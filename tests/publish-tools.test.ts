@@ -60,6 +60,15 @@ test("plain JSON Schema input passes through untouched; readOnly maps to readOnl
   assert.equal(sent.annotations.readOnlyHint, true);
 });
 
+test("property-less JSON Schema passes through, does not hit the zod path", () => {
+  const api = fakeApi();
+  const { app } = fakeWorld(api);
+  const js = { type: "object" as const };
+  publishTools(plugin(app), [{ name: "t", description: "d", inputSchema: js, handler: () => ({}) }]);
+  const sent = api.calls[0].tools[0] as { inputSchema: unknown };
+  assert.deepEqual(sent.inputSchema, js);
+});
+
 test("waits for vault-mcp:ready when not loaded; re-registers on reload", () => {
   const api = fakeApi();
   const { app } = fakeWorld(null); // vault-mcp not loaded yet
@@ -70,6 +79,7 @@ test("waits for vault-mcp:ready when not loaded; re-registers on reload", () => 
   assert.equal(api.calls.length, 1);
   app.workspace.trigger("vault-mcp:ready", api); // vault-mcp reloaded
   assert.equal(api.calls.length, 2);
+  assert.equal(api.unregisteredCount(), 0); // stale unregister dropped, never called
 });
 
 test("apiVersion mismatch: warns, never registers", () => {

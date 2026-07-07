@@ -42,8 +42,10 @@ const VAULT_MCP_ID = "vault-mcp";
 const API_VERSION = 1;
 
 function isJsonSchema(s: NonNullable<SdkToolSpec["inputSchema"]>): s is JsonSchemaObject {
-  return (s as JsonSchemaObject).type === "object" &&
-    typeof (s as JsonSchemaObject).properties === "object";
+  // A zod raw shape's values are zod schemas, never the string "object",
+  // so checking type alone discriminates safely — and accepts a valid
+  // property-less JSON Schema like { type: "object" }.
+  return (s as JsonSchemaObject).type === "object";
 }
 
 function toJsonSchema(s: SdkToolSpec["inputSchema"]): JsonSchemaObject | undefined {
