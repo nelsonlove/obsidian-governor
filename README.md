@@ -24,4 +24,4 @@ Publisher SDK for the [vault-mcp](https://github.com/nelsonlove/obsidian-vault-m
       }])
     );
 
-Rules: tool `name` must match `/^[a-z][a-z0-9_]*$/`; handlers return plain JSON-serializable values (vault-mcp wraps them) and thrown errors become MCP tool errors; tools appear to Claude Code sessions on their next connect. Requires vault-mcp with `apiVersion: 1`; on a version mismatch the SDK logs a warning and registers nothing.
+Rules: tool `name` must match `/^[a-z][a-z0-9_]*$/`; published tool names must not collide with vault-mcp's built-in `obsidian_*` namespace (registration throws a TypeError if the namespaced name would start with `obsidian_`). Handlers return plain JSON-serializable values (vault-mcp wraps them) and thrown errors become MCP tool errors; tools appear to Claude Code sessions on their next connect. Requires vault-mcp with `apiVersion: 1`; on a version mismatch the SDK logs a warning and registers nothing.

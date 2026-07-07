@@ -100,3 +100,11 @@ test("disposer unregisters and unsubscribes", () => {
   app.workspace.trigger("vault-mcp:ready", api); // must be inert after dispose
   assert.equal(api.calls.length, 1);
 });
+
+test("destructive and idempotent flags pass through as annotation hints", () => {
+  const api = fakeApi();
+  const { app } = fakeWorld(api);
+  publishTools(plugin(app), [{ name: "t", description: "d", destructive: true, idempotent: true, handler: () => ({}) }]);
+  const sent = api.calls[0].tools[0] as { annotations: Record<string, boolean> };
+  assert.deepEqual(sent.annotations, { readOnlyHint: false, destructiveHint: true, idempotentHint: true });
+});

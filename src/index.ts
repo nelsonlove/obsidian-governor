@@ -15,7 +15,7 @@ export interface ExternalToolSpec {
   name: string;
   description: string;
   inputSchema?: JsonSchemaObject;
-  annotations?: { readOnlyHint?: boolean };
+  annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean; idempotentHint?: boolean };
   handler: (args: Record<string, unknown>) => Promise<unknown> | unknown;
 }
 
@@ -35,6 +35,10 @@ export interface SdkToolSpec {
   inputSchema?: Record<string, z.ZodTypeAny> | JsonSchemaObject;
   /** Omitted or false ⇒ the tool counts as MUTATING (blocked by vault-mcp read-only mode). */
   readOnly?: boolean;
+  /** Set true if the tool can destroy user data (delete/overwrite); advisory hint surfaced to MCP clients. */
+  destructive?: boolean;
+  /** Set true if repeated identical calls have no additional effect. */
+  idempotent?: boolean;
   handler: (args: Record<string, unknown>) => Promise<unknown> | unknown;
 }
 
@@ -66,7 +70,11 @@ function toExternalSpec(t: SdkToolSpec): ExternalToolSpec {
     name: t.name,
     description: t.description,
     inputSchema: toJsonSchema(t.inputSchema),
-    annotations: { readOnlyHint: t.readOnly === true },
+    annotations: {
+      readOnlyHint: t.readOnly === true,
+      ...(t.destructive !== undefined && { destructiveHint: t.destructive }),
+      ...(t.idempotent !== undefined && { idempotentHint: t.idempotent }),
+    },
     handler: t.handler,
   };
 }
