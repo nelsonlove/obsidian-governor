@@ -52,7 +52,7 @@ regardless of which community plugins are installed.
 
 | Tool name | Description |
 |---|---|
-| `obsidian_doctor` | Vault-mcp health, socket path, integration detection |
+| `obsidian_doctor` | Vault-mcp health, socket path, integration + CLI-binary detection |
 | `obsidian_get_active_note` | Currently focused note + editor selection |
 
 ### `tools-vault-write.ts` — `registerVaultWriteTools` (2 tools)
@@ -110,8 +110,9 @@ list stale/uninstalled entries).  New tools appear on session reconnect.
 ### Conditional on the official Obsidian CLI binary (1)
 
 `tools-cli.ts` — `registerCliTools`. Registered only when the official
-Obsidian CLI binary is installed (`/usr/local/bin/obsidian` or
-`/opt/homebrew/bin/obsidian`).
+Obsidian CLI binary is installed (`/usr/local/bin/obsidian`,
+`/opt/homebrew/bin/obsidian`, or `/usr/bin/obsidian`); `obsidian_doctor`
+reports the detected path as `cli_binary`.
 
 | Tool name | Description |
 |---|---|
@@ -139,15 +140,16 @@ the full surface or these 3, never both.
 
 ## Observed live set cross-check
 
-The 43-tool set observed with Dataview + Templater + Metadata Menu loaded
-(Omnisearch absent) maps exactly to the inventory above:
+The 44-tool set observed with Dataview + Templater + Metadata Menu loaded
+(Omnisearch absent, CLI binary not counted) maps exactly to the inventory above:
 
 - 17 fs-expressible ✓
-- 21 always-live ✓
+- 22 always-live ✓
 - 5 integration (Dataview×2 + Templater×1 + Metadata Menu×2) ✓
 - `obsidian_omnisearch` absent — Omnisearch plugin not loaded ✓
+- (`obsidian_cli` additionally registers when the CLI binary is installed — 45 with it)
 
-**No tool in the observed-43 list is unaccounted for in source.**
+**No tool in the observed-44 list is unaccounted for in source.**
 
 ---
 

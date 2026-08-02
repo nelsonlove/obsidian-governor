@@ -20,10 +20,9 @@
 
 import { z } from "zod";
 import { execFile } from "node:child_process";
-import * as fs from "node:fs";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ok, fail, okError } from "./helpers.js";
-import { spawnEnv } from "../claude-cli.js";
+import { spawnEnv, findBinary } from "../claude-cli.js";
 import type { ServerCtx } from "./tools-core.js";
 
 // Mutating + can reach outside the vault (plugin installs fetch the network).
@@ -33,29 +32,45 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 300_000;
 const MAX_BUFFER = 4 * 1024 * 1024;
 
-// Pure + testable: returns the first existing CLI binary, else null. Mirrors
-// findClaudeBinary — Obsidian's GUI PATH is minimal, so probe fixed locations.
+// Pure + testable: returns the first existing CLI binary, else null. Probes
+// fixed locations (Obsidian's GUI PATH is minimal): the macOS install targets
+// plus /usr/bin for Linux packagings. An X_OK probe can't distinguish the CLI
+// forwarder from a same-named app launcher (worst case: calls time out) — a
+// content probe per connection-build would cost a process spawn, so we accept
+// the tradeoff and surface the found path via obsidian_doctor instead.
 export function findObsidianBinary(opts?: {
   candidates?: string[];
   fileExists?: (p: string) => boolean;
 }): string | null {
-  const candidates = opts?.candidates ?? ["/usr/local/bin/obsidian", "/opt/homebrew/bin/obsidian"];
-  const exists =
-    opts?.fileExists ??
-    ((p: string) => { try { fs.accessSync(p, fs.constants.X_OK); return true; } catch { return false; } });
-  for (const c of candidates) if (exists(c)) return c;
-  return null;
+  const candidates = opts?.candidates ?? [
+    "/usr/local/bin/obsidian",
+    "/opt/homebrew/bin/obsidian",
+    "/usr/bin/obsidian",
+  ];
+  return findBinary(candidates, opts?.fileExists);
 }
 
 // Commands that execute arbitrary code, restart the app, or weaken the plugin
-// sandbox. Matches the community consensus set (cf. dsebastien/obsidian-cli-rest):
-// `command` runs ANY Obsidian command by id; `eval` / `dev:*` are JS/CDP access.
-const DANGEROUS_EXACT = new Set(["eval", "devtools", "restart", "reload", "command", "plugins:restrict"]);
+// sandbox: `command` runs ANY Obsidian command by id; `eval` / `dev:*` are
+// JS/CDP access; `plugin:install` loads new third-party code whose onload()
+// runs immediately (code-execution-equivalent) and `plugin:uninstall` can
+// remove vault-mcp itself out from under every connected session.
+const DANGEROUS_EXACT = new Set([
+  "eval", "devtools", "restart", "reload", "command",
+  "plugins:restrict", "plugin:install", "plugin:uninstall",
+]);
 export function isDangerousCliCommand(command: string): boolean {
   return DANGEROUS_EXACT.has(command) || command.startsWith("dev:");
 }
 
-const COMMAND_RE = /^[a-z][a-z0-9:_-]*$/i;
+// Single source for every prose surface that names the gated set (tool
+// description, settings toggle) — keep in sync with DANGEROUS_EXACT + `dev:*`.
+export const DANGEROUS_LIST_DESC = [...DANGEROUS_EXACT].sort().join(", ") + ", and dev:*";
+
+// Lowercase-only ON PURPOSE: the CLI's commands are all lowercase, and a
+// case-insensitive accept here would let 'Eval' slip past the case-sensitive
+// danger gate above while (potentially) still resolving in the CLI.
+const COMMAND_RE = /^[a-z][a-z0-9:_-]*$/;
 const PARAM_KEY_RE = /^[a-z][a-z0-9_-]*$/i;
 const FLAG_RE = /^--?[a-z][a-z0-9:_-]*(=.*)?$/i;
 
@@ -141,7 +156,8 @@ export function registerCliTools(
         "Params become key=value CLI arguments; flags are passed verbatim (e.g. ['--json']). " +
         "Output is the CLI's raw stdout/stderr plus exit_code — non-zero exits return isError with the same structure. " +
         "Requires the Obsidian CLI feature (Settings → General → Command line interface). " +
-        "Dangerous commands (eval, dev:*, devtools, restart, reload, command, plugins:restrict) are blocked unless enabled in plugin settings. " +
+        `Dangerous commands (${DANGEROUS_LIST_DESC}) are blocked unless enabled in plugin settings. ` +
+        "On timeout, the command may still have completed inside Obsidian (only the CLI forwarder is killed) — verify state before retrying a mutation. " +
         "Prefer a dedicated obsidian_* tool when one exists — those return structured data.",
       inputSchema: {
         command: z.string().min(1).describe("CLI command name, e.g. 'help', 'history:list', 'theme:set'."),
@@ -181,6 +197,11 @@ export function registerCliTools(
           stdout: res.stdout,
           stderr: res.stderr,
           ...(res.errorMessage ? { error: res.errorMessage } : {}),
+          // The CLI binary is a forwarder into the running Obsidian; killing it
+          // on timeout does NOT cancel the in-app command.
+          ...(res.timedOut
+            ? { note: "the command may still have completed inside Obsidian — verify state before retrying" }
+            : {}),
         };
         // Non-zero exit: keep the structured report (stdout often carries the
         // CLI's own diagnostic) but flag the call as an error.

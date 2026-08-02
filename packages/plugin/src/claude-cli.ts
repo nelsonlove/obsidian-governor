@@ -16,6 +16,18 @@ export function spawnEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessE
   return { ...base, PATH: parts.join(":") };
 }
 
+// Pure + testable: returns the first candidate that is an executable file,
+// else null. Shared by findClaudeBinary here and findObsidianBinary in
+// mcp/tools-cli.ts so the probe logic can't drift between the two.
+export function findBinary(
+  candidates: string[],
+  fileExists?: (p: string) => boolean
+): string | null {
+  const exists = fileExists ?? ((p: string) => { try { fs.accessSync(p, fs.constants.X_OK); return true; } catch { return false; } });
+  for (const c of candidates) if (exists(c)) return c;
+  return null;
+}
+
 // Pure + testable: returns the first candidate that exists, else null.
 export function findClaudeBinary(opts?: {
   candidates?: string[];
@@ -27,9 +39,7 @@ export function findClaudeBinary(opts?: {
     "/opt/homebrew/bin/claude",
     "/usr/local/bin/claude",
   ];
-  const exists = opts?.fileExists ?? ((p: string) => { try { fs.accessSync(p, fs.constants.X_OK); return true; } catch { return false; } });
-  for (const c of candidates) if (exists(c)) return c;
-  return null;
+  return findBinary(candidates, opts?.fileExists);
 }
 
 export async function claudeIsRegistered(bin: string): Promise<boolean> {
