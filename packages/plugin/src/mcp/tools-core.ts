@@ -8,13 +8,15 @@ import type { App, TFile } from "obsidian";
 import { ok, fail } from "./helpers.js";
 import type { GuardSettings } from "../guard.js";
 import type { ExternalToolEntry } from "./external-tools.js";
+import { findObsidianBinary } from "./tools-cli.js";
 
 export interface ServerCtx {
   pluginVersion: string;
   socketPath: string;
   vaultName: string;
   enabledPlugins: () => string[];
-  getSettings: () => GuardSettings;
+  /** Guard settings plus tool-specific gates (allowDangerousCli: obsidian_cli's danger gate). */
+  getSettings: () => GuardSettings & { allowDangerousCli?: boolean };
   /** Externally-published tools (other Obsidian plugins via plugin.api). Optional: absent in tests that don't exercise it. */
   getExternalTools?: () => ExternalToolEntry[];
 }
@@ -40,6 +42,9 @@ export function registerCoreTools(server: McpServer, app: App, ctx: ServerCtx) {
           socket_path: ctx.socketPath,
           plugin_version: ctx.pluginVersion,
           integrations: Object.fromEntries(integrations.map((id) => [id, enabled.has(id)])),
+          // obsidian_cli registers only when this is non-null — surfaced here so
+          // its absence is diagnosable, like the integration gates above.
+          cli_binary: findObsidianBinary(),
         });
       } catch (e) { return fail(e); }
     }

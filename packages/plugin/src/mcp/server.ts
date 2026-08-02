@@ -6,6 +6,7 @@ import { registerVaultWriteTools } from "./tools-vault-write.js";
 import { registerComplementaryTools } from "./tools-complementary.js";
 import { registerNavTools } from "./tools-nav.js";
 import { registerIntegrationTools } from "./tools-integrations.js";
+import { registerCliTools } from "./tools-cli.js";
 import { registerExternalTools } from "./external-tools.js";
 import { guardCall } from "../guard.js";
 import { ObsidianBackend } from "./obsidian-backend.js";
@@ -41,6 +42,8 @@ export function buildMcpServer(app: App, ctx: ServerCtx): McpServer {
   registerComplementaryTools(server, app, ctx);
   registerNavTools(server, app);
   registerIntegrationTools(server, app, ctx);
+  // ── official-CLI proxy — conditional on the CLI binary being installed ──────
+  registerCliTools(server, ctx);
   // ── externally-published tools (other Obsidian plugins via plugin.api) ─────
   registerExternalTools(server, app, ctx);
   return server;
