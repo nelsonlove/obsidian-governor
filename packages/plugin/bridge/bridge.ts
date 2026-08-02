@@ -213,6 +213,8 @@ function tryConnect(chosen: Discovery): Promise<net.Socket | null> {
 // re-exported for callers/tests that import it from here.
 import { splitLines } from "../src/ndjson.js";
 export { splitLines };
+import { buildPreamble } from "../src/preamble.js";
+export { buildPreamble };
 
 type JsonRpcId = string | number;
 
@@ -441,6 +443,10 @@ export interface RelayOpts {
   maxPending?: number;
   /** Ceiling on how long shutdown waits for stdout to flush before force-exiting (ms). */
   exitFlushTimeoutMs?: number;
+  /** Connection preamble line (no trailing newline) written first on every
+   * attach — initial connect AND each reconnect, since every connection gets a
+   * fresh per-connection server that must learn its surface again. */
+  preamble?: string;
 }
 
 const DISCONNECT_REASON =
@@ -463,6 +469,7 @@ export class BridgeRelay {
   private readonly rapidFailWindowMs: number;
   private readonly maxPending: number;
   private readonly exitFlushTimeoutMs: number;
+  private readonly preamble: string | undefined;
 
   constructor(
     private io: RelayIO,
@@ -474,6 +481,7 @@ export class BridgeRelay {
     this.rapidFailWindowMs = opts.rapidFailWindowMs ?? 5000;
     this.maxPending = opts.maxPending ?? 10000;
     this.exitFlushTimeoutMs = opts.exitFlushTimeoutMs ?? 5000;
+    this.preamble = opts.preamble;
   }
 
   // Fail the requests in `line`, writing their JSON-RPC error responses, and
@@ -571,6 +579,10 @@ export class BridgeRelay {
     this.sock = sock;
     this.sockBuf = "";
     this.connectedAt = Date.now();
+    // The preamble must be the connection's first line — written here, before
+    // the reconnect path replays the handshake and before any client traffic
+    // is forwarded (both happen after attach returns).
+    if (this.preamble !== undefined) sock.write(`${this.preamble}\n`);
     sock.setEncoding("utf8");
     sock.on("data", (chunk: string) => this.onServerData(chunk, sock));
     sock.on("error", () => {
@@ -756,6 +768,11 @@ async function waitForVault(
 // Entry point (skipped under test import; runs when executed as a script).
 if (process.argv[1] && process.argv[1].endsWith("bridge.mjs")) {
   const pick = parseFlag(process.argv, "vault") ?? process.env.VAULT_MCP_VAULT;
+  // Code Mode: register this session with the compact search/describe/call
+  // meta-tool surface instead of the full tool set (token-lean; see preamble.ts).
+  const codeMode =
+    process.argv.includes("--code-mode") ||
+    ["1", "true"].includes((process.env.VAULT_MCP_CODE_MODE ?? "").toLowerCase());
   (async () => {
     const { sock, chosen } = await waitForVault(pick, Date.now() + WAIT_MS);
     // Pin reconnects to the vault we first connected to, so another vault
@@ -775,7 +792,11 @@ if (process.argv[1] && process.argv[1].endsWith("bridge.mjs")) {
         exit: (code) => process.exit(code),
       },
       async () => (await waitForVault(pinned, Date.now() + RECONNECT_MS)).sock,
-      { queueGraceMs: QUEUE_GRACE_MS, maxPending: MAX_PENDING }
+      {
+        queueGraceMs: QUEUE_GRACE_MS,
+        maxPending: MAX_PENDING,
+        preamble: codeMode ? buildPreamble({ codeMode: true }) : undefined,
+      }
     );
     relay.start(sock);
   })().catch((e) => {

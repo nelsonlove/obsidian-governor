@@ -50,6 +50,10 @@ On the Mac, **disconnect the remote `obsidian-vault-mcp-server` connector** for 
 
 Run **`obsidian_doctor`** (tool) or **`vault-mcp: Show diagnostics`** (command) to see which integrations the plugin currently detects.
 
+### Code Mode (token-lean surface)
+
+Registering ~40+ tool schemas costs context in every session. A connection whose bridge runs with **`--code-mode`** (append it to the registered command: `… node ~/.claude/vault-mcp/bridge.mjs --vault <name> --code-mode`, or set `VAULT_MCP_CODE_MODE=1`) gets just **3 meta-tools** over the same registry: `obsidian_search_tools` (keyword discovery), `obsidian_describe_tool` (input JSON Schema), `obsidian_call_tool` (invoke by name, args validated against the target's schema). Read-only mode and the path allowlist bind on the target tool exactly as on the full surface. The mode is chosen per connection via a one-line preamble the bridge sends before the MCP stream — old bridges and full-surface sessions are wire-compatible, and both kinds of session can run concurrently against the same vault.
+
 ## Settings (Settings → Vault MCP)
 
 - **Claude Code connection** — status + the `claude mcp add` line + copy button.

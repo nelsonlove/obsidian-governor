@@ -9,6 +9,7 @@ import {
   RelayState,
   BridgeRelay,
   envMs,
+  buildPreamble,
 } from "../bridge/bridge.ts";
 
 // --- splitLines: incremental NDJSON framing ---
@@ -810,5 +811,46 @@ test("BridgeRelay: stdin paused by a pre-grace flood is resumed at grace expiry"
   await until(() => clientIn.isPaused() === false, "stdin resumed at grace expiry", 2000);
   clientIn.write(call(99) + "\n");
   await until(() => out.some((m) => m.id === 99 && m.error), "post-grace request fast-failed, not hung");
+  stop();
+});
+
+test("BridgeRelay: preamble is the first line on connect AND after reconnect", async () => {
+  const sockPath = tmpSock();
+  const preamble = buildPreamble({ codeMode: true });
+  const s1 = await fakeServer(sockPath);
+  const { relay, clientIn, out, stop } = makeRelay(sockPath, { preamble });
+  relay.start(await connectTo(sockPath));
+
+  clientIn.write(init + "\n");
+  await until(() => out.length === 1, "initialize response");
+  assert.equal(s1.received[0].vault_mcp_preamble, 1, "preamble must be the first line the server sees");
+  assert.equal(s1.received[0].code_mode, true);
+  assert.equal(s1.received[1].method, "initialize");
+
+  clientIn.write(initialized + "\n");
+  await until(() => s1.received.length === 3, "initialized notification");
+
+  // Restart: the fresh connection must ALSO lead with the preamble, before the
+  // replayed handshake.
+  await stopServer(s1);
+  const s2 = await fakeServer(sockPath);
+  await until(() => s2.received.length >= 3, "replayed handshake after reconnect");
+  assert.equal(s2.received[0].vault_mcp_preamble, 1, "reconnect must lead with the preamble");
+  assert.equal(s2.received[1].method, "initialize");
+  assert.equal(s2.received[2].method, "notifications/initialized");
+
+  await stopServer(s2);
+  stop();
+});
+
+test("BridgeRelay: no preamble option → wire format unchanged (back-compat)", async () => {
+  const sockPath = tmpSock();
+  const s1 = await fakeServer(sockPath);
+  const { relay, clientIn, out, stop } = makeRelay(sockPath);
+  relay.start(await connectTo(sockPath));
+  clientIn.write(init + "\n");
+  await until(() => out.length === 1, "initialize response");
+  assert.equal(s1.received[0].method, "initialize", "first line must be the client's initialize");
+  await stopServer(s1);
   stop();
 });

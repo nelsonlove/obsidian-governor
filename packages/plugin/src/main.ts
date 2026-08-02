@@ -118,8 +118,8 @@ export default class VaultMcpPlugin extends Plugin {
     if (this.settings.enabled) {
       // One MCP server per connection → concurrent Claude Code sessions and
       // background agents share the plugin without evicting each other.
-      this.listener = new UnixSocketListener(sock, (transport) => {
-        const server = buildMcpServer(this.app, ctx);
+      this.listener = new UnixSocketListener(sock, (transport, connOpts) => {
+        const server = buildMcpServer(this.app, ctx, { codeMode: connOpts.codeMode });
         server.connect(transport).catch((e) => console.error("[vault-mcp] connect failed", e));
       });
       await this.listener.listen();
