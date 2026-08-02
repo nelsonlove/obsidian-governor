@@ -120,6 +120,24 @@ reports the detected path as `cli_binary`.
 
 ---
 
+## Code Mode (per-connection alternative surface)
+
+A connection whose bridge runs with `--code-mode` (or `VAULT_MCP_CODE_MODE=1`)
+gets **3 meta-tools instead of the full surface** (`tools-code-mode.ts`,
+`registerCodeModeTools`). Every tool above is still reachable — captured into a
+per-connection registry (guard wrapper included) and exposed through:
+
+| Tool name | Description |
+|---|---|
+| `obsidian_search_tools` | Find tools by keyword (name/title/description); no query lists all |
+| `obsidian_describe_tool` | Full description + annotations + input JSON Schema for one tool |
+| `obsidian_call_tool` | Invoke any captured tool by name; args validated against its zod shape; read-only mode and path allowlist bind on the target exactly as on the full surface |
+
+Code Mode tools are not counted in the summary above: a session sees either
+the full surface or these 3, never both.
+
+---
+
 ## Observed live set cross-check
 
 The 44-tool set observed with Dataview + Templater + Metadata Menu loaded

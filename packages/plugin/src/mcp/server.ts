@@ -8,10 +8,16 @@ import { registerNavTools } from "./tools-nav.js";
 import { registerIntegrationTools } from "./tools-integrations.js";
 import { registerCliTools } from "./tools-cli.js";
 import { registerExternalTools } from "./external-tools.js";
+import { registerCodeModeTools, makeCaptureRegister, type CapturedRegistry } from "./tools-code-mode.js";
 import { guardCall } from "../guard.js";
 import { ObsidianBackend } from "./obsidian-backend.js";
 
-export function buildMcpServer(app: App, ctx: ServerCtx): McpServer {
+export interface BuildOpts {
+  /** Code Mode: expose the search/describe/call meta-tool surface instead of the full tool set. */
+  codeMode?: boolean;
+}
+
+export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): McpServer {
   const server = new McpServer({ name: "vault-mcp", version: ctx.pluginVersion });
 
   // Wrap registerTool so every tool handler is guarded before registration.
@@ -19,16 +25,24 @@ export function buildMcpServer(app: App, ctx: ServerCtx): McpServer {
   // 17 fs-expressible tools registered via registerFsTools below — because
   // registerFsTools calls server.registerTool, which is this patched version.
   // Cast origRegister to any to bypass overload signature checking on the wrapped handler.
+  //
+  // In Code Mode the same interception point CAPTURES each guarded tool into a
+  // registry instead of registering it; the three meta-tools registered at the
+  // end are the only tools the session sees. The guard wrapper travels with
+  // the captured handler, so read-only/allowlist bind identically in both modes.
   const origRegister: any = server.registerTool.bind(server);
-  (server as any).registerTool = (name: string, def: any, handler: any) =>
-    origRegister(name, def, async (args: any, extra: any) => {
-      const isMutating = def?.annotations?.readOnlyHint === false;
-      const blocked = guardCall({ isMutating, args: args ?? {}, settings: ctx.getSettings() });
-      if (blocked) {
-        return { content: [{ type: "text" as const, text: `Error [${blocked.code}]: ${blocked.message}` }], isError: true as const };
-      }
-      return handler(args, extra);
-    });
+  const guarded = (def: any, handler: any) => async (args: any, extra: any) => {
+    const isMutating = def?.annotations?.readOnlyHint === false;
+    const blocked = guardCall({ isMutating, args: args ?? {}, settings: ctx.getSettings() });
+    if (blocked) {
+      return { content: [{ type: "text" as const, text: `Error [${blocked.code}]: ${blocked.message}` }], isError: true as const };
+    }
+    return handler(args, extra);
+  };
+  const registry: CapturedRegistry = new Map();
+  (server as any).registerTool = opts.codeMode
+    ? makeCaptureRegister(registry, guarded)
+    : (name: string, def: any, handler: any) => origRegister(name, def, guarded(def, handler));
 
   // ── 17 fs-expressible tools — shared registry + live ObsidianBackend ────────
   // decodeHtml: false — no HTML entities expected from in-process calls.
@@ -46,5 +60,16 @@ export function buildMcpServer(app: App, ctx: ServerCtx): McpServer {
   registerCliTools(server, ctx);
   // ── externally-published tools (other Obsidian plugins via plugin.api) ─────
   registerExternalTools(server, app, ctx);
+
+  if (opts.codeMode) {
+    // Meta-tools register through origRegister directly: they must NOT be
+    // guard-wrapped — obsidian_call_tool would otherwise be blocked wholesale
+    // in read-only mode, blocking read tools too. The captured handlers carry
+    // the guard, so enforcement happens per target call. The capture patch is
+    // deliberately LEFT INSTALLED: any post-build registration still lands in
+    // the registry, guarded — the "every registerTool call is guarded" locked
+    // invariant holds in both modes for the server's whole lifetime.
+    registerCodeModeTools(server, registry, origRegister);
+  }
   return server;
 }
