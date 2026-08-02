@@ -3,6 +3,7 @@ import type VaultMcpPlugin from "./main.js";
 import { buildRegisterCommand } from "./register-command.js";
 import { bridgeDestPath } from "./paths.js";
 import { findClaudeBinary, claudeIsRegistered } from "./claude-cli.js";
+import { DANGEROUS_LIST_DESC } from "./mcp/tools-cli.js";
 
 export function registerCommandFor(app: App): string {
   // Pin the current vault so the command stays unambiguous once a second vault
@@ -103,7 +104,7 @@ export class VaultMcpSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Allow dangerous CLI commands")
       .setDesc(
-        "Let obsidian_cli run eval, dev:*, devtools, restart, reload, command, and plugins:restrict. These execute arbitrary code or control the app — leave off unless you need them."
+        `Let obsidian_cli run ${DANGEROUS_LIST_DESC}. These execute arbitrary code or control the app — leave off unless you need them.`
       )
       .addToggle((t) =>
         t.setValue(this.plugin.settings.allowDangerousCli).onChange(async (value) => {

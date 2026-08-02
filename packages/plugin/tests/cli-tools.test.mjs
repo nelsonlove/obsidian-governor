@@ -13,6 +13,7 @@ import {
   buildCliArgs,
   registerCliTools,
 } from "../src/mcp/tools-cli.js";
+import { fakeServer } from "./fake-server.mjs";
 
 // ── findObsidianBinary ────────────────────────────────────────────────────────
 
@@ -32,10 +33,10 @@ describe("findObsidianBinary", () => {
 // ── isDangerousCliCommand ─────────────────────────────────────────────────────
 
 describe("isDangerousCliCommand", () => {
-  for (const cmd of ["eval", "devtools", "restart", "reload", "command", "plugins:restrict", "dev:cdp", "dev:screenshot"]) {
+  for (const cmd of ["eval", "devtools", "restart", "reload", "command", "plugins:restrict", "plugin:install", "plugin:uninstall", "dev:cdp", "dev:screenshot"]) {
     test(`${cmd} is dangerous`, () => assert.equal(isDangerousCliCommand(cmd), true));
   }
-  for (const cmd of ["help", "history:list", "theme:set", "plugin:install", "developer"]) {
+  for (const cmd of ["help", "history:list", "theme:set", "plugin:enable", "plugin:disable", "developer"]) {
     test(`${cmd} is not dangerous`, () => assert.equal(isDangerousCliCommand(cmd), false));
   }
 });
@@ -65,6 +66,11 @@ describe("buildCliArgs", () => {
       assert.throws(() => buildCliArgs({ vaultName: "v", command: bad }), /invalid command/);
     }
   });
+  test("rejects mixed-case command names (danger-gate case-bypass hardening)", () => {
+    for (const bad of ["Eval", "DEV:cdp", "Help"]) {
+      assert.throws(() => buildCliArgs({ vaultName: "v", command: bad }), /invalid command/);
+    }
+  });
   test("rejects malformed param keys", () => {
     assert.throws(() => buildCliArgs({ vaultName: "v", command: "read", params: { "bad key": "x" } }), /invalid param key/);
   });
@@ -81,16 +87,6 @@ describe("buildCliArgs", () => {
 });
 
 // ── registerCliTools handler ──────────────────────────────────────────────────
-
-function fakeServer() {
-  const tools = new Map();
-  return {
-    tools,
-    registerTool(name, def, handler) {
-      tools.set(name, { def, handler });
-    },
-  };
-}
 
 function ctxWith(settings) {
   return {
@@ -170,12 +166,23 @@ describe("registerCliTools", () => {
     assert.match(res.content[0].text, /pinned/);
   });
 
-  test("timeout surfaces timed_out in the report", async () => {
+  test("timeout surfaces timed_out plus the may-have-completed note", async () => {
     const server = fakeServer();
     const exec = async () => ({ exitCode: null, stdout: "", stderr: "", timedOut: true });
     registerCliTools(server, ctxWith({}), { binary: "/bin/obsidian", exec });
     const res = await server.tools.get("obsidian_cli").handler({ command: "search", timeout_ms: 1000 });
     assert.equal(res.isError, true);
     assert.equal(res.structuredContent.timed_out, true);
+    assert.match(res.structuredContent.note, /may still have completed/);
+  });
+
+  test("mixed-case dangerous command is rejected outright (never executed)", async () => {
+    const server = fakeServer();
+    let executed = false;
+    const exec = async () => { executed = true; return { exitCode: 0, stdout: "", stderr: "", timedOut: false }; };
+    registerCliTools(server, ctxWith({}), { binary: "/bin/obsidian", exec });
+    const res = await server.tools.get("obsidian_cli").handler({ command: "Eval" });
+    assert.equal(res.isError, true);
+    assert.equal(executed, false);
   });
 });
