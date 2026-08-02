@@ -20,6 +20,7 @@ import {
   registerCodeModeTools,
 } from "../src/mcp/tools-code-mode.js";
 import { UnixSocketListener } from "../src/socket-transport.js";
+import { fakeServer } from "./fake-server.mjs";
 
 // ── preamble ──────────────────────────────────────────────────────────────────
 
@@ -85,11 +86,6 @@ function fakeRegistry() {
     ],
   ]);
   return { registry, calls };
-}
-
-function fakeServer() {
-  const tools = new Map();
-  return { tools, registerTool(name, def, handler) { tools.set(name, { def, handler }); } };
 }
 
 describe("searchRegistry / describeTool", () => {
