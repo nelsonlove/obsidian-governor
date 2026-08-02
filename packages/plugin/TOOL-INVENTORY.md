@@ -5,7 +5,8 @@ by reading `packages/plugin/src/mcp/server.ts` and all `tools-*.ts` files.
 The fs-expressible list is locked by `tests/tool-inventory.test.mjs` (#25).
 
 **Count summary:** 17 fs-expressible + 22 always-live = **39 base** tools,
-plus up to 6 conditional integration tools = **up to 45 total**.
+plus up to 6 conditional integration tools and 1 CLI-conditional tool
+(`obsidian_cli`) = **up to 46 total**.
 
 Cross-check: the observed live set with Dataview + Templater + Metadata Menu
 loaded (but NOT Omnisearch) reports 44 tools: 39 + 5 = 44. ✓
@@ -41,7 +42,7 @@ against its `FilesystemBackend`.
 
 ---
 
-## Section 2 — live-only, always registered (21)
+## Section 2 — live-only, always registered (22)
 
 These tools depend on live Obsidian `app.*` state and cannot be expressed on the
 filesystem.  They are unconditionally registered on every `buildMcpServer` call,
@@ -51,7 +52,7 @@ regardless of which community plugins are installed.
 
 | Tool name | Description |
 |---|---|
-| `obsidian_doctor` | Vault-mcp health, socket path, integration detection |
+| `obsidian_doctor` | Vault-mcp health, socket path, integration + CLI-binary detection |
 | `obsidian_get_active_note` | Currently focused note + editor selection |
 
 ### `tools-vault-write.ts` — `registerVaultWriteTools` (2 tools)
@@ -106,19 +107,31 @@ list stale/uninstalled entries).  New tools appear on session reconnect.
 | `obsidian_fileclass_schema` | Metadata Menu | `metadata-menu` |
 | `obsidian_fileclass_insert_fields` | Metadata Menu | `metadata-menu` |
 
+### Conditional on the official Obsidian CLI binary (1)
+
+`tools-cli.ts` — `registerCliTools`. Registered only when the official
+Obsidian CLI binary is installed (`/usr/local/bin/obsidian`,
+`/opt/homebrew/bin/obsidian`, or `/usr/bin/obsidian`); `obsidian_doctor`
+reports the detected path as `cli_binary`.
+
+| Tool name | Description |
+|---|---|
+| `obsidian_cli` | Proxy any official CLI command against this vault (vault pinned; dangerous commands gated behind the "Allow dangerous CLI commands" setting; refuses to run while a path allowlist is active) |
+
 ---
 
 ## Observed live set cross-check
 
-The 43-tool set observed with Dataview + Templater + Metadata Menu loaded
-(Omnisearch absent) maps exactly to the inventory above:
+The 44-tool set observed with Dataview + Templater + Metadata Menu loaded
+(Omnisearch absent, CLI binary not counted) maps exactly to the inventory above:
 
 - 17 fs-expressible ✓
-- 21 always-live ✓
+- 22 always-live ✓
 - 5 integration (Dataview×2 + Templater×1 + Metadata Menu×2) ✓
 - `obsidian_omnisearch` absent — Omnisearch plugin not loaded ✓
+- (`obsidian_cli` additionally registers when the CLI binary is installed — 45 with it)
 
-**No tool in the observed-43 list is unaccounted for in source.**
+**No tool in the observed-44 list is unaccounted for in source.**
 
 ---
 
@@ -129,8 +142,9 @@ The 43-tool set observed with Dataview + Templater + Metadata Menu loaded
 | `packages/core/src/tool-registry.ts` | — (FS_TOOLS definition) | 17 fs-expressible |
 | `packages/plugin/src/mcp/server.ts` | `registerFsTools` | 17 fs-expressible |
 | `packages/plugin/src/mcp/tools-core.ts` | `registerCoreTools` | 2 always-live |
-| `packages/plugin/src/mcp/tools-vault-write.ts` | `registerVaultWriteTools` | 1 always-live |
+| `packages/plugin/src/mcp/tools-vault-write.ts` | `registerVaultWriteTools` | 2 always-live |
 | `packages/plugin/src/mcp/tools-complementary.ts` | `registerComplementaryTools` | 9 always-live |
 | `packages/plugin/src/mcp/tools-nav.ts` | `registerNavTools` | 9 always-live |
 | `packages/plugin/src/mcp/tools-integrations.ts` | `registerIntegrationTools` | up to 6 conditional |
+| `packages/plugin/src/mcp/tools-cli.ts` | `registerCliTools` | 1 conditional (CLI binary) |
 | `packages/plugin/src/mcp/tools-vault-read.ts` | `registerVaultReadTools` (no-op stub) | 0 (all 9 migrated) |

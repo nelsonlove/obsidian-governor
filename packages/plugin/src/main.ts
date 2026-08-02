@@ -8,8 +8,8 @@ import { ConnectionSetupModal, VaultMcpSettingTab } from "./connection-ui.js";
 import { findClaudeBinary, claudeIsRegistered, claudeRegister, claudeRemove, claudeEnsureConnectPlugin } from "./claude-cli.js";
 import { ExternalToolRegistry, type VaultMcpApi } from "./mcp/external-tools.js";
 
-interface VaultMcpSettings { setupAcknowledged: boolean; readOnly: boolean; allowlist: string[]; enabled: boolean; }
-const DEFAULT_SETTINGS: VaultMcpSettings = { setupAcknowledged: false, readOnly: false, allowlist: [], enabled: true };
+interface VaultMcpSettings { setupAcknowledged: boolean; readOnly: boolean; allowlist: string[]; enabled: boolean; allowDangerousCli: boolean; }
+const DEFAULT_SETTINGS: VaultMcpSettings = { setupAcknowledged: false, readOnly: false, allowlist: [], enabled: true, allowDangerousCli: false };
 
 class DiagnosticsModal extends Modal {
   constructor(app: any, private readonly lines: string[]) { super(app); }
@@ -111,7 +111,7 @@ export default class VaultMcpPlugin extends Plugin {
       socketPath: sock,
       vaultName,
       enabledPlugins: () => Array.from((this.app as any).plugins.enabledPlugins as Set<string>),
-      getSettings: () => ({ readOnly: this.settings.readOnly, allowlist: this.settings.allowlist }),
+      getSettings: () => ({ readOnly: this.settings.readOnly, allowlist: this.settings.allowlist, allowDangerousCli: this.settings.allowDangerousCli }),
       getExternalTools: () => this.externalRegistry.entries(),
     };
 
