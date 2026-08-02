@@ -216,6 +216,31 @@ export { splitLines };
 import { buildPreamble } from "../src/preamble.js";
 export { buildPreamble };
 
+// --- Code Mode selection (pure, exported for tests) ---
+
+// Accept `--code-mode`, `--code-mode=<value>`, and the VAULT_MCP_CODE_MODE env
+// var. Falsy `=` values (`0`, `false`, `no`, `off`) opt out; anything else set
+// opts in — an exact-token-only match would silently ignore `--code-mode=1`
+// and hand the session the full surface with no indication why.
+export function parseCodeModeFlag(argv: string[], env?: string): boolean {
+  for (const a of argv) {
+    if (a === "--code-mode") return true;
+    const m = /^--code-mode=(.*)$/.exec(a);
+    if (m) return !["0", "false", "no", "off"].includes(m[1].toLowerCase());
+  }
+  return ["1", "true", "yes", "on"].includes((env ?? "").toLowerCase());
+}
+
+// The preamble may only be sent to a plugin build that knows how to consume
+// it: an older listener would deliver it to the MCP SDK as a bogus message.
+// ~/.claude/vault-mcp/bridge.mjs is one shared file rewritten by whichever
+// vault's plugin loaded last, so a newer bridge CAN meet an older plugin —
+// gate on the discovery's advertised capabilities, not on hope.
+export function supportsPreamble(d: Discovery): boolean {
+  const caps = (d as { capabilities?: unknown }).capabilities;
+  return Array.isArray(caps) && caps.includes("preamble");
+}
+
 type JsonRpcId = string | number;
 
 interface JsonRpcMsg {
@@ -770,14 +795,25 @@ if (process.argv[1] && process.argv[1].endsWith("bridge.mjs")) {
   const pick = parseFlag(process.argv, "vault") ?? process.env.VAULT_MCP_VAULT;
   // Code Mode: register this session with the compact search/describe/call
   // meta-tool surface instead of the full tool set (token-lean; see preamble.ts).
-  const codeMode =
-    process.argv.includes("--code-mode") ||
-    ["1", "true"].includes((process.env.VAULT_MCP_CODE_MODE ?? "").toLowerCase());
+  const codeModeWanted = parseCodeModeFlag(process.argv, process.env.VAULT_MCP_CODE_MODE);
   (async () => {
     const { sock, chosen } = await waitForVault(pick, Date.now() + WAIT_MS);
     // Pin reconnects to the vault we first connected to, so another vault
     // appearing mid-session can neither divert nor ambiguate the reconnect.
     const pinned = chosen.vault_name;
+    let preamble: string | undefined;
+    if (codeModeWanted) {
+      if (supportsPreamble(chosen)) {
+        preamble = buildPreamble({ codeMode: true });
+        fs.writeSync(2, "vault-mcp: code mode on\n");
+      } else {
+        fs.writeSync(
+          2,
+          `vault-mcp: code mode requested but vault '${chosen.vault_name}' runs plugin ` +
+            `${chosen.plugin_version ?? "unknown"} without preamble support — continuing with the full tool surface\n`
+        );
+      }
+    }
     const relay = new BridgeRelay(
       {
         clientIn: process.stdin,
@@ -792,11 +828,7 @@ if (process.argv[1] && process.argv[1].endsWith("bridge.mjs")) {
         exit: (code) => process.exit(code),
       },
       async () => (await waitForVault(pinned, Date.now() + RECONNECT_MS)).sock,
-      {
-        queueGraceMs: QUEUE_GRACE_MS,
-        maxPending: MAX_PENDING,
-        preamble: codeMode ? buildPreamble({ codeMode: true }) : undefined,
-      }
+      { queueGraceMs: QUEUE_GRACE_MS, maxPending: MAX_PENDING, preamble }
     );
     relay.start(sock);
   })().catch((e) => {

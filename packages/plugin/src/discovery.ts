@@ -9,6 +9,10 @@ export interface Discovery {
   plugin_version: string;
   obsidian_version: string;
   started_at: string;
+  /** Protocol features this plugin build supports (e.g. "preamble"). The
+   * bridge gates optional wire features on this list instead of guessing from
+   * plugin_version, so an older plugin never receives bytes it can't parse. */
+  capabilities?: string[];
 }
 
 export function writeDiscovery(slug: string, d: Discovery): void {

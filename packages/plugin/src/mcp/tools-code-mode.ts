@@ -16,6 +16,7 @@
 import { z, type ZodRawShape } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { SHARED_ANNOTATIONS } from "@vault-mcp/core";
 import { ok, fail } from "./helpers.js";
 
 export interface CapturedTool {
@@ -34,7 +35,29 @@ export interface CapturedTool {
 
 export type CapturedRegistry = Map<string, CapturedTool>;
 
-const RO = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+/**
+ * The code-mode replacement for server.registerTool: capture the (guarded)
+ * tool into the registry instead of registering it on the SDK server. Pure so
+ * the capture semantics — including the SDK-mirroring duplicate-name throw —
+ * are unit-testable without an McpServer.
+ */
+export function makeCaptureRegister(
+  registry: CapturedRegistry,
+  wrap: (def: any, handler: any) => CapturedTool["handler"]
+) {
+  return (name: string, def: any, handler: any) => {
+    // Mirror the SDK's duplicate-name throw: silent Map replacement would let
+    // a later registrant shadow an earlier one with no error, diverging from
+    // the full surface (where external-tools.ts relies on the throw to
+    // skip-and-log a colliding entry).
+    if (registry.has(name)) throw new Error(`Tool ${name} is already registered`);
+    registry.set(name, { def, handler: wrap(def, handler) });
+    // Callers ignore the RegisteredTool return value; a stub keeps the shape.
+    return { name };
+  };
+}
+
+const RO = SHARED_ANNOTATIONS.RO;
 
 function summarize(name: string, t: CapturedTool) {
   return {
@@ -46,12 +69,16 @@ function summarize(name: string, t: CapturedTool) {
 }
 
 export function searchRegistry(registry: CapturedRegistry, query?: string) {
-  const q = (query ?? "").trim().toLowerCase();
+  // Whitespace-tokenized AND match, with underscores in tool names treated as
+  // word separators — so the natural query "read note" finds
+  // obsidian_read_note instead of returning zero hits (whole-query substring
+  // matching fails every multi-word query an agent is likely to type).
+  const tokens = (query ?? "").trim().toLowerCase().split(/\s+/).filter(Boolean);
   const out: ReturnType<typeof summarize>[] = [];
   for (const [name, t] of registry) {
-    if (q) {
-      const hay = `${name}\n${t.def.title ?? ""}\n${t.def.description ?? ""}`.toLowerCase();
-      if (!hay.includes(q)) continue;
+    if (tokens.length) {
+      const hay = `${name} ${name.replace(/_/g, " ")}\n${t.def.title ?? ""}\n${t.def.description ?? ""}`.toLowerCase();
+      if (!tokens.every((tok) => hay.includes(tok))) continue;
     }
     out.push(summarize(name, t));
   }
@@ -69,8 +96,19 @@ export function describeTool(registry: CapturedRegistry, name: string) {
   };
 }
 
-export function registerCodeModeTools(server: McpServer, registry: CapturedRegistry): void {
-  server.registerTool(
+/**
+ * Register the three meta-tools. `register` defaults to server.registerTool
+ * but buildMcpServer passes the ORIGINAL (pre-monkey-patch) registerTool so
+ * the meta-tools bypass both the guard wrapper and the capture registry —
+ * see the code-mode block in server.ts for why.
+ */
+export function registerCodeModeTools(
+  server: McpServer,
+  registry: CapturedRegistry,
+  register?: (name: string, def: unknown, handler: unknown) => unknown
+): void {
+  const reg: any = register ?? (server.registerTool as any).bind(server);
+  reg(
     "obsidian_search_tools",
     {
       title: "Search available vault tools",
@@ -89,7 +127,7 @@ export function registerCodeModeTools(server: McpServer, registry: CapturedRegis
     }
   );
 
-  server.registerTool(
+  reg(
     "obsidian_describe_tool",
     {
       title: "Describe a vault tool",
@@ -106,7 +144,7 @@ export function registerCodeModeTools(server: McpServer, registry: CapturedRegis
     }
   );
 
-  server.registerTool(
+  reg(
     "obsidian_call_tool",
     {
       title: "Call a vault tool by name",

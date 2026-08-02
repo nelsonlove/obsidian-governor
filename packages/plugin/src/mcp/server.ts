@@ -8,7 +8,7 @@ import { registerNavTools } from "./tools-nav.js";
 import { registerIntegrationTools } from "./tools-integrations.js";
 import { registerCliTools } from "./tools-cli.js";
 import { registerExternalTools } from "./external-tools.js";
-import { registerCodeModeTools, type CapturedRegistry } from "./tools-code-mode.js";
+import { registerCodeModeTools, makeCaptureRegister, type CapturedRegistry } from "./tools-code-mode.js";
 import { guardCall } from "../guard.js";
 import { ObsidianBackend } from "./obsidian-backend.js";
 
@@ -41,11 +41,7 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   };
   const registry: CapturedRegistry = new Map();
   (server as any).registerTool = opts.codeMode
-    ? (name: string, def: any, handler: any) => {
-        registry.set(name, { def, handler: guarded(def, handler) });
-        // Callers ignore the RegisteredTool return value; a stub keeps the shape.
-        return { name };
-      }
+    ? makeCaptureRegister(registry, guarded)
     : (name: string, def: any, handler: any) => origRegister(name, def, guarded(def, handler));
 
   // ── 17 fs-expressible tools — shared registry + live ObsidianBackend ────────
@@ -66,12 +62,14 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   registerExternalTools(server, app, ctx);
 
   if (opts.codeMode) {
-    // Meta-tools register directly (restore the original registerTool): they
-    // must NOT be guard-wrapped — obsidian_call_tool would otherwise be blocked
-    // wholesale in read-only mode, blocking read tools too. The captured
-    // handlers carry the guard, so enforcement happens per target call.
-    (server as any).registerTool = origRegister;
-    registerCodeModeTools(server, registry);
+    // Meta-tools register through origRegister directly: they must NOT be
+    // guard-wrapped — obsidian_call_tool would otherwise be blocked wholesale
+    // in read-only mode, blocking read tools too. The captured handlers carry
+    // the guard, so enforcement happens per target call. The capture patch is
+    // deliberately LEFT INSTALLED: any post-build registration still lands in
+    // the registry, guarded — the "every registerTool call is guarded" locked
+    // invariant holds in both modes for the server's whole lifetime.
+    registerCodeModeTools(server, registry, origRegister);
   }
   return server;
 }

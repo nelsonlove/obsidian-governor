@@ -131,6 +131,7 @@ export default class VaultMcpPlugin extends Plugin {
         plugin_version: this.manifest.version,
         obsidian_version: (this.app as any).appVersion ?? "",
         started_at: new Date().toISOString(),
+        capabilities: ["preamble"],
       };
       writeDiscovery(this.slug, discovery);
       console.log(`[vault-mcp] listening on ${sock}`);

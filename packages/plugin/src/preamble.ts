@@ -32,5 +32,5 @@ export function parsePreamble(line: string): ConnOptions | null {
   if (v === null || typeof v !== "object" || Array.isArray(v)) return null;
   const obj = v as Record<string, unknown>;
   if (obj.vault_mcp_preamble !== 1) return null;
-  return { codeMode: obj.code_mode === true };
+  return { ...DEFAULT_CONN_OPTIONS, codeMode: obj.code_mode === true };
 }

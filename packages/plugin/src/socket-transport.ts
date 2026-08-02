@@ -50,6 +50,11 @@ export class UnixSocketConnTransport implements Transport {
     this.conn.on("data", (chunk: string) => this.onChunk(chunk));
     this.conn.on("close", () => this.onclose?.());
     this.conn.on("error", (e) => this.onerror?.(e));
+    // The listener paused the socket when its peek handler detached, so bytes
+    // that arrived between handoff and start() are buffered, not dropped —
+    // correctness must not depend on Protocol.connect reaching start() in the
+    // same tick. Resume now that our 'data' listener is attached.
+    this.conn.resume();
     // Deliver peeked-past bytes AFTER connect() finishes wiring the server:
     // Protocol.connect assigns onmessage before awaiting start(), but a
     // microtask keeps message dispatch out of the start() call stack entirely.
@@ -99,11 +104,22 @@ export class UnixSocketListener {
       const nl = buf.indexOf("\n");
       if (nl === -1) return;
       conn.off("data", onData);
+      // Detaching the peek handler leaves the socket flowing with no 'data'
+      // listener — pause so bytes arriving before transport.start() re-attaches
+      // one are buffered by the socket instead of discarded (start() resumes).
+      conn.pause();
       const firstLine = buf.slice(0, nl).replace(/\r$/, "");
       const rest = buf.slice(nl + 1);
       const pre = parsePreamble(firstLine);
       const initial = pre !== null ? rest : buf;
-      this.onConnection(new UnixSocketConnTransport(conn, initial), pre ?? { ...DEFAULT_CONN_OPTIONS });
+      try {
+        this.onConnection(new UnixSocketConnTransport(conn, initial), pre ?? { ...DEFAULT_CONN_OPTIONS });
+      } catch (e) {
+        // A failed server build must kill only this connection, not strand it
+        // half-open (the bridge's reconnect loop handles the drop).
+        console.error("[vault-mcp] connection handoff failed", e);
+        conn.destroy();
+      }
     };
     conn.setEncoding("utf8");
     conn.on("data", onData);
