@@ -101,6 +101,18 @@ export class VaultMcpSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Allow dangerous CLI commands")
+      .setDesc(
+        "Let obsidian_cli run eval, dev:*, devtools, restart, reload, command, and plugins:restrict. These execute arbitrary code or control the app — leave off unless you need them."
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.allowDangerousCli).onChange(async (value) => {
+          this.plugin.settings.allowDangerousCli = value;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
       .setName("Path allowlist")
       .setDesc("Restrict file operations to these vault-relative prefixes (one per line). Leave empty to allow the whole vault.")
       .addTextArea((ta) => {

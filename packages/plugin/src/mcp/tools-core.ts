@@ -14,7 +14,8 @@ export interface ServerCtx {
   socketPath: string;
   vaultName: string;
   enabledPlugins: () => string[];
-  getSettings: () => GuardSettings;
+  /** Guard settings plus tool-specific gates (allowDangerousCli: obsidian_cli's danger gate). */
+  getSettings: () => GuardSettings & { allowDangerousCli?: boolean };
   /** Externally-published tools (other Obsidian plugins via plugin.api). Optional: absent in tests that don't exercise it. */
   getExternalTools?: () => ExternalToolEntry[];
 }

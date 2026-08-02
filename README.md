@@ -40,12 +40,13 @@ On the Mac, **disconnect the remote `obsidian-vault-mcp-server` connector** for 
 
 ## Tools
 
-**43 tools.** 37 are always available; 6 are **plugin-gated** (register only when their backing plugin is loaded):
+**Up to 46 tools.** 39 are always available; 6 are **plugin-gated** (register only when their backing plugin is loaded); 1 (`obsidian_cli`) registers only when the official Obsidian CLI binary is installed:
 
 - **Core (read/write, live `app.*`):** list/read/write/append/move/delete notes, backlinks, outlinks, resolve, frontmatter (atomic multi-key), patch, search, find-by-tag, …
 - **Complementary:** trash, parsed read, append-at-heading, run-command, command list, vault/tags/environment info, active note, open-in-editor.
 - **Navigation/control:** jump-to, view-mode, workspaces (open/save/list), bookmarks (open/list), periodic note, plugin toggle.
 - **Plugin-gated:** `dataview_list_query`, `dataview_table_query` (Dataview); `create_note_from_template` (Templater); `omnisearch` (Omnisearch); `fileclass_schema`, `fileclass_insert_fields` (Metadata Menu).
+- **Official-CLI proxy:** `obsidian_cli` runs any official Obsidian CLI command against this vault (file history/diff/restore, themes, snippets, plugin install/uninstall, publish, …). The vault is pinned; dangerous commands (`eval`, `dev:*`, `devtools`, `restart`, `reload`, `command`, `plugins:restrict`) need the **Allow dangerous CLI commands** setting; the tool is unavailable while a path allowlist is active (CLI args can't be path-scoped) and is blocked entirely in read-only mode.
 
 Run **`obsidian_doctor`** (tool) or **`vault-mcp: Show diagnostics`** (command) to see which integrations the plugin currently detects.
 
@@ -53,6 +54,7 @@ Run **`obsidian_doctor`** (tool) or **`vault-mcp: Show diagnostics`** (command) 
 
 - **Claude Code connection** — status + the `claude mcp add` line + copy button.
 - **Read-only mode** — blocks all mutating tools (write/delete/move/trash/frontmatter-set/…). Reads still work. Useful when you don't want Claude touching the vault this session.
+- **Allow dangerous CLI commands** — off by default; lets `obsidian_cli` run code-executing/app-controlling commands (`eval`, `dev:*`, `devtools`, `restart`, `reload`, `command`, `plugins:restrict`).
 - **Path allowlist** — one vault-relative prefix per line (empty = whole vault). File operations outside every prefix are refused (`..` traversal is normalized and blocked). Useful to sandbox Claude to one area.
 - **Disable socket** — stops the server without uninstalling the plugin (takes effect on plugin reload).
 
