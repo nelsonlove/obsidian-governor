@@ -311,6 +311,17 @@ export class UidIndex {
     return paths[0];
   }
 
+  /**
+   * Every indexed path, in insertion order. Exists so a caller that must report
+   * the index's CARDINALITY can filter it first: `size` and `uidCount` describe
+   * the whole vault, and handing those to an allowlisted session tells it how
+   * much is out there — the same path-oracle leak `visiblePaths` closes for the
+   * paths themselves.
+   */
+  indexedPaths(): string[] {
+    return [...this.byPath.keys()];
+  }
+
   /** Every uid carried by more than one note. Reported for repair, never repaired. */
   duplicates(): UidDuplicate[] {
     const out: UidDuplicate[] = [];

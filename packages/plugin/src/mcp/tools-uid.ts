@@ -87,9 +87,22 @@ export function registerUidTools(server: McpServer, ctx: UidToolsCtx): void {
           .duplicates()
           .map((d) => ({ uid: d.uid, paths: visible(d.paths) }))
           .filter((d) => d.paths.length > 1);
+        // The TOTALS are filtered too (D1). `index.size` / `index.uidCount`
+        // describe the whole vault, so reporting them raw told a session
+        // sandboxed to one folder how many notes exist outside it — a
+        // cardinality oracle beside the path oracle the duplicates list already
+        // closes. A session sees its own visible cardinality and nothing more.
+        //
+        // `visiblePaths` hands back the SAME array when no allowlist is active,
+        // so the unfiltered case still reads the index's own counters and costs
+        // nothing.
+        const all = index.indexedPaths();
+        const shown = visible(all);
+        const uidCount =
+          shown === all ? index.uidCount : new Set(shown.map((p) => index.uidFor(p))).size;
         return ok({
-          indexed_notes: index.size,
-          indexed_uids: index.uidCount,
+          indexed_notes: shown.length,
+          indexed_uids: uidCount,
           duplicate_count: duplicates.length,
           duplicates,
         });

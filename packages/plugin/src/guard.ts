@@ -94,13 +94,16 @@ export function collectPaths(args: Record<string, unknown>): string[] {
  * The subset of `paths` this session may be TOLD ABOUT — the allowlist applied
  * to disclosure rather than to action.
  *
- * It lives here, beside guardCall, because two callers need the identical rule
- * and a second copy of it is a second thing to forget: `obsidian_resolve_uid`
- * filters the candidates it reports (an unfiltered index is a path oracle for
- * the area a sandboxed session is excluded from), and uid ADDRESSING decides
+ * It lives here, beside guardCall, because every disclosing surface needs the
+ * identical rule and a second copy of it is a second thing to forget:
+ * `obsidian_resolve_uid` filters the candidates AND the totals it reports (an
+ * unfiltered index is a path — and cardinality — oracle for the area a
+ * sandboxed session is excluded from), uid ADDRESSING decides
  * unresolved/ambiguous over the same visible set (a `uid_ambiguous` naming every
- * carrier disclosed exactly the paths the filter exists to hide). One rule, so
- * the lookup and the addressing can never disagree about what a uid names.
+ * carrier disclosed exactly the paths the filter exists to hide), and
+ * `obsidian_check_links` filters both halves of its drift report. One rule, so
+ * the lookup, the addressing and the report can never disagree about what a
+ * session can see.
  *
  * No allowlist ⇒ everything is visible, unchanged.
  */

@@ -10,6 +10,7 @@ import { registerCliTools } from "./tools-cli.js";
 import { registerExternalTools } from "./external-tools.js";
 import { registerLockTools } from "./tools-locks.js";
 import { registerUidTools } from "./tools-uid.js";
+import { registerLinkTools, obsidianLinkSource } from "./tools-links.js";
 import { registerCodeModeTools, makeCaptureRegister, type CapturedRegistry } from "./tools-code-mode.js";
 import { makeGuarded, withKernelArgs } from "./guarded.js";
 import type { JournalActor } from "../kernel/index.js";
@@ -106,6 +107,10 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   // Addressing by uid needs no tool of its own — `uid:<value>` binds at the
   // interception point above — so this is purely the lookup, in both directions.
   registerUidTools(server, ctx);
+  // ── link drift, reported not repaired (slice 2.2) ──────────────────────────
+  // Read-only by construction: moves already heal their own links through
+  // fileManager.renameFile, so this reports the drift that came from OUTSIDE.
+  registerLinkTools(server, obsidianLinkSource(app), ctx);
   // ── official-CLI proxy — conditional on the CLI binary being installed ──────
   registerCliTools(server, ctx);
   // ── externally-published tools (other Obsidian plugins via plugin.api) ─────
