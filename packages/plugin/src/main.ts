@@ -126,9 +126,19 @@ export default class VaultMcpPlugin extends Plugin {
    *   • `vault.delete` drops the mapping.
    *
    * registerEvent so every handler is detached when the plugin unloads.
+   *
+   * `onLayoutReady` is the exception: it takes a plain callback and returns no
+   * EventRef, so there is nothing for registerEvent to detach. A plugin unloaded
+   * before the layout settles would otherwise still run its rebuild — indexing a
+   * vault on behalf of an instance that no longer exists — so the callback is
+   * gated on a disposed flag that `register` flips at unload. Wired only when
+   * the plugin is enabled: a disabled plugin serves no connection, so an index
+   * it maintains is upkeep nobody can read.
    */
   private wireUidIndex(index: UidIndex): void {
-    this.app.workspace.onLayoutReady(() => index.rebuild());
+    let disposed = false;
+    this.register(() => { disposed = true; });
+    this.app.workspace.onLayoutReady(() => { if (!disposed) index.rebuild(); });
     this.registerEvent(this.app.metadataCache.on("changed", (file) => index.onChanged(file.path)));
     this.registerEvent(this.app.vault.on("rename", (file, oldPath) => index.onRenamed(oldPath, file.path)));
     this.registerEvent(this.app.vault.on("delete", (file) => index.onDeleted(file.path)));
@@ -165,7 +175,6 @@ export default class VaultMcpPlugin extends Plugin {
       new LockStore(),
       uidIndex,
     );
-    this.wireUidIndex(uidIndex);
 
     // Server identity — the transport asserting which vault and which install.
     // The install id is a small file beside the journal (`install-id.json`), so
@@ -192,6 +201,11 @@ export default class VaultMcpPlugin extends Plugin {
     };
 
     if (this.settings.enabled) {
+      // The uid index is kept fresh only while the plugin actually serves: with
+      // the socket down nothing can address a uid, so an index maintained off
+      // every metadata event would be work done for no reader.
+      this.wireUidIndex(uidIndex);
+
       // One MCP server per connection → concurrent Claude Code sessions and
       // background agents share the plugin without evicting each other.
       this.listener = new UnixSocketListener(sock, (transport, connOpts) => {

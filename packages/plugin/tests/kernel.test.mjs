@@ -1716,7 +1716,7 @@ describe("D1: the claim cap refuses, and never evicts another holder's claim", (
     assert.equal(locks.size, 3, "a refused claim adds nothing");
   });
 
-  test("the per-holder cap bites first, so one flooding holder cannot fill the store", () => {
+  test("the per-holder cap bounds ONE holder, leaving room for the next one", () => {
     const locks = new LockStore(() => 1_000_000, 200, 2);
     locks.claim({ scope: "A/1", holder: "flooder", reason: "r" });
     locks.claim({ scope: "A/2", holder: "flooder", reason: "r" });
@@ -1726,6 +1726,45 @@ describe("D1: the claim cap refuses, and never evicts another holder's claim", (
     );
     // …and everyone else still has room, which is the point of a per-holder cap.
     assert.equal(locks.claim({ scope: "B/1", holder: "someone-else", reason: "r" }).lock.holder, "someone-else");
+  });
+
+  // D-C: the per-holder cap does NOT make the store un-exhaustible. A holder is
+  // `client#connection`, connections are free, and 4 × 50 = 200 — so a
+  // multi-connection client can fill the store and a bystander is refused. The
+  // honest property is TTL-bounded self-healing, and the refusal says so.
+  test("D-C: a multi-CONNECTION client can still fill the store, and the refusal is honest about it", () => {
+    const now = 1_000_000;
+    const locks = new LockStore(() => now, LOCK_MAX, LOCK_MAX_PER_HOLDER);
+    for (let conn = 0; conn < LOCK_MAX / LOCK_MAX_PER_HOLDER; conn++) {
+      for (let i = 0; i < LOCK_MAX_PER_HOLDER; i++) {
+        locks.claim({ scope: `Flood/${conn}/${i}.md`, holder: `one-client#conn-${conn}`, reason: "flooding" });
+      }
+    }
+    assert.equal(locks.size, LOCK_MAX, "one client, four connections, the whole store");
+
+    let refusal;
+    try {
+      locks.claim({ scope: "Bystander/a.md", holder: "bystander#conn-x", reason: "ordinary work" });
+    } catch (e) {
+      refusal = e;
+    }
+    assert.ok(refusal instanceof LockCapError && refusal.kind === "store", "the bystander is refused");
+    assert.match(
+      refusal.message,
+      /expire/,
+      "a denied bystander is told recovery is bounded — every claim is TTL-bounded, so the store self-heals"
+    );
+  });
+
+  test("D-C: …and the store recovers on its own once those claims expire", () => {
+    let now = 1_000_000;
+    const locks = new LockStore(() => now, 2, 2);
+    locks.claim({ scope: "A/1", holder: "flooder#1", reason: "r", ttlMs: 60_000 });
+    locks.claim({ scope: "A/2", holder: "flooder#1", reason: "r", ttlMs: 60_000 });
+    assert.throws(() => locks.claim({ scope: "B/1", holder: "bystander#1", reason: "r" }), LockCapError);
+
+    now += 60_001; // no timer, no sweep: the next call prunes them
+    assert.equal(locks.claim({ scope: "B/1", holder: "bystander#1", reason: "r" }).lock.scope, "B/1");
   });
 
   test("re-claiming your own scope at the cap is a replacement, so it is allowed", () => {
@@ -2024,6 +2063,33 @@ describe("scope-claim tools", () => {
 
     const missing = await call("obsidian_release_scope", { lock_id: "lock-nope" });
     assert.equal(missing.isError, true);
+  });
+
+  // D-B: a cap refusal used to be caught and rendered by core `fail(e)`, which
+  // emits a bare `Error: <message>` — so the ONE machine-readable thing about it,
+  // its code, was dropped on the wire while `codedError` sat in the same file.
+  test("D-B: the per-holder cap refusal reaches the wire as Error [lock_cap]", async () => {
+    const locks = new LockStore(() => 1_000_000, 200, 1);
+    const { call } = lockServer({ kernel: fakeKernel({ locks }).kernel });
+    assert.equal((await call("obsidian_claim_scope", { scope: "Projects", reason: "one" })).isError, undefined);
+
+    const res = await call("obsidian_claim_scope", { scope: "Archive", reason: "two" });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[lock_cap\]: /, "a coded refusal, not an anonymous Error:");
+    assert.match(res.content[0].text, /per-holder cap/);
+    assert.equal(locks.list().length, 1, "nothing was claimed");
+  });
+
+  test("D-B: the STORE cap refusal carries its own code, and names the TTL recovery", async () => {
+    const locks = new LockStore(() => 1_000_000, 1, 50);
+    locks.claim({ scope: "Elsewhere", holder: "someone-else#conn-9", reason: "theirs" });
+    const { call } = lockServer({ kernel: fakeKernel({ locks }).kernel });
+
+    const res = await call("obsidian_claim_scope", { scope: "Projects", reason: "mine" });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[lock_store_cap\]: /, "the store cap is distinguishable from the holder cap");
+    assert.match(res.content[0].text, /expire/, "a denied bystander learns the wait is bounded");
+    assert.equal(locks.list().length, 1, "no holder's claim was dropped to make room");
   });
 
   // D2: re-claiming used to ACCUMULATE — one claim per call, all saying the same

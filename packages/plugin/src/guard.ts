@@ -90,6 +90,25 @@ export function collectPaths(args: Record<string, unknown>): string[] {
   return out;
 }
 
+/**
+ * The subset of `paths` this session may be TOLD ABOUT — the allowlist applied
+ * to disclosure rather than to action.
+ *
+ * It lives here, beside guardCall, because two callers need the identical rule
+ * and a second copy of it is a second thing to forget: `obsidian_resolve_uid`
+ * filters the candidates it reports (an unfiltered index is a path oracle for
+ * the area a sandboxed session is excluded from), and uid ADDRESSING decides
+ * unresolved/ambiguous over the same visible set (a `uid_ambiguous` naming every
+ * carrier disclosed exactly the paths the filter exists to hide). One rule, so
+ * the lookup and the addressing can never disagree about what a uid names.
+ *
+ * No allowlist ⇒ everything is visible, unchanged.
+ */
+export function visiblePaths(paths: string[], settings?: GuardSettings | null): string[] {
+  if (!settings?.allowlist?.length) return paths;
+  return paths.filter((path) => !guardCall({ isMutating: false, args: { path }, settings }));
+}
+
 // Returns a blocking reason, or null if the call is allowed.
 export function guardCall(opts: {
   isMutating: boolean;

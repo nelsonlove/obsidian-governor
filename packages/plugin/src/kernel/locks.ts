@@ -24,6 +24,19 @@
 // IN MEMORY, PER PLUGIN INSTANCE, like the idempotency store: a reload clears
 // every claim. Claims describe work in flight inside one session's lifetime,
 // which is exactly as long as an advisory claim is worth anything.
+//
+// ── caps, and what they do not do ────────────────────────────────────────────
+//
+// 50 live claims per holder, 200 store-wide, and both REFUSE rather than evict
+// (LockCapError). A holder is `client#connection`, so the per-holder cap bounds
+// a connection: a client that opens four connections can hold all 200 and a
+// bystander's claim is then refused. That is not fixable by identity — the
+// client name is self-asserted, so a per-"client" cap is spoofable by renaming.
+// What bounds it is the TTL: a flooded store drains on its own within 30 minutes
+// (5 by default), and because claims are ADVISORY, a full store costs a denied
+// caller only the disclosure — never access to the vault, never a write.
+
+
 
 import { posix } from "node:path";
 
@@ -36,9 +49,17 @@ export const LOCK_TTL_MIN_MS = 1_000;
 /** Cap on live claims store-wide, so a leak cannot grow without bound. */
 export const LOCK_MAX = 200;
 /**
- * Cap on live claims held by ONE holder. The store cap alone would let a single
- * flooding connection fill the store and refuse everyone else; per-holder is
- * where the pressure belongs, since a holder can always release its own.
+ * Cap on live claims held by ONE holder, where a holder is `client#connection`
+ * (holderOf) — so it bounds a CONNECTION, not a client.
+ *
+ * Be precise about what that buys, because the obvious stronger claim is false:
+ * it does NOT make the store un-exhaustible. Connections are free and identity
+ * is self-asserted, so four connections of one client reach 4 × 50 = 200 and a
+ * bystander's next claim is refused. Widening the cap per "client" would only
+ * move the spoof. What actually bounds the damage is TIME: every claim expires
+ * (5 min default, 30 max) and expiry is lazy, so a flooded store drains without
+ * intervention, and nothing but disclosure is lost while it is full — claims are
+ * advisory, so a refused claim never costs anyone access to the vault.
  */
 export const LOCK_MAX_PER_HOLDER = 50;
 
@@ -83,7 +104,13 @@ export interface LockClaim {
  * to make room for another's.
  */
 export class LockCapError extends Error {
-  readonly code = "lock_cap";
+  /**
+   * Two caps, two codes: `lock_cap` is your own doing and you can fix it by
+   * releasing one of your claims; `lock_store_cap` is somebody else's doing and
+   * you can only wait. A caller that cannot tell them apart cannot react
+   * correctly to either.
+   */
+  readonly code: string;
   constructor(
     readonly cap: number,
     readonly kind: "holder" | "store"
@@ -94,9 +121,11 @@ export class LockCapError extends Error {
             `Release one with obsidian_release_scope, or let it expire — no other holder's claim is ever ` +
             `dropped to make room. Nothing was claimed.`
         : `refused: this vault already holds ${cap} live advisory claims (the store cap). ` +
-            `Wait for claims to expire or release some — no holder's claim is ever dropped to make room. ` +
-            `Nothing was claimed.`
+            `No holder's claim is ever dropped to make room, but every claim is TTL-bounded (5 minutes by ` +
+            `default, 30 at most), so the store self-heals as they expire — retry shortly, or release your ` +
+            `own claims to free room sooner. Nothing was claimed.`
     );
+    this.code = kind === "store" ? "lock_store_cap" : "lock_cap";
     this.name = "LockCapError";
   }
 }
