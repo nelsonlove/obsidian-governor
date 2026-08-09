@@ -1,13 +1,15 @@
 // The single interception point every registerTool call passes through (see the
-// monkeypatch in server.ts). Four things bind here, in order:
+// monkeypatch in server.ts). Five things bind here, in order:
 //
-//   1. guardCall  — read-only mode + path allowlist (pre-existing)
-//   2. kernel arguments — `if_rev` / `idempotency_key` are peeled off the args
+//   1. uid addressing — `uid:<value>` path arguments resolve to real paths
+//      through the uid index (slice 2.1), for READS and WRITES alike
+//   2. guardCall  — read-only mode + path allowlist (pre-existing)
+//   3. kernel arguments — `if_rev` / `idempotency_key` are peeled off the args
 //      (kernel v0) so no tool handler ever sees them
-//   3. write queue — mutating calls serialize plugin-wide (kernel v0)
-//   4. write journal — one audit record per mutating call (kernel v0)
+//   4. write queue — mutating calls serialize plugin-wide (kernel v0)
+//   5. write journal — one audit record per mutating call (kernel v0)
 //
-// Reads take path 1 only and return immediately. Lives in its own module (not
+// Reads take paths 1–2 only and return immediately. Lives in its own module (not
 // inline in server.ts) so it imports nothing from `obsidian` and can be
 // unit-tested headlessly — server.ts cannot, since its tool registrars pull in
 // live Obsidian classes.
@@ -17,9 +19,13 @@ import { guardCall, type GuardSettings } from "../guard.js";
 import {
   IdempotencyMismatchError,
   RevConflictError,
+  UidAmbiguousError,
+  UidUnresolvedError,
   WriteTimeoutError,
+  resolveUidArgs,
   type Kernel,
   type JournalActor,
+  type UidIndex,
 } from "../kernel/index.js";
 
 /** Guard/queue-level failure envelope: matches the `Error [code]: message` shape guardCall already emits. */
@@ -145,6 +151,34 @@ export interface GuardedOpts {
   kernel?: Kernel | null;
   /** Actor for the journal, resolved per call: client identity is only known after initialize. */
   actor: () => JournalActor;
+  /**
+   * The uid index backing `uid:<value>` addressing. Defaults to the kernel's,
+   * which is where it lives in the plugin; overridable so this wrapper can be
+   * tested against an index without a kernel.
+   */
+  uids?: UidIndex | null;
+}
+
+// ── uid addressing ───────────────────────────────────────────────────────────
+//
+// `path: "uid:019f…"` resolves through the index to the real path before
+// ANYTHING else sees the call. Deliberately here and not in ~30 tool handlers:
+// like the kernel arguments, per-tool support would mean the next path-taking
+// tool silently lacks it. Because it is defined over the guard's own path walker
+// (mapPaths), every argument the allowlist scopes is addressable and vice versa.
+//
+// It runs BEFORE guardCall so the allowlist checks the RESOLVED path — a uid
+// must not be a way around a path sandbox. The consequence is that an
+// allowlisted session could learn a path outside its sandbox from the refusal
+// message, so resolved paths are folded back to their `uid:` form in the
+// guard's text (uidSafe): the refusal still says which argument was wrong
+// without disclosing where it pointed.
+
+/** Put `uid:<value>` back where a resolved path appears, so a refusal discloses nothing. */
+function uidSafe(message: string, resolved: Array<{ uid: string; path: string }>): string {
+  let out = message;
+  for (const { uid, path } of resolved) out = out.split(path).join(`uid:${uid}`);
+  return out;
 }
 
 /**
@@ -158,8 +192,20 @@ export function makeGuarded(opts: GuardedOpts) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (def: any, handler: any, name?: string) => async (args: any, extra: any) => {
     const isMutating = def?.annotations?.readOnlyHint === false;
-    const blocked = guardCall({ isMutating, args: args ?? {}, settings: opts.getSettings() });
-    if (blocked) return codedError(blocked.code, blocked.message);
+    // 1. uid addressing. A call using none is handed back the SAME args object,
+    //    so nothing below can behave differently for an ordinary path call.
+    let addressed;
+    try {
+      addressed = resolveUidArgs(args ?? {}, opts.uids ?? opts.kernel?.uids ?? null);
+    } catch (e) {
+      // Unknown or duplicated uid: refuse, and run nothing. Both are typed, and
+      // the ambiguous one names the candidates so the caller can disambiguate.
+      if (e instanceof UidUnresolvedError || e instanceof UidAmbiguousError) return codedError(e.code, e.message);
+      throw e;
+    }
+    const callArgs = addressed.args;
+    const blocked = guardCall({ isMutating, args: callArgs, settings: opts.getSettings() });
+    if (blocked) return codedError(blocked.code, uidSafe(blocked.message, addressed.resolved));
     // Kernel arguments are always PEELED OFF, kernel or not, so no handler ever
     // sees one. What differs without a kernel is whether they can be honored:
     //
@@ -173,7 +219,7 @@ export function makeGuarded(opts: GuardedOpts) {
     //     failure mode is at-least-once (the pre-kernel status quo), not a
     //     destructive one: the operation still does what the caller asked, a
     //     retry just isn't deduplicated.
-    const { toolArgs, ifRev, idempotencyKey } = splitKernelArgs(args ?? {});
+    const { toolArgs, ifRev, idempotencyKey } = splitKernelArgs(callArgs);
     if (isMutating && !opts.kernel && ifRev !== undefined) {
       return codedError(
         "precondition_unsupported",

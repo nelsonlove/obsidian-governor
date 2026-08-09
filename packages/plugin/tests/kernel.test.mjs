@@ -26,12 +26,15 @@ import {
   digestArgs,
   monthKey,
   LockStore,
+  LockCapError,
   holderOf,
   scopeCovers,
   scopesOverlap,
   LOCK_TTL_DEFAULT_MS,
   LOCK_TTL_MAX_MS,
   LOCK_TTL_MIN_MS,
+  LOCK_MAX,
+  LOCK_MAX_PER_HOLDER,
   loadInstallId,
   mintInstallId,
   INSTALL_ID_FILE,
@@ -1676,6 +1679,71 @@ describe("LockStore lifecycle", () => {
   });
 });
 
+// D1: the cap used to EVICT the globally oldest claim to make room. A client
+// claiming in a loop could therefore silently destroy every other session's
+// live claims — the disclosure mechanism quietly deleting the disclosures.
+describe("D1: the claim cap refuses, and never evicts another holder's claim", () => {
+  test("200+ claims by holder A cannot remove holder B's claim", () => {
+    const locks = new LockStore(() => 1_000_000, 200, 1000);
+    const b = locks.claim({ scope: "Bravo/work.md", holder: "B", reason: "B is working here" }).lock;
+
+    let refusals = 0;
+    for (let i = 0; i < 400; i++) {
+      // Distinct scopes, so nothing is a same-scope replacement: this is the
+      // flood the old eviction loop turned into a weapon.
+      try {
+        locks.claim({ scope: `Alpha/${i}.md`, holder: "A", reason: "flooding" });
+      } catch (e) {
+        assert.ok(e instanceof LockCapError, "the refusal is typed");
+        refusals++;
+      }
+    }
+
+    assert.ok(refusals > 0, "the cap was reached and refused");
+    const survivor = locks.list().find((l) => l.id === b.id);
+    assert.ok(survivor, "B's claim survived 400 claims by A — no claim is taken to make room for another's");
+    assert.equal(survivor.reason, "B is working here");
+    assert.equal(locks.list().length, 200, "the store never grew past its cap either");
+  });
+
+  test("the refusal names the cap it hit, and nothing was claimed", () => {
+    const locks = new LockStore(() => 1_000_000, 3, 1000);
+    for (let i = 0; i < 3; i++) locks.claim({ scope: `S${i}`, holder: "h", reason: "r" });
+    assert.throws(
+      () => locks.claim({ scope: "S3", holder: "h", reason: "r" }),
+      (e) => e instanceof LockCapError && e.kind === "store" && e.cap === 3 && /already holds 3 live advisory claims/.test(e.message)
+    );
+    assert.equal(locks.size, 3, "a refused claim adds nothing");
+  });
+
+  test("the per-holder cap bites first, so one flooding holder cannot fill the store", () => {
+    const locks = new LockStore(() => 1_000_000, 200, 2);
+    locks.claim({ scope: "A/1", holder: "flooder", reason: "r" });
+    locks.claim({ scope: "A/2", holder: "flooder", reason: "r" });
+    assert.throws(
+      () => locks.claim({ scope: "A/3", holder: "flooder", reason: "r" }),
+      (e) => e instanceof LockCapError && e.kind === "holder" && e.cap === 2
+    );
+    // …and everyone else still has room, which is the point of a per-holder cap.
+    assert.equal(locks.claim({ scope: "B/1", holder: "someone-else", reason: "r" }).lock.holder, "someone-else");
+  });
+
+  test("re-claiming your own scope at the cap is a replacement, so it is allowed", () => {
+    const locks = new LockStore(() => 1_000_000, 200, 2);
+    const first = locks.claim({ scope: "A/1", holder: "h", reason: "r1" }).lock;
+    locks.claim({ scope: "A/2", holder: "h", reason: "r2" });
+    const again = locks.claim({ scope: "A/1", holder: "h", reason: "restated" });
+    assert.equal(again.replaced, true);
+    assert.equal(again.lock.id, first.id);
+    assert.equal(locks.size, 2, "a replacement never grows the store, so a cap cannot block a renewal");
+  });
+
+  test("the documented caps", () => {
+    assert.equal(LOCK_MAX, 200);
+    assert.equal(LOCK_MAX_PER_HOLDER, 50);
+  });
+});
+
 describe("LockStore overlap disclosure", () => {
   test("a foreign overlapping claim is allowed AND disclosed to the claimer", () => {
     const locks = new LockStore();
@@ -1716,6 +1784,27 @@ describe("LockStore overlap disclosure", () => {
     const covering = locks.covering("Projects/Alpha/a.md", "me");
     assert.deepEqual(covering.map((l) => l.reason), ["specific", "middling", "whole vault"]);
     assert.deepEqual(locks.covering("Elsewhere/x.md", "me").map((l) => l.reason), ["whole vault"]);
+  });
+
+  // D3: a move names a `from` and a `to`. Consulting only the primary target
+  // made the ARRIVING half of every move invisible — you could move a note into
+  // somebody's claimed scope and never be told you had.
+  test("D3: coveringAny consults every path, so a move INTO a claimed scope is noticed", () => {
+    const locks = new LockStore();
+    locks.claim({ scope: "Projects/Alpha", holder: "h1", reason: "restructuring" });
+
+    const movingIn = locks.coveringAny(["Inbox/note.md", "Projects/Alpha/note.md"], "me");
+    assert.deepEqual(movingIn.map((l) => l.reason), ["restructuring"], "the destination is inside the claim");
+    const movingOut = locks.coveringAny(["Projects/Alpha/note.md", "Inbox/note.md"], "me");
+    assert.deepEqual(movingOut.map((l) => l.reason), ["restructuring"], "…and so is the source, symmetrically");
+    assert.deepEqual(locks.coveringAny(["Inbox/a.md", "Inbox/b.md"], "me"), [], "a move touching neither is untouched");
+  });
+
+  test("D3: one lock covering many of the paths is disclosed ONCE", () => {
+    const locks = new LockStore();
+    locks.claim({ scope: "Projects", holder: "h1", reason: "sweeping" });
+    const batch = Array.from({ length: 50 }, (_, i) => `Projects/n${i}.md`);
+    assert.equal(locks.coveringAny(batch, "me").length, 1, "50 paths under one claim is one notice, not 50");
   });
 
   test("holderOf derives a stable per-connection identity from the journal actor", () => {
@@ -1810,6 +1899,38 @@ describe("advisory lock notices", () => {
     assert.equal(records()[0].lockNotice.reason, "narrow edit", "the closest claim is the one recorded");
   });
 
+  test("D4: several notices are one block, one claim per LINE", async () => {
+    const { kernel } = fakeKernel();
+    const THIRD = { transport: "mcp", client: "third/1", connection: "conn-3" };
+    kernel.locks.claim({ scope: "Projects", holder: holderOf(THIRD), reason: "broad sweep", ttlMs: 120_000 });
+    kernel.locks.claim({ scope: "Projects/Alpha", holder: holderOf(OTHER), reason: "narrow edit", ttlMs: 120_000 });
+
+    const res = await kernel.runMutation(ctx(), async () => okEnvelope({ ok: true }));
+    assert.equal(res.content.length, 2, "the notice is ONE extra block however many claims it names");
+    const lines = res.content[1].text.split("\n");
+    assert.equal(lines.length, 2, "…with one line per claim, not a space-joined run-on");
+    assert.match(lines[0], /^advisory lock: .*claims Projects\/Alpha \(narrow edit\)/, "closest first");
+    assert.match(lines[1], /^advisory lock: .*claims Projects \(broad sweep\)/);
+  });
+
+  test("D3: a MOVE into a foreign claim is noticed, though its primary target is outside", async () => {
+    const { kernel, records } = fakeKernel();
+    kernel.locks.claim({ scope: "Projects/Alpha", holder: holderOf(OTHER), reason: "restructuring", ttlMs: 120_000 });
+
+    // `from` is the primary target and lies OUTSIDE the claim; only `to` is in.
+    const res = await kernel.runMutation(
+      ctx({ op: "obsidian_move_note", args: { from: "Inbox/note.md", to: "Projects/Alpha/note.md" } }),
+      async () => okEnvelope({ moved: true })
+    );
+    assert.equal(res.content.length, 2, "arriving in somebody's scope is landing in their work");
+    assert.equal(res.structuredContent.advisory_locks[0].scope, "Projects/Alpha");
+
+    await tick(5);
+    const [rec] = records();
+    assert.equal(rec.target.path, "Inbox/note.md", "the journal's primary target is unchanged");
+    assert.equal(rec.lockNotice.reason, "restructuring");
+  });
+
   test("a non-envelope handler result is passed through untouched", async () => {
     const { kernel } = fakeKernel();
     kernel.locks.claim({ scope: "Projects", holder: holderOf(OTHER), reason: "r", ttlMs: 120_000 });
@@ -1847,9 +1968,12 @@ describe("scope-claim tools", () => {
     assert.equal(def("obsidian_list_scope_claims").annotations.readOnlyHint, true);
   });
 
-  test("the verbs are claim/release only — no grant, approve or accept anywhere", () => {
+  test("the verbs are claim/renew/release only — no grant, approve or accept anywhere", () => {
     const { calls } = lockServer();
-    assert.deepEqual([...calls.keys()], ["obsidian_claim_scope", "obsidian_release_scope", "obsidian_list_scope_claims"]);
+    assert.deepEqual(
+      [...calls.keys()],
+      ["obsidian_claim_scope", "obsidian_renew_scope", "obsidian_release_scope", "obsidian_list_scope_claims"]
+    );
     for (const [name, { def }] of calls) {
       const text = `${name} ${def.title} ${def.description}`.toLowerCase();
       for (const banned of ["grant", "approve", "accept"]) {
@@ -1902,12 +2026,75 @@ describe("scope-claim tools", () => {
     assert.equal(missing.isError, true);
   });
 
-  test("re-claiming the same scope is how you renew; both claims are yours", async () => {
+  // D2: re-claiming used to ACCUMULATE — one claim per call, all saying the same
+  // thing, all counting against the cap. It now replaces.
+  test("D2: re-claiming a scope you hold REPLACES that claim rather than adding one", async () => {
     const { kernel, call } = lockServer();
     const first = (await call("obsidian_claim_scope", { scope: "Projects", reason: "pass 1" })).structuredContent;
     assert.deepEqual(first.overlapping, [], "your own scope never overlaps you");
-    await call("obsidian_claim_scope", { scope: "Projects", reason: "pass 2" });
+    assert.equal(first.replaced, false, "the first claim replaced nothing");
+
+    const second = (await call("obsidian_claim_scope", { scope: "Projects", reason: "pass 2" })).structuredContent;
+    assert.equal(second.replaced, true);
+    assert.equal(second.claim.id, first.claim.id, "the claim keeps its identity, so a held id stays valid");
+    assert.equal(second.claim.reason, "pass 2", "the reason is restated");
+    assert.equal(kernel.locks.list().length, 1, "one scope, one claim");
+
+    // A DIFFERENT scope is a different claim, replaced by nothing.
+    const other = (await call("obsidian_claim_scope", { scope: "Archive", reason: "elsewhere" })).structuredContent;
+    assert.equal(other.replaced, false);
     assert.equal(kernel.locks.list().length, 2);
+  });
+
+  test("D2: obsidian_renew_scope extends a claim you hold, by id", async () => {
+    const { kernel, call } = lockServer();
+    const claim = (await call("obsidian_claim_scope", { scope: "Projects", reason: "long job" })).structuredContent.claim;
+
+    const renewed = await call("obsidian_renew_scope", { lock_id: claim.id, ttl_ms: LOCK_TTL_MAX_MS });
+    assert.equal(renewed.isError, undefined);
+    assert.equal(renewed.structuredContent.renewed.id, claim.id, "renewing never mints a new claim");
+    assert.equal(renewed.structuredContent.renewed.scope, "Projects", "scope and reason are untouched");
+    assert.equal(renewed.structuredContent.renewed.reason, "long job");
+    assert.ok(
+      new Date(renewed.structuredContent.renewed.expires_at) > new Date(claim.expires_at),
+      "the clock restarted"
+    );
+    assert.equal(kernel.locks.list().length, 1);
+  });
+
+  test("D2: renewing another holder's claim, or an unknown id, is refused", async () => {
+    const { kernel, call } = lockServer();
+    const foreign = kernel.locks.claim({ scope: "Archive", holder: "someone-else", reason: "theirs", ttlMs: 120_000 }).lock;
+
+    const denied = await call("obsidian_renew_scope", { lock_id: foreign.id });
+    assert.equal(denied.isError, true);
+    assert.match(denied.content[0].text, /another holder/);
+    assert.equal(
+      kernel.locks.list()[0].expiresAt,
+      foreign.expiresAt,
+      "a foreign claim's clock is not touched by a refused renewal"
+    );
+
+    assert.equal((await call("obsidian_renew_scope", { lock_id: "lock-nope" })).isError, true);
+  });
+
+  test("D2: renew is MUTATING, so it is journaled, and names the lock", async () => {
+    const { kernel, records } = fakeKernel();
+    const guarded = makeGuarded({ getSettings: () => OPEN_SETTINGS, kernel, actor: () => ACTOR });
+    const calls = new Map();
+    registerLockTools(
+      { registerTool: (name, def, handler) => calls.set(name, guarded(def, handler, name)) },
+      { kernel },
+      () => ACTOR
+    );
+    const claimed = await calls.get("obsidian_claim_scope")({ scope: "Projects", reason: "r" }, {});
+    const id = claimed.structuredContent.claim.id;
+    await calls.get("obsidian_renew_scope")({ lock_id: id }, {});
+
+    await tick(5);
+    const renew = records().find((r) => r.op === "obsidian_renew_scope");
+    assert.ok(renew, "a renewal is an act the audit stream records");
+    assert.equal(renew.target.ref, `lock:${id}`);
   });
 
   test("without a kernel the tools fail cleanly rather than throwing", async () => {
@@ -1939,6 +2126,72 @@ describe("scope-claim tools", () => {
     assert.equal(recs[0].target.ref, "scope:Projects/Alpha");
     assert.equal(recs[1].target.ref, `lock:${claimed.structuredContent.claim.id}`);
     assert.deepEqual(recs[0].actor, ACTOR, "a claim is attributed like any other operation");
+  });
+
+  // D8: a claim is a statement about a region of the vault that every other
+  // session sees. A session sandboxed to Projects/ that could claim the whole
+  // vault would reach out of its sandbox — not to write, but to stamp its name
+  // on everybody else's writes.
+  describe("D8: a claim is bounded by the path allowlist", () => {
+    function sandboxed(allowlist) {
+      const calls = new Map();
+      const { kernel } = fakeKernel();
+      registerLockTools(
+        { registerTool: (name, def, handler) => calls.set(name, { def, handler }) },
+        { kernel, getSettings: () => ({ readOnly: false, allowlist }) },
+        () => ACTOR
+      );
+      return { kernel, call: (name, args = {}) => calls.get(name).handler(args, {}) };
+    }
+
+    test("an allowlisted session may claim INSIDE its allowlist", async () => {
+      const { kernel, call } = sandboxed(["Projects"]);
+      const res = await call("obsidian_claim_scope", { scope: "Projects/Alpha", reason: "editing" });
+      assert.equal(res.isError, undefined);
+      assert.equal(res.structuredContent.claim.scope, "Projects/Alpha");
+      assert.equal(kernel.locks.list().length, 1);
+    });
+
+    test("…and is refused OUTSIDE it, with a typed error and no claim", async () => {
+      const { kernel, call } = sandboxed(["Projects"]);
+      const res = await call("obsidian_claim_scope", { scope: "Archive", reason: "reaching out" });
+      assert.equal(res.isError, true);
+      assert.match(res.content[0].text, /Error \[out_of_allowlist\]/);
+      assert.match(res.content[0].text, /Nothing was claimed/);
+      assert.deepEqual(kernel.locks.list(), []);
+    });
+
+    test("…and refused the WHOLE-VAULT scope, which no path check would catch", async () => {
+      const { kernel, call } = sandboxed(["Projects"]);
+      for (const scope of ["", ".", "/"]) {
+        const res = await call("obsidian_claim_scope", { scope, reason: "everything" });
+        assert.equal(res.isError, true, `scope ${JSON.stringify(scope)} must be refused`);
+        assert.match(res.content[0].text, /Error \[out_of_allowlist\]/);
+      }
+      assert.deepEqual(kernel.locks.list(), [], "the empty scope normalizes to whole-vault, and is dropped by collectPaths");
+    });
+
+    test("a session with NO allowlist is unchanged, whole-vault claims included", async () => {
+      const { kernel, call } = sandboxed([]);
+      assert.equal((await call("obsidian_claim_scope", { scope: "", reason: "all of it" })).isError, undefined);
+      assert.equal((await call("obsidian_claim_scope", { scope: "Anywhere/At/All", reason: "r" })).isError, undefined);
+      assert.equal(kernel.locks.list().length, 2);
+    });
+
+    test("listing stays unrestricted — disclosure of who is working is its whole value", async () => {
+      const { kernel, call } = sandboxed(["Projects"]);
+      kernel.locks.claim({ scope: "Archive", holder: "someone-else", reason: "outside your sandbox", ttlMs: 120_000 });
+      const list = await call("obsidian_list_scope_claims");
+      assert.equal(list.isError, undefined);
+      assert.deepEqual(list.structuredContent.claims.map((c) => c.scope), ["Archive"]);
+    });
+
+    test("releasing and renewing your own claim stay allowed: they only ever shrink reach", async () => {
+      const { call } = sandboxed(["Projects"]);
+      const claim = (await call("obsidian_claim_scope", { scope: "Projects", reason: "r" })).structuredContent.claim;
+      assert.equal((await call("obsidian_renew_scope", { lock_id: claim.id })).isError, undefined);
+      assert.equal((await call("obsidian_release_scope", { lock_id: claim.id })).isError, undefined);
+    });
   });
 
   test("read-only mode blocks claiming, since there is nothing to disclose", async () => {

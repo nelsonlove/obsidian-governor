@@ -33,8 +33,14 @@ export const LOCK_TTL_DEFAULT_MS = 5 * 60_000;
 export const LOCK_TTL_MAX_MS = 30 * 60_000;
 /** Floor: below this a claim expires before the claimer can act on it. */
 export const LOCK_TTL_MIN_MS = 1_000;
-/** Cap on live claims, so a misbehaving client cannot grow the store without bound. */
+/** Cap on live claims store-wide, so a leak cannot grow without bound. */
 export const LOCK_MAX = 200;
+/**
+ * Cap on live claims held by ONE holder. The store cap alone would let a single
+ * flooding connection fill the store and refuse everyone else; per-holder is
+ * where the pressure belongs, since a holder can always release its own.
+ */
+export const LOCK_MAX_PER_HOLDER = 50;
 
 /** One live claim. `scope` is normalized; `""` means the whole vault. */
 export interface Lock {
@@ -59,6 +65,40 @@ export interface LockClaim {
    * — so the disclosure is the whole point: the claimer learns it is not alone.
    */
   overlapping: Lock[];
+  /**
+   * True when this call REFRESHED a claim the same holder already had on the
+   * same scope, rather than adding a second one. Same `id`, same `claimedAt`,
+   * new reason and new expiry — see LockStore.claim.
+   */
+  replaced?: boolean;
+}
+
+/**
+ * Typed refusal when a claim would push a holder (or the store) past its cap.
+ *
+ * The cap REFUSES rather than evicting. Evicting the oldest claim to make room
+ * — what this store used to do — silently destroys a live claim belonging to
+ * SOMEBODY ELSE, so a client that claims in a loop could erase every other
+ * session's disclosure and never be told. A claim is never taken from a holder
+ * to make room for another's.
+ */
+export class LockCapError extends Error {
+  readonly code = "lock_cap";
+  constructor(
+    readonly cap: number,
+    readonly kind: "holder" | "store"
+  ) {
+    super(
+      kind === "holder"
+        ? `refused: this connection already holds ${cap} live advisory claims (the per-holder cap). ` +
+            `Release one with obsidian_release_scope, or let it expire — no other holder's claim is ever ` +
+            `dropped to make room. Nothing was claimed.`
+        : `refused: this vault already holds ${cap} live advisory claims (the store cap). ` +
+            `Wait for claims to expire or release some — no holder's claim is ever dropped to make room. ` +
+            `Nothing was claimed.`
+    );
+    this.name = "LockCapError";
+  }
 }
 
 /** Journal/notice shape for a foreign claim a write ran inside. */
@@ -149,7 +189,8 @@ export class LockStore {
   constructor(
     /** Injectable clock — tests drive TTL expiry without waiting for it. */
     private readonly now: () => number = () => Date.now(),
-    private readonly max: number = LOCK_MAX
+    private readonly max: number = LOCK_MAX,
+    private readonly maxPerHolder: number = LOCK_MAX_PER_HOLDER
   ) {}
 
   /** Live (unexpired) claims. */
@@ -159,9 +200,15 @@ export class LockStore {
   }
 
   /**
-   * Claim `scope` for `holder`. Never refuses on account of another holder —
+   * Claim `scope` for `holder`. Never refuses on account of ANOTHER holder —
    * the response instead DISCLOSES every live overlapping claim, which is the
-   * whole of the advisory contract.
+   * whole of the advisory contract. It refuses only at a cap, and only ever
+   * the caller's own claim (LockCapError); no claim is evicted to make room.
+   *
+   * Re-claiming a scope you ALREADY hold REPLACES that claim rather than adding
+   * a second: same id, same `claimedAt`, new reason, new expiry. Claims
+   * accumulating one per call was how a holder walked itself into the cap while
+   * every one of those claims said the same thing.
    *
    * `ttlMs` is clamped into [1s, 30min]; the tool layer rejects out-of-range
    * values outright, so the clamp here is a defensive floor/ceiling that keeps
@@ -173,9 +220,25 @@ export class LockStore {
     const scope = normalizeScope(req.scope);
     const now = this.now();
     const ttlMs = Math.min(LOCK_TTL_MAX_MS, Math.max(LOCK_TTL_MIN_MS, req.ttlMs ?? LOCK_TTL_DEFAULT_MS));
+    const mine = [...this.locks.values()].filter((l) => l.holder === req.holder);
     const overlapping = [...this.locks.values()].filter(
       (l) => l.holder !== req.holder && scopesOverlap(l.scope, scope)
     );
+
+    // Same holder, same scope ⇒ this is a renewal wearing a claim's clothes.
+    // Refresh in place: the claim keeps its identity (callers may still hold the
+    // id) and the store does not grow.
+    const held = mine.find((l) => l.scope === scope);
+    if (held) {
+      const refreshed: Lock = { ...held, reason: req.reason, expiresAt: now + ttlMs };
+      this.locks.set(held.id, refreshed);
+      return { lock: refreshed, overlapping, replaced: true };
+    }
+
+    // Caps refuse; they never evict. See LockCapError.
+    if (mine.length >= this.maxPerHolder) throw new LockCapError(this.maxPerHolder, "holder");
+    if (this.locks.size >= this.max) throw new LockCapError(this.max, "store");
+
     const lock: Lock = {
       id: mintLockId(),
       scope,
@@ -185,14 +248,6 @@ export class LockStore {
       expiresAt: now + ttlMs,
     };
     this.locks.set(lock.id, lock);
-    // Insertion order is claim order, so the oldest live claim is the first
-    // one out when a client floods the store. Claims are cheap and TTL'd; the
-    // cap only exists so a leak cannot become unbounded.
-    while (this.locks.size > this.max) {
-      const oldest = this.locks.keys().next();
-      if (oldest.done || oldest.value === lock.id) break;
-      this.locks.delete(oldest.value);
-    }
     return { lock, overlapping };
   }
 
@@ -241,9 +296,23 @@ export class LockStore {
    * point of claiming a scope is to work in it.
    */
   covering(path: string, holder: string): Lock[] {
+    return this.coveringAny([path], holder);
+  }
+
+  /**
+   * The same, for an operation that names SEVERAL paths — a move, a batch move,
+   * a multi-note edit. Every path is consulted, not just the primary, because a
+   * move INTO somebody's claimed scope lands inside their work exactly as much
+   * as a move out of it does, and consulting only the source made the arriving
+   * half of that operation invisible.
+   *
+   * Each lock appears at most ONCE however many of the paths it covers, so a
+   * batch of fifty notes under one claim discloses one notice, not fifty.
+   */
+  coveringAny(paths: string[], holder: string): Lock[] {
     this.prune();
     return [...this.locks.values()]
-      .filter((l) => l.holder !== holder && scopeCovers(l.scope, path))
+      .filter((l) => l.holder !== holder && paths.some((p) => scopeCovers(l.scope, p)))
       .sort((a, b) => b.scope.length - a.scope.length || a.claimedAt - b.claimedAt);
   }
 

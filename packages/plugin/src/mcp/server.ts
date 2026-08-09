@@ -9,6 +9,7 @@ import { registerIntegrationTools } from "./tools-integrations.js";
 import { registerCliTools } from "./tools-cli.js";
 import { registerExternalTools } from "./external-tools.js";
 import { registerLockTools } from "./tools-locks.js";
+import { registerUidTools } from "./tools-uid.js";
 import { registerCodeModeTools, makeCaptureRegister, type CapturedRegistry } from "./tools-code-mode.js";
 import { makeGuarded, withKernelArgs } from "./guarded.js";
 import type { JournalActor } from "../kernel/index.js";
@@ -101,6 +102,10 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   // serialized and journaled like any other mutating operation — the claim is
   // itself an act the audit stream should record.
   registerLockTools(server, ctx, actor);
+  // ── the uid index's read surface (identity substrate, Delivery step 2) ─────
+  // Addressing by uid needs no tool of its own — `uid:<value>` binds at the
+  // interception point above — so this is purely the lookup, in both directions.
+  registerUidTools(server, ctx);
   // ── official-CLI proxy — conditional on the CLI binary being installed ──────
   registerCliTools(server, ctx);
   // ── externally-published tools (other Obsidian plugins via plugin.api) ─────
