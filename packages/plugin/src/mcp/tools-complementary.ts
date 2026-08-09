@@ -1,7 +1,8 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { type App, TFile } from "obsidian";
+import { type App, TFile, getAllTags } from "obsidian";
 import { ok, fail } from "./helpers.js";
+import { visiblePaths } from "../guard.js";
 import type { ServerCtx } from "./tools-core.js";
 
 const RO = { readOnlyHint: true,  destructiveHint: false, idempotentHint: true,  openWorldHint: false };
@@ -237,18 +238,42 @@ export function registerComplementaryTools(server: McpServer, app: App, ctx: Ser
     "obsidian_tags_list",
     {
       title: "List all tags",
-      description: "Return all tags in the vault with their usage counts, from the live metadata cache. Read-only.",
+      description:
+        "Return all tags in the vault with their usage counts, from the live metadata cache. Read-only. " +
+        "While a path allowlist is active, only tags used by notes you can see are listed, and the counts are counts over those notes.",
       inputSchema: {},
       annotations: RO,
     },
     async () => {
       try {
-        // getTags() is not in the public obsidian types — cast required.
-        // Returns Record<string, number> where keys have a leading '#'.
-        const raw = (app.metadataCache as any).getTags() as Record<string, number>;
-        const tags = Object.entries(raw)
+        const settings = ctx.getSettings();
+        if (!settings.allowlist.length) {
+          // No boundary ⇒ the host's own aggregate, byte-identical to before.
+          // getTags() is not in the public obsidian types — cast required.
+          // Returns Record<string, number> where keys have a leading '#'.
+          const raw = (app.metadataCache as any).getTags() as Record<string, number>;
+          const tags = Object.entries(raw)
+            .map(([tag, count]) => ({ tag, count }))
+            .sort((a, b) => b.count - a.count);
+          return ok({ count: tags.length, tags });
+        }
+        // Obsidian's getTags() aggregates the WHOLE vault, so a sandboxed
+        // session would learn both the vocabulary of the area it is excluded
+        // from and how much is in it — a tag name is often the most telling
+        // thing about a note. Recompute over visible notes only; the aggregate
+        // is not decomposable, so the only honest answer is to rebuild it.
+        const files = app.vault.getMarkdownFiles();
+        const shown = new Set(visiblePaths(files.map((f) => f.path), settings));
+        const counts = new Map<string, number>();
+        for (const f of files) {
+          if (!shown.has(f.path)) continue;
+          const cache = app.metadataCache.getFileCache(f);
+          if (!cache) continue;
+          for (const t of getAllTags(cache) ?? []) counts.set(t, (counts.get(t) ?? 0) + 1);
+        }
+        const tags = [...counts.entries()]
           .map(([tag, count]) => ({ tag, count }))
-          .sort((a, b) => b.count - a.count);
+          .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
         return ok({ count: tags.length, tags });
       } catch (e) { return fail(e); }
     }

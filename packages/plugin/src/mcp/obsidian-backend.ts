@@ -4,6 +4,30 @@
  * Each of the 17 fs-expressible methods calls the same Obsidian API that the
  * previous inline tool handlers called. Behavior is unchanged; this is a
  * pure structural move so the shared registerFsTools registrar can drive them.
+ *
+ * ── The read boundary (slice 3.0) ────────────────────────────────────────────
+ *
+ * Half of these methods ENUMERATE the vault instead of being told a path:
+ * `searchNotes` reads every markdown file, `listNotes` with no subdir lists them
+ * all, `findByTag` / `searchByFrontmatter` sweep the metadata cache. The guard
+ * checks the paths an operation NAMES IN ITS ARGUMENTS (guard.ts), so it never
+ * saw any of them — a session allowlisted to `Projects` could call
+ * `obsidian_search_notes` and read a secret straight out of a note it was
+ * sandboxed away from. The allowlist was a write boundary and only half a read
+ * boundary.
+ *
+ * So the backend bounds its own iteration, the same way `obsidian_repoint_link`
+ * bounds its scan: `visible` is the injected filter (wired to `visiblePaths` in
+ * server.ts) and it is applied BEFORE anything is read — a hidden note is never
+ * opened, not merely omitted from the answer afterwards. Methods that RESOLVE a
+ * path rather than discover one (`resolve`, `getOutlinks`) fail closed to
+ * "unresolved" instead of naming where they landed, and `getBacklinks` filters
+ * the linkers it reports: a note you can read must not name the notes you can't.
+ *
+ * `visible` defaults to identity, and `visiblePaths` returns the caller's own
+ * array when no allowlist is configured — see `allowed()` below, which turns
+ * that identity into "don't filter at all", so an unsandboxed session's reads
+ * are unchanged down to the object.
  */
 
 import { TFile, TFolder, getAllTags, type App } from "obsidian";
@@ -23,14 +47,21 @@ import type {
   PatchOp,
 } from "@vault-mcp/core";
 
-function countMarkdownRecursive(folder: TFolder): number {
-  let n = 0;
+/** Every markdown path under `folder`, so the count can be filtered before it is reported. */
+function markdownPathsRecursive(folder: TFolder, out: string[] = []): string[] {
   for (const child of folder.children) {
-    if (child instanceof TFolder) n += countMarkdownRecursive(child);
-    else if (child instanceof TFile && child.extension === "md") n += 1;
+    if (child instanceof TFolder) markdownPathsRecursive(child, out);
+    else if (child instanceof TFile && child.extension === "md") out.push(child.path);
   }
-  return n;
+  return out;
 }
+
+/**
+ * The subset of `paths` a session may be told about. Injected rather than
+ * imported so this class stays testable against a plain function, and so the
+ * ONE rule lives in guard.ts. Identity by default (no allowlist ⇒ no boundary).
+ */
+export type VisibleFilter = (paths: string[]) => string[];
 
 async function ensureParentFolders(app: App, filePath: string): Promise<void> {
   const parts = filePath.split("/");
@@ -47,7 +78,28 @@ async function ensureParentFolders(app: App, filePath: string): Promise<void> {
 // ── ObsidianBackend ───────────────────────────────────────────────────────────
 
 export class ObsidianBackend implements VaultBackend {
-  constructor(private readonly app: App) {}
+  constructor(
+    private readonly app: App,
+    private readonly visible: VisibleFilter = (paths) => paths,
+  ) {}
+
+  /**
+   * A membership test for `paths`, or `null` when nothing is being filtered.
+   *
+   * `visiblePaths` hands back the CALLER'S OWN ARRAY when no allowlist is
+   * configured (guard.ts documents that identity), so a `null` here means "no
+   * boundary is active" and every loop below skips the check entirely. That is
+   * what keeps an unsandboxed vault-wide search exactly as cheap as it was.
+   */
+  private allowed(paths: string[]): Set<string> | null {
+    const vis = this.visible(paths);
+    return vis === paths ? null : new Set(vis);
+  }
+
+  /** One path's visibility, for the answers that name a single note. */
+  private isVisible(path: string): boolean {
+    return this.visible([path]).length === 1;
+  }
 
   // ── listing & navigation ────────────────────────────────────────────────────
 
@@ -57,11 +109,15 @@ export class ObsidianBackend implements VaultBackend {
     offset: number,
   ): Promise<{ total: number; notes: NoteRef[] }> {
     const prefix = subdir ? subdir.replace(/\/$/, "") + "/" : "";
-    const all = this.app.vault
-      .getMarkdownFiles()
-      .filter((f) => (prefix ? f.path.startsWith(prefix) : true))
-      .map((f) => f.path)
-      .sort();
+    // Filtered BEFORE the page is cut, so `total` is the visible total: an
+    // unfiltered count would still say how much lives outside the allowlist,
+    // which is the cardinality oracle the uid totals already close.
+    const all = this.visible(
+      this.app.vault
+        .getMarkdownFiles()
+        .filter((f) => (prefix ? f.path.startsWith(prefix) : true))
+        .map((f) => f.path),
+    ).sort();
     const total = all.length;
     const page = all.slice(offset, offset + limit);
     return { total, notes: page.map((path) => ({ path })) };
@@ -74,9 +130,16 @@ export class ObsidianBackend implements VaultBackend {
       ? this.app.vault.getAbstractFileByPath(subdir.replace(/\/$/, ""))
       : this.app.vault.getRoot();
     if (!(base instanceof TFolder)) throw new Error(`not a folder: ${subdir}`);
-    return base.children
-      .filter((c): c is TFolder => c instanceof TFolder)
-      .map((f) => ({ path: f.path, note_count: countMarkdownRecursive(f) }))
+    const children = base.children.filter((c): c is TFolder => c instanceof TFolder);
+    // With no subdir this is the vault ROOT — the one listing no argument can
+    // scope. A folder outside the allowlist is neither named nor counted, and
+    // the counts that survive count only visible notes, so neither the name nor
+    // the size of a hidden area leaks. A folder that merely CONTAINS the
+    // allowlist is outside it too, exactly as a `scope` is (tools-links.ts).
+    const shown = this.allowed(children.map((f) => f.path));
+    return children
+      .filter((f) => !shown || shown.has(f.path))
+      .map((f) => ({ path: f.path, note_count: this.visible(markdownPathsRecursive(f)).length }))
       .sort((a, b) => a.path.localeCompare(b.path));
   }
 
@@ -100,7 +163,14 @@ export class ObsidianBackend implements VaultBackend {
   async searchNotes(query: string, limit: number, mode: SearchMode): Promise<SearchHit[]> {
     const needle = query.toLowerCase();
     const hits: SearchHit[] = [];
-    outer: for (const f of this.app.vault.getMarkdownFiles()) {
+    // THE hole this slice closes: an argument-less search read every note in the
+    // vault and returned matching LINES, so a sandboxed session could lift a
+    // secret out of a note it had no path to. The filter is applied before
+    // `cachedRead`, not to the hits afterwards — a hidden note is never opened.
+    const files = this.app.vault.getMarkdownFiles();
+    const shown = this.allowed(files.map((f) => f.path));
+    outer: for (const f of files) {
+      if (shown && !shown.has(f.path)) continue;
       const content = await this.app.vault.cachedRead(f);
       const lines = content.split("\n");
       for (let i = 0; i < lines.length; i++) {
@@ -117,7 +187,12 @@ export class ObsidianBackend implements VaultBackend {
   async findByTag(tag: string, limit: number): Promise<NoteRef[]> {
     const want = tag.replace(/^#/, "").toLowerCase();
     const notes: NoteRef[] = [];
-    for (const f of this.app.vault.getMarkdownFiles()) {
+    // Same boundary as searchNotes: the tag is the only argument, so the guard
+    // has nothing to check and the sweep has to bound itself.
+    const files = this.app.vault.getMarkdownFiles();
+    const shown = this.allowed(files.map((f) => f.path));
+    for (const f of files) {
+      if (shown && !shown.has(f.path)) continue;
       const cache = this.app.metadataCache.getFileCache(f);
       if (!cache) continue;
       const tags = (getAllTags(cache) ?? []).map((t) => t.replace(/^#/, "").toLowerCase());
@@ -132,7 +207,12 @@ export class ObsidianBackend implements VaultBackend {
   async searchByFrontmatter(property: string, value: string): Promise<FrontmatterSearchResult[]> {
     const wantKey = property.toLowerCase();
     const results: FrontmatterSearchResult[] = [];
-    for (const f of this.app.vault.getMarkdownFiles()) {
+    // As above — and the leak here is wider than a path: the result carries the
+    // matching note's WHOLE frontmatter block.
+    const files = this.app.vault.getMarkdownFiles();
+    const shown = this.allowed(files.map((f) => f.path));
+    for (const f of files) {
+      if (shown && !shown.has(f.path)) continue;
       const fm = this.app.metadataCache.getFileCache(f)?.frontmatter;
       if (!fm) continue;
       const key = Object.keys(fm).find((k) => k.toLowerCase() === wantKey);
@@ -171,7 +251,12 @@ export class ObsidianBackend implements VaultBackend {
       const fragment = fragmentIdx >= 0 ? working.slice(fragmentIdx + 1) : undefined;
 
       const dest = this.app.metadataCache.getFirstLinkpathDest(clean, from ?? "");
-      if (!dest) {
+      // A ref is link TEXT, not a path — `[[Projects]]` passes the guard's
+      // prefix check and can still resolve to `Archive/Projects.md`, so the
+      // resolver's answer is checked, not just the question. Out of the
+      // allowlist reads as UNRESOLVED rather than as a refusal: refusing would
+      // confirm that a note by that name exists somewhere you can't see.
+      if (!dest || !this.isVisible(dest.path)) {
         return {
           ref,
           ...(fragment ? { fragment } : {}),
@@ -215,7 +300,11 @@ export class ObsidianBackend implements VaultBackend {
     // .data can be a Map (most Obsidian builds) or a plain object (some older
     // builds) — backlinkKeys handles both shapes defensively.
     const bl = (this.app.metadataCache as any).getBacklinksForFile(file);
-    return backlinkKeys(bl?.data);
+    // The ARGUMENT is guarded; the ANSWER is a list of other notes' paths, and
+    // "who links to this" is exactly how a visible note names hidden ones. A
+    // linker you cannot read is not disclosed — the same fail-closed choice
+    // `obsidian_check_links` makes about whose notes it reports from.
+    return this.visible(backlinkKeys(bl?.data));
   }
 
   async getOutlinks(notePath: string): Promise<OutlinkEntry[]> {
@@ -223,12 +312,19 @@ export class ObsidianBackend implements VaultBackend {
     if (!(file instanceof TFile)) throw new Error(`not found: ${notePath}`);
     const cache = this.app.metadataCache.getFileCache(file);
     const refs = [...(cache?.links ?? []), ...(cache?.embeds ?? [])];
+    // `ref` is the link text as WRITTEN in a note this session can read, so it
+    // is reported verbatim — the same reasoning obsidian_check_links applies to
+    // a dangling link's text. What is withheld is where it LANDS: a link out of
+    // the allowlist comes back with no `resolved_path`, indistinguishable from
+    // a dangling one. That leaves the same residual one-bit oracle the link
+    // report already documents (a resolved link resolved to something), and no
+    // path.
     return refs.map((r): OutlinkEntry => {
       const linkpath = r.link.split("#")[0];
       const dest = linkpath
         ? this.app.metadataCache.getFirstLinkpathDest(linkpath, notePath)
         : null;
-      return { ref: r.link, resolved_path: dest ? dest.path : undefined };
+      return { ref: r.link, resolved_path: dest && this.isVisible(dest.path) ? dest.path : undefined };
     });
   }
 

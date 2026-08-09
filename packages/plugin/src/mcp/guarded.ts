@@ -1,0 +1,300 @@
+// The single interception point every registerTool call passes through (see the
+// monkeypatch in server.ts). Five things bind here, in order:
+//
+//   1. uid addressing — `uid:<value>` path arguments resolve to real paths
+//      through the uid index (slice 2.1), for READS and WRITES alike
+//   2. guardCall  — read-only mode + path allowlist (pre-existing)
+//   3. kernel arguments — `if_rev` / `idempotency_key` are peeled off the args
+//      (kernel v0) so no tool handler ever sees them
+//   4. write queue — mutating calls serialize plugin-wide (kernel v0)
+//   5. write journal — one audit record per mutating call (kernel v0)
+//
+// Reads take paths 1–2 only and return immediately. Lives in its own module (not
+// inline in server.ts) so it imports nothing from `obsidian` and can be
+// unit-tested headlessly — server.ts cannot, since its tool registrars pull in
+// live Obsidian classes.
+
+import { z } from "zod";
+import { guardCall, type GuardSettings } from "../guard.js";
+import {
+  IdempotencyMismatchError,
+  RevConflictError,
+  UidAmbiguousError,
+  UidUnresolvedError,
+  WriteTimeoutError,
+  resolveUidArgs,
+  type Kernel,
+  type JournalActor,
+  type JournalEffects,
+  type UidIndex,
+} from "../kernel/index.js";
+
+/** Guard/queue-level failure envelope: matches the `Error [code]: message` shape guardCall already emits. */
+function codedError(code: string, message: string) {
+  return { content: [{ type: "text" as const, text: `Error [${code}]: ${message}` }], isError: true as const };
+}
+
+// Argument keys that identify a NON-path target, MOST IDENTIFYING FIRST — a
+// tool taking both `id` and `name` should journal the id. Pathless mutators
+// (run a command, toggle a plugin, open a workspace) would otherwise journal
+// `target: {}`. The mapping lives here, at the interception point, and is keyed
+// on argument names rather than tool names — the kernel stays generic and an
+// external tool taking `commandId` gets the same treatment for free.
+const REF_KEYS = [
+  "command_id",
+  "commandId",
+  "plugin_id",
+  "pluginId",
+  "command",
+  // Advisory claims: `obsidian_claim_scope` journals `scope:<prefix>` and
+  // `obsidian_release_scope` journals `lock:<id>` — the release call names only
+  // the lock, so the scope it covers is not among its arguments.
+  "lock_id",
+  "lockId",
+  "scope",
+  "id",
+  "workspace",
+  "name",
+  "kind",
+];
+const MAX_REF = 120;
+
+/**
+ * `plugin:dataview`, `command:editor:toggle-bold`, … — the label is the key
+ * with any `_id`/`Id` suffix dropped, so no per-tool knowledge is encoded.
+ */
+function refOf(args: Record<string, unknown>): string | undefined {
+  for (const key of REF_KEYS) {
+    const value = args?.[key];
+    if (typeof value !== "string" || !value) continue;
+    const label = key.replace(/_?[Ii]d$/, "") || key;
+    return `${label}:${value}`.slice(0, MAX_REF);
+  }
+  return undefined;
+}
+
+// ── reported effects ─────────────────────────────────────────────────────────
+//
+// The journal's `target` is derived from the paths an operation NAMES, which is
+// right for nearly everything. `obsidian_repoint_link` is the exception: it
+// names one target path and then discovers, rewrites and reports a set of notes
+// of its own, so an argument-derived record describes a one-file operation that
+// may have changed forty. The audit stream has to carry what actually happened.
+//
+// The convention is RESULT-shaped and lives here for the same reason REF_KEYS
+// does: the kernel stays generic and only records what it is handed, while the
+// knowledge of what this tool surface's envelopes look like stays at the
+// boundary. A handler opts in simply by reporting `filesChanged` (and
+// optionally `files`) in its structured result — nothing is inferred.
+//
+// A DRY RUN reports nothing: `filesChanged` then means "would change", and a
+// record asserting effects for an operation that wrote nothing is worse than a
+// record with no effects field at all.
+const EFFECT_COUNT_KEY = "filesChanged";
+const EFFECT_PATHS_KEY = "files";
+// Same cap the journal applies to `target.paths` — the record keeps the shape,
+// not the payload; `filesChanged` stays exact.
+const MAX_EFFECT_PATHS = 20;
+
+function reportedEffects(args: Record<string, unknown>, result: unknown): JournalEffects | undefined {
+  if (args?.dry_run === true) return undefined;
+  const structured = (result as { structuredContent?: unknown } | null | undefined)?.structuredContent;
+  if (structured === null || typeof structured !== "object" || Array.isArray(structured)) return undefined;
+  const body = structured as Record<string, unknown>;
+  const count = body[EFFECT_COUNT_KEY];
+  if (typeof count !== "number" || !Number.isFinite(count)) return undefined;
+  const raw = body[EFFECT_PATHS_KEY];
+  const paths = Array.isArray(raw) ? raw.filter((p): p is string => typeof p === "string").slice(0, MAX_EFFECT_PATHS) : [];
+  return { filesChanged: count, ...(paths.length > 0 ? { paths } : {}) };
+}
+
+// ── kernel arguments ─────────────────────────────────────────────────────────
+//
+// `if_rev` and `idempotency_key` are KERNEL arguments, not tool arguments: no
+// handler knows about them, and adding them by hand to ~25 mutating schemas
+// would guarantee that the next mutating tool forgets one. They are declared
+// generically (withKernelArgs, applied to every mutating registration) and
+// consumed generically (stripped from args here, passed to Kernel.runMutation).
+//
+// The declaration is not optional decoration: the MCP SDK validates a call's
+// arguments against the tool's zod shape and z.object STRIPS unknown keys, so
+// an undeclared `if_rev` would be silently discarded before the handler — and
+// this wrapper — ever saw it. Code Mode's obsidian_call_tool parses against the
+// same captured shape, so declaring once covers both surfaces.
+
+const IF_REV = z
+  .number()
+  .optional()
+  .describe(
+    "Optimistic concurrency: only apply if the target is still at this `rev` (from a read). " +
+      "A mismatch fails with Error [rev_conflict] and writes nothing. For multi-target ops, applies to the first target."
+  );
+
+const IDEMPOTENCY_KEY = z
+  .string()
+  .min(1)
+  .max(200)
+  .optional()
+  .describe(
+    "Retry safety for calls that RETURNED: a repeat call with the same key returns the first call's result " +
+      "instead of running again, and a repeat sent while the first is still in flight waits for it and shares its " +
+      "outcome. It does NOT cover a call that failed with Error [write_timeout] — that operation was abandoned " +
+      "server-side and may still have landed, so its key is not held and a retry re-executes; re-read before " +
+      "retrying. Same key + different arguments — or a different (or dropped) if_rev — is " +
+      "Error [idempotency_mismatch], never a replay. " +
+      "10-minute window, cleared on plugin reload. Use a fresh key per logical operation."
+  );
+
+/** The kernel argument names, stripped from every mutating call's args. */
+export const KERNEL_ARG_KEYS = ["if_rev", "idempotency_key"] as const;
+
+/**
+ * Declare the kernel arguments on a MUTATING tool's input schema. Read-only
+ * tools are returned untouched — neither argument means anything without a
+ * write. A tool that already declares one of the names keeps its own
+ * declaration (nothing here may quietly redefine a tool's contract).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function withKernelArgs(def: any): any {
+  if (def?.annotations?.readOnlyHint !== false) return def;
+  const inputSchema = { ...(def.inputSchema ?? {}) };
+  if (!("if_rev" in inputSchema)) inputSchema.if_rev = IF_REV;
+  if (!("idempotency_key" in inputSchema)) inputSchema.idempotency_key = IDEMPOTENCY_KEY;
+  return { ...def, inputSchema };
+}
+
+/** Split a call's arguments into the kernel's and the tool's. */
+function splitKernelArgs(args: Record<string, unknown>): {
+  toolArgs: Record<string, unknown>;
+  ifRev?: number;
+  idempotencyKey?: string;
+} {
+  const { if_rev: ifRev, idempotency_key: idempotencyKey, ...toolArgs } = args;
+  return {
+    toolArgs,
+    ...(typeof ifRev === "number" ? { ifRev } : {}),
+    ...(typeof idempotencyKey === "string" && idempotencyKey ? { idempotencyKey } : {}),
+  };
+}
+
+export interface GuardedOpts {
+  getSettings: () => GuardSettings;
+  /**
+   * Plugin-singleton kernel. Absent (tests, bare embeds) ⇒ no queue, no journal
+   * — the guard still applies, and a mutating call carrying `if_rev` is refused
+   * rather than written unconditionally (the precondition is unenforceable).
+   */
+  kernel?: Kernel | null;
+  /** Actor for the journal, resolved per call: client identity is only known after initialize. */
+  actor: () => JournalActor;
+  /**
+   * The uid index backing `uid:<value>` addressing. Defaults to the kernel's,
+   * which is where it lives in the plugin; overridable so this wrapper can be
+   * tested against an index without a kernel.
+   */
+  uids?: UidIndex | null;
+}
+
+// ── uid addressing ───────────────────────────────────────────────────────────
+//
+// `path: "uid:019f…"` resolves through the index to the real path before
+// ANYTHING else sees the call. Deliberately here and not in ~30 tool handlers:
+// like the kernel arguments, per-tool support would mean the next path-taking
+// tool silently lacks it. Because it is defined over the guard's own path walker
+// (mapPaths), every argument the allowlist scopes is addressable and vice versa.
+//
+// It runs BEFORE guardCall so the allowlist checks the RESOLVED path — a uid
+// must not be a way around a path sandbox. The consequence is that an
+// allowlisted session could learn a path outside its sandbox from the refusal
+// message, so resolved paths are folded back to their `uid:` form in the
+// guard's text (uidSafe): the refusal still says which argument was wrong
+// without disclosing where it pointed.
+//
+// The uid errors themselves are bounded at the source rather than scrubbed
+// after the fact: resolution runs over the allowlist-VISIBLE candidates only
+// (UidIndex.requireOne), so `uid_ambiguous` can only ever name paths this
+// session could have named itself, and a uid carried solely outside the sandbox
+// reads as `uid_unresolved`. That is also what obsidian_resolve_uid reports, so
+// looking a uid up and addressing by it agree.
+
+/** Put `uid:<value>` back where a resolved path appears, so a refusal discloses nothing. */
+function uidSafe(message: string, resolved: Array<{ uid: string; path: string }>): string {
+  let out = message;
+  for (const { uid, path } of resolved) out = out.split(path).join(`uid:${uid}`);
+  return out;
+}
+
+/**
+ * Build the wrapper applied to every registered tool handler.
+ *
+ * `def.annotations.readOnlyHint === false` is the sole mutating test — the same
+ * discriminant the guard has always used, so queue and journal cover exactly
+ * the set read-only mode covers, including externally-published tools.
+ */
+export function makeGuarded(opts: GuardedOpts) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (def: any, handler: any, name?: string) => async (args: any, extra: any) => {
+    const isMutating = def?.annotations?.readOnlyHint === false;
+    const settings = opts.getSettings();
+    // 1. uid addressing. A call using none is handed back the SAME args object,
+    //    so nothing below can behave differently for an ordinary path call.
+    //    Resolution is bounded by the session's own allowlist (see requireOne):
+    //    a uid carried by a note this session cannot see is not a candidate, so
+    //    neither refusal below can name a path the caller was never entitled to.
+    let addressed;
+    try {
+      addressed = resolveUidArgs(args ?? {}, opts.uids ?? opts.kernel?.uids ?? null, settings);
+    } catch (e) {
+      // Unknown or duplicated uid: refuse, and run nothing. Both are typed, and
+      // the ambiguous one names the candidates so the caller can disambiguate.
+      if (e instanceof UidUnresolvedError || e instanceof UidAmbiguousError) return codedError(e.code, e.message);
+      throw e;
+    }
+    const callArgs = addressed.args;
+    const blocked = guardCall({ isMutating, args: callArgs, settings });
+    if (blocked) return codedError(blocked.code, uidSafe(blocked.message, addressed.resolved));
+    // Kernel arguments are always PEELED OFF, kernel or not, so no handler ever
+    // sees one. What differs without a kernel is whether they can be honored:
+    //
+    //   • `if_rev` is FAIL-CLOSED. Without a kernel there is no probe and no
+    //     dequeue check, so the precondition cannot be evaluated at all — and
+    //     its whole purpose is to stop a write that would clobber someone
+    //     else's. Ignoring it would write unconditionally while the caller
+    //     believes it was guarded, which is the exact lost update the argument
+    //     exists to prevent. Refuse instead.
+    //   • `idempotency_key` degrades quietly to no collapsing, because its
+    //     failure mode is at-least-once (the pre-kernel status quo), not a
+    //     destructive one: the operation still does what the caller asked, a
+    //     retry just isn't deduplicated.
+    const { toolArgs, ifRev, idempotencyKey } = splitKernelArgs(callArgs);
+    if (isMutating && !opts.kernel && ifRev !== undefined) {
+      return codedError(
+        "precondition_unsupported",
+        `'${name ?? def?.title ?? "this tool"}' cannot enforce if_rev: no kernel is active in this build, so the ` +
+          `target's revision cannot be checked. Nothing was written — retry without if_rev to write unconditionally.`
+      );
+    }
+    if (!isMutating || !opts.kernel) return handler(toolArgs, extra);
+    try {
+      return await opts.kernel.runMutation(
+        {
+          op: name ?? def?.title ?? "unknown",
+          args: toolArgs,
+          actor: opts.actor(),
+          ref: refOf(toolArgs),
+          effectsOf: (result) => reportedEffects(toolArgs, result),
+          ...(ifRev !== undefined ? { ifRev } : {}),
+          ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
+        },
+        () => handler(toolArgs, extra)
+      );
+    } catch (e) {
+      // Kernel-level failures are typed tool errors; anything else the handler
+      // threw keeps propagating to the SDK exactly as before.
+      if (e instanceof WriteTimeoutError) return codedError(e.code, e.message);
+      if (e instanceof RevConflictError) return codedError(e.code, e.message);
+      if (e instanceof IdempotencyMismatchError) return codedError(e.code, e.message);
+      throw e;
+    }
+  };
+}

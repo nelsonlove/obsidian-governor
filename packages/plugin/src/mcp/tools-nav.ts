@@ -2,6 +2,8 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type App, MarkdownView } from "obsidian";
 import { ok, fail } from "./helpers.js";
+import { isVisible } from "../guard.js";
+import type { ServerCtx } from "./tools-core.js";
 
 const RO = { readOnlyHint: true,  destructiveHint: false, idempotentHint: true,  openWorldHint: false };
 const RW = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
@@ -61,7 +63,7 @@ function findRawBookmark(items: BookmarkItem[], title: string): BookmarkItem | u
   return undefined;
 }
 
-export function registerNavTools(server: McpServer, app: App) {
+export function registerNavTools(server: McpServer, app: App, ctx: ServerCtx) {
 
   // ── obsidian_jump_to ────────────────────────────────────────────────────────
   server.registerTool(
@@ -242,6 +244,16 @@ export function registerNavTools(server: McpServer, app: App) {
       annotations: RW,
     },
     async ({ kind, action }) => {
+      // The periodic note's path comes from another plugin's settings, not from
+      // this call's arguments, so the guard cannot check it. Its RESPONSE is
+      // contained here — an out-of-allowlist note reports `path: null`, a value
+      // this tool already returns on its command-dispatch branches. The note is
+      // still opened or created where its owner's settings say; containing the
+      // WRITE would need the target resolved before the call, which no stable
+      // API offers. Documented in the README's sandbox section.
+      const settings = ctx.getSettings();
+      const shownPath = (p: string | null | undefined): string | null =>
+        p && isVisible(p, settings) ? p : null;
       try {
         // Prefer community Periodic Notes plugin.
         // app.plugins.plugins is internal — not in public obsidian types.
@@ -254,7 +266,7 @@ export function registerNavTools(server: McpServer, app: App) {
           const pluginInstance = periodicPlugin as any;
           if (typeof pluginInstance.openNote === "function") {
             const file = await pluginInstance.openNote(granularity);
-            return ok({ kind, path: file?.path ?? null, created: action === "create" });
+            return ok({ kind, path: shownPath(file?.path), created: action === "create" });
           }
           // Fallback: use commands to open/create via Obsidian command system.
           // Command IDs follow the pattern: "periodic-notes:open-<granularity>-note"
@@ -274,20 +286,20 @@ export function registerNavTools(server: McpServer, app: App) {
         if (dailyInstance) {
           if (action === "create" && typeof dailyInstance.createNewDailyNote === "function") {
             const file = await dailyInstance.createNewDailyNote();
-            return ok({ kind, path: file?.path ?? null, created: true });
+            return ok({ kind, path: shownPath(file?.path), created: true });
           }
           // openDailyNote opens or creates and navigates.
           if (typeof dailyInstance.openDailyNote === "function") {
             await dailyInstance.openDailyNote();
             const active = app.workspace.getActiveFile();
-            return ok({ kind, path: active?.path ?? null, created: false });
+            return ok({ kind, path: shownPath(active?.path), created: false });
           }
         }
 
         // Last resort: run the daily-notes command.
         (app as any).commands?.executeCommandById("daily-notes");
         const active = app.workspace.getActiveFile();
-        return ok({ kind, path: active?.path ?? null, created: false });
+        return ok({ kind, path: shownPath(active?.path), created: false });
       } catch (e) { return fail(e); }
     }
   );
@@ -311,7 +323,12 @@ export function registerNavTools(server: McpServer, app: App) {
         // instance.items holds the bookmark tree — internal, not in public types.
         const items: BookmarkItem[] = (instance as any).items ?? [];
         const bm = findRawBookmark(items, name);
-        if (!bm) return fail(new Error(`bookmark not found: ${name}`));
+        // Same rule as the listing, so the two agree about what exists: a
+        // bookmark you may not be told about is not one you may open by
+        // guessing its title. Identical message, so it discloses nothing.
+        if (!bm || (bm.path && !isVisible(bm.path, ctx.getSettings()))) {
+          return fail(new Error(`bookmark not found: ${name}`));
+        }
 
         // Delegate to the Bookmarks plugin's own opener, which handles every
         // bookmark type (file/folder/search/graph/group) — not just files.
@@ -326,7 +343,9 @@ export function registerNavTools(server: McpServer, app: App) {
     "obsidian_list_bookmarks",
     {
       title: "List bookmarks",
-      description: "Return all bookmarks as a flat list of {title, type, path?} (requires the core Bookmarks plugin). Read-only.",
+      description:
+        "Return all bookmarks as a flat list of {title, type, path?} (requires the core Bookmarks plugin). Read-only. " +
+        "While a path allowlist is active, bookmarks pointing outside it are omitted.",
       inputSchema: {},
       annotations: RO,
     },
@@ -341,7 +360,12 @@ export function registerNavTools(server: McpServer, app: App) {
             ? (instance as any).getBookmarks()
             : ((instance as any).items ?? []);
 
-        const bookmarks = flattenBookmarks(items);
+        // A bookmark list is an argument-less read of the human's own map of the
+        // vault: file and folder bookmarks carry paths, and a file bookmark's
+        // default title IS its path. Path-bearing entries outside the allowlist
+        // are dropped — pathless ones (searches, graphs) name no note and stay.
+        const settings = ctx.getSettings();
+        const bookmarks = flattenBookmarks(items).filter((b) => !b.path || isVisible(b.path, settings));
         return ok({ count: bookmarks.length, bookmarks });
       } catch (e) { return fail(e); }
     }
