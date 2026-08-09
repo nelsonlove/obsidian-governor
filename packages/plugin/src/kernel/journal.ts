@@ -70,6 +70,29 @@ export interface JournalTarget {
   ref?: string;
 }
 
+/**
+ * What the operation actually touched, for the operations whose blast radius is
+ * NOT in their arguments.
+ *
+ * `target` is derived from the paths the arguments name, which is the right
+ * answer for almost everything: a write names its note, a move names both ends.
+ * But `obsidian_repoint_link` names only the link target and then discovers,
+ * reads and rewrites a set of notes for itself — so a record built from its
+ * arguments alone would describe a one-file operation that changed forty. That
+ * is not a small inaccuracy in an audit stream; it is the difference between
+ * "what happened" and "what was asked for".
+ *
+ * Recorded only when the handler REPORTED it (see effectsOf in mcp/guarded.ts,
+ * where the tool surface's result conventions live) — never inferred, and never
+ * for an operation that declared itself a dry run.
+ */
+export interface JournalEffects {
+  /** Files the operation changed. EXACT, however many paths are listed below. */
+  filesChanged: number;
+  /** The changed paths, capped — the shape, not the payload. Absent when none. */
+  paths?: string[];
+}
+
 export interface JournalRecord {
   ts: string;
   op: string;
@@ -93,6 +116,11 @@ export interface JournalRecord {
   idempotencyKey?: string;
   /** On a `deduped` record: the `ts` of the record whose result was replayed. */
   dedupeOf?: string;
+  /**
+   * The operation's real blast radius, when the handler reported one that its
+   * arguments could not (a vault-wide link repoint). See JournalEffects.
+   */
+  effects?: JournalEffects;
   /**
    * Present when the operation's PRIMARY target fell inside another holder's
    * live advisory claim. The operation still ran — claims never block — so this

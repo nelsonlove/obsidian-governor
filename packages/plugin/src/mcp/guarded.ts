@@ -25,6 +25,7 @@ import {
   resolveUidArgs,
   type Kernel,
   type JournalActor,
+  type JournalEffects,
   type UidIndex,
 } from "../kernel/index.js";
 
@@ -70,6 +71,41 @@ function refOf(args: Record<string, unknown>): string | undefined {
     return `${label}:${value}`.slice(0, MAX_REF);
   }
   return undefined;
+}
+
+// ── reported effects ─────────────────────────────────────────────────────────
+//
+// The journal's `target` is derived from the paths an operation NAMES, which is
+// right for nearly everything. `obsidian_repoint_link` is the exception: it
+// names one target path and then discovers, rewrites and reports a set of notes
+// of its own, so an argument-derived record describes a one-file operation that
+// may have changed forty. The audit stream has to carry what actually happened.
+//
+// The convention is RESULT-shaped and lives here for the same reason REF_KEYS
+// does: the kernel stays generic and only records what it is handed, while the
+// knowledge of what this tool surface's envelopes look like stays at the
+// boundary. A handler opts in simply by reporting `filesChanged` (and
+// optionally `files`) in its structured result — nothing is inferred.
+//
+// A DRY RUN reports nothing: `filesChanged` then means "would change", and a
+// record asserting effects for an operation that wrote nothing is worse than a
+// record with no effects field at all.
+const EFFECT_COUNT_KEY = "filesChanged";
+const EFFECT_PATHS_KEY = "files";
+// Same cap the journal applies to `target.paths` — the record keeps the shape,
+// not the payload; `filesChanged` stays exact.
+const MAX_EFFECT_PATHS = 20;
+
+function reportedEffects(args: Record<string, unknown>, result: unknown): JournalEffects | undefined {
+  if (args?.dry_run === true) return undefined;
+  const structured = (result as { structuredContent?: unknown } | null | undefined)?.structuredContent;
+  if (structured === null || typeof structured !== "object" || Array.isArray(structured)) return undefined;
+  const body = structured as Record<string, unknown>;
+  const count = body[EFFECT_COUNT_KEY];
+  if (typeof count !== "number" || !Number.isFinite(count)) return undefined;
+  const raw = body[EFFECT_PATHS_KEY];
+  const paths = Array.isArray(raw) ? raw.filter((p): p is string => typeof p === "string").slice(0, MAX_EFFECT_PATHS) : [];
+  return { filesChanged: count, ...(paths.length > 0 ? { paths } : {}) };
 }
 
 // ── kernel arguments ─────────────────────────────────────────────────────────
@@ -246,6 +282,7 @@ export function makeGuarded(opts: GuardedOpts) {
           args: toolArgs,
           actor: opts.actor(),
           ref: refOf(toolArgs),
+          effectsOf: (result) => reportedEffects(toolArgs, result),
           ...(ifRev !== undefined ? { ifRev } : {}),
           ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
         },

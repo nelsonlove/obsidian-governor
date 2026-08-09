@@ -21,12 +21,12 @@
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { glob, readFile, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve as resolvePath } from "node:path";
 
 import { installObsidianStub, TFile, TFolder } from "./obsidian-stub.mjs";
-import { UidIndex } from "../src/kernel/index.ts";
+import { Kernel, UidIndex, WriteJournal, WriteQueue } from "../src/kernel/index.ts";
 import { makeGuarded } from "../src/mcp/guarded.ts";
 import { registerLinkTools, obsidianLinkSource } from "../src/mcp/tools-links.ts";
 import { registerUidTools } from "../src/mcp/tools-uid.ts";
@@ -167,30 +167,73 @@ describe("moves rename through Obsidian's link-updating API", () => {
     assert.deepEqual(calls.vaultRename, []);
   });
 
-  test("no move path anywhere in the plugin source reaches for vault.rename", async () => {
-    const files = ["mcp/obsidian-backend.ts", "mcp/tools-vault-write.ts", "mcp/tools-complementary.ts", "mcp/tools-nav.ts"];
-    for (const rel of files) {
+  // The scan globs `src/**/*.ts` rather than a hand-kept list of four files
+  // (D4): the invariant is "NOWHERE in the plugin source", and a list only
+  // covers the files somebody remembered — a new tools-*.ts, or a helper moved
+  // out of one of the four, would leave the guarantee unenforced while the test
+  // kept passing. The scan is proven live below, against a planted violation.
+  async function vaultRenameOffenders() {
+    const offenders = [];
+    for await (const rel of glob("**/*.ts", { cwd: SRC })) {
       const text = await readFile(resolvePath(SRC, rel), "utf8");
-      const offending = text
-        .split("\n")
-        .filter((line) => /\bvault\s*\.\s*rename\s*\(/.test(line) && !line.trimStart().startsWith("*") && !line.trimStart().startsWith("//"));
-      assert.deepEqual(offending, [], `${rel} calls vault.rename — use app.fileManager.renameFile`);
+      for (const line of text.split("\n")) {
+        const trimmed = line.trimStart();
+        if (/\bvault\s*\.\s*rename\s*\(/.test(line) && !trimmed.startsWith("*") && !trimmed.startsWith("//")) {
+          offenders.push(`${rel}: ${trimmed}`);
+        }
+      }
     }
+    return offenders;
+  }
+
+  test("no move path anywhere in the plugin source reaches for vault.rename", async () => {
+    assert.deepEqual(await vaultRenameOffenders(), [], "use app.fileManager.renameFile — vault.rename orphans backlinks");
+  });
+
+  test("the scan actually catches one: a planted vault.rename in a scratch module fails it", async () => {
+    const planted = resolvePath(SRC, "__vault-rename-scratch.ts");
+    try {
+      await writeFile(
+        planted,
+        [
+          "// Scratch module planted by link-healing.test.mjs, removed in the same test.",
+          "export async function move(app: any, file: any, to: string) {",
+          "  await app.vault.rename(file, to);",
+          "}",
+          "",
+        ].join("\n")
+      );
+      const offenders = await vaultRenameOffenders();
+      assert.equal(offenders.length, 1, `the glob missed a planted violation: ${JSON.stringify(offenders)}`);
+      assert.match(offenders[0], /__vault-rename-scratch\.ts: await app\.vault\.rename\(file, to\);/);
+    } finally {
+      await rm(planted, { force: true });
+    }
+    // And the tree is clean again, so the real assertion above still means what it says.
+    assert.deepEqual(await vaultRenameOffenders(), []);
   });
 });
 
 // ── B. obsidian_check_links — read-only drift report ──────────────────────────
 
 describe("obsidian_check_links", () => {
-  function linkServer({ unresolved = {}, uids = null, allowlist = [], kernel } = {}) {
+  // `notes` is the vault's markdown-file list — uid coverage's denominator. It
+  // defaults to the notes the uid map mentions, so every pre-existing case
+  // keeps a coherent vault; pass it explicitly to include notes with no uid.
+  function linkServer({ unresolved = {}, uids = null, notes = null, allowlist = [], kernel } = {}) {
     const index = uids ? new UidIndex({ paths: () => Object.keys(uids), uidOf: (p) => uids[p] }) : null;
     index?.rebuild();
     const s = fakeServer();
     const k = kernel === undefined ? (index ? { uids: index } : null) : kernel;
-    registerLinkTools(s.server, obsidianLinkSource({ metadataCache: { unresolvedLinks: unresolved } }), {
-      kernel: k,
-      getSettings: () => ({ readOnly: false, allowlist }),
-    });
+    const paths = notes ?? Object.keys(uids ?? {});
+    registerLinkTools(
+      s.server,
+      obsidianLinkSource({
+        metadataCache: { unresolvedLinks: unresolved },
+        vault: { getMarkdownFiles: () => paths.map((p) => ({ path: p })) },
+      }),
+      { kernel: k, getSettings: () => ({ readOnly: false, allowlist }) }
+    );
     return { ...s, index, call: (args = {}) => s.call("obsidian_check_links", args) };
   }
 
@@ -300,6 +343,74 @@ describe("obsidian_check_links", () => {
     }
   });
 
+  // ── D5: scope refusals are CODED, like the claims surface's ─────────────────
+
+  test("a malformed scope refuses with Error [invalid_scope], not a codeless failure", async () => {
+    const { call } = linkServer({ unresolved: { "Archive/secret.md": { Ghost: 1 } } });
+    const cases = [
+      [" Projects", /whitespace/],
+      ["Projects ", /whitespace/],
+      ["/Projects", /absolute path/],
+      ["..", /does not name a folder/],
+      ["./", /does not name a folder/],
+      ["Projects/../..", /does not name a folder/],
+    ];
+    for (const [scope, why] of cases) {
+      const res = await call({ scope });
+      assert.equal(res.isError, true, `scope '${scope}' should refuse`);
+      assert.match(res.content[0].text, /^Error \[invalid_scope\]: /, `scope '${scope}' lost its code`);
+      assert.match(res.content[0].text, why);
+      assert.equal(res.structuredContent, undefined, "a refusal reports nothing");
+      assert.equal(JSON.stringify(res).includes("secret"), false);
+    }
+  });
+
+  test("an out-of-allowlist scope refuses TYPED rather than returning a zeroed report", async () => {
+    const { call } = linkServer({
+      unresolved: { "Projects/A.md": { Ghost: 1 }, "Archive/Payroll/S.md": { "Bonus Pool": 1 } },
+      allowlist: ["Projects"],
+    });
+    const res = await call({ scope: "Archive/Payroll" });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[out_of_allowlist\]: /);
+    // A zeroed report for a hidden folder and a zeroed report for a genuinely
+    // clean one are indistinguishable; the refusal is the honest answer, and it
+    // matches how a scope claim answers the same mistake.
+    assert.equal(res.structuredContent, undefined);
+    assert.equal(JSON.stringify(res).includes("Bonus Pool"), false);
+  });
+
+  test("a scope that merely CONTAINS the allowlist is out of it too — narrow, or omit", async () => {
+    const { call } = linkServer({ unresolved: { "Projects/Alpha/A.md": { Ghost: 1 } }, allowlist: ["Projects/Alpha"] });
+    const wide = await call({ scope: "Projects" });
+    assert.equal(wide.isError, true);
+    assert.match(wide.content[0].text, /^Error \[out_of_allowlist\]: /);
+    assert.match(wide.content[0].text, /narrow the scope, or omit it/);
+    // The remedies both work, and report the same thing.
+    const narrow = await call({ scope: "Projects/Alpha" });
+    const omitted = await call();
+    assert.equal(narrow.structuredContent.dangling_links.link_count, 1);
+    assert.equal(omitted.structuredContent.dangling_links.link_count, 1);
+  });
+
+  // ── D6: a zero count is a zero ──────────────────────────────────────────────
+
+  test("a host-reported count of 0 stays 0 — it is never inflated to 1", async () => {
+    const { call } = linkServer({ unresolved: { "A.md": { Ghost: 0, Real: 2 } } });
+    const res = await call();
+    assert.deepEqual(res.structuredContent.dangling_links.items, [
+      { from: "A.md", link: "Ghost", count: 0 },
+      { from: "A.md", link: "Real", count: 2 },
+    ]);
+    assert.equal(res.structuredContent.dangling_links.link_count, 2, "0 + 2, not 1 + 2");
+  });
+
+  test("a non-numeric count still falls back to 1 — the key's presence is the evidence", async () => {
+    const { call } = linkServer({ unresolved: { "A.md": { Ghost: "two" } } });
+    const res = await call();
+    assert.deepEqual(res.structuredContent.dangling_links.items, [{ from: "A.md", link: "Ghost", count: 1 }]);
+  });
+
   test("it never names a path outside the allowlist", async () => {
     const { call } = linkServer({
       unresolved: {
@@ -353,6 +464,89 @@ describe("obsidian_check_links", () => {
     assert.equal(res.structuredContent.duplicate_uids.available, false);
     assert.equal(res.structuredContent.duplicate_uids.count, 0);
     assert.equal(res.structuredContent.dangling_links.link_count, 1, "the dangling half still works");
+  });
+
+  // ── uid coverage — report-first, never minting ──────────────────────────────
+
+  describe("uid_coverage", () => {
+    test("counts the visible notes that carry a uid, and names the ones that do not", async () => {
+      const { call } = linkServer({
+        uids: { "Projects/A.md": "a", "Projects/B.md": "b" },
+        notes: ["Projects/A.md", "Projects/B.md", "Projects/C.md", "Notes/D.md"],
+      });
+      const res = await call();
+      assert.deepEqual(res.structuredContent.uid_coverage, {
+        available: true,
+        notes_total: 4,
+        notes_with_uid: 2,
+        notes_without_uid: 2,
+        truncated: false,
+        uncovered: ["Notes/D.md", "Projects/C.md"],
+      });
+    });
+
+    test("it mints nothing and writes nothing: the notes without uids still have none", async () => {
+      const uids = { "A.md": "a" };
+      const { call, index } = linkServer({ uids, notes: ["A.md", "B.md"] });
+      await call();
+      await call();
+      assert.equal(index.uidFor("B.md"), undefined, "a report must not create identity");
+      assert.deepEqual(Object.keys(uids), ["A.md"]);
+    });
+
+    test("report-first on the wire: `scope` is the only argument, and the description disclaims minting", () => {
+      const d = linkServer().def("obsidian_check_links");
+      // No fix/heal/mint/assign argument exists to be reached for — minting is a
+      // pending human decision, not a flag on a report.
+      assert.deepEqual(Object.keys(d.inputSchema), ["scope"]);
+      assert.match(d.description, /no uid is minted/i);
+    });
+
+    test("the denominator is the SESSION's: an out-of-allowlist note is neither counted nor named", async () => {
+      const { call } = linkServer({
+        uids: { "Projects/A.md": "a" },
+        notes: ["Projects/A.md", "Projects/B.md", "Archive/Payroll/S.md"],
+        allowlist: ["Projects"],
+      });
+      const res = await call();
+      assert.deepEqual(res.structuredContent.uid_coverage, {
+        available: true,
+        notes_total: 2,
+        notes_with_uid: 1,
+        notes_without_uid: 1,
+        truncated: false,
+        uncovered: ["Projects/B.md"],
+      });
+      assert.equal(JSON.stringify(res).includes("Payroll"), false);
+    });
+
+    test("`scope` narrows coverage the same way it narrows the rest of the report", async () => {
+      const { call } = linkServer({
+        uids: { "Projects/A.md": "a" },
+        notes: ["Projects/A.md", "Projects/B.md", "Archive/C.md", "Projects Archive/D.md"],
+      });
+      const res = await call({ scope: "Projects" });
+      assert.equal(res.structuredContent.uid_coverage.notes_total, 2, "'Projects Archive' is a different folder");
+      assert.deepEqual(res.structuredContent.uid_coverage.uncovered, ["Projects/B.md"]);
+    });
+
+    test("the uncovered list is capped at 100 while the counts stay exact", async () => {
+      const notes = Array.from({ length: 150 }, (_, i) => `Notes/n${String(i).padStart(3, "0")}.md`);
+      const { call } = linkServer({ uids: { "Notes/n000.md": "a" }, notes });
+      const cov = (await call()).structuredContent.uid_coverage;
+      assert.equal(cov.notes_total, 150);
+      assert.equal(cov.notes_with_uid, 1);
+      assert.equal(cov.notes_without_uid, 149);
+      assert.equal(cov.uncovered.length, 100);
+      assert.equal(cov.truncated, true);
+    });
+
+    test("without a uid index it says the coverage is unknown, not zero", async () => {
+      const res = await linkServer({ kernel: null, notes: ["A.md", "B.md"] }).call();
+      assert.equal(res.structuredContent.uid_coverage.available, false);
+      assert.equal(res.structuredContent.uid_coverage.notes_total, 2, "the denominator needs no index");
+      assert.deepEqual(res.structuredContent.uid_coverage.uncovered, []);
+    });
   });
 
   test("counts stay exact when the list is capped, and the cap is flagged", async () => {
@@ -415,5 +609,203 @@ describe("obsidian_resolve_uid — D1: totals are the session's own cardinality"
       duplicate_count: 1,
       duplicates: [{ uid: "dup", paths: ["A.md", "B.md"] }],
     });
+  });
+});
+
+// ── D. obsidian_repoint_link — the repair is contained by the allowlist ───────
+//
+// Cycle 8 D1. `obsidian_repoint_link` is the tool the Link-health docs prescribe
+// as the repair for a dangling link, and it was the one tool whose blast radius
+// was not in its arguments: it iterated `vault.getMarkdownFiles()` — the WHOLE
+// vault — reading, rewriting and then NAMING notes a sandboxed session could
+// not read, write or list. The guard never saw them, because the guard checks
+// the paths an operation names and a repoint names only its target.
+//
+// These tests pin the containment in all three directions (read, write, name),
+// the flag that admits the repair is partial, the unchanged no-allowlist
+// behavior, and the journal record's honesty about what actually changed.
+
+describe("obsidian_repoint_link containment (D1)", () => {
+  /** A vault of note bodies, recording every read and every write. */
+  function repointVault(files) {
+    const contents = new Map(Object.entries(files));
+    const reads = [];
+    const writes = [];
+    const app = {
+      vault: {
+        getMarkdownFiles: () => [...contents.keys()].map((p) => new TFile(p)),
+        getAbstractFileByPath: (p) => (contents.has(p) ? new TFile(p) : null),
+        async cachedRead(file) {
+          reads.push(file.path);
+          return contents.get(file.path);
+        },
+        async process(file, fn) {
+          writes.push(file.path);
+          const next = fn(contents.get(file.path));
+          contents.set(file.path, next);
+          return next;
+        },
+      },
+      metadataCache: {
+        unresolvedLinks: {},
+        // Shortest link text for the target: the basename, as Obsidian would.
+        fileToLinktext: (target) => target.path.replace(/\.md$/, "").split("/").pop(),
+      },
+    };
+    return { app, contents, reads, writes };
+  }
+
+  const VAULT = {
+    "Projects/Target.md": "# target",
+    "Projects/A.md": "see [[Ghost]]",
+    "Archive/Payroll/Salaries.md": "see [[Ghost]] too",
+  };
+
+  function repointServer(files, allowlist = []) {
+    const v = repointVault(files);
+    const s = fakeServer();
+    registerVaultWriteTools(s.server, v.app, { getSettings: () => ({ readOnly: false, allowlist }) });
+    return { ...v, call: (args) => s.call("obsidian_repoint_link", { dry_run: false, unresolved_only: false, drop_echo_alias: false, ...args }) };
+  }
+
+  const REPOINT = { link_name: "Ghost", target_path: "Projects/Target.md" };
+
+  test("under an allowlist it rewrites, reads and names ONLY visible notes", async () => {
+    const { call, contents, reads, writes } = repointServer(VAULT, ["Projects"]);
+    const res = await call(REPOINT);
+
+    assert.equal(res.isError, undefined, res.content?.[0]?.text);
+    assert.deepEqual(res.structuredContent.files, ["Projects/A.md"]);
+    assert.equal(res.structuredContent.filesChanged, 1);
+    assert.equal(res.structuredContent.linksChanged, 1);
+    assert.equal(res.structuredContent.scoped_to_allowlist, true, "a partial repair must say it is partial");
+
+    assert.equal(contents.get("Projects/A.md"), "see [[Target]]");
+    assert.equal(contents.get("Archive/Payroll/Salaries.md"), "see [[Ghost]] too", "an out-of-allowlist note was rewritten");
+    assert.equal(writes.includes("Archive/Payroll/Salaries.md"), false, "…or opened for writing");
+    assert.equal(reads.includes("Archive/Payroll/Salaries.md"), false, "…or even read");
+    assert.equal(JSON.stringify(res).includes("Payroll"), false, "…or named in the response");
+  });
+
+  test("a dry run is contained too — it discloses no out-of-allowlist path", async () => {
+    const { call, contents, reads } = repointServer(VAULT, ["Projects"]);
+    const res = await call({ ...REPOINT, dry_run: true });
+
+    assert.deepEqual(res.structuredContent.files, ["Projects/A.md"]);
+    assert.equal(res.structuredContent.filesChanged, 1);
+    assert.equal(res.structuredContent.scoped_to_allowlist, true);
+    assert.equal(contents.get("Projects/A.md"), "see [[Ghost]]", "a dry run writes nothing");
+    assert.equal(reads.includes("Archive/Payroll/Salaries.md"), false);
+  });
+
+  test("with no allowlist the behavior is unchanged: the whole vault, and the flag is false", async () => {
+    const { call, contents } = repointServer(VAULT);
+    const res = await call(REPOINT);
+
+    assert.deepEqual(res.structuredContent.files, ["Projects/A.md", "Archive/Payroll/Salaries.md"]);
+    assert.equal(res.structuredContent.filesChanged, 2);
+    assert.equal(res.structuredContent.linksChanged, 2);
+    assert.equal(res.structuredContent.scoped_to_allowlist, false);
+    assert.equal(contents.get("Archive/Payroll/Salaries.md"), "see [[Target]] too");
+  });
+
+  test("a target inside the allowlist with all sources outside changes nothing, and says so", async () => {
+    const { call, contents } = repointServer(
+      { "Projects/Target.md": "# target", "Archive/B.md": "[[Ghost]]" },
+      ["Projects"]
+    );
+    const res = await call(REPOINT);
+    assert.deepEqual(res.structuredContent.files, []);
+    assert.equal(res.structuredContent.filesChanged, 0);
+    assert.equal(res.structuredContent.scoped_to_allowlist, true);
+    assert.equal(contents.get("Archive/B.md"), "[[Ghost]]");
+  });
+
+  // ── the journal tells the truth about the blast radius ─────────────────────
+
+  function journalKernel() {
+    const files = new Map();
+    const dirs = new Set();
+    const adapter = {
+      async exists(p) { return files.has(p) || dirs.has(p); },
+      async mkdir(p) { dirs.add(p); },
+      async write(p, d) { files.set(p, d); },
+      async append(p, d) { files.set(p, (files.get(p) ?? "") + d); },
+    };
+    const journal = new WriteJournal(adapter, "dir/journal", () => new Date("2026-08-08T12:00:00Z"));
+    const kernel = new Kernel(new WriteQueue(1000), journal, null);
+    const records = () =>
+      (files.get("dir/journal/2026-08.jsonl") ?? "").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    return { kernel, records };
+  }
+
+  /** The real chain: makeGuarded → Kernel.runMutation → WriteJournal. */
+  function journaledRepoint(files, allowlist = []) {
+    const v = repointVault(files);
+    const s = fakeServer();
+    registerVaultWriteTools(s.server, v.app, { getSettings: () => ({ readOnly: false, allowlist }) });
+    const { def, handler } = s.tools.get("obsidian_repoint_link");
+    const { kernel, records } = journalKernel();
+    const guarded = makeGuarded({
+      getSettings: () => ({ readOnly: false, allowlist }),
+      kernel,
+      actor: () => ACTOR,
+    })(def, handler, "obsidian_repoint_link");
+    return {
+      ...v,
+      records,
+      call: (args) => guarded({ dry_run: false, unresolved_only: false, drop_echo_alias: false, ...args }, {}),
+    };
+  }
+
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  test("the record names what actually changed, not just the target that was asked for", async () => {
+    const { call, records } = journaledRepoint(VAULT);
+    await call(REPOINT);
+    await flush();
+
+    const [rec] = records();
+    assert.equal(rec.op, "obsidian_repoint_link");
+    assert.equal(rec.outcome, "ok");
+    // The argument-derived target is still there — it is what was ASKED for…
+    assert.equal(rec.target.path, "Projects/Target.md");
+    // …and `effects` is what HAPPENED: two notes rewritten, both named.
+    assert.deepEqual(rec.effects, {
+      filesChanged: 2,
+      paths: ["Projects/A.md", "Archive/Payroll/Salaries.md"],
+    });
+  });
+
+  test("under an allowlist the record's blast radius is the contained one", async () => {
+    const { call, records } = journaledRepoint(VAULT, ["Projects"]);
+    await call(REPOINT);
+    await flush();
+
+    const [rec] = records();
+    assert.deepEqual(rec.effects, { filesChanged: 1, paths: ["Projects/A.md"] });
+    assert.equal(JSON.stringify(rec).includes("Payroll"), false, "the journal must not record what the tool could not touch");
+  });
+
+  test("a dry run records no effects — nothing changed, so nothing is claimed", async () => {
+    const { call, records } = journaledRepoint(VAULT);
+    await call({ ...REPOINT, dry_run: true });
+    await flush();
+
+    const [rec] = records();
+    assert.equal(rec.effects, undefined);
+    assert.equal(rec.argsDigest.dry_run, true, "the digest still says what was asked");
+  });
+
+  test("an ordinary single-path write records no effects — its target already says everything", async () => {
+    const { kernel, records } = journalKernel();
+    const guarded = makeGuarded({ getSettings: () => ({ readOnly: false, allowlist: [] }), kernel, actor: () => ACTOR })(
+      { annotations: { readOnlyHint: false } },
+      async () => ({ content: [], structuredContent: { path: "A.md", written: true } }),
+      "obsidian_write_note"
+    );
+    await guarded({ path: "A.md" }, {});
+    await flush();
+    assert.equal(records()[0].effects, undefined);
   });
 });

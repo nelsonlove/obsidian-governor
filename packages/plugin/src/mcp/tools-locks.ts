@@ -11,7 +11,7 @@
 
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { ok, fail } from "./helpers.js";
+import { ok, fail, codedError } from "./helpers.js";
 import { guardCall, type GuardSettings } from "../guard.js";
 import {
   expiresInSeconds,
@@ -96,11 +96,6 @@ function scopeRefusal(scope: string, settings?: GuardSettings): { code: string; 
   }
   const blocked = guardCall({ isMutating: false, args: { path: normalized }, settings });
   return blocked ? { code: blocked.code, message: `${blocked.message}. Nothing was claimed.` } : null;
-}
-
-/** Guard-shaped failure envelope, matching the `Error [code]: message` the guard emits. */
-function codedError(code: string, message: string) {
-  return { content: [{ type: "text" as const, text: `Error [${code}]: ${message}` }], isError: true as const };
 }
 
 export function registerLockTools(server: McpServer, ctx: LockToolsCtx, actor: () => JournalActor): void {

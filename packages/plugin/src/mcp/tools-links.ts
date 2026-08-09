@@ -19,19 +19,33 @@
 // argument. `obsidian_repoint_link` remains the tool that actually rewrites a
 // dangling link, and it is called deliberately, one target at a time.
 //
-// What it reports, both bounded by the caller's own visibility:
+// What it reports, all three bounded by the caller's own visibility:
 //
 //   1. DANGLING WIKILINKS — Obsidian's own `metadataCache.unresolvedLinks`,
 //      which is the host's answer to "which links resolve to nothing", already
 //      computed. We never parse a file.
 //   2. DUPLICATED UIDS — the uid index's `duplicates()`, the same already-
 //      computed data `obsidian_resolve_uid` reports with no argument.
+//   3. UID COVERAGE — how many visible notes carry a uid at all, and which do
+//      not. Report-first like everything else here: it NAMES the gap and mints
+//      nothing. Whether uncovered notes should get uids, and on whose say-so,
+//      is a decision this tool exists to inform, not to make.
 //
 // Allowlist-aware for the same reason obsidian_resolve_uid is: an unfiltered
 // report is a path oracle for the area a sandboxed session is excluded from —
 // "you have 412 dangling links, here they are" would enumerate half a vault the
 // caller cannot read. Every path in the report passes `visiblePaths` (guard.ts,
 // one copy shared with uid addressing), and `scope` narrows further.
+//
+// The filter is over SOURCE NOTES, and that is the whole of the claim: a
+// dangling link's TEXT is reported verbatim from a note this session can read,
+// including text that happens to be shaped like a path outside the allowlist.
+// It names nothing that exists — a dangling link resolves to no file, by
+// definition — and it is text the caller could read out of the note itself.
+// There is a residual one-bit oracle in the other direction, inherent to
+// letting the host resolve links at all: a link that DOESN'T appear in the
+// report resolved to something, which may be a note outside the allowlist. See
+// the README's Link health section.
 //
 // Imports nothing from `obsidian`: the unresolved-link map arrives through an
 // injected LinkSource (the same shape as the uid index's UidSource), so this
@@ -40,8 +54,8 @@
 import { z } from "zod";
 import { posix } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { ok, fail } from "./helpers.js";
-import { visiblePaths, type GuardSettings } from "../guard.js";
+import { ok, fail, codedError } from "./helpers.js";
+import { guardCall, visiblePaths, type GuardSettings } from "../guard.js";
 import type { Kernel } from "../kernel/index.js";
 
 const RO = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
@@ -55,15 +69,27 @@ export type UnresolvedLinks = Record<string, Record<string, number>>;
 /** Where the drift report gets its facts. Cache-backed lookups, never a read from disk. */
 export interface LinkSource {
   unresolved(): UnresolvedLinks;
+  /**
+   * Every markdown note in the vault, by path — the DENOMINATOR of uid
+   * coverage. Enumeration only: no content is read, and the caller filters it
+   * through `visiblePaths` before anything is counted or named.
+   */
+  notes(): string[];
 }
 
 /**
- * The adapter over Obsidian's metadata cache. Typed STRUCTURALLY rather than
- * against `App` so this file imports nothing from `obsidian` at all — the live
- * `app` satisfies it, and a test can hand over a plain object.
+ * The adapter over Obsidian's metadata cache and file list. Typed STRUCTURALLY
+ * rather than against `App` so this file imports nothing from `obsidian` at all
+ * — the live `app` satisfies it, and a test can hand over a plain object.
  */
-export function obsidianLinkSource(app: { metadataCache: { unresolvedLinks: UnresolvedLinks } }): LinkSource {
-  return { unresolved: () => app.metadataCache.unresolvedLinks ?? {} };
+export function obsidianLinkSource(app: {
+  metadataCache: { unresolvedLinks: UnresolvedLinks };
+  vault?: { getMarkdownFiles(): Array<{ path: string }> };
+}): LinkSource {
+  return {
+    unresolved: () => app.metadataCache.unresolvedLinks ?? {},
+    notes: () => (app.vault?.getMarkdownFiles() ?? []).map((f) => f.path),
+  };
 }
 
 export interface LinkToolsCtx {
@@ -80,25 +106,53 @@ export interface LinkToolsCtx {
  */
 const MAX_ITEMS = 100;
 
+/** A refusal, carrying the machine-readable code the wire shape wants. */
+interface Refusal {
+  code: string;
+  message: string;
+}
+
+const HOW = "give a vault-relative prefix like 'Projects', or omit scope to report on everything you can see. Nothing was reported.";
+
 /**
- * A scope is a vault-relative folder prefix, `posix.normalize`d for the same
- * reason guardCall normalizes: `Projects/../Archive` must not read as
- * `Projects…`. One that normalizes to nothing, to `.`, or above the vault root
- * is REFUSED rather than quietly widened to everything — a caller who wrote a
- * `..` meant to narrow, and silently handing back the whole vault instead is
- * the opposite of what they asked for. Omitting `scope` is how you ask for
- * everything, and it is unambiguous.
+ * Resolve `scope` to a normalized prefix, or REFUSE it — the same shape and the
+ * same code vocabulary `scopeRefusal` uses for an advisory claim (tools-locks.ts),
+ * so the two scope-taking surfaces answer a bad scope the same way.
+ *
+ * Two families of refusal, both typed rather than silently repaired:
+ *
+ *   • MALFORMED (`invalid_scope`) — one that normalizes to nothing, to `.`, or
+ *     above the vault root; one that is absolute; one padded with whitespace.
+ *     A caller who wrote `..` meant to NARROW, and quietly handing back the
+ *     whole vault is the opposite of what they asked for; `/Projects` and
+ *     ` Projects` are equally a mistake about what a vault-relative prefix is,
+ *     and repairing them silently teaches a shape that will not hold elsewhere.
+ *   • OUT OF ALLOWLIST (`out_of_allowlist`) — a scope naming an area this
+ *     session cannot see. It refuses TYPED rather than returning a zeroed
+ *     report, matching the claims surface: a zeroed report for `Archive/` and a
+ *     zeroed report for a genuinely clean `Archive/` are indistinguishable, so
+ *     the refusal is both the more honest answer and the consistent one. A
+ *     scope that merely CONTAINS your allowlist (`Projects` under an allowlist
+ *     of `Projects/Alpha`) is out of it too — narrow the scope, or omit it.
+ *
+ * Omitting `scope` is how you ask for everything visible, and it is unambiguous.
  */
-function normalizeScope(scope: string | undefined): string | undefined {
-  if (scope === undefined) return undefined;
+function resolveScope(scope: string | undefined, settings?: GuardSettings): { prefix?: string; refusal?: Refusal } {
+  const malformed = (raw: string, why: string) => ({ refusal: { code: "invalid_scope", message: `scope '${raw}' ${why} — ${HOW}` } });
+  if (scope === undefined) return {};
+  if (scope !== scope.trim()) return malformed(scope, "has leading or trailing whitespace");
+  if (scope.startsWith("/")) return malformed(scope, "is an absolute path");
   const prefix = posix.normalize(scope).replace(/\/+$/, "");
   if (!prefix || prefix === "." || prefix === ".." || prefix.startsWith("../")) {
-    throw new Error(
-      `scope '${scope}' does not name a folder in this vault — give a vault-relative prefix like 'Projects', ` +
-        `or omit scope to report on everything you can see`
-    );
+    return malformed(scope, "does not name a folder in this vault");
   }
-  return prefix;
+  const blocked = guardCall({
+    isMutating: false,
+    args: { path: prefix },
+    settings: settings ?? { readOnly: false, allowlist: [] },
+  });
+  if (blocked) return { refusal: { code: blocked.code, message: `${blocked.message} — narrow the scope, or omit it. Nothing was reported.` } };
+  return { prefix };
 }
 
 /** Segment-boundary prefix match against an already-normalized scope. */
@@ -116,14 +170,16 @@ export function registerLinkTools(server: McpServer, links: LinkSource, ctx: Lin
     {
       title: "Check link health",
       description:
-        "Report link drift in the vault, read-only: wikilinks that point at no note (from Obsidian's own unresolved-link " +
-        "map) and uids carried by more than one note. Nothing is written and nothing is repaired — this names what has " +
-        "drifted so you (or a deliberate follow-up call) can decide. Moves made through this server do not need it: " +
-        "obsidian_move_note / obsidian_move_notes rename through Obsidian's link-updating API, which rewrites backlinks " +
-        "as it goes. Drift comes from outside — a note deleted or renamed by another tool, a link typed against a note " +
-        "that was never created, a uid pasted twice. To fix a dangling link, call obsidian_repoint_link with the target " +
-        "you meant; to fix a duplicated uid, edit one note's frontmatter. Pass `scope` to narrow to a folder. Counts are " +
-        "exact; the lists are capped at 100 each with a `truncated` flag.",
+        "Report link and identity drift in the vault, read-only: wikilinks that point at no note (from Obsidian's own " +
+        "unresolved-link map), uids carried by more than one note, and uid coverage — how many visible notes carry a uid " +
+        "at all, and which do not. Nothing is written and nothing is repaired: no link is rewritten, no uid is minted. " +
+        "This names what has drifted so you (or a deliberate follow-up call) can decide. Moves made through this server " +
+        "do not need it: obsidian_move_note / obsidian_move_notes rename through Obsidian's link-updating API, which " +
+        "rewrites backlinks as it goes. Drift comes from outside — a note deleted or renamed by another tool, a link " +
+        "typed against a note that was never created, a uid pasted twice. To fix a dangling link, call " +
+        "obsidian_repoint_link with the target you meant; to fix a duplicated uid, edit one note's frontmatter. Pass " +
+        "`scope` to narrow to a folder — a malformed or out-of-allowlist scope is refused, not silently widened. Counts " +
+        "are exact; the lists are capped at 100 each with a `truncated` flag.",
       inputSchema: {
         scope: z
           .string()
@@ -135,7 +191,9 @@ export function registerLinkTools(server: McpServer, links: LinkSource, ctx: Lin
     },
     async (args) => {
       try {
-        const scope = normalizeScope(args.scope);
+        const settings = ctx.getSettings?.();
+        const { prefix: scope, refusal } = resolveScope(args.scope, settings);
+        if (refusal) return codedError(refusal.code, refusal.message);
 
         // ── 1. dangling wikilinks ────────────────────────────────────────────
         // Source notes are filtered to the scope AND to the allowlist first, so
@@ -156,7 +214,12 @@ export function registerLinkTools(server: McpServer, links: LinkSource, ctx: Lin
           if (entries.length === 0) continue;
           noteCount++;
           for (const [link, count] of entries) {
-            const n = typeof count === "number" && count > 0 ? count : 1;
+            // A number is reported AS GIVEN (floored at 0): a host that says 0
+            // occurrences must not be rewritten to 1 — an inflated total is a
+            // count nobody can reconcile against the note. The 1 is only the
+            // fallback for a non-number, where the key's presence is the whole
+            // of the evidence.
+            const n = typeof count === "number" && Number.isFinite(count) ? Math.max(0, Math.trunc(count)) : 1;
             linkCount += n;
             rowCount++;
             if (dangling.length < MAX_ITEMS) dangling.push({ from, link, count: n });
@@ -179,6 +242,24 @@ export function registerLinkTools(server: McpServer, links: LinkSource, ctx: Lin
               .sort((a, b) => (a.uid < b.uid ? -1 : a.uid > b.uid ? 1 : 0))
           : [];
 
+        // ── 3. uid coverage ──────────────────────────────────────────────────
+        // The identity substrate's own drift: a note with no uid cannot be
+        // addressed as `uid:…`, cannot be followed across a rename by anything
+        // but its path, and is invisible to the index. REPORT-FIRST, like both
+        // halves above — this names the uncovered notes and mints nothing.
+        // Whether they should get uids at all is a decision for a human, and
+        // there is deliberately no argument here that would make it ours.
+        //
+        // Denominator and names are the same visible-and-in-scope set the rest
+        // of the report uses, so coverage is the SESSION's coverage: a
+        // sandboxed caller learns nothing about how many notes live outside its
+        // allowlist, which is the cardinality oracle visiblePaths exists for.
+        const notes = visible(links.notes().filter((p) => inScope(p, scope))).sort();
+        // Without an index there is no answer, only a confident zero — say so
+        // the same way the duplicates half does.
+        const uncovered = index ? notes.filter((p) => index.uidFor(p) === undefined) : [];
+        const withUid = index ? notes.length - uncovered.length : 0;
+
         return ok({
           scope: scope ?? null,
           dangling_links: {
@@ -194,6 +275,15 @@ export function registerLinkTools(server: McpServer, links: LinkSource, ctx: Lin
             count: duplicates.length,
             truncated: duplicates.length > MAX_ITEMS,
             items: duplicates.slice(0, MAX_ITEMS),
+          },
+          uid_coverage: {
+            // As above: `false` means the counts below are unknown, not zero.
+            available: Boolean(index),
+            notes_total: notes.length,
+            notes_with_uid: withUid,
+            notes_without_uid: uncovered.length,
+            truncated: uncovered.length > MAX_ITEMS,
+            uncovered: uncovered.slice(0, MAX_ITEMS),
           },
         });
       } catch (e) {

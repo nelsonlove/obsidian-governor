@@ -94,7 +94,10 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
 
   // ── remaining tools — live-only, complementary, nav, integrations ────────────
   registerCoreTools(server, app, ctx);
-  registerVaultWriteTools(server, app);
+  // ctx carries the guard's settings: obsidian_repoint_link scans the vault for
+  // itself, so it must contain that scan by the allowlist on its own — no
+  // argument-level check can see a set the handler discovers.
+  registerVaultWriteTools(server, app, ctx);
   registerComplementaryTools(server, app, ctx);
   registerNavTools(server, app);
   registerIntegrationTools(server, app, ctx);
