@@ -46,7 +46,7 @@ On the Mac, **disconnect the remote `obsidian-vault-mcp-server` connector** for 
 - **Complementary:** trash, parsed read, append-at-heading, run-command, command list, vault/tags/environment info, active note, open-in-editor.
 - **Navigation/control:** jump-to, view-mode, workspaces (open/save/list), bookmarks (open/list), periodic note, plugin toggle.
 - **Identity:** `obsidian_resolve_uid` — look a note up by its frontmatter `uid`, or a uid up by path. See [Addressing notes by uid](#addressing-notes-by-uid).
-- **Link health:** `obsidian_check_links` — read-only report of dangling wikilinks and duplicated uids. See [Link health](#link-health).
+- **Link health:** `obsidian_check_links` — read-only report of dangling wikilinks, duplicated uids, and uid coverage. See [Link health](#link-health).
 - **Advisory claims:** `obsidian_claim_scope`, `obsidian_renew_scope`, `obsidian_release_scope`, `obsidian_list_scope_claims` — see [Advisory scope claims](#advisory-scope-claims).
 - **Plugin-gated:** `dataview_list_query`, `dataview_table_query` (Dataview); `create_note_from_template` (Templater); `omnisearch` (Omnisearch); `fileclass_schema`, `fileclass_insert_fields` (Metadata Menu).
 - **Official-CLI proxy:** `obsidian_cli` runs any official Obsidian CLI command against this vault (file history/diff/restore, themes, snippets, publish, …). The vault is pinned; dangerous commands (`eval`, `dev:*`, `devtools`, `restart`, `reload`, `command`, `plugins:restrict`, `plugin:install`, `plugin:uninstall` — the last two because installing loads arbitrary plugin code and uninstalling can remove vault-mcp itself) need the **Allow dangerous CLI commands** setting; the tool is unavailable while a path allowlist is active (CLI args can't be path-scoped) and is blocked entirely in read-only mode.
@@ -103,13 +103,29 @@ Links are handled in two places, and the split is deliberate.
     "dangling_links":  {"note_count": 3, "link_count": 5, "truncated": false,
                         "items": [{"from": "Projects/A.md", "link": "Old Name", "count": 2}, …]},
     "duplicate_uids":  {"available": true, "count": 1, "truncated": false,
-                        "items": [{"uid": "019fe34f-…", "paths": ["Projects/A.md", "Projects/B.md"]}]}
+                        "items": [{"uid": "019fe34f-…", "paths": ["Projects/A.md", "Projects/B.md"]}]},
+    "uid_coverage":    {"available": true, "notes_total": 120, "notes_with_uid": 118,
+                        "notes_without_uid": 2, "truncated": false,
+                        "uncovered": ["Projects/C.md", "Projects/D.md"]}
   }
 ```
 
-Dangling links come from Obsidian's own `unresolvedLinks` map and duplicated uids from the uid index — both already computed, so the report never reads a file. Counts are exact for everything visible and in scope; the lists are capped at 100 each with a `truncated` flag (narrow `scope` to see more). **Nothing outside your path allowlist appears** — not a path, not the link text inside one — and a uid whose duplicate carriers straddle your scope isn't an ambiguity *for that scope*. A `scope` that normalizes to nothing or above the vault root is refused rather than quietly widened to the whole vault.
+Dangling links come from Obsidian's own `unresolvedLinks` map and duplicated uids from the uid index — both already computed, so the report never reads a file. **`uid_coverage`** is the identity half: how many of the notes you can see carry a uid at all, and which don't. It is **report-first like the rest** — no uid is minted, nothing is written, and there is no argument that would make it otherwise; whether uncovered notes should get uids is a decision this names for you, not one it takes. `available: false` (no uid index in this build) means the uid counts are *unknown*, not zero.
+
+Counts are exact for everything visible and in scope; the lists are capped at 100 each with a `truncated` flag (narrow `scope` to see more).
+
+**Visibility.** Every path in the report is filtered through your path allowlist, so no out-of-allowlist note is counted, named, or used as a denominator. Two boundaries are worth stating plainly:
+
+- The filter is over **source notes**. A dangling link's *text* is reported verbatim out of a note you can read — including text shaped like a path outside your allowlist. It names nothing that exists (a dangling link resolves to no file, by definition) and you could read it out of the note yourself.
+- **Absence is a one-bit oracle.** A link that *doesn't* appear in the report resolved to something — possibly a note outside your allowlist. That bit is inherent to letting Obsidian resolve links at all: it is the host, not this server, that decides a link resolves, and suppressing the resolution would mean re-implementing link resolution over a filtered vault. Nothing else leaks: no path, no name, no count.
+
+A duplicate whose carriers straddle your scope isn't an ambiguity *for that scope*.
+
+**A bad `scope` is refused, never widened**, with a machine-readable code — the same way an advisory claim answers the same mistake. `Error [invalid_scope]` for a scope that is absolute, whitespace-padded, or normalizes to nothing or above the vault root; `Error [out_of_allowlist]` for one naming an area you can't see. The out-of-allowlist case refuses *typed* rather than returning a zeroed report, because a zeroed report for a hidden folder and a zeroed report for a genuinely clean one are indistinguishable. A scope that merely *contains* your allowlist (`Projects` when you're scoped to `Projects/Alpha`) is out of it too — narrow the scope, or omit it.
 
 To act on a report: **`obsidian_repoint_link`** rewrites every wikilink matching a name to a target you choose (`dry_run` first, `unresolved_only` to leave working links alone) — one deliberate call, one decision. A duplicated uid is fixed by editing one note's frontmatter; nothing here will pick a winner for you.
+
+**The repair is contained by the same allowlist.** `obsidian_repoint_link` scans notes to find the links it rewrites, so its blast radius isn't in its arguments and the ordinary path check can't reach it. With an allowlist configured it reads, rewrites and names **only visible notes** — the response says `scoped_to_allowlist: true`, and that flag matters: the repair is then **partial**, and dangling links to the same name survive outside your allowlist. With no allowlist, the scan is the whole vault as before (`scoped_to_allowlist: false`). The journal records what actually changed, not just what was asked for: an `effects: {filesChanged, paths}` field beside the argument-derived `target` (omitted for a `dry_run`, which changes nothing).
 
 ## Write queue & journal
 
@@ -138,7 +154,7 @@ Every mutating operation also appends **one JSONL line** to `.obsidian/plugins/v
  "outcome":"ok","durationMs":37,"queueWaitMs":0,"revBefore":1754680000000,"revAfter":1754680051427}
 ```
 
-It records the *operation* — what happened, to what, on whose behalf — not the bytes; git already covers the bytes. `actor.server` is the transport's own assertion of identity: which **vault**, which **install** (a persistent id in `.obsidian/plugins/vault-mcp/install-id.json`, minted once and kept beside the journal), and which plugin **version** — so a journal copied off the machine, or two vaults' journals read together, stays attributable. The `initialize` handshake carries the vault name too, in `serverInfo.title`. `durationMs` is the handler alone and `queueWaitMs` is the time spent waiting behind other writes, so a slow operation and a queued one are distinguishable; `revBefore` is probed when the operation reaches the front of the queue, not when it was enqueued. Operations that name no vault path (running a command, toggling a plugin, an `obsidian_cli` invocation) record `target.ref`, e.g. `"command:editor:toggle-bold"`.
+It records the *operation* — what happened, to what, on whose behalf — not the bytes; git already covers the bytes. `actor.server` is the transport's own assertion of identity: which **vault**, which **install** (a persistent id in `.obsidian/plugins/vault-mcp/install-id.json`, minted once and kept beside the journal), and which plugin **version** — so a journal copied off the machine, or two vaults' journals read together, stays attributable. The `initialize` handshake carries the vault name too, in `serverInfo.title`. `durationMs` is the handler alone and `queueWaitMs` is the time spent waiting behind other writes, so a slow operation and a queued one are distinguishable; `revBefore` is probed when the operation reaches the front of the queue, not when it was enqueued. Operations that name no vault path (running a command, toggling a plugin, an `obsidian_cli` invocation) record `target.ref`, e.g. `"command:editor:toggle-bold"`. `target` says what was *asked for*; where an operation discovers its own blast radius — `obsidian_repoint_link` scans notes to find the links it rewrites — the record also carries **`effects`**: `{"filesChanged": 12, "paths": [...]}`, the exact count plus the changed paths (capped at 20). A dry run records none: nothing changed, so nothing is claimed.
 
 ### Advisory scope claims
 

@@ -20,6 +20,18 @@ export function okError(data: unknown) {
   return { ...ok(data), isError: true as const };
 }
 
+/**
+ * A TYPED refusal, in the `Error [code]: message` shape the guard itself emits
+ * (mcp/guarded.ts). Core's `fail()` renders `Error: <message>`, which drops the
+ * only machine-readable thing about a refusal — so any tool refusing for a
+ * reason a caller might branch on (a cap, a scope, an allowlist) reports it
+ * through here instead. One copy, shared by tools-locks.ts and tools-links.ts,
+ * so two surfaces cannot drift on what a refusal looks like.
+ */
+export function codedError(code: string, message: string) {
+  return { content: [{ type: "text" as const, text: `Error [${code}]: ${message}` }], isError: true as const };
+}
+
 // Static validation for a batch of moves, all checked before any item runs.
 // Sequential batch moves make swaps/chains destructive with overwrite=true (an
 // earlier item can trash or consume a note a later item depends on), and

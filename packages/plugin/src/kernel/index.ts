@@ -28,7 +28,14 @@
 
 import { collectPaths } from "../guard.js";
 import { WriteQueue, WriteTimeoutError } from "./write-queue.js";
-import { digestArgs, WriteJournal, type JournalActor, type JournalOutcome, type JournalTarget } from "./journal.js";
+import {
+  digestArgs,
+  WriteJournal,
+  type JournalActor,
+  type JournalEffects,
+  type JournalOutcome,
+  type JournalTarget,
+} from "./journal.js";
 import { fingerprintArgs, IdempotencyMismatchError, IdempotencyStore, type IdempotencySettlement } from "./idempotency.js";
 import { holderOf, lockNoticeText, LockStore, expiresInSeconds, type Lock, type LockNotice } from "./locks.js";
 import type { UidIndex } from "./uid-index.js";
@@ -36,7 +43,14 @@ import type { UidIndex } from "./uid-index.js";
 export { WriteQueue, WriteTimeoutError, WRITE_TIMEOUT_MS } from "./write-queue.js";
 export type { LateSettlement } from "./write-queue.js";
 export { WriteJournal, digestArgs, monthKey } from "./journal.js";
-export type { JournalRecord, JournalActor, JournalAdapter, JournalOutcome, JournalTarget } from "./journal.js";
+export type {
+  JournalRecord,
+  JournalActor,
+  JournalAdapter,
+  JournalEffects,
+  JournalOutcome,
+  JournalTarget,
+} from "./journal.js";
 export {
   IdempotencyStore,
   IdempotencyMismatchError,
@@ -156,6 +170,17 @@ export interface MutationContext {
    * TTL'd — see idempotency.ts.
    */
   idempotencyKey?: string;
+  /**
+   * Read the operation's REAL blast radius off its result, for operations whose
+   * arguments cannot state it (a link repoint discovers the notes it rewrites).
+   *
+   * Supplied by the interception layer, where the tool surface's result
+   * conventions live (mcp/guarded.ts) — the kernel only records what it is
+   * handed, exactly as it does with `ref`. Absent ⇒ nothing is recorded; a
+   * throw here is swallowed, since a journal field must never cost a caller
+   * their result.
+   */
+  effectsOf?: (result: unknown) => JournalEffects | undefined;
 }
 
 // A batch move can name 100 paths; the journal records the shape, not the payload.
@@ -173,6 +198,20 @@ function errorTextOf(result: unknown): string | undefined {
   if (r.isError !== true) return undefined;
   const first = Array.isArray(r.content) ? (r.content[0] as { text?: unknown } | undefined) : undefined;
   return typeof first?.text === "string" ? first.text.slice(0, MAX_JOURNALED_ERROR) : "error";
+}
+
+/**
+ * The effects a handler reported, if any — never allowed to fail the operation
+ * or lose the record. The convention it reads is the CALLER's (mc.effectsOf);
+ * this only makes it safe.
+ */
+function safeEffects(mc: MutationContext, result: unknown): JournalEffects | undefined {
+  try {
+    return mc.effectsOf?.(result);
+  } catch (e) {
+    console.error("[vault-mcp] journal effects failed", e);
+    return undefined;
+  }
 }
 
 /** Journal text for a THROWN failure (as opposed to a returned isError envelope). */
@@ -420,6 +459,13 @@ export class Kernel {
             ...(lateRevAfter !== undefined ? { revAfter: lateRevAfter } : {}),
             ...(ts !== undefined ? { corrects: ts } : {}),
             ...(lockNotice !== undefined ? { lockNotice } : {}),
+            ...(() => {
+              // A late settlement is the FIRST record able to say what the
+              // abandoned operation touched — the timeout record was written
+              // before it produced a result.
+              const late = settlement.ok ? safeEffects(mc, settlement.value) : undefined;
+              return late !== undefined ? { effects: late } : {};
+            })(),
             ...this.preconditionFields(mc),
           });
         }
@@ -438,6 +484,9 @@ export class Kernel {
     } finally {
       const durationMs = Date.now() - started;
       const revAfter = this.revAfterOf(target);
+      // Only a RETURNED envelope can report effects; a throw means the handler
+      // never said what it touched, and the record must not guess.
+      const effects = settled !== undefined ? safeEffects(mc, settled.value) : undefined;
       ts = new Date().toISOString();
       // Fire-and-forget: WriteJournal.append never rejects, and the operation's
       // result must not wait on (or be affected by) the audit write. Appended
@@ -457,6 +506,7 @@ export class Kernel {
         ...(revBefore !== undefined ? { revBefore } : {}),
         ...(revAfter !== undefined ? { revAfter } : {}),
         ...(lockNotice !== undefined ? { lockNotice } : {}),
+        ...(effects !== undefined ? { effects } : {}),
         ...this.preconditionFields(mc),
       });
       // Release the key: waiters adopt this outcome verbatim, and only now does
