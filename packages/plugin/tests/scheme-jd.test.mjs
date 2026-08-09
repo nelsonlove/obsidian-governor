@@ -4,10 +4,12 @@
  * obsidian-johnny-decimal's src/core/jdId.ts (see that file's header for the
  * full shape catalogue: area / category / id / expanded-item / fractal-id).
  *
- * This task implements parse/format/addressOf/validateName + capabilities
- * only; scopeOf/chainOf/membersOf/expectedFolder/nextFree are stubbed to
- * throw ("task 2") so the file typechecks without pretending those methods
- * are ready — pinned at the bottom of this file.
+ * This file covers parse/format/addressOf/validateName + capabilities — the
+ * grammar-only half. The five vault-aware methods (scopeOf/chainOf/membersOf/
+ * expectedFolder/nextFree, Task 2) are covered in scheme-jd-scopes.test.mjs;
+ * the smoke test at the bottom of this file just pins that they're live
+ * (not the "task 2" stubs Task 1 shipped them as) so a future refactor can't
+ * silently regress them back to throwing.
  */
 
 import { test, describe } from "node:test";
@@ -168,14 +170,21 @@ describe("validateName", () => {
   });
 });
 
-// ── Task 2 stubs: pinned so a future task cannot silently forget them ──────────
+// ── Task 2 methods: smoke-pinned live here; full coverage in scheme-jd-scopes.test.mjs ──
 
-describe("methods deferred to task 2 throw, rather than silently stubbing behavior", () => {
-  test("scopeOf/chainOf/membersOf/expectedFolder/nextFree all throw 'task 2'", () => {
-    assert.throws(() => p.scopeOf("06.11 Foo.md"), /task 2/);
-    assert.throws(() => p.chainOf({ kind: "category", token: "06" }), /task 2/);
-    assert.throws(() => p.membersOf({ kind: "category", token: "06" }, []), /task 2/);
-    assert.throws(() => p.expectedFolder(p.parse("06.11"), []), /task 2/);
-    assert.throws(() => p.nextFree({ kind: "category", token: "06" }, []), /task 2/);
+describe("methods deferred to task 2 are live, not stubs", () => {
+  test("scopeOf/chainOf/membersOf/expectedFolder/nextFree no longer throw 'task 2'", () => {
+    const notes = ["00-09 System/06 Agent tooling/06.11 Foo.md"];
+    assert.deepEqual(p.scopeOf("00-09 System/06 Agent tooling/06.11 Foo.md"), { kind: "category", token: "06" });
+    assert.deepEqual(p.chainOf({ kind: "category", token: "06" }), [
+      { kind: "category", token: "06" },
+      { kind: "area", token: "00-09" },
+    ]);
+    assert.deepEqual(
+      p.membersOf({ kind: "category", token: "06" }, notes).map((m) => m.address),
+      ["06.11"],
+    );
+    assert.equal(p.expectedFolder(p.parse("06.12"), notes), "00-09 System/06 Agent tooling");
+    assert.equal(p.format(p.nextFree({ kind: "category", token: "06" }, notes)), "06.10");
   });
 });

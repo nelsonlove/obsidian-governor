@@ -16,13 +16,11 @@
 //
 // Everything else (e.g. "26 2.18") is malformed.
 //
-// This task (Task 1) implements parse/format/addressOf/validateName plus
-// capabilities. scopeOf/chainOf/membersOf/expectedFolder/nextFree are
-// stubbed to throw ("task 2") — plan-mandated, not an oversight, so the file
-// typechecks against the full ScopeProvider shape while later tasks fill
-// in the vault-aware half. The grammar helpers below are ported in full now
-// (not just the subset Task 1 calls) so Task 2 has them ready rather than
-// re-porting the same source a second time.
+// Task 1 implemented parse/format/addressOf/validateName plus capabilities.
+// Task 2 (below, in jdProvider's returned object) implements the five
+// vault-aware methods — scopeOf/chainOf/membersOf/expectedFolder/nextFree —
+// all pure over a supplied `notes: string[]` vault listing, same as
+// everything else in this file: no I/O, no "obsidian" import.
 
 import type { Address, Capabilities, Member, Scope, SchemeFinding, ScopeProvider } from "./provider.js";
 
@@ -165,9 +163,18 @@ function nextContentDecimal(used: Set<number>): string | null {
   return null;
 }
 
-// categoryOf / isExpandedCategory / isExpandedAreaItem / isStandardZero /
-// nextContentDecimal are not called by this task's four methods — they exist
-// here, ported and ready, for Task 2's scopeOf/nextFree.
+// categoryOf / isExpandedAreaItem / isStandardZero are ported and available
+// but not called below — Task 2's methods work directly off ParsedId's own
+// area/category/decimal fields (already validated by parseJdId), which makes
+// the looser categoryOf and the boolean isExpandedAreaItem/isStandardZero
+// checks redundant for this file's purposes. isExpandedCategory is likewise
+// not reused for the Scope-kind "category" dispatch in nextFree: its OR
+// branch also matches a category folded into an expanded AREA, which cannot
+// arise as a "category" Scope in the first place (an expanded area collapses
+// the category level entirely — see levelsOf's expanded-item branch), so a
+// direct `cfg.expandedCategories.includes(token)` check is both sufficient
+// and avoids implying a case that can't occur. nextContentDecimal IS used,
+// verbatim, by nextFree's plain-category branch.
 
 // ── Address <-> ParsedId ─────────────────────────────────────────────────────
 
@@ -207,6 +214,27 @@ function basename(path: string): string {
 /** A leading token that at least LOOKS like a JD id (digits, dots, hyphens) —
  * used to distinguish "malformed address" from "simply not addressed". */
 const LOOKS_NUMERIC = /^[0-9][0-9.\-]*$/;
+
+/** A path's folder segments, top to bottom, with the filename dropped. */
+function folderSegments(path: string): string[] {
+  const parts = path.split("/");
+  parts.pop();
+  return parts;
+}
+
+/** A folder segment's leading token (same convention as idTokenFromName, but
+ * folder names carry no Extend-the-End suffix — just "<token> <title>"). */
+function folderToken(segment: string): string {
+  return segment.split(" ")[0];
+}
+
+/** Parse the address a note's filename carries, as a ParsedId (not the
+ * public Address shape) — for internal use where the structural fields
+ * (area/category/decimal) are needed directly. Same extraction addressOf
+ * uses. */
+function parsedFromPath(path: string, cfg: JdConfig): ParsedId | null {
+  return parseJdId(idTokenFromName(basename(path)), cfg);
+}
 
 // ── the provider ─────────────────────────────────────────────────────────────
 
@@ -251,20 +279,179 @@ export function jdProvider(cfg: JdConfig): ScopeProvider {
     format,
     addressOf,
     validateName,
-    scopeOf(_path: string): Scope | null {
-      throw new Error("task 2");
+    // Walk the path's folder segments deepest-first; the first one whose
+    // leading token parses as a container (area / category / expanded-item)
+    // is the scope — independent of what the note's OWN filename says (a
+    // note with no address, or a malformed one, still lives in a scope).
+    scopeOf(path: string): Scope | null {
+      const segments = folderSegments(path);
+      for (let i = segments.length - 1; i >= 0; i--) {
+        const p = parseJdId(folderToken(segments[i]), cfg);
+        if (p && (p.kind === "area" || p.kind === "category" || p.kind === "expanded-item")) {
+          return { kind: p.kind, token: p.raw };
+        }
+      }
+      return null;
     },
-    chainOf(_scope: Scope): Scope[] {
-      throw new Error("task 2");
+
+    // Self first, root last. An expanded-item's parent depends on whether it
+    // sits in an expanded AREA (collapses straight to the area, no category
+    // level — levelsOf's expanded-item branch) or an expanded CATEGORY (the
+    // category folder survives).
+    chainOf(scope: Scope): Scope[] {
+      switch (scope.kind) {
+        case "area":
+          return [scope];
+        case "category":
+          return [scope, { kind: "area", token: areaOfCategory(scope.token) }];
+        case "expanded-item": {
+          const cat = scope.token.slice(0, 2);
+          const area = areaOfCategory(cat);
+          if (cfg.expandedAreas.includes(area)) {
+            return [scope, { kind: "area", token: area }];
+          }
+          return [scope, { kind: "category", token: cat }, { kind: "area", token: area }];
+        }
+        default:
+          return [scope];
+      }
     },
-    membersOf(_scope: Scope, _notes: string[]): Member[] {
-      throw new Error("task 2");
+
+    // Membership is decided by ADDRESS, not physical folder location: a note
+    // whose filename carries no address is excluded here even if it lives
+    // inside the scope's folder (it's an `unaddressed` finding, Task 4's
+    // business, not a member). A scope's own self-address (e.g. a bare "06"
+    // note for the category scope {category, "06"}) is excluded too — it
+    // names the container, not something inside it.
+    membersOf(scope: Scope, notes: string[]): Member[] {
+      const isMember = (p: ParsedId): boolean => {
+        switch (scope.kind) {
+          case "area":
+            return p.area === scope.token && p.raw !== scope.token;
+          case "category":
+            return p.category === scope.token && p.raw !== scope.token;
+          case "expanded-item":
+            return p.kind === "fractal-id" && p.raw.split(".")[0] === scope.token;
+          default:
+            return false;
+        }
+      };
+      // Numeric sort key: [primary, secondary], ascending. `primary` is the
+      // category (ids) or the 5-digit item number (expanded-item/fractal-id);
+      // `secondary` is the decimal part where one exists, else -1 so a bare
+      // container sorts before its own content.
+      const sortKey = (p: ParsedId): [number, number] => {
+        switch (p.kind) {
+          case "id":
+            return [parseInt(p.category, 10), parseInt(p.decimal as string, 10)];
+          case "category":
+            return [parseInt(p.category, 10), -1];
+          case "expanded-item":
+            return [parseInt(p.raw, 10), -1];
+          case "fractal-id":
+            return [parseInt(p.raw.split(".")[0], 10), parseInt(p.decimal as string, 10)];
+          default:
+            return [0, -1];
+        }
+      };
+      const members: Array<{ path: string; p: ParsedId }> = [];
+      for (const path of notes) {
+        const p = parsedFromPath(path, cfg);
+        if (p && isMember(p)) members.push({ path, p });
+      }
+      members.sort((a, b) => {
+        const [ak0, ak1] = sortKey(a.p);
+        const [bk0, bk1] = sortKey(b.p);
+        return ak0 - bk0 || ak1 - bk1;
+      });
+      return members.map(({ path, p }) => ({ path, address: format(toAddress(p)) }));
     },
-    expectedFolder(_addr: Address, _notes: string[]): string | null {
-      throw new Error("task 2");
+
+    // The folder an address's CONTAINER actually lives in, found by locating
+    // a folder segment among `notes` whose token matches that container.
+    // `levels` (Address.levels) is the folder-path convention: the
+    // second-to-last entry is always the container token — for "id" that's
+    // the category; for a bare "category" it's the area (levels = [area,
+    // category], so index length-2 = 0 = area); for an expanded-item inside
+    // an expanded area (2 levels, no category folder) it's the area; inside
+    // an expanded category (3 levels) it's the category; for a fractal-id
+    // it's the expanded-item's own 5-digit folder. An address with fewer
+    // than 2 levels (a bare area) has no container to find.
+    expectedFolder(addr: Address, notes: string[]): string | null {
+      if (addr.levels.length < 2) return null;
+      const containerToken = addr.levels[addr.levels.length - 2];
+      for (const note of notes) {
+        const segments = folderSegments(note);
+        for (let i = 0; i < segments.length; i++) {
+          if (folderToken(segments[i]) === containerToken) {
+            return segments.slice(0, i + 1).join("/");
+          }
+        }
+      }
+      return null;
     },
-    nextFree(_scope: Scope, _notes: string[]): Address | null {
-      throw new Error("task 2");
+
+    // category scope: lowest unused two-digit content decimal (nextContentDecimal,
+    //   ported verbatim — .00-.09 reserved, exhaustion at .99 returns null),
+    //   UNLESS the category is one of cfg.expandedCategories, in which case it
+    //   allocates 5-digit ids like an expanded area does (see below).
+    // area scope: null, UNLESS the area is one of cfg.expandedAreas.
+    // expanded area / expanded category: next 5-digit sequential id.
+    //   Convention (see JdConfig / task brief): the numeric space for an
+    //   expanded AREA is <band-first-digit><4-digit sequence> (e.g. band
+    //   "90-99" -> 90000..99999, starting at 90001 when empty); for an
+    //   expanded CATEGORY it's <2-digit category><3-digit sequence> (e.g.
+    //   category "27" -> 27000..27999, starting at 27001 when empty). Both
+    //   allocate strictly max(used)+1, not lowest-unused — a used id is
+    //   never reclaimed by a later gap.
+    // expanded-item scope (e.g. "92021", allocating fractal sub-ids like
+    //   "92021.11"): not part of v1's allocate surface, so null — same
+    //   "allocate ids, not categories" boundary as the plain-area case.
+    nextFree(scope: Scope, notes: string[]): Address | null {
+      if (scope.kind === "category" && cfg.expandedCategories.includes(scope.token)) {
+        const base = parseInt(scope.token, 10) * 1000;
+        const used = new Set<number>();
+        for (const note of notes) {
+          const p = parsedFromPath(note, cfg);
+          if (p && p.kind === "expanded-item" && p.category === scope.token) {
+            used.add(parseInt(p.raw, 10));
+          }
+        }
+        const next = used.size === 0 ? base + 1 : Math.max(...used) + 1;
+        if (next > base + 999) return null;
+        return parse(String(next).padStart(5, "0"));
+      }
+      if (scope.kind === "category") {
+        const used = new Set<number>();
+        for (const note of notes) {
+          const p = parsedFromPath(note, cfg);
+          if (p && p.kind === "id" && p.category === scope.token) {
+            used.add(parseInt(p.decimal as string, 10));
+          }
+        }
+        const decimal = nextContentDecimal(used);
+        return decimal === null ? null : parse(`${scope.token}.${decimal}`);
+      }
+      if (scope.kind === "area" && cfg.expandedAreas.includes(scope.token)) {
+        const bandDigit = scope.token[0];
+        const base = parseInt(bandDigit, 10) * 10000;
+        const used = new Set<number>();
+        for (const note of notes) {
+          const p = parsedFromPath(note, cfg);
+          if (!p) continue;
+          if (p.kind === "expanded-item" && p.area === scope.token) {
+            used.add(parseInt(p.raw, 10));
+          } else if (p.kind === "fractal-id" && p.area === scope.token) {
+            used.add(parseInt(p.raw.split(".")[0], 10));
+          }
+        }
+        const next = used.size === 0 ? base + 1 : Math.max(...used) + 1;
+        if (next > base + 9999) return null;
+        return parse(String(next).padStart(5, "0"));
+      }
+      // Plain (non-expanded) area, or an expanded-item scope: v1 does not
+      // allocate here.
+      return null;
     },
   };
 }
