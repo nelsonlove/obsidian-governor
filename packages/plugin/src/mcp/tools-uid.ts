@@ -18,7 +18,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ok, fail } from "./helpers.js";
-import { guardCall, type GuardSettings } from "../guard.js";
+import { visiblePaths, type GuardSettings } from "../guard.js";
 import type { Kernel } from "../kernel/index.js";
 
 const RO = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
@@ -32,12 +32,13 @@ export interface UidToolsCtx {
 const NO_INDEX = "the uid index needs the kernel, which is not active in this build";
 
 export function registerUidTools(server: McpServer, ctx: UidToolsCtx): void {
-  /** Paths this session is allowed to be told about. */
-  const visible = (paths: string[]): string[] => {
-    const settings = ctx.getSettings?.();
-    if (!settings?.allowlist?.length) return paths;
-    return paths.filter((path) => !guardCall({ isMutating: false, args: { path }, settings }));
-  };
+  /**
+   * Paths this session is allowed to be told about. The rule itself lives in
+   * guard.ts (`visiblePaths`) because uid ADDRESSING decides over the same set —
+   * one copy, so the lookup and the addressing cannot drift into disagreeing
+   * about what a duplicated uid names.
+   */
+  const visible = (paths: string[]): string[] => visiblePaths(paths, ctx.getSettings?.());
 
   server.registerTool(
     "obsidian_resolve_uid",

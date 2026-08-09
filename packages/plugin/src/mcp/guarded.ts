@@ -173,6 +173,13 @@ export interface GuardedOpts {
 // message, so resolved paths are folded back to their `uid:` form in the
 // guard's text (uidSafe): the refusal still says which argument was wrong
 // without disclosing where it pointed.
+//
+// The uid errors themselves are bounded at the source rather than scrubbed
+// after the fact: resolution runs over the allowlist-VISIBLE candidates only
+// (UidIndex.requireOne), so `uid_ambiguous` can only ever name paths this
+// session could have named itself, and a uid carried solely outside the sandbox
+// reads as `uid_unresolved`. That is also what obsidian_resolve_uid reports, so
+// looking a uid up and addressing by it agree.
 
 /** Put `uid:<value>` back where a resolved path appears, so a refusal discloses nothing. */
 function uidSafe(message: string, resolved: Array<{ uid: string; path: string }>): string {
@@ -192,11 +199,15 @@ export function makeGuarded(opts: GuardedOpts) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (def: any, handler: any, name?: string) => async (args: any, extra: any) => {
     const isMutating = def?.annotations?.readOnlyHint === false;
+    const settings = opts.getSettings();
     // 1. uid addressing. A call using none is handed back the SAME args object,
     //    so nothing below can behave differently for an ordinary path call.
+    //    Resolution is bounded by the session's own allowlist (see requireOne):
+    //    a uid carried by a note this session cannot see is not a candidate, so
+    //    neither refusal below can name a path the caller was never entitled to.
     let addressed;
     try {
-      addressed = resolveUidArgs(args ?? {}, opts.uids ?? opts.kernel?.uids ?? null);
+      addressed = resolveUidArgs(args ?? {}, opts.uids ?? opts.kernel?.uids ?? null, settings);
     } catch (e) {
       // Unknown or duplicated uid: refuse, and run nothing. Both are typed, and
       // the ambiguous one names the candidates so the caller can disambiguate.
@@ -204,7 +215,7 @@ export function makeGuarded(opts: GuardedOpts) {
       throw e;
     }
     const callArgs = addressed.args;
-    const blocked = guardCall({ isMutating, args: callArgs, settings: opts.getSettings() });
+    const blocked = guardCall({ isMutating, args: callArgs, settings });
     if (blocked) return codedError(blocked.code, uidSafe(blocked.message, addressed.resolved));
     // Kernel arguments are always PEELED OFF, kernel or not, so no handler ever
     // sees one. What differs without a kernel is whether they can be honored:

@@ -22,9 +22,12 @@
 // ── duplicates ───────────────────────────────────────────────────────────────
 //
 // A uid may map to several paths. The index keeps them ALL, in precedence order
-// (first wins for a bare lookup; `rebuild` sorts so that "first" is stable
-// across reloads rather than a function of cache-warming order). Addressing a
-// duplicated uid is a typed ERROR, never a silent pick: see requireOne.
+// (first wins for a bare lookup; `rebuild` sorts and incremental adds insert in
+// sorted position, so "first" is a property of the vault rather than of
+// cache-warming or edit order — an in-place `onRenamed` is the one documented
+// exception). Addressing a duplicated uid is a typed ERROR, never a silent pick:
+// see requireOne — which decides over the candidates the caller's allowlist
+// leaves VISIBLE, so a duplicate is never a way to read a path out of a sandbox.
 //
 // ── uid addressing ───────────────────────────────────────────────────────────
 //
@@ -35,7 +38,7 @@
 // Obsidian-free by construction, like every other kernel module: the adapter
 // lives in obsidian-probe.ts and the events are wired in main.ts.
 
-import { mapPaths } from "../guard.js";
+import { mapPaths, visiblePaths, type GuardSettings } from "../guard.js";
 
 /**
  * Where the index gets its facts. Cheap, synchronous, cache-backed lookups —
@@ -94,6 +97,11 @@ export class UidUnresolvedError extends Error {
  * Typed failure for a uid carried by more than one note. Nothing runs, and the
  * error NAMES the candidates: uid addressing needs exactly one target, and
  * picking the first would write into whichever note happened to sort earlier.
+ *
+ * The candidates it names are the ALLOWLIST-VISIBLE ones (see requireOne). It
+ * used to name every carrier, which handed a sandboxed session the paths its
+ * allowlist exists to hide — a duplicated uid was a path oracle for the rest of
+ * the vault.
  */
 export class UidAmbiguousError extends Error {
   readonly code = "uid_ambiguous";
@@ -144,10 +152,16 @@ export interface UidAddressing {
  * so the arguments uid addressing reaches and the arguments the allowlist scopes
  * are the same set by construction: a tool the guard can see cannot be
  * unaddressable, and a tool addressable by uid cannot escape the allowlist.
+ *
+ * `settings` is the session's guard settings, and resolution happens over the
+ * candidates that allowlist leaves VISIBLE — the same set `obsidian_resolve_uid`
+ * reports, so looking a uid up and acting on it can never disagree. Omit it
+ * (tests, no-allowlist embeds) and the whole candidate set decides, as before.
  */
 export function resolveUidArgs(
   args: Record<string, unknown>,
-  index: UidIndex | null
+  index: UidIndex | null,
+  settings?: GuardSettings | null
 ): UidAddressing {
   const resolved: Array<{ uid: string; path: string }> = [];
   const rewritten = mapPaths(args ?? {}, (value) => {
@@ -157,7 +171,7 @@ export function resolveUidArgs(
     // treating `uid:019f…` as a literal filename would create a junk note (or
     // read a missing one) while the caller believes it addressed a real note.
     if (!index) throw new UidUnresolvedError(uid, "no uid index is active in this build");
-    const path = index.requireOne(uid);
+    const path = index.requireOne(uid, settings);
     resolved.push({ uid, path });
     return path;
   });
@@ -193,8 +207,14 @@ export class UidIndex {
   /**
    * Build (or rebuild) from scratch. Paths are sorted first so duplicate
    * PRECEDENCE is a property of the vault rather than of the order the metadata
-   * cache happened to warm in — the same vault resolves a duplicated uid the
-   * same way after every reload.
+   * cache happened to warm in.
+   *
+   * Incremental adds insert in sorted position too (see `add`), so a warm index
+   * and a freshly rebuilt one agree — the ONE exception is `onRenamed`, which
+   * replaces a mapping in place and can leave a duplicate's order diverging from
+   * sorted until the next rebuild. That is a deliberate trade, stated here
+   * rather than papered over: a rename must not silently demote the note a
+   * duplicated uid currently resolves to.
    */
   rebuild(): void {
     this.byUid.clear();
@@ -268,9 +288,24 @@ export class UidIndex {
    * The single path a uid names, or a typed error. This is the ONLY resolution
    * uid ADDRESSING is allowed to use: unknown and ambiguous both refuse, because
    * both would otherwise act on a note the caller did not name.
+   *
+   * The decision is made over the candidates `settings` leaves VISIBLE, never
+   * the raw carrier set:
+   *
+   *   • 0 visible ⇒ unresolved, even when hidden carriers exist. A sandboxed
+   *     session learns that the uid names nothing IT can reach, which is all it
+   *     is entitled to know;
+   *   • 1 visible ⇒ that path. Exactly one target is exactly what addressing
+   *     needs, and the hidden carriers are not this session's business;
+   *   • 2+ visible ⇒ ambiguous, naming ONLY the visible ones.
+   *
+   * Which is the same rule `obsidian_resolve_uid` applies to what it reports:
+   * the lookup and the addressing answer one question one way. Without settings
+   * (or without an allowlist) every carrier is visible and this is the plain
+   * duplicate check it has always been.
    */
-  requireOne(uid: string): string {
-    const paths = this.byUid.get(uid) ?? [];
+  requireOne(uid: string, settings?: GuardSettings | null): string {
+    const paths = visiblePaths(this.byUid.get(uid) ?? [], settings);
     if (paths.length === 0) throw new UidUnresolvedError(uid);
     if (paths.length > 1) throw new UidAmbiguousError(uid, [...paths]);
     return paths[0];
@@ -283,11 +318,24 @@ export class UidIndex {
     return out;
   }
 
+  /**
+   * Insert in SORTED position, not at the end. Appending made a duplicate's
+   * precedence depend on the order the events happened to arrive in, so a warm
+   * index and the same vault after a reload could disagree about which note a
+   * duplicated uid resolves to — the thing `rebuild`'s sort exists to prevent,
+   * undone by the first incremental add. A linear scan over the carriers of ONE
+   * uid is free: the array has one element in every case but a duplicate.
+   */
   private add(path: string, uid: string): void {
     this.byPath.set(path, uid);
     const paths = this.byUid.get(uid);
-    if (!paths) this.byUid.set(uid, [path]);
-    else if (!paths.includes(path)) paths.push(path);
+    if (!paths) {
+      this.byUid.set(uid, [path]);
+      return;
+    }
+    if (paths.includes(path)) return;
+    const at = paths.findIndex((p) => p > path);
+    paths.splice(at < 0 ? paths.length : at, 0, path);
   }
 
   private drop(path: string): void {

@@ -179,6 +179,43 @@ describe("UidIndex — duplicates are recorded, never repaired", () => {
     );
   });
 
+  // D-E: `rebuild` sorts, but incremental adds used to APPEND — so a duplicate
+  // discovered by a live `changed` event took a different precedence order than
+  // the same vault takes after a reload, and the comment claiming reload
+  // stability was false. Adds now insert in sorted position.
+  test("D-E: a duplicate found incrementally takes the SAME order as after a rebuild", () => {
+    const src = fakeSource({ "Zeta.md": "dup" });
+    const index = new UidIndex(src);
+    index.rebuild();
+
+    // Two more carriers arrive live, in an order the vault does not determine —
+    // whichever file the user happened to edit first.
+    src.setUid("Alpha.md", "dup");
+    index.onChanged("Alpha.md");
+    src.setUid("Mid.md", "dup");
+    index.onChanged("Mid.md");
+
+    const incremental = index.resolve("dup").paths;
+    index.rebuild();
+    assert.deepEqual(incremental, index.resolve("dup").paths, "warm-index order agrees with post-reload order");
+    assert.deepEqual(incremental, ["Alpha.md", "Mid.md", "Zeta.md"]);
+  });
+
+  test("D-E: …so the winner of a duplicate does not depend on edit order", () => {
+    const order = (paths) => {
+      const src = fakeSource({});
+      const index = new UidIndex(src);
+      index.rebuild();
+      for (const path of paths) {
+        src.setUid(path, "dup");
+        index.onChanged(path);
+      }
+      return index.resolve("dup").paths;
+    };
+    assert.deepEqual(order(["B.md", "A.md"]), order(["A.md", "B.md"]), "edit order does not decide the winner");
+    assert.deepEqual(order(["B.md", "A.md"]), ["A.md", "B.md"]);
+  });
+
   test("resolving a duplicate down to one note makes it addressable again", () => {
     const src = fakeSource({ "A.md": "dup", "B.md": "dup" });
     const index = new UidIndex(src);
@@ -449,18 +486,21 @@ describe("uid addressing through the guarded wrapper", () => {
     assert.deepEqual(records(), [], "a refused reference never reached the queue");
   });
 
-  test("the allowlist is checked against the RESOLVED path — a uid is not a way around it", async () => {
+  test("a uid carried only OUTSIDE the allowlist is not a way around it", async () => {
     const { guarded, seen, handler } = harness({
       allowlist: ["Projects"],
       entries: { "Archive/secret.md": "uid-secret" },
     });
     const res = await guarded(RW_DEF, handler, "obsidian_write_note")({ path: "uid:uid-secret" }, {});
     assert.equal(res.isError, true);
-    assert.match(res.content[0].text, /Error \[out_of_allowlist\]/);
-    assert.deepEqual(seen, []);
+    // The sandbox decides the candidate set (D-A), so the uid names nothing this
+    // session can reach — which is also exactly what obsidian_resolve_uid says
+    // about it. Refusing as "out of allowlist" would confirm the uid exists.
+    assert.match(res.content[0].text, /Error \[uid_unresolved\]/);
+    assert.deepEqual(seen, [], "nothing ran");
   });
 
-  test("…and the refusal does not disclose the path it resolved to", async () => {
+  test("…and the refusal does not disclose the path it would have resolved to", async () => {
     const { guarded, handler } = harness({
       allowlist: ["Projects"],
       entries: { "Archive/secret.md": "uid-secret" },
@@ -471,7 +511,25 @@ describe("uid addressing through the guarded wrapper", () => {
       false,
       "a sandboxed session must not learn paths outside its sandbox from an error message"
     );
-    assert.match(res.content[0].text, /uid:uid-secret/, "it names the reference the caller actually gave");
+    assert.match(res.content[0].text, /uid-secret/, "it names the reference the caller actually gave");
+  });
+
+  test("uidSafe still folds a resolved path back to its uid in a guard refusal", async () => {
+    // A visible uid alongside a literal path outside the allowlist: the guard
+    // refuses on the literal one, and the message must not spell out where the
+    // uid pointed (even though this session could have named it itself).
+    const { guarded, seen, handler } = harness({
+      allowlist: ["Projects"],
+      entries: { "Projects/Alpha.md": "uid-alpha" },
+    });
+    const res = await guarded(RW_DEF, handler, "obsidian_move_note")(
+      { from: "uid:uid-alpha", to: "Archive/moved.md" },
+      {}
+    );
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /Error \[out_of_allowlist\]/);
+    assert.equal(res.content[0].text.includes("Projects/Alpha.md"), false, "the resolved path is folded back");
+    assert.deepEqual(seen, []);
   });
 
   test("an allowlisted session addressing INSIDE its allowlist by uid still works", async () => {
@@ -496,6 +554,62 @@ describe("uid addressing through the guarded wrapper", () => {
     assert.equal(res.isError, true);
     assert.match(res.content[0].text, /uid_unresolved/);
     assert.deepEqual(seen, [], "a partially-resolvable batch is not half-run");
+  });
+
+  // D-A: `uid_ambiguous` used to name EVERY carrier of the uid, including ones
+  // the session's allowlist hides — so a sandboxed session could learn a path
+  // outside its sandbox just by addressing a duplicated uid. Addressing now
+  // decides on the ALLOWLIST-VISIBLE candidate set only, exactly as
+  // obsidian_resolve_uid already did.
+  const HIDDEN = "Archive/Payroll/Salaries 2026.md";
+
+  test("D-A: a duplicate whose other carrier is hidden resolves to the visible one", async () => {
+    const { guarded, seen, handler } = harness({
+      allowlist: ["Projects"],
+      entries: { "Projects/Alpha.md": "dup", [HIDDEN]: "dup" },
+    });
+    const res = await guarded(RW_DEF, handler, "obsidian_write_note")({ path: "uid:dup", content: "x" }, {});
+    assert.equal(res.isError, undefined, "one visible candidate is not ambiguous — there is one target");
+    assert.deepEqual(seen, [{ path: "Projects/Alpha.md", content: "x" }]);
+  });
+
+  test("D-A: the refusal for a wholly hidden uid never names a hidden carrier", async () => {
+    const { guarded, seen, handler } = harness({
+      allowlist: ["Projects"],
+      entries: { [HIDDEN]: "dup", "Archive/Payroll/Bonuses.md": "dup" },
+    });
+    const res = await guarded(RW_DEF, handler, "obsidian_write_note")({ path: "uid:dup", content: "x" }, {});
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[uid_unresolved\]/, "no visible carrier reads as unresolved");
+    assert.equal(
+      res.content[0].text.includes(HIDDEN),
+      false,
+      "a sandboxed session must not learn a path outside its sandbox from a uid refusal"
+    );
+    assert.equal(res.content[0].text.includes("Archive"), false, "not even a fragment of one");
+    assert.deepEqual(seen, []);
+  });
+
+  test("D-A: two VISIBLE carriers are still ambiguous, and only they are named", async () => {
+    const { guarded, seen, handler } = harness({
+      allowlist: ["Projects"],
+      entries: { "Projects/Alpha.md": "dup", "Projects/Beta.md": "dup", [HIDDEN]: "dup" },
+    });
+    const res = await guarded(RW_DEF, handler, "obsidian_write_note")({ path: "uid:dup", content: "x" }, {});
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[uid_ambiguous\]/);
+    assert.match(res.content[0].text, /Projects\/Alpha\.md/);
+    assert.match(res.content[0].text, /Projects\/Beta\.md/);
+    assert.match(res.content[0].text, /carried by 2 notes/, "the count is of what the caller can see");
+    assert.equal(res.content[0].text.includes(HIDDEN), false, "the hidden carrier is not disclosed");
+    assert.deepEqual(seen, []);
+  });
+
+  test("D-A: with no allowlist the whole candidate set decides, as before", async () => {
+    const { guarded, handler } = harness({ entries: { "Projects/Alpha.md": "dup", [HIDDEN]: "dup" } });
+    const res = await guarded(RW_DEF, handler, "obsidian_write_note")({ path: "uid:dup", content: "x" }, {});
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[uid_ambiguous\]/, "an unsandboxed session sees the real duplication");
   });
 });
 
@@ -649,6 +763,32 @@ describe("obsidian_resolve_uid", () => {
     const res = await call();
     assert.deepEqual(res.structuredContent.duplicates, [], "a wholly out-of-bounds duplicate is invisible");
     assert.equal(res.structuredContent.duplicate_count, 0);
+  });
+
+  // D-A: the two surfaces used to DISAGREE about a duplicate with one visible
+  // carrier — the lookup resolved it, addressing refused it and named the hidden
+  // carrier while doing so. They now share one visible-candidate rule.
+  test("D-A: resolve_uid and uid ADDRESSING agree on the visible candidate set", async () => {
+    const entries = { "Projects/Alpha.md": "dup", "Archive/Payroll/Salaries 2026.md": "dup" };
+    const allowlist = ["Projects"];
+    const { call, index } = uidServer({ entries, allowlist });
+
+    const lookup = (await call({ uid: "dup" })).structuredContent;
+    assert.deepEqual(lookup, { uid: "dup", found: true, path: "Projects/Alpha.md" }, "one visible carrier, no ambiguity");
+
+    const seen = [];
+    const guarded = makeGuarded({
+      getSettings: () => ({ readOnly: false, allowlist }),
+      uids: index,
+      actor: () => ACTOR,
+    });
+    const res = await guarded(
+      RO_DEF,
+      async (a) => { seen.push(a); return { content: [{ type: "text", text: "{}" }] }; },
+      "obsidian_read_note"
+    )({ path: "uid:dup" }, {});
+    assert.equal(res.isError, undefined);
+    assert.deepEqual(seen, [{ path: lookup.path }], "addressing lands where the lookup said it would");
   });
 
   test("without a kernel it fails cleanly rather than throwing", async () => {

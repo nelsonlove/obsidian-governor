@@ -16,6 +16,7 @@ import { guardCall, type GuardSettings } from "../guard.js";
 import {
   expiresInSeconds,
   holderOf,
+  LockCapError,
   LOCK_TTL_DEFAULT_MS,
   LOCK_TTL_MAX_MS,
   LOCK_TTL_MIN_MS,
@@ -161,6 +162,12 @@ export function registerLockTools(server: McpServer, ctx: LockToolsCtx, actor: (
           advisory: "Advisory only: this does not block other sessions from writing inside the scope.",
         });
       } catch (e) {
+        // A cap refusal is a TYPED outcome and must reach the wire as one.
+        // `fail()` renders `Error: <message>`, which drops the only
+        // machine-readable thing about it — and the two caps mean different
+        // things to a caller: `lock_cap` you can clear by releasing one of your
+        // own claims, `lock_store_cap` you can only wait out.
+        if (e instanceof LockCapError) return codedError(e.code, e.message);
         return fail(e);
       }
     }
