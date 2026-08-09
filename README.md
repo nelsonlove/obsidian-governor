@@ -54,6 +54,16 @@ Run **`obsidian_doctor`** (tool) or **`vault-mcp: Show diagnostics`** (command) 
 
 Registering ~40+ tool schemas costs context in every session. A connection whose bridge runs with **`--code-mode`** (append it to the registered command: `… node ~/.claude/vault-mcp/bridge.mjs --vault <name> --code-mode`, or set `VAULT_MCP_CODE_MODE=1`) gets just **3 meta-tools** over the same registry: `obsidian_search_tools` (keyword discovery), `obsidian_describe_tool` (input JSON Schema), `obsidian_call_tool` (invoke by name, args validated against the target's schema). Read-only mode and the path allowlist bind on the target tool exactly as on the full surface. The mode is chosen per connection via a one-line preamble the bridge sends before the MCP stream — old bridges and full-surface sessions are wire-compatible, and both kinds of session can run concurrently against the same vault. If the vault's plugin build predates preamble support, the bridge warns on stderr and falls back to the full surface rather than failing.
 
+## Revisions & concurrency
+
+Multiple sessions — and the human in the editor — can touch the same vault at once. Three per-tool mechanisms cover this. They appear on the relevant tools' schemas (so MCP clients learn them automatically) and bind identically in code mode:
+
+- **`rev` on reads.** Where the host tracks revisions, read tools return the note's current `rev` alongside its content. *Any* change to the note advances it — an MCP write from any session, a human edit in the editor, or a review-tool action (e.g. a Stewardship Revert or acceptance stamp).
+- **`if_rev` on writes.** Pass a previously-read `rev` back as `if_rev` to make the write conditional: if the note changed since that read, the call fails with `Error [rev_conflict]` and writes nothing, instead of silently clobbering a change you didn't see. On multi-target operations it applies to the first target. Writes without `if_rev` are unconditional, as before.
+- **`idempotency_key` on mutations.** Retry safety for calls that *returned*: a repeat call with the same key returns the first call's result instead of running again, and a repeat sent while the first is still in flight waits for it and shares its outcome. It does **not** cover a call that failed with `Error [write_timeout]` — that operation was abandoned server-side and may still have landed, so re-read before retrying. The same key with different arguments (or a changed/dropped `if_rev`) is `Error [idempotency_mismatch]`, never a replay. Keys are held ~10 minutes and cleared on plugin reload; use a fresh key per logical operation.
+
+The interplay with review tooling is deliberate: a human decision made outside MCP — an editor edit, or clicking **Revert** in the Stewardship review plugin — bumps the note's `rev` like any other write. An agent holding a stale `rev` then fails with `rev_conflict` rather than overwriting the human's action. Read-then-conditionally-write is the good-citizen pattern; plain writes remain available where last-write-wins is acceptable.
+
 ## Settings (Settings → Vault MCP)
 
 - **Claude Code connection** — status + the `claude mcp add` line + copy button.
