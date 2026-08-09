@@ -43,7 +43,7 @@ export type CapturedRegistry = Map<string, CapturedTool>;
  */
 export function makeCaptureRegister(
   registry: CapturedRegistry,
-  wrap: (def: any, handler: any) => CapturedTool["handler"]
+  wrap: (def: any, handler: any, name: string) => CapturedTool["handler"]
 ) {
   return (name: string, def: any, handler: any) => {
     // Mirror the SDK's duplicate-name throw: silent Map replacement would let
@@ -51,7 +51,9 @@ export function makeCaptureRegister(
     // the full surface (where external-tools.ts relies on the throw to
     // skip-and-log a colliding entry).
     if (registry.has(name)) throw new Error(`Tool ${name} is already registered`);
-    registry.set(name, { def, handler: wrap(def, handler) });
+    // The tool name travels into the wrap: the journal records the operation by
+    // name, and in code mode this is the only place it is still in hand.
+    registry.set(name, { def, handler: wrap(def, handler, name) });
     // Callers ignore the RegisteredTool return value; a stub keeps the shape.
     return { name };
   };

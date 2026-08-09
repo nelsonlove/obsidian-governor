@@ -7,6 +7,8 @@ import { writeDiscovery, removeDiscovery, writeBridge, type Discovery } from "./
 import { ConnectionSetupModal, VaultMcpSettingTab } from "./connection-ui.js";
 import { findClaudeBinary, claudeIsRegistered, claudeRegister, claudeRemove, claudeEnsureConnectPlugin } from "./claude-cli.js";
 import { ExternalToolRegistry, type VaultMcpApi } from "./mcp/external-tools.js";
+import { Kernel, WriteQueue, WriteJournal } from "./kernel/index.js";
+import { obsidianProbe } from "./kernel/obsidian-probe.js";
 
 interface VaultMcpSettings { setupAcknowledged: boolean; readOnly: boolean; allowlist: string[]; enabled: boolean; allowDangerousCli: boolean; }
 const DEFAULT_SETTINGS: VaultMcpSettings = { setupAcknowledged: false, readOnly: false, allowlist: [], enabled: true, allowDangerousCli: false };
@@ -106,6 +108,17 @@ export default class VaultMcpPlugin extends Plugin {
     try { writeBridge(); }
     catch (e) { console.error("[vault-mcp] writeBridge failed", e); }
 
+    // Kernel v0 — ONE queue and ONE journal per plugin instance, shared by
+    // every per-connection server built below. The journal lives beside the
+    // plugin's own data (`.obsidian/plugins/vault-mcp/journal/YYYY-MM.jsonl`),
+    // out of the note tree so it can never be mistaken for vault content.
+    const pluginDir = this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`;
+    const kernel = new Kernel(
+      new WriteQueue(),
+      new WriteJournal(this.app.vault.adapter, `${pluginDir}/journal`),
+      obsidianProbe(this.app),
+    );
+
     const ctx = {
       pluginVersion: this.manifest.version,
       socketPath: sock,
@@ -113,6 +126,7 @@ export default class VaultMcpPlugin extends Plugin {
       enabledPlugins: () => Array.from((this.app as any).plugins.enabledPlugins as Set<string>),
       getSettings: () => ({ readOnly: this.settings.readOnly, allowlist: this.settings.allowlist, allowDangerousCli: this.settings.allowDangerousCli }),
       getExternalTools: () => this.externalRegistry.entries(),
+      kernel,
     };
 
     if (this.settings.enabled) {
