@@ -18,6 +18,8 @@
 - JD grammar semantics port VERBATIM from `~/repos/obsidian-johnny-decimal/src/core/jdId.ts` (+ its `jdId.test.ts` cases) — do not redesign the grammar; adapt names only where the ScopeProvider interface requires.
 - Conventional commits, one per task minimum. `npm test` green before every commit.
 - Scheme-audit is NOT a registered tool (Nelson's ruling; Conformance README: "rule packs, never new surface"). `findings.ts` exports pure functions only.
+- **Scheme semantics are configuration, not hardwired (Nelson's ruling, 2026-08-09):** any scheme-semantic value in a provider — reserved decimals (.00–.09), the content-decimal floor (10), expanded bands, allocation policy — flows through the per-instance config with today's behavior as the DEFAULT. A new hardwired semantic constant is a review defect. The verbatim-port rule governs *semantics of the defaults*, not their configurability.
+- **The user-facing config schema must be flexible (Nelson, 2026-08-09):** `schemes[].config` is a per-provider namespace validated by the provider itself (skip-and-report, never throw), designed so a user can express scheme variants — and future providers can add capability config — without code or schema-shape changes. Task 5 owns this design; Task 2's JdConfig gains `contentDecimalFloor?: number` (default 10) and `reservedDecimals?` handling as part of the Task-5 amendment rather than new constants.
 
 ---
 
