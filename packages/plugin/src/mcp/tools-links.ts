@@ -255,10 +255,16 @@ export function registerLinkTools(server: McpServer, links: LinkSource, ctx: Lin
         // sandboxed caller learns nothing about how many notes live outside its
         // allowlist, which is the cardinality oracle visiblePaths exists for.
         const notes = visible(links.notes().filter((p) => inScope(p, scope))).sort();
-        // Without an index there is no answer, only a confident zero — say so
-        // the same way the duplicates half does.
+        // Without an index there is no answer, only a confident zero — so the
+        // uid-derived fields are NULL, not 0 (D-D). `available: false` said as
+        // much already, but the numbers beside it still read as facts, and
+        // `notes_total: 412, notes_with_uid: 0, notes_without_uid: 0` is a shape
+        // that cannot be true of any vault: a reader summing the halves gets a
+        // different total than the one printed above them. Null is the value
+        // that survives being read without the flag. `notes_total` stays a
+        // number in both cases — it is a note enumeration, which needs no index.
         const uncovered = index ? notes.filter((p) => index.uidFor(p) === undefined) : [];
-        const withUid = index ? notes.length - uncovered.length : 0;
+        const withUid = index ? notes.length - uncovered.length : null;
 
         return ok({
           scope: scope ?? null,
@@ -277,11 +283,12 @@ export function registerLinkTools(server: McpServer, links: LinkSource, ctx: Lin
             items: duplicates.slice(0, MAX_ITEMS),
           },
           uid_coverage: {
-            // As above: `false` means the counts below are unknown, not zero.
+            // As above: `false` means the uid counts are unknown, and they say
+            // so themselves by being null rather than zero.
             available: Boolean(index),
             notes_total: notes.length,
             notes_with_uid: withUid,
-            notes_without_uid: uncovered.length,
+            notes_without_uid: index ? uncovered.length : null,
             truncated: uncovered.length > MAX_ITEMS,
             uncovered: uncovered.slice(0, MAX_ITEMS),
           },

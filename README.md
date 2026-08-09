@@ -110,11 +110,11 @@ Links are handled in two places, and the split is deliberate.
   }
 ```
 
-Dangling links come from Obsidian's own `unresolvedLinks` map and duplicated uids from the uid index — both already computed, so the report never reads a file. **`uid_coverage`** is the identity half: how many of the notes you can see carry a uid at all, and which don't. It is **report-first like the rest** — no uid is minted, nothing is written, and there is no argument that would make it otherwise; whether uncovered notes should get uids is a decision this names for you, not one it takes. `available: false` (no uid index in this build) means the uid counts are *unknown*, not zero.
+Dangling links come from Obsidian's own `unresolvedLinks` map and duplicated uids from the uid index — both already computed, so the report never reads a file. **`uid_coverage`** is the identity half: how many of the notes you can see carry a uid at all, and which don't. It is **report-first like the rest** — no uid is minted, nothing is written, and there is no argument that would make it otherwise; whether uncovered notes should get uids is a decision this names for you, not one it takes. When there is no uid index in this build, `available: false` and the uid-derived counts are **`null`, not `0`** — unknown, and shaped so a reader who ignores the flag still can't mistake them for facts (`notes_with_uid` and `notes_without_uid` always sum to `notes_total` whenever they are numbers at all). `notes_total` is a note count, so it is a number either way.
 
 Counts are exact for everything visible and in scope; the lists are capped at 100 each with a `truncated` flag (narrow `scope` to see more).
 
-**Visibility.** Every path in the report is filtered through your path allowlist, so no out-of-allowlist note is counted, named, or used as a denominator. Two boundaries are worth stating plainly:
+**Visibility.** Every path in the report is filtered through your [path allowlist](#the-path-allowlist), so no out-of-allowlist note is counted, named, or used as a denominator. Two boundaries are worth stating plainly:
 
 - The filter is over **source notes**. A dangling link's *text* is reported verbatim out of a note you can read — including text shaped like a path outside your allowlist. It names nothing that exists (a dangling link resolves to no file, by definition) and you could read it out of the note yourself.
 - **Absence is a one-bit oracle.** A link that *doesn't* appear in the report resolved to something — possibly a note outside your allowlist. That bit is inherent to letting Obsidian resolve links at all: it is the host, not this server, that decides a link resolves, and suppressing the resolution would mean re-implementing link resolution over a filtered vault. Nothing else leaks: no path, no name, no count.
@@ -125,7 +125,7 @@ A duplicate whose carriers straddle your scope isn't an ambiguity *for that scop
 
 To act on a report: **`obsidian_repoint_link`** rewrites every wikilink matching a name to a target you choose (`dry_run` first, `unresolved_only` to leave working links alone) — one deliberate call, one decision. A duplicated uid is fixed by editing one note's frontmatter; nothing here will pick a winner for you.
 
-**The repair is contained by the same allowlist.** `obsidian_repoint_link` scans notes to find the links it rewrites, so its blast radius isn't in its arguments and the ordinary path check can't reach it. With an allowlist configured it reads, rewrites and names **only visible notes** — the response says `scoped_to_allowlist: true`, and that flag matters: the repair is then **partial**, and dangling links to the same name survive outside your allowlist. With no allowlist, the scan is the whole vault as before (`scoped_to_allowlist: false`). The journal records what actually changed, not just what was asked for: an `effects: {filesChanged, paths}` field beside the argument-derived `target` (omitted for a `dry_run`, which changes nothing).
+**The repair is contained by the same allowlist.** `obsidian_repoint_link` scans notes to find the links it rewrites, so its blast radius isn't in its arguments and the ordinary path check can't reach it. With an allowlist configured it reads, rewrites and names **only visible notes** — the response says `scoped_to_allowlist: true`, and that flag matters: the repair is then **partial**, and dangling links to the same name survive outside your allowlist. With no allowlist, the scan is the whole vault as before (`scoped_to_allowlist: false`). One bit still escapes: the link text it writes is Obsidian's *shortest unambiguous* form for the target, computed over the whole vault, so a bare `[[Target]]` vs a path-qualified `[[Projects/Target]]` says whether some other note shares that basename — see [Known oracles](#the-path-allowlist). The journal records what actually changed, not just what was asked for: an `effects: {filesChanged, paths}` field beside the argument-derived `target` (omitted for a `dry_run`, which changes nothing).
 
 ## Write queue & journal
 
@@ -181,8 +181,40 @@ Outcomes beyond `ok` / `error`: **`"conflict"`** is a failed `if_rev` preconditi
 - **Read-only mode** — blocks all mutating tools (write/delete/move/trash/frontmatter-set/…). Reads still work. Useful when you don't want Claude touching the vault this session.
 - **Allow dangerous CLI commands** — off by default; lets `obsidian_cli` run code-executing/app-controlling commands (`eval`, `dev:*`, `devtools`, `restart`, `reload`, `command`, `plugins:restrict`, `plugin:install`, `plugin:uninstall`).
 - **Trusted read-only plugins** — plugin ids (one per line, empty by default) whose published tools may declare themselves read-only and be believed. See [External tool trust](#external-tool-trust).
-- **Path allowlist** — one vault-relative prefix per line (empty = whole vault). File operations outside every prefix are refused (`..` traversal is normalized and blocked). Useful to sandbox Claude to one area.
+- **Path allowlist** — one vault-relative prefix per line (empty = whole vault). Sandboxes a session to one area, for reads as well as writes. See [The path allowlist](#the-path-allowlist).
 - **Disable socket** — stops the server without uninstalling the plugin (takes effect on plugin reload).
+
+## The path allowlist
+
+One vault-relative prefix per line, empty for the whole vault. It is checked after `..` traversal is normalized away, and a prefix matches on segment boundaries (`Projects` covers `Projects/A.md`, never `ProjectsX/A.md`).
+
+**It bounds writes and reads alike.** Every path a call *names* is checked — including inside batches and behind `uid:` addressing, which resolves before the check so a uid can't be a way around it. And every tool that reads or enumerates the vault **without being told where** bounds its own iteration by the same rule, filtering before it reads rather than after:
+
+| Surface | Under an allowlist |
+| --- | --- |
+| `obsidian_search_notes` | only visible notes are opened at all — a hidden note contributes no hit, no snippet, no path |
+| `obsidian_list_notes` (no `subdir`), `obsidian_list_folders` (no `subdir`) | visible entries only; `total` and `note_count` count only what you can see |
+| `obsidian_find_by_tag`, `obsidian_search_by_frontmatter` | visible carriers only, totals included |
+| `obsidian_get_backlinks` | linkers you can't read are not named |
+| `obsidian_resolve`, `obsidian_get_outlinks` | a destination outside the allowlist reads as **unresolved** — the link text is still reported, the path never is |
+| `obsidian_get_active_note` | a hidden note in focus reads as `{active: null}` — the human's focus is not a bypass |
+| `obsidian_tags_list` | recomputed over visible notes, so both the tag vocabulary and the counts are yours |
+| `obsidian_list_bookmarks` / `obsidian_open_bookmark` | path-bearing bookmarks outside the allowlist are omitted, and unopenable by name |
+| `obsidian_omnisearch` | hits outside the allowlist are dropped, excerpt and all |
+| `obsidian_fileclass_schema` | the fileClass key set is bounded, so the "available"/"ambiguous" messages can't enumerate folders |
+| `obsidian_check_links`, `obsidian_resolve_uid`, `obsidian_repoint_link` | filtered as described in [Link health](#link-health) and [Addressing notes by uid](#addressing-notes-by-uid) |
+| `obsidian_dataview_list_query`, `obsidian_dataview_table_query`, `obsidian_cli` | **refused** with `Error [out_of_allowlist]` — a Dataview query runs over Dataview's own index and returns values it selects for itself, and CLI arguments can't be path-scoped, so neither can be bounded honestly |
+
+With no allowlist configured, every one of these behaves exactly as it always did.
+
+**Known oracles.** The boundary is about content and paths, not about perfect indistinguishability. Four bits leak by construction, and none of them names a hidden path:
+
+- **Link resolution.** A link that *doesn't* show up as dangling resolved to something — possibly outside your allowlist. Inherent to letting Obsidian resolve links; see [Link health](#link-health).
+- **Link text.** Text written inside a note you can read is reported as written, including text shaped like a path you can't reach. You could read it out of the note yourself.
+- **Basename collisions via `fileToLinktext`.** `obsidian_repoint_link` writes the *shortest unambiguous* link text for its target, which Obsidian computes over the **whole vault**. So a rewrite that comes back as `[[Target]]` says no other note in the vault shares that basename, and one that comes back as `[[Projects/Target]]` says at least one does — one bit about the existence of a same-named note somewhere outside your allowlist, and no more (not its path, not its folder, not how many). Closing it would mean writing link text Obsidian itself would not resolve.
+- **Your own allowlist.** Refusals name the prefix you were checked against, which you configured.
+
+**Where it stops.** The allowlist scopes what a call *names* and what an enumeration *discovers*. It does not follow a target chosen by another plugin's settings: `obsidian_periodic_note` opens or creates today's note wherever Periodic/Daily Notes is configured to put it, and only its **response** is contained (an out-of-allowlist note reports `path: null`). Nothing here is a substitute for read-only mode when you don't want writes at all.
 
 ## Troubleshooting
 
