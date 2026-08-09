@@ -114,7 +114,8 @@ export const FS_TOOLS: ToolDef[] = [
     name: "obsidian_read_note",
     title: "Read a note",
     description:
-      "Read the full markdown content of a note by its vault-relative path. Read-only.",
+      "Read the full markdown content of a note by its vault-relative path. " +
+      "Where the host tracks revisions, the response also carries the note's current `rev` — pass it back as `if_rev` on a following write to make that write conditional (it fails instead of clobbering a change you didn't see). Read-only.",
     inputSchema: {
       path: z
         .string()
@@ -129,7 +130,7 @@ export const FS_TOOLS: ToolDef[] = [
     name: "obsidian_read_notes",
     title: "Read multiple notes",
     description:
-      "Read several notes in one call. Returns `notes` for successful reads and `errors` for paths that failed (missing, ignored folders, etc.) — one bad path doesn't fail the whole call. Each note is truncated independently at the per-note character limit. Read-only.",
+      "Read several notes in one call. Returns `notes` for successful reads and `errors` for paths that failed (missing, ignored folders, etc.) — one bad path doesn't fail the whole call. Each note is truncated independently at the per-note character limit, and carries its current `rev` where the host tracks revisions (pass it back as `if_rev` on a write). Read-only.",
     inputSchema: {
       paths: z
         .array(z.string().min(1))
