@@ -18,6 +18,28 @@ function codedError(code: string, message: string) {
   return { content: [{ type: "text" as const, text: `Error [${code}]: ${message}` }], isError: true as const };
 }
 
+// Argument keys that identify a NON-path target, most specific first. Pathless
+// mutators (run a command, toggle a plugin, open a workspace) would otherwise
+// journal `target: {}`. The mapping lives here, at the interception point, and
+// is keyed on argument names rather than tool names — the kernel stays generic
+// and an external tool taking `commandId` gets the same treatment for free.
+const REF_KEYS = ["command_id", "commandId", "plugin_id", "pluginId", "workspace", "name", "id", "kind"];
+const MAX_REF = 120;
+
+/**
+ * `plugin:dataview`, `command:editor:toggle-bold`, … — the label is the key
+ * with any `_id`/`Id` suffix dropped, so no per-tool knowledge is encoded.
+ */
+function refOf(args: Record<string, unknown>): string | undefined {
+  for (const key of REF_KEYS) {
+    const value = args?.[key];
+    if (typeof value !== "string" || !value) continue;
+    const label = key.replace(/_?[Ii]d$/, "") || key;
+    return `${label}:${value}`.slice(0, MAX_REF);
+  }
+  return undefined;
+}
+
 export interface GuardedOpts {
   getSettings: () => GuardSettings;
   /** Plugin-singleton kernel. Absent (tests, bare embeds) ⇒ no queue, no journal — guard still applies. */
@@ -42,7 +64,7 @@ export function makeGuarded(opts: GuardedOpts) {
     if (!isMutating || !opts.kernel) return handler(args, extra);
     try {
       return await opts.kernel.runMutation(
-        { op: name ?? def?.title ?? "unknown", args: args ?? {}, actor: opts.actor() },
+        { op: name ?? def?.title ?? "unknown", args: args ?? {}, actor: opts.actor(), ref: refOf(args ?? {}) },
         () => handler(args, extra)
       );
     } catch (e) {

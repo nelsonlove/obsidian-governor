@@ -14,8 +14,15 @@
 // (see digestArgs) so the journal stays a log of operations rather than a
 // shadow copy of the vault.
 
-/** Outcome of a journaled operation. */
-export type JournalOutcome = "ok" | "error";
+/**
+ * Outcome of a journaled operation.
+ *
+ * `late-ok` / `late-error` belong to CORRECTIVE records: an operation the write
+ * queue abandoned on timeout (journaled `error`) settled afterwards, and the
+ * corrective record — linked by `corrects` — says how. Append-only means the
+ * original record is never rewritten; the correction is a new line.
+ */
+export type JournalOutcome = "ok" | "error" | "late-ok" | "late-error";
 
 /**
  * Who did it. Established by the transport, never claimed by the caller:
@@ -37,6 +44,12 @@ export interface JournalTarget {
   uid?: string;
   /** Present only for multi-target operations (batch moves); capped. */
   paths?: string[];
+  /**
+   * Non-path target, e.g. `command:editor:toggle-bold` or `plugin:dataview`.
+   * Present only when the operation names no vault path at all, so a pathless
+   * mutator (run a command, toggle a plugin) still says what it acted on.
+   */
+  ref?: string;
 }
 
 export interface JournalRecord {
@@ -47,10 +60,15 @@ export interface JournalRecord {
   argsDigest: Record<string, unknown>;
   outcome: JournalOutcome;
   error?: string;
+  /** Handler execution only — measured from dequeue, so it never includes queue wait. */
   durationMs: number;
+  /** Enqueue→dequeue: how long the operation waited behind other writes. */
+  queueWaitMs: number;
   /** mtime (ms) of target.path before/after the operation; absent when the file didn't exist. */
   revBefore?: number;
   revAfter?: number;
+  /** On a corrective record: the `ts` of the record it corrects. */
+  corrects?: string;
 }
 
 /**

@@ -383,6 +383,149 @@ describe("Kernel.runMutation", () => {
     });
   });
 
+  test("revBefore is sampled at dequeue, not at enqueue", async () => {
+    const revs = new Map([["Notes/A.md", 100]]);
+    const { kernel, records } = fakeKernel({ revs });
+    const gate = deferred();
+    const args = { path: "Notes/A.md" };
+
+    const first = kernel.runMutation({ op: "obsidian_write_note", args, actor: ACTOR }, async () => {
+      await gate.promise;
+      revs.set("Notes/A.md", 200);
+      return { content: [] };
+    });
+    // Enqueued while the first still holds the queue: its revBefore must be the
+    // revision the FIRST operation left behind, not the one it displaced.
+    const second = kernel.runMutation({ op: "obsidian_append_note", args, actor: ACTOR }, async () => {
+      await tick(0);
+      revs.set("Notes/A.md", 300);
+      return { content: [] };
+    });
+
+    await tick(5);
+    assert.equal(kernel.queue.depth, 1);
+    gate.resolve();
+    await first;
+    await second;
+    await tick(0);
+
+    const recs = records();
+    assert.equal(recs[0].revBefore, 100);
+    assert.equal(recs[0].revAfter, 200);
+    assert.equal(recs[1].revBefore, recs[0].revAfter, "a queued operation carried a stale, pre-queue revBefore");
+    assert.equal(recs[1].revBefore, 200);
+    assert.equal(recs[1].revAfter, 300);
+  });
+
+  test("queueWaitMs records the wait; durationMs is handler time only", async () => {
+    const { kernel, records } = fakeKernel();
+    const gate = deferred();
+
+    const first = kernel.runMutation({ op: "obsidian_write_note", args: { path: "A.md" }, actor: ACTOR }, () => gate.promise);
+    const second = kernel.runMutation({ op: "obsidian_write_note", args: { path: "B.md" }, actor: ACTOR }, async () => {
+      await tick(5);
+      return { content: [] };
+    });
+
+    await tick(40);
+    gate.resolve({ content: [] });
+    await first;
+    await second;
+    await tick(0);
+
+    const [head, queued] = records();
+    assert.equal(typeof head.queueWaitMs, "number");
+    assert.ok(head.queueWaitMs < 25, `an unqueued operation waited (${head.queueWaitMs}ms)`);
+    assert.ok(queued.queueWaitMs >= 25, `queue wait was not recorded (${queued.queueWaitMs}ms)`);
+    assert.ok(queued.durationMs < 25, `durationMs still includes the queue wait (${queued.durationMs}ms)`);
+  });
+
+  test("a late-settling abandoned operation gets a corrective record", async () => {
+    const revs = new Map([["Notes/A.md", 100]]);
+    const { kernel, records } = fakeKernel({ timeoutMs: 25, revs });
+    const wedged = deferred();
+
+    await assert.rejects(
+      kernel.runMutation({ op: "obsidian_move_note", args: { path: "Notes/A.md" }, actor: ACTOR }, () => wedged.promise),
+      WriteTimeoutError
+    );
+    await tick(0);
+    assert.equal(records().length, 1, "the timeout itself journals exactly one record");
+
+    // The queue is not wedged behind the abandoned operation.
+    const next = await kernel.runMutation({ op: "obsidian_write_note", args: { path: "B.md" }, actor: ACTOR }, async () => ({
+      content: [{ type: "text", text: "wrote" }],
+    }));
+    assert.equal(next.content[0].text, "wrote");
+    await tick(0);
+
+    // …and now the abandoned operation finally lands.
+    revs.set("Notes/A.md", 400);
+    wedged.resolve({ content: [{ type: "text", text: "moved" }] });
+    await tick(5);
+
+    const recs = records();
+    assert.equal(recs.length, 3);
+    assert.equal(recs[0].outcome, "error");
+    assert.match(recs[0].error, /write-queue timeout/);
+    const corrective = recs[2];
+    assert.equal(corrective.op, "obsidian_move_note");
+    assert.equal(corrective.outcome, "late-ok");
+    assert.equal(corrective.error, undefined);
+    assert.equal(corrective.corrects, recs[0].ts, "the corrective record must name the record it corrects");
+    assert.deepEqual(corrective.target, recs[0].target);
+    assert.deepEqual(corrective.actor, ACTOR);
+    assert.equal(corrective.revBefore, 100);
+    assert.equal(corrective.revAfter, 400, "the correction must re-probe the revision");
+    assert.equal(kernel.queue.running, false);
+  });
+
+  test("an abandoned operation that fails late is corrected as late-error", async () => {
+    const { kernel, records } = fakeKernel({ timeoutMs: 20 });
+    const wedged = deferred();
+    await assert.rejects(
+      kernel.runMutation({ op: "obsidian_patch_note", args: { path: "A.md" }, actor: ACTOR }, () => wedged.promise),
+      WriteTimeoutError
+    );
+    wedged.reject(new Error("disk gave up"));
+    await tick(5);
+
+    const [, corrective] = records();
+    assert.equal(corrective.outcome, "late-error");
+    assert.equal(corrective.error, "disk gave up");
+    assert.equal(corrective.corrects, records()[0].ts);
+  });
+
+  test("an isError envelope arriving late is corrected as late-error", async () => {
+    const { kernel, records } = fakeKernel({ timeoutMs: 20 });
+    const wedged = deferred();
+    await assert.rejects(
+      kernel.runMutation({ op: "obsidian_move_note", args: { path: "A.md" }, actor: ACTOR }, () => wedged.promise),
+      WriteTimeoutError
+    );
+    wedged.resolve({ content: [{ type: "text", text: "Error: destination exists" }], isError: true });
+    await tick(5);
+
+    const [, corrective] = records();
+    assert.equal(corrective.outcome, "late-error");
+    assert.equal(corrective.error, "Error: destination exists");
+  });
+
+  test("a broken journal never throws from the late-settlement path", async () => {
+    await quietly(async () => {
+      const adapter = fakeAdapter();
+      adapter.exists = async () => { throw new Error("adapter is on fire"); };
+      const kernel = new Kernel(new WriteQueue(20), new WriteJournal(adapter, "dir/journal"), null);
+      const wedged = deferred();
+      await assert.rejects(
+        kernel.runMutation({ op: "obsidian_write_note", args: { path: "A.md" }, actor: ACTOR }, () => wedged.promise),
+        WriteTimeoutError
+      );
+      wedged.resolve({ content: [] });
+      await tick(5); // the corrective append fails, muted, and nothing escapes
+    });
+  });
+
   test("mutations from different connections share one queue", async () => {
     const { kernel } = fakeKernel();
     const gate = deferred();
@@ -476,6 +619,26 @@ describe("makeGuarded", () => {
     assert.match(recs[0].error, /write-queue timeout/);
     assert.equal(recs[1].op, "obsidian_write_note");
     assert.equal(recs[1].outcome, "ok");
+  });
+
+  test("pathless mutators journal a ref target, and a real path still wins", async () => {
+    const { kernel, records } = fakeKernel();
+    const guarded = makeGuarded({ getSettings: () => OPEN_SETTINGS, kernel, actor: () => ACTOR });
+    const call = (name, args) => guarded(RW_DEF, async () => ({ content: [] }), name)(args, {});
+
+    await call("obsidian_run_command", { command_id: "editor:toggle-bold" });
+    await call("obsidian_plugin_toggle", { plugin_id: "dataview", enabled: true });
+    await call("obsidian_open_workspace", { name: "Writing" });
+    await call("obsidian_periodic_note", { kind: "daily", action: "open" });
+    await call("obsidian_write_note", { path: "Notes/A.md", name: "not the target" });
+    await tick(5);
+
+    const recs = records();
+    assert.deepEqual(
+      recs.map((r) => r.target.ref),
+      ["command:editor:toggle-bold", "plugin:dataview", "name:Writing", "kind:daily", undefined]
+    );
+    assert.equal(recs[4].target.path, "Notes/A.md", "a path argument always outranks the ref fallback");
   });
 
   test("without a kernel the wrapper degrades to guard-only (no queue, no journal)", async () => {
