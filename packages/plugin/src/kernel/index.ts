@@ -1,8 +1,8 @@
 // Kernel v0 — the capabilities that ship in the transport: a serialized write
 // queue (the transaction pipeline's embryo), a write journal (the audit
-// stream), `if_rev` optimistic concurrency (precondition checking), and
-// idempotency keys (safe retries). One instance per plugin, shared by every
-// connection's server.
+// stream), `if_rev` optimistic concurrency (precondition checking), idempotency
+// keys (safe retries), and advisory locks (the claims mechanism). One instance
+// per plugin, shared by every connection's server.
 //
 // Kernel.runMutation is the single place they all meet: it reserves or replays
 // an idempotency key without executing anything, derives the operation's
@@ -30,6 +30,7 @@ import { collectPaths } from "../guard.js";
 import { WriteQueue, WriteTimeoutError } from "./write-queue.js";
 import { digestArgs, WriteJournal, type JournalActor, type JournalOutcome, type JournalTarget } from "./journal.js";
 import { fingerprintArgs, IdempotencyMismatchError, IdempotencyStore, type IdempotencySettlement } from "./idempotency.js";
+import { holderOf, lockNoticeText, LockStore, expiresInSeconds, type Lock, type LockNotice } from "./locks.js";
 
 export { WriteQueue, WriteTimeoutError, WRITE_TIMEOUT_MS } from "./write-queue.js";
 export type { LateSettlement } from "./write-queue.js";
@@ -42,7 +43,28 @@ export {
   IDEMPOTENCY_TTL_MS,
   IDEMPOTENCY_MAX,
 } from "./idempotency.js";
-export type { IdempotencyEntry, IdempotencyClaim, IdempotencySettlement } from "./idempotency.js";
+export type {
+  IdempotencyEntry,
+  IdempotencyClaim,
+  IdempotencySettlement,
+  MismatchReason,
+} from "./idempotency.js";
+export {
+  LockStore,
+  holderOf,
+  normalizeScope,
+  scopeCovers,
+  scopesOverlap,
+  lockNoticeText,
+  expiresInSeconds,
+  LOCK_TTL_DEFAULT_MS,
+  LOCK_TTL_MAX_MS,
+  LOCK_TTL_MIN_MS,
+  LOCK_MAX,
+} from "./locks.js";
+export type { Lock, LockClaim, LockNotice } from "./locks.js";
+export { loadInstallId, mintInstallId, INSTALL_ID_FILE } from "./install-id.js";
+export type { InstallIdAdapter, LoadedInstallId, ServerIdentity } from "./install-id.js";
 
 /**
  * Typed failure for an `if_rev` precondition that did not hold: the target's
@@ -116,9 +138,10 @@ export interface MutationContext {
    * Retry-collapsing key. A second call carrying a key this kernel has already
    * completed replays that result without executing anything or taking a queue
    * slot; one that is still IN FLIGHT awaits the first call and adopts its
-   * outcome. The key's identity is (key, op, arguments) — a divergent op or
-   * divergent arguments is an error, never a silent replay. Per plugin
-   * instance, TTL'd — see idempotency.ts.
+   * outcome. The key's identity is (key, op, arguments, `if_rev`) — a divergent
+   * op, divergent arguments, or a divergent (including newly absent)
+   * precondition is an error, never a silent replay. Per plugin instance,
+   * TTL'd — see idempotency.ts.
    */
   idempotencyKey?: string;
 }
@@ -145,13 +168,57 @@ function errorTextOfThrown(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).slice(0, MAX_JOURNALED_ERROR);
 }
 
+/**
+ * Attach the advisory notice for foreign claims to a tool result envelope.
+ *
+ * ADDITIVE ONLY, and only to something already shaped like a result: one extra
+ * `content` text block (so `content[0]`'s JSON stays parseable byte-for-byte)
+ * and, when the envelope carries a plain-object `structuredContent` that does
+ * not already use the key, an `advisory_locks` array. A handler that returns
+ * something else — a bare value, an array — is passed through untouched rather
+ * than reshaped: the notice is a courtesy and must never be the reason a
+ * caller's parse breaks.
+ */
+function withLockNotice<T>(result: T, locks: Lock[], now: number): T {
+  if (locks.length === 0 || result === null || typeof result !== "object") return result;
+  const r = result as { content?: unknown; structuredContent?: unknown };
+  if (!Array.isArray(r.content)) return result;
+  const text = locks.map((l) => lockNoticeText(l, now)).join(" ");
+  const structured =
+    r.structuredContent !== null &&
+    typeof r.structuredContent === "object" &&
+    !Array.isArray(r.structuredContent) &&
+    !("advisory_locks" in (r.structuredContent as Record<string, unknown>))
+      ? {
+          structuredContent: {
+            ...(r.structuredContent as Record<string, unknown>),
+            advisory_locks: locks.map((l) => ({
+              id: l.id,
+              scope: l.scope,
+              holder: l.holder,
+              reason: l.reason,
+              expires_in_s: expiresInSeconds(l, now),
+            })),
+          },
+        }
+      : {};
+  return { ...(result as object), content: [...r.content, { type: "text", text }], ...structured } as T;
+}
+
 export class Kernel {
   constructor(
     readonly queue: WriteQueue = new WriteQueue(),
     private readonly journal: WriteJournal | null = null,
     private readonly probe: TargetProbe | null = null,
     /** Replay store for `idempotency_key`. In memory, cleared by a plugin reload. */
-    readonly idempotency: IdempotencyStore = new IdempotencyStore()
+    readonly idempotency: IdempotencyStore = new IdempotencyStore(),
+    /**
+     * Advisory scope claims. Consulted (never enforced) on every mutating
+     * operation: a write inside another holder's live claim still runs, and
+     * gains a notice saying whose work it landed in. In memory, cleared by a
+     * plugin reload — see locks.ts.
+     */
+    readonly locks: LockStore = new LockStore()
   ) {}
 
   /**
@@ -182,12 +249,27 @@ export class Kernel {
     // claim is synchronous — no await between the lookup and the reservation —
     // so concurrent retries of one request cannot all come away as owner.
     if (mc.idempotencyKey !== undefined) {
-      const claim = this.idempotency.claim(mc.idempotencyKey, mc.op, fingerprintArgs(argsDigest, mc.args));
+      // `ifRev` travels alongside the args fingerprint rather than inside it, so
+      // a divergent precondition is reported as its own reason ("if_rev") with
+      // both revisions named — see the ruling in idempotency.ts's header.
+      const claim = this.idempotency.claim(
+        mc.idempotencyKey,
+        mc.op,
+        fingerprintArgs(argsDigest, mc.args),
+        mc.ifRev
+      );
       if (claim.kind === "mismatch") {
-        // One key, two operations (or two argument sets): the caller's retry
-        // bookkeeping is wrong, and either interpretation could be the wrong
-        // write — or, worse, a silently discarded one.
-        const mismatch = new IdempotencyMismatchError(mc.idempotencyKey, claim.firstOp, mc.op, claim.reason);
+        // One key, two operations (or two argument sets, or two preconditions):
+        // the caller's retry bookkeeping is wrong, and either interpretation
+        // could be the wrong write — or, worse, a silently discarded one.
+        const mismatch = new IdempotencyMismatchError(
+          mc.idempotencyKey,
+          claim.firstOp,
+          mc.op,
+          claim.reason,
+          claim.firstIfRev,
+          mc.ifRev
+        );
         this.journalTerminal(mc, argsDigest, "error", { error: mismatch.message });
         throw mismatch;
       }
@@ -220,6 +302,11 @@ export class Kernel {
     let revBefore: number | undefined;
     let started = enqueued;
     let queueWaitMs = 0;
+    // The most specific foreign claim this operation's primary target fell
+    // inside, if any. Set at dequeue with everything else, for the same reason:
+    // a claim taken (or expired) while this call sat in the queue is part of the
+    // world the operation actually ran in, not the one it was submitted into.
+    let lockNotice: LockNotice | undefined;
 
     let outcome: JournalOutcome = "ok";
     let error: string | undefined;
@@ -259,7 +346,20 @@ export class Kernel {
           if (mc.ifRev !== undefined && revBefore !== mc.ifRev) {
             throw new RevConflictError(mc.op, target.path, mc.ifRev, revBefore);
           }
-          return run();
+          // Advisory claims: consulted, never enforced. The operation PROCEEDS
+          // whatever it finds — a claim that could block would be a promise
+          // Obsidian cannot keep (a rogue process writes bytes regardless), so
+          // the mechanism's whole value is disclosure. What foreign claims buy
+          // is a notice on the result and a `lockNotice` on the record.
+          const foreign = target.path ? this.locks.covering(target.path, holderOf(mc.actor)) : [];
+          if (foreign.length > 0) {
+            const [closest] = foreign;
+            lockNotice = { holder: closest.holder, scope: closest.scope, reason: closest.reason };
+          }
+          const handled = run();
+          return foreign.length === 0
+            ? handled
+            : Promise.resolve(handled).then((r) => withLockNotice(r, foreign, Date.now()));
         },
         // The queue abandoned this operation on timeout and we already journaled
         // an `error`; if it settles later, correct the record rather than let
@@ -284,6 +384,7 @@ export class Kernel {
             ...(revBefore !== undefined ? { revBefore } : {}),
             ...(lateRevAfter !== undefined ? { revAfter: lateRevAfter } : {}),
             ...(ts !== undefined ? { corrects: ts } : {}),
+            ...(lockNotice !== undefined ? { lockNotice } : {}),
             ...this.preconditionFields(mc),
           });
         }
@@ -320,6 +421,7 @@ export class Kernel {
         queueWaitMs,
         ...(revBefore !== undefined ? { revBefore } : {}),
         ...(revAfter !== undefined ? { revAfter } : {}),
+        ...(lockNotice !== undefined ? { lockNotice } : {}),
         ...this.preconditionFields(mc),
       });
       // Release the key: waiters adopt this outcome verbatim, and only now does

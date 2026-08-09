@@ -33,7 +33,23 @@ function codedError(code: string, message: string) {
 // `target: {}`. The mapping lives here, at the interception point, and is keyed
 // on argument names rather than tool names — the kernel stays generic and an
 // external tool taking `commandId` gets the same treatment for free.
-const REF_KEYS = ["command_id", "commandId", "plugin_id", "pluginId", "command", "id", "workspace", "name", "kind"];
+const REF_KEYS = [
+  "command_id",
+  "commandId",
+  "plugin_id",
+  "pluginId",
+  "command",
+  // Advisory claims: `obsidian_claim_scope` journals `scope:<prefix>` and
+  // `obsidian_release_scope` journals `lock:<id>` — the release call names only
+  // the lock, so the scope it covers is not among its arguments.
+  "lock_id",
+  "lockId",
+  "scope",
+  "id",
+  "workspace",
+  "name",
+  "kind",
+];
 const MAX_REF = 120;
 
 /**
@@ -82,7 +98,8 @@ const IDEMPOTENCY_KEY = z
       "instead of running again, and a repeat sent while the first is still in flight waits for it and shares its " +
       "outcome. It does NOT cover a call that failed with Error [write_timeout] — that operation was abandoned " +
       "server-side and may still have landed, so its key is not held and a retry re-executes; re-read before " +
-      "retrying. Same key + different arguments is Error [idempotency_mismatch], never a replay. " +
+      "retrying. Same key + different arguments — or a different (or dropped) if_rev — is " +
+      "Error [idempotency_mismatch], never a replay. " +
       "10-minute window, cleared on plugin reload. Use a fresh key per logical operation."
   );
 

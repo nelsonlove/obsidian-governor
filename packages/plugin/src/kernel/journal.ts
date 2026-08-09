@@ -14,6 +14,9 @@
 // (see digestArgs) so the journal stays a log of operations rather than a
 // shadow copy of the vault.
 
+import type { LockNotice } from "./locks.js";
+import type { ServerIdentity } from "./install-id.js";
+
 /**
  * Outcome of a journaled operation.
  *
@@ -37,6 +40,11 @@ export type JournalOutcome = "ok" | "error" | "late-ok" | "late-error" | "confli
  * everything reaching this module came over the MCP socket, so `transport` is
  * a constant and the client identity comes from the connection's initialize
  * handshake rather than from tool arguments.
+ *
+ * `server` is the other half of that assertion — not who called, but which
+ * transport answered: which vault, which install of the plugin, which version.
+ * A journal shipped between machines, or two vaults' journals concatenated,
+ * stays attributable.
  */
 export interface JournalActor {
   transport: "mcp";
@@ -44,6 +52,8 @@ export interface JournalActor {
   client?: string;
   /** Per-connection id, minted when this connection's server was built. */
   connection: string;
+  /** Server identity: `{vault, install, version}`. See kernel/install-id.ts. */
+  server?: ServerIdentity;
 }
 
 /** What it acted on. `uid` is read from frontmatter only when the cache already has it. */
@@ -83,6 +93,13 @@ export interface JournalRecord {
   idempotencyKey?: string;
   /** On a `deduped` record: the `ts` of the record whose result was replayed. */
   dedupeOf?: string;
+  /**
+   * Present when the operation's PRIMARY target fell inside another holder's
+   * live advisory claim. The operation still ran — claims never block — so this
+   * records what it walked into, not why it stopped. Most specific claim only
+   * when several overlap.
+   */
+  lockNotice?: LockNotice;
 }
 
 /**

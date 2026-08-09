@@ -4,6 +4,17 @@
 
 import { TFile, type App } from "obsidian";
 import type { TargetProbe } from "./index.js";
+import type { ServerIdentity } from "./install-id.js";
+
+/**
+ * The transport's own identity, for the journal's actor block: which vault,
+ * which install, which plugin version. Lives here rather than in the kernel
+ * because `app.vault.getName()` is the one Obsidian call it needs — same reason
+ * obsidianProbe does.
+ */
+export function obsidianServerIdentity(app: App, install: string, version: string): ServerIdentity {
+  return { vault: app.vault.getName(), install, version };
+}
 
 export function obsidianProbe(app: App): TargetProbe {
   const fileAt = (path: string): TFile | null => {
