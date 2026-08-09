@@ -1,0 +1,116 @@
+// findings.ts — pure conformance findings over one note's vocabulary use.
+//
+// NOT registered as a tool, deliberately (Conformance README: "capabilities
+// arrive as rule packs, never as new surface") — the rail mounts this later;
+// until then `obsidian_validate_terms` exposes the same computation for a
+// single named note, which is a lookup, not a rail.
+//
+// Alignment with the rail's existing checks: `unregistered_tag` reproduces
+// drift_audit's check H semantics (prefix-permissive via the blueprint
+// provider, report-only in spirit); `undefined_property` / `unknown_type` are
+// the registration checks the rail does not have today (its check G validates
+// naming self-consistency only). Deprecation and ambiguity are this module's
+// own additions.
+//
+// Multiple providers may serve one kind (two registries, say): a token is
+// clean when ANY provider serving its kind accepts it — vocabularies are
+// additive, not intersecting. Findings carry the NOTE's path (they are about
+// the note), where a provider's own validateToken carries null.
+
+import { VocabAmbiguousError, type VocabFinding, type VocabKind, type VocabularyProvider } from "./provider.js";
+
+export interface NoteVocabInput {
+  path: string;
+  frontmatter: Record<string, unknown> | null;
+}
+
+/** `[[A/B/Name.fileclass|alias]]` → `Name` (how Obsidian resolves a wikilink:
+ * by basename); plain values pass through with any `.fileclass` dropped. */
+function typeToken(v: string): string {
+  const inner = v.replace(/^\[\[/, "").replace(/\]\]$/, "").split("|")[0];
+  const base = inner.split("/").pop() ?? inner;
+  return base.replace(/\.fileclass$/, "");
+}
+
+/** The type-bearing frontmatter key. Its VALUE is checked as a type, so the
+ * KEY itself is exempt from the property check — flagging it as an undefined
+ * property beside the type finding would be noise, twice, forever. */
+const TYPE_KEY = "fileClass";
+
+function asStrings(v: unknown): string[] {
+  if (Array.isArray(v)) return v.map(String);
+  if (typeof v === "string") return [v];
+  return [];
+}
+
+/** One token against every provider serving its kind: clean when any accepts,
+ * the FIRST provider's findings otherwise, re-anchored to the note. Ambiguity
+ * is probed separately — validateToken never throws, resolve does. */
+function check(
+  token: string,
+  kind: VocabKind,
+  notePath: string,
+  providers: VocabularyProvider[]
+): VocabFinding[] {
+  const serving = providers.filter((p) => p.kinds.includes(kind));
+  if (serving.length === 0) return [];
+  let first: VocabFinding[] | null = null;
+  for (const p of serving) {
+    const found = p.validateToken(token, kind);
+    if (found.length === 0) {
+      // Accepted — but an accepted token may still be ambiguous to resolve.
+      try {
+        p.resolve(token, kind);
+        return [];
+      } catch (e) {
+        if (!(e instanceof VocabAmbiguousError)) throw e;
+        return [
+          {
+            code: "ambiguous",
+            token,
+            path: notePath,
+            detail: `'${token}' (${kind}) has ${e.candidates.length} senses: ${e.candidates.join(", ")}`,
+          },
+        ];
+      }
+    }
+    first = first ?? found;
+  }
+  return (first ?? []).map((f) => ({ ...f, path: notePath }));
+}
+
+const MALFORMED_TAG = /\s/;
+
+export function noteVocabFindings(note: NoteVocabInput, providers: VocabularyProvider[]): VocabFinding[] {
+  const fm = note.frontmatter;
+  if (!fm) return [];
+  const findings: VocabFinding[] = [];
+
+  // tags — frontmatter `tags`, whitespace is malformed before it is unregistered
+  for (const raw of asStrings(fm.tags)) {
+    const token = raw.trim();
+    if (token === "" || MALFORMED_TAG.test(token)) {
+      findings.push({
+        code: "malformed_token",
+        token: raw,
+        path: note.path,
+        detail: `'${raw}' is not a well-formed tag`,
+      });
+      continue;
+    }
+    findings.push(...check(token, "tag", note.path, providers));
+  }
+
+  // properties — every top-level frontmatter key except the type-bearing one
+  for (const key of Object.keys(fm)) {
+    if (key === TYPE_KEY) continue;
+    findings.push(...check(key, "property", note.path, providers));
+  }
+
+  // types — the fileClass values, wikilink-resolved by basename
+  for (const raw of asStrings(fm[TYPE_KEY])) {
+    findings.push(...check(typeToken(raw), "type", note.path, providers));
+  }
+
+  return findings;
+}
