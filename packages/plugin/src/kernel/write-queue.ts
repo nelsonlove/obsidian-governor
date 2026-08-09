@@ -38,11 +38,19 @@ export class WriteTimeoutError extends Error {
   }
 }
 
+/**
+ * How an ABANDONED operation eventually settled. The queue has already rejected
+ * it with WriteTimeoutError and moved on, so this is the only remaining evidence
+ * of what the vault actually did — the journal turns it into a corrective record.
+ */
+export type LateSettlement = { ok: true; value: unknown } | { ok: false; error: unknown };
+
 interface QueueItem {
   op: string;
   fn: () => unknown;
   resolve: (v: any) => void;
   reject: (e: unknown) => void;
+  onLate?: (settlement: LateSettlement) => void;
 }
 
 export class WriteQueue {
@@ -65,10 +73,15 @@ export class WriteQueue {
    * Enqueue `fn` and resolve with its result. Rejects with WriteTimeoutError if
    * it hasn't settled within the queue's timeout; rejects with whatever `fn`
    * threw otherwise. FIFO: enqueue order is run order.
+   *
+   * `onLate` is called if — and only if — an operation the queue already
+   * ABANDONED settles afterwards. Without it that settlement vanishes and the
+   * audit trail keeps asserting the timeout's failure for an operation that may
+   * well have succeeded.
    */
-  run<T>(op: string, fn: () => Promise<T> | T): Promise<T> {
+  run<T>(op: string, fn: () => Promise<T> | T, onLate?: (settlement: LateSettlement) => void): Promise<T> {
     return new Promise<T>((resolve, reject) => {
-      this.pending.push({ op, fn, resolve, reject });
+      this.pending.push({ op, fn, resolve, reject, onLate });
       this.pump();
     });
   }
@@ -99,13 +112,26 @@ export class WriteQueue {
       if (claim()) item.reject(new WriteTimeoutError(item.op, this.timeoutMs));
     }, this.timeoutMs);
 
+    // Losing the claim means the timer already abandoned this operation: the
+    // caller has its WriteTimeoutError and the slot belongs to someone else, so
+    // the settlement is reported through onLate instead of being dropped.
+    const late = (settlement: LateSettlement): void => {
+      try {
+        item.onLate?.(settlement);
+      } catch (e) {
+        // A misbehaving observer must not take down the queue (or surface as an
+        // unhandled rejection on an operation nobody is awaiting any more).
+        console.error("[vault-mcp] late-settlement handler failed", e);
+      }
+    };
+
     // Promise.resolve().then keeps a SYNCHRONOUS throw from fn() inside the
     // queue's control flow — otherwise it would escape run()'s executor.
     Promise.resolve()
       .then(() => item.fn())
       .then(
-        (v) => { if (claim()) item.resolve(v); },
-        (e) => { if (claim()) item.reject(e); }
+        (v) => { if (claim()) item.resolve(v); else late({ ok: true, value: v }); },
+        (e) => { if (claim()) item.reject(e); else late({ ok: false, error: e }); }
       );
   }
 }

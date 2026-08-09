@@ -66,10 +66,12 @@ Every mutating operation also appends **one JSONL line** to `.obsidian/plugins/v
 {"ts":"2026-08-08T19:04:11.427Z","op":"obsidian_write_note","target":{"path":"Inbox/Idea.md","uid":"019f…"},
  "actor":{"transport":"mcp","client":"claude-code/1.0.0","connection":"m1x8g-3"},
  "argsDigest":{"path":"Inbox/Idea.md","content":"<812 chars>","overwrite":true},
- "outcome":"ok","durationMs":37,"revBefore":1754680000000,"revAfter":1754680051427}
+ "outcome":"ok","durationMs":37,"queueWaitMs":0,"revBefore":1754680000000,"revAfter":1754680051427}
 ```
 
-It records the *operation* — what happened, to what, on whose behalf — not the bytes; git already covers the bytes. **Note bodies are never written to it**: arguments are reduced to a digest, with bodies and long strings collapsed to `<N chars>`. The journal is **append-only** — nothing in the plugin edits or deletes a record, and pruning is a manual act on whole month files. If a journal write fails it is logged to the console and dropped; it never fails the vault operation.
+It records the *operation* — what happened, to what, on whose behalf — not the bytes; git already covers the bytes. `durationMs` is the handler alone and `queueWaitMs` is the time spent waiting behind other writes, so a slow operation and a queued one are distinguishable; `revBefore` is probed when the operation reaches the front of the queue, not when it was enqueued. Operations that name no vault path (running a command, toggling a plugin) record `target.ref`, e.g. `"command:editor:toggle-bold"`.
+
+**Note bodies are never written to it**: arguments are reduced to a digest, with bodies and long strings collapsed to `<N chars>`. The journal is **append-only** — nothing in the plugin edits or deletes a record, and pruning is a manual act on whole month files. So when an operation that timed out (journaled `"outcome":"error"`) turns out to have finished afterwards, the original line stands and a **corrective record** is appended — same op and target, `"outcome":"late-ok"` or `"late-error"`, and `"corrects"` naming the `ts` of the record it amends. If a journal write fails it is logged to the console and dropped; it never fails the vault operation.
 
 ## Settings (Settings → Vault MCP)
 
