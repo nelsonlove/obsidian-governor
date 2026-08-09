@@ -78,8 +78,12 @@ const IDEMPOTENCY_KEY = z
   .max(200)
   .optional()
   .describe(
-    "Retry safety: a repeat call with the same key returns the first call's result instead of running again " +
-      "(10-minute window, cleared on plugin reload). Use a fresh key per logical operation."
+    "Retry safety for calls that RETURNED: a repeat call with the same key returns the first call's result " +
+      "instead of running again, and a repeat sent while the first is still in flight waits for it and shares its " +
+      "outcome. It does NOT cover a call that failed with Error [write_timeout] — that operation was abandoned " +
+      "server-side and may still have landed, so its key is not held and a retry re-executes; re-read before " +
+      "retrying. Same key + different arguments is Error [idempotency_mismatch], never a replay. " +
+      "10-minute window, cleared on plugin reload. Use a fresh key per logical operation."
   );
 
 /** The kernel argument names, stripped from every mutating call's args. */
@@ -116,7 +120,11 @@ function splitKernelArgs(args: Record<string, unknown>): {
 
 export interface GuardedOpts {
   getSettings: () => GuardSettings;
-  /** Plugin-singleton kernel. Absent (tests, bare embeds) ⇒ no queue, no journal — guard still applies. */
+  /**
+   * Plugin-singleton kernel. Absent (tests, bare embeds) ⇒ no queue, no journal
+   * — the guard still applies, and a mutating call carrying `if_rev` is refused
+   * rather than written unconditionally (the precondition is unenforceable).
+   */
   kernel?: Kernel | null;
   /** Actor for the journal, resolved per call: client identity is only known after initialize. */
   actor: () => JournalActor;
@@ -135,9 +143,27 @@ export function makeGuarded(opts: GuardedOpts) {
     const isMutating = def?.annotations?.readOnlyHint === false;
     const blocked = guardCall({ isMutating, args: args ?? {}, settings: opts.getSettings() });
     if (blocked) return codedError(blocked.code, blocked.message);
-    // Kernel arguments never reach a handler — including on the no-kernel path,
-    // so a tool's behavior does not depend on whether a kernel is present.
+    // Kernel arguments are always PEELED OFF, kernel or not, so no handler ever
+    // sees one. What differs without a kernel is whether they can be honored:
+    //
+    //   • `if_rev` is FAIL-CLOSED. Without a kernel there is no probe and no
+    //     dequeue check, so the precondition cannot be evaluated at all — and
+    //     its whole purpose is to stop a write that would clobber someone
+    //     else's. Ignoring it would write unconditionally while the caller
+    //     believes it was guarded, which is the exact lost update the argument
+    //     exists to prevent. Refuse instead.
+    //   • `idempotency_key` degrades quietly to no collapsing, because its
+    //     failure mode is at-least-once (the pre-kernel status quo), not a
+    //     destructive one: the operation still does what the caller asked, a
+    //     retry just isn't deduplicated.
     const { toolArgs, ifRev, idempotencyKey } = splitKernelArgs(args ?? {});
+    if (isMutating && !opts.kernel && ifRev !== undefined) {
+      return codedError(
+        "precondition_unsupported",
+        `'${name ?? def?.title ?? "this tool"}' cannot enforce if_rev: no kernel is active in this build, so the ` +
+          `target's revision cannot be checked. Nothing was written — retry without if_rev to write unconditionally.`
+      );
+    }
     if (!isMutating || !opts.kernel) return handler(toolArgs, extra);
     try {
       return await opts.kernel.runMutation(

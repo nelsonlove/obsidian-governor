@@ -4,23 +4,45 @@
 // idempotency keys (safe retries). One instance per plugin, shared by every
 // connection's server.
 //
-// Kernel.runMutation is the single place they all meet: it replays a known
-// idempotency key without executing anything, derives the operation's target,
-// checks the caller's revision precondition at dequeue, runs the handler
-// through the queue, and journals exactly one record per mutating operation
-// whatever the outcome.
+// Kernel.runMutation is the single place they all meet: it reserves or replays
+// an idempotency key without executing anything, derives the operation's
+// target, checks the caller's revision precondition at dequeue, runs the
+// handler through the queue, and journals exactly one record per mutating
+// operation whatever the outcome.
+//
+// ── idempotency: reserve at entry, share one outcome ─────────────────────────
+//
+// A key is claimed SYNCHRONOUSLY on the way in (IdempotencyStore.claim), before
+// any await, so simultaneous retries of one dropped request cannot all become
+// owners. Exactly one caller runs the operation; the rest await that owner's
+// settlement and return the SAME envelope it produced (journaled `deduped`,
+// with `dedupeOf` naming the owner's record).
+//
+// Waiters share the owner's outcome WHATEVER IT IS — one logical request, one
+// outcome. If the owner throws (rev_conflict, write_timeout, probe failure),
+// every waiter already attached rethrows that same error rather than racing to
+// re-run the operation behind it. The free-key-on-thrown-failure rule applies
+// only AFTER settlement: a thrown failure stores nothing and releases the key,
+// so the NEXT call re-executes, while a returned envelope (ok or isError) is
+// stored and replayed.
 
 import { collectPaths } from "../guard.js";
 import { WriteQueue, WriteTimeoutError } from "./write-queue.js";
 import { digestArgs, WriteJournal, type JournalActor, type JournalOutcome, type JournalTarget } from "./journal.js";
-import { IdempotencyMismatchError, IdempotencyStore } from "./idempotency.js";
+import { fingerprintArgs, IdempotencyMismatchError, IdempotencyStore, type IdempotencySettlement } from "./idempotency.js";
 
 export { WriteQueue, WriteTimeoutError, WRITE_TIMEOUT_MS } from "./write-queue.js";
 export type { LateSettlement } from "./write-queue.js";
 export { WriteJournal, digestArgs, monthKey } from "./journal.js";
 export type { JournalRecord, JournalActor, JournalAdapter, JournalOutcome, JournalTarget } from "./journal.js";
-export { IdempotencyStore, IdempotencyMismatchError, IDEMPOTENCY_TTL_MS, IDEMPOTENCY_MAX } from "./idempotency.js";
-export type { IdempotencyEntry } from "./idempotency.js";
+export {
+  IdempotencyStore,
+  IdempotencyMismatchError,
+  fingerprintArgs,
+  IDEMPOTENCY_TTL_MS,
+  IDEMPOTENCY_MAX,
+} from "./idempotency.js";
+export type { IdempotencyEntry, IdempotencyClaim, IdempotencySettlement } from "./idempotency.js";
 
 /**
  * Typed failure for an `if_rev` precondition that did not hold: the target's
@@ -93,7 +115,10 @@ export interface MutationContext {
   /**
    * Retry-collapsing key. A second call carrying a key this kernel has already
    * completed replays that result without executing anything or taking a queue
-   * slot. Per plugin instance, TTL'd — see idempotency.ts.
+   * slot; one that is still IN FLIGHT awaits the first call and adopts its
+   * outcome. The key's identity is (key, op, arguments) — a divergent op or
+   * divergent arguments is an error, never a silent replay. Per plugin
+   * instance, TTL'd — see idempotency.ts.
    */
   idempotencyKey?: string;
 }
@@ -115,6 +140,11 @@ function errorTextOf(result: unknown): string | undefined {
   return typeof first?.text === "string" ? first.text.slice(0, MAX_JOURNALED_ERROR) : "error";
 }
 
+/** Journal text for a THROWN failure (as opposed to a returned isError envelope). */
+function errorTextOfThrown(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error)).slice(0, MAX_JOURNALED_ERROR);
+}
+
 export class Kernel {
   constructor(
     readonly queue: WriteQueue = new WriteQueue(),
@@ -133,23 +163,52 @@ export class Kernel {
    * mcp/guarded.ts). An operation abandoned on timeout is journaled `error`; if
    * it later settles anyway, a second, CORRECTIVE record is appended (the
    * journal never rewrites a line).
+   *
+   * A call carrying an `idempotencyKey` either OWNS that key (and runs), waits
+   * on the owner and adopts its outcome — return or throw alike — or fails with
+   * IdempotencyMismatchError. See the file header for why waiters share the
+   * owner's failure rather than re-running behind it.
    */
   async runMutation<T>(mc: MutationContext, run: () => Promise<T>): Promise<T> {
+    // Computed once and reused by every record this call may produce, so a
+    // replay's digest and the original's cannot drift apart.
+    const argsDigest = digestArgs(mc.args);
+    // Set when this call OWNS its idempotency key; called exactly once, from
+    // the `finally` below, to release every waiter with this call's outcome.
+    let settleKey: ((s: IdempotencySettlement) => void) | undefined;
+
     // Idempotency is settled BEFORE the queue: a retry that is going to be
-    // replayed must not take a queue slot behind real work, let alone run.
+    // replayed must not take a queue slot behind real work, let alone run. The
+    // claim is synchronous — no await between the lookup and the reservation —
+    // so concurrent retries of one request cannot all come away as owner.
     if (mc.idempotencyKey !== undefined) {
-      const hit = this.idempotency.get(mc.idempotencyKey);
-      if (hit) {
-        if (hit.op !== mc.op) {
-          // One key, two operations: the caller's retry bookkeeping is wrong
-          // and executing either interpretation could be the wrong write.
-          const mismatch = new IdempotencyMismatchError(mc.idempotencyKey, hit.op, mc.op);
-          this.journalTerminal(mc, "error", { error: mismatch.message });
-          throw mismatch;
-        }
-        this.journalTerminal(mc, "deduped", { dedupeOf: hit.ts });
-        return hit.result as T;
+      const claim = this.idempotency.claim(mc.idempotencyKey, mc.op, fingerprintArgs(argsDigest, mc.args));
+      if (claim.kind === "mismatch") {
+        // One key, two operations (or two argument sets): the caller's retry
+        // bookkeeping is wrong, and either interpretation could be the wrong
+        // write — or, worse, a silently discarded one.
+        const mismatch = new IdempotencyMismatchError(mc.idempotencyKey, claim.firstOp, mc.op, claim.reason);
+        this.journalTerminal(mc, argsDigest, "error", { error: mismatch.message });
+        throw mismatch;
       }
+      if (claim.kind === "replay") {
+        this.journalTerminal(mc, argsDigest, "deduped", { dedupeOf: claim.entry.ts });
+        return claim.entry.result as T;
+      }
+      if (claim.kind === "wait") {
+        // The key is in flight. Await the owner and adopt its outcome verbatim
+        // — including a throw. Nothing ran here, so this is a `deduped` record
+        // whichever way the owner went; `dedupeOf` points at the record that
+        // holds the real story (and carries the error text, when there was one).
+        const settlement = await claim.settlement;
+        this.journalTerminal(mc, argsDigest, "deduped", {
+          dedupeOf: settlement.ts,
+          ...(settlement.ok ? {} : { error: errorTextOfThrown(settlement.error) }),
+        });
+        if (settlement.ok) return settlement.result as T;
+        throw settlement.error;
+      }
+      settleKey = claim.settle;
     }
     const enqueued = Date.now();
     // Everything below is sampled AT DEQUEUE, inside the queued closure: with a
@@ -169,6 +228,9 @@ export class Kernel {
     // Set only when the handler RETURNED an envelope; a throw leaves it unset,
     // so nothing gets stored for replay under an idempotency key.
     let settled: { value: T } | undefined;
+    // The thrown value itself (not just its text) — waiters on this call's
+    // idempotency key rethrow exactly what the owner threw.
+    let thrown: { error: unknown } | undefined;
     try {
       const result = await this.queue.run(
         mc.op,
@@ -214,7 +276,7 @@ export class Kernel {
             op: mc.op,
             target,
             actor: mc.actor,
-            argsDigest: digestArgs(mc.args),
+            argsDigest,
             outcome: lateError === undefined ? "late-ok" : "late-error",
             ...(lateError !== undefined ? { error: lateError } : {}),
             durationMs: Date.now() - started,
@@ -235,27 +297,23 @@ export class Kernel {
       // `revBefore` already holds the revision actually found.
       outcome = e instanceof RevConflictError ? "conflict" : "error";
       error = e instanceof Error ? e.message : String(e);
+      thrown = { error: e };
       throw e;
     } finally {
       const durationMs = Date.now() - started;
       const revAfter = this.revAfterOf(target);
       ts = new Date().toISOString();
-      // A retry replays whatever the first call RETURNED — success or a failure
-      // envelope alike. One key means one logical request with one outcome; a
-      // genuine retry of a failed operation takes a fresh key. Thrown failures
-      // (timeout, conflict) are deliberately not stored: they left the vault in
-      // an unknown or unchanged state, where re-running is the right answer.
-      if (mc.idempotencyKey !== undefined && settled !== undefined) {
-        this.idempotency.set(mc.idempotencyKey, { op: mc.op, result: settled.value, ts });
-      }
       // Fire-and-forget: WriteJournal.append never rejects, and the operation's
-      // result must not wait on (or be affected by) the audit write.
+      // result must not wait on (or be affected by) the audit write. Appended
+      // BEFORE the key is settled, so this record always precedes the `deduped`
+      // records of the waiters that name it (the journal chains appends in call
+      // order, and waiters only wake a microtask later).
       void this.journal?.append({
         ts,
         op: mc.op,
         target,
         actor: mc.actor,
-        argsDigest: digestArgs(mc.args),
+        argsDigest,
         outcome,
         ...(error !== undefined ? { error } : {}),
         durationMs,
@@ -264,10 +322,22 @@ export class Kernel {
         ...(revAfter !== undefined ? { revAfter } : {}),
         ...this.preconditionFields(mc),
       });
+      // Release the key: waiters adopt this outcome verbatim, and only now does
+      // the store decide the key's future. A RETURNED envelope (success or a
+      // failure envelope alike) is stored for replay — one key means one logical
+      // request with one outcome, and a genuine retry of a failed operation
+      // takes a fresh key. A THROWN failure (timeout, conflict, probe error)
+      // stores nothing and frees the key: it left the vault in an unknown or
+      // unchanged state, where re-running is the right answer.
+      settleKey?.(settled !== undefined ? { ok: true, result: settled.value, ts } : { ok: false, error: thrown?.error, ts });
     }
   }
 
-  /** The caller-supplied kernel arguments, recorded on every record they apply to. */
+  /**
+   * The caller-supplied kernel arguments, recorded on every record for a call
+   * that actually reached the dequeue check. `ifRev` is deliberately NOT part of
+   * the terminal-record path: see journalTerminal.
+   */
   private preconditionFields(mc: MutationContext): { ifRev?: number; idempotencyKey?: string } {
     return {
       ...(mc.ifRev !== undefined ? { ifRev: mc.ifRev } : {}),
@@ -277,11 +347,17 @@ export class Kernel {
 
   /**
    * Journal a record for an operation that never reached the queue — a replayed
-   * idempotency key, or a key reused across operations. Same shape as any other
-   * record; zero durations, because nothing ran.
+   * or deduped idempotency key, or a key reused across operations/arguments.
+   * Same shape as any other record; zero durations, because nothing ran.
+   *
+   * `ifRev` is OMITTED even when the caller supplied one: the precondition is
+   * evaluated at dequeue, and nothing here ever dequeued. Recording it would
+   * assert a check that never happened. `idempotencyKey` is still recorded —
+   * that argument is exactly what produced this record.
    */
   private journalTerminal(
     mc: MutationContext,
+    argsDigest: Record<string, unknown>,
     outcome: JournalOutcome,
     extra: { error?: string; dedupeOf?: string } = {}
   ): void {
@@ -290,13 +366,13 @@ export class Kernel {
       op: mc.op,
       target: this.withUid(this.resolveTarget(mc.args, mc.ref)),
       actor: mc.actor,
-      argsDigest: digestArgs(mc.args),
+      argsDigest,
       outcome,
       ...(extra.error !== undefined ? { error: extra.error.slice(0, MAX_JOURNALED_ERROR) } : {}),
       durationMs: 0,
       queueWaitMs: 0,
       ...(extra.dedupeOf !== undefined ? { dedupeOf: extra.dedupeOf } : {}),
-      ...this.preconditionFields(mc),
+      ...(mc.idempotencyKey !== undefined ? { idempotencyKey: mc.idempotencyKey } : {}),
     });
   }
 
