@@ -9,7 +9,8 @@ import { registerIntegrationTools } from "./tools-integrations.js";
 import { registerCliTools } from "./tools-cli.js";
 import { registerExternalTools } from "./external-tools.js";
 import { registerCodeModeTools, makeCaptureRegister, type CapturedRegistry } from "./tools-code-mode.js";
-import { guardCall } from "../guard.js";
+import { makeGuarded } from "./guarded.js";
+import type { JournalActor } from "../kernel/index.js";
 import { ObsidianBackend } from "./obsidian-backend.js";
 
 export interface BuildOpts {
@@ -17,8 +18,14 @@ export interface BuildOpts {
   codeMode?: boolean;
 }
 
+// Per-connection id for the journal's actor block. Monotonic within a plugin
+// load; the load-time epoch keeps ids from colliding across plugin reloads.
+let connSeq = 0;
+const CONN_EPOCH = Date.now().toString(36);
+
 export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): McpServer {
   const server = new McpServer({ name: "vault-mcp", version: ctx.pluginVersion });
+  const connectionId = `${CONN_EPOCH}-${++connSeq}`;
 
   // Wrap registerTool so every tool handler is guarded before registration.
   // This monkeypatch fires for ALL registerTool calls that follow, including the
@@ -26,23 +33,28 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   // registerFsTools calls server.registerTool, which is this patched version.
   // Cast origRegister to any to bypass overload signature checking on the wrapped handler.
   //
+  // The same wrapper also routes MUTATING calls through the plugin-singleton
+  // write queue and the write journal (ctx.kernel) — one interception point, so
+  // the guarded set, the serialized set, and the journaled set are the same set
+  // by construction.
+  //
   // In Code Mode the same interception point CAPTURES each guarded tool into a
   // registry instead of registering it; the three meta-tools registered at the
   // end are the only tools the session sees. The guard wrapper travels with
   // the captured handler, so read-only/allowlist bind identically in both modes.
   const origRegister: any = server.registerTool.bind(server);
-  const guarded = (def: any, handler: any) => async (args: any, extra: any) => {
-    const isMutating = def?.annotations?.readOnlyHint === false;
-    const blocked = guardCall({ isMutating, args: args ?? {}, settings: ctx.getSettings() });
-    if (blocked) {
-      return { content: [{ type: "text" as const, text: `Error [${blocked.code}]: ${blocked.message}` }], isError: true as const };
-    }
-    return handler(args, extra);
+  // Resolved per call, not once: the MCP client's identity only exists after
+  // the initialize handshake, which happens well after the server is built.
+  const actor = (): JournalActor => {
+    const info = (server.server as any)?.getClientVersion?.();
+    const client = info?.name ? (info.version ? `${info.name}/${info.version}` : String(info.name)) : undefined;
+    return { transport: "mcp", ...(client ? { client } : {}), connection: connectionId };
   };
+  const guarded = makeGuarded({ getSettings: () => ctx.getSettings(), kernel: ctx.kernel, actor });
   const registry: CapturedRegistry = new Map();
   (server as any).registerTool = opts.codeMode
     ? makeCaptureRegister(registry, guarded)
-    : (name: string, def: any, handler: any) => origRegister(name, def, guarded(def, handler));
+    : (name: string, def: any, handler: any) => origRegister(name, def, guarded(def, handler, name));
 
   // ── 17 fs-expressible tools — shared registry + live ObsidianBackend ────────
   // decodeHtml: false — no HTML entities expected from in-process calls.
@@ -65,7 +77,10 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
     // Meta-tools register through origRegister directly: they must NOT be
     // guard-wrapped — obsidian_call_tool would otherwise be blocked wholesale
     // in read-only mode, blocking read tools too. The captured handlers carry
-    // the guard, so enforcement happens per target call. The capture patch is
+    // the guard — and the queue and journal — so enforcement happens per target
+    // call. That also keeps the queue non-reentrant: obsidian_call_tool itself
+    // never takes a queue slot, so its target can't wait on its own caller.
+    // The capture patch is
     // deliberately LEFT INSTALLED: any post-build registration still lands in
     // the registry, guarded — the "every registerTool call is guarded" locked
     // invariant holds in both modes for the server's whole lifetime.

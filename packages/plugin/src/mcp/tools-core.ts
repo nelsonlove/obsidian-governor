@@ -8,6 +8,7 @@ import type { App, TFile } from "obsidian";
 import { ok, fail } from "./helpers.js";
 import type { GuardSettings } from "../guard.js";
 import type { ExternalToolEntry } from "./external-tools.js";
+import type { Kernel } from "../kernel/index.js";
 import { findObsidianBinary } from "./tools-cli.js";
 
 export interface ServerCtx {
@@ -19,6 +20,13 @@ export interface ServerCtx {
   getSettings: () => GuardSettings & { allowDangerousCli?: boolean };
   /** Externally-published tools (other Obsidian plugins via plugin.api). Optional: absent in tests that don't exercise it. */
   getExternalTools?: () => ExternalToolEntry[];
+  /**
+   * Kernel v0: the PLUGIN-SINGLETON write queue + journal. It must be created
+   * once in main.ts and shared by every connection's server — a per-connection
+   * kernel would serialize nothing, since concurrent sessions are exactly what
+   * the queue exists to order. Optional: absent in tests that don't exercise it.
+   */
+  kernel?: Kernel;
 }
 
 const RO = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
