@@ -40,12 +40,13 @@ On the Mac, **disconnect the remote `obsidian-vault-mcp-server` connector** for 
 
 ## Tools
 
-**Up to 49 tools.** 42 are always available; 6 are **plugin-gated** (register only when their backing plugin is loaded); 1 (`obsidian_cli`) registers only when the official Obsidian CLI binary is installed:
+**Up to 51 tools.** 44 are always available; 6 are **plugin-gated** (register only when their backing plugin is loaded); 1 (`obsidian_cli`) registers only when the official Obsidian CLI binary is installed:
 
 - **Core (read/write, live `app.*`):** list/read/write/append/move/delete notes, backlinks, outlinks, resolve, frontmatter (atomic multi-key), patch, search, find-by-tag, …
 - **Complementary:** trash, parsed read, append-at-heading, run-command, command list, vault/tags/environment info, active note, open-in-editor.
 - **Navigation/control:** jump-to, view-mode, workspaces (open/save/list), bookmarks (open/list), periodic note, plugin toggle.
-- **Advisory claims:** `obsidian_claim_scope`, `obsidian_release_scope`, `obsidian_list_scope_claims` — see [Advisory scope claims](#advisory-scope-claims).
+- **Identity:** `obsidian_resolve_uid` — look a note up by its frontmatter `uid`, or a uid up by path. See [Addressing notes by uid](#addressing-notes-by-uid).
+- **Advisory claims:** `obsidian_claim_scope`, `obsidian_renew_scope`, `obsidian_release_scope`, `obsidian_list_scope_claims` — see [Advisory scope claims](#advisory-scope-claims).
 - **Plugin-gated:** `dataview_list_query`, `dataview_table_query` (Dataview); `create_note_from_template` (Templater); `omnisearch` (Omnisearch); `fileclass_schema`, `fileclass_insert_fields` (Metadata Menu).
 - **Official-CLI proxy:** `obsidian_cli` runs any official Obsidian CLI command against this vault (file history/diff/restore, themes, snippets, publish, …). The vault is pinned; dangerous commands (`eval`, `dev:*`, `devtools`, `restart`, `reload`, `command`, `plugins:restrict`, `plugin:install`, `plugin:uninstall` — the last two because installing loads arbitrary plugin code and uninstalling can remove vault-mcp itself) need the **Allow dangerous CLI commands** setting; the tool is unavailable while a path allowlist is active (CLI args can't be path-scoped) and is blocked entirely in read-only mode.
 
@@ -54,6 +55,33 @@ Run **`obsidian_doctor`** (tool) or **`vault-mcp: Show diagnostics`** (command) 
 ### Code Mode (token-lean surface)
 
 Registering ~40+ tool schemas costs context in every session. A connection whose bridge runs with **`--code-mode`** (append it to the registered command: `… node ~/.claude/vault-mcp/bridge.mjs --vault <name> --code-mode`, or set `VAULT_MCP_CODE_MODE=1`) gets just **3 meta-tools** over the same registry: `obsidian_search_tools` (keyword discovery), `obsidian_describe_tool` (input JSON Schema), `obsidian_call_tool` (invoke by name, args validated against the target's schema). Read-only mode and the path allowlist bind on the target tool exactly as on the full surface. The mode is chosen per connection via a one-line preamble the bridge sends before the MCP stream — old bridges and full-surface sessions are wire-compatible, and both kinds of session can run concurrently against the same vault. If the vault's plugin build predates preamble support, the bridge warns on stderr and falls back to the full surface rather than failing.
+
+## Addressing notes by uid
+
+**A path is not an identity.** Rename a note, move it into a folder, let a template reorganize it — and every path you were holding is silently wrong, usually without an error, because a path that no longer exists reads as "create a new note here". A note's frontmatter `uid` doesn't move.
+
+So **anywhere a tool takes a path, it also takes `uid:<value>`**:
+
+```jsonc
+{"path": "uid:019fe34f-1ff0-74ae-8117-ca6d9843873f", "content": "…"}   // obsidian_write_note
+{"paths": ["uid:019fe34f-…", "Notes/Literal.md"]}                      // mixed is fine
+{"from": "uid:019fe34f-…", "to": "Archive/2026/Moved.md"}              // any path argument
+```
+
+This is **the stable way to reference a note across renames** — resolve a uid once and keep using it for the rest of a session, or across sessions, without re-reading the path. It works on **reads and writes alike**, on the full surface, in Code Mode, and on path-taking tools published by other plugins, because it binds at the same single interception point as the guard and the write queue rather than tool by tool. Handlers never see a uid reference; they get the resolved path.
+
+The plugin keeps a **uid index** (`uid → path`, and the inverse) built at load from Obsidian's own metadata cache — no file reads — and kept current from Obsidian's events: a uid added, changed or removed by an edit, a note renamed or moved, a note deleted. Notes with no `uid` are simply not in it.
+
+Two references refuse rather than guess, and **nothing runs** in either case:
+
+- `Error [uid_unresolved]` — no note carries that uid. Better than writing a file literally named `uid:019f…`, which is what a plain path argument would have done.
+- `Error [uid_ambiguous]` — **two or more notes carry it**, and the error names them. The index records duplicates rather than picking a winner or rewriting somebody's frontmatter; use `obsidian_resolve_uid` to see them and fix the vault.
+
+**`obsidian_resolve_uid`** is the lookup, in both directions: `{uid}` → `{path, duplicates?}`, `{path}` → `{uid}`, and no argument at all → index totals plus every duplicated uid in the vault. It's read-only and reports duplicates; it never repairs them. A path allowlist bounds it like everything else — a uid whose note lies outside the allowlist reads as unknown, and a refusal names the `uid:` reference you gave rather than the path it resolved to.
+
+The journal records both halves: `target.path` is where the operation landed, `target.uid` is the identity it landed on (taken from the index, so it's present even when the frontmatter cache is behind).
+
+*(Link healing — rewriting references when a note moves — is not part of this; the index is the substrate it will be built on.)*
 
 ## Write queue & journal
 
@@ -91,8 +119,11 @@ Two agents working the same folder can at least *tell each other so*. `obsidian_
 **It is advisory and nothing else.** A claim blocks no one, queues nothing, and refuses nobody:
 
 - **Overlapping claims by different holders are allowed** — and the claim response *lists* the ones it overlaps, with holder and reason, so the claimer knows who else is here.
-- **A write inside somebody else's live claim still happens.** What it gains is a notice: an extra line on the result (`advisory lock: claude-code/1.0.0#m1x8g-3 claims Projects/Alpha (restructuring), expires in 214s`), an `advisory_locks` entry in the structured result, and a `lockNotice` field on the journal record. Your own writes inside your own claim get nothing — claiming a scope is how you say you're working in it.
-- **Claims expire on their own** — default 5 minutes, maximum 30. A holder that crashes or disconnects cannot wedge a scope; expiry is lazy, so an expired claim is simply gone the next time anyone looks. Re-claim to extend, `obsidian_release_scope` to drop it early. `obsidian_list_scope_claims` shows every live claim.
+- **A write inside somebody else's live claim still happens.** What it gains is a notice: an extra content block on the result (one claim per line — `advisory lock: claude-code/1.0.0#m1x8g-3 claims Projects/Alpha (restructuring), expires in 214s`), an `advisory_locks` entry in the structured result, and a `lockNotice` field on the journal record naming the most specific claim. Your own writes inside your own claim get nothing — claiming a scope is how you say you're working in it.
+- **Every path an operation names is consulted, not just the first.** A move *into* a claimed scope lands in somebody's work exactly as much as a move out of one does, so both halves of a move (and every path of a batch) are checked. Each claim is disclosed once however many of the paths it covers.
+- **Claims expire on their own** — default 5 minutes, maximum 30. A holder that crashes or disconnects cannot wedge a scope; expiry is lazy, so an expired claim is simply gone the next time anyone looks. `obsidian_renew_scope` restarts the clock on a claim you hold (by its `lock_id`, leaving scope and reason alone); **claiming a scope you already hold replaces that claim** rather than adding a second — same id, restated reason, restarted clock. `obsidian_release_scope` drops it early, and `obsidian_list_scope_claims` shows every live claim.
+- **At the cap, a claim is refused — never traded for someone else's.** A holder may hold 50 live claims and the vault 200; past either, `obsidian_claim_scope` fails with `Error [lock_cap]` naming the cap it hit and claims nothing. (Evicting the oldest claim to make room, which is what it used to do, let a client claiming in a loop silently delete every other session's claims.)
+- **A path allowlist bounds claiming.** A claim is a statement about a region of the vault that every other session sees, so a session sandboxed to `Projects/` can claim inside `Projects/` and nowhere else — a scope outside it, or the whole-vault scope `""`, fails with `Error [out_of_allowlist]`. Sessions with no allowlist configured are unaffected, whole-vault claims included. Listing is never restricted: knowing who else is working is the entire value of the mechanism.
 
 A claim is held per **connection** — a reconnecting session starts with none — and claims live in memory, so a plugin reload clears them. Claiming and releasing are treated as **mutating** operations: not because they touch the vault (they don't) but because a claim is exactly the sort of act the audit stream should record, so each one is journaled like any other operation (`target.ref` = `scope:<prefix>` / `lock:<id>`). One consequence: **read-only mode blocks claiming and releasing** — in a session that cannot write, there is nothing for a claim to disclose. Listing still works.
 

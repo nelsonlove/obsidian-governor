@@ -4,48 +4,89 @@ export interface GuardSettings { readOnly: boolean; allowlist: string[]; }
 
 // Path-bearing argument keys across the tool surface.
 const PATH_KEYS = ["path", "from", "to", "target_path", "template_path", "subdir", "file_path"];
+// Keys whose ARRAY values carry paths (refs = obsidian_resolve's batch input).
+const ARRAY_PATH_KEYS = ["paths", "refs"];
+// Defensive depth cap: MCP args arrive as parsed JSON, so nesting is bounded in
+// practice and a cycle is impossible.
+const MAX_DEPTH = 8;
 
-// Recursively walk the args, collecting any non-empty string under a
-// PATH_KEYS-named key (and string members of a `paths` array) at ANY depth.
-// This replaces per-shape clauses (flat keys, paths[], moves[{from,to}]): a
-// future batch tool with a new nesting can't silently bypass the allowlist
-// just because nobody added its shape here (#18). Over-collection is safe —
-// worst case the guard over-blocks; silent under-collection is the failure
-// mode this eliminates. Depth-capped + cycle-guarded defensively.
-export function collectPaths(args: Record<string, unknown>): string[] {
-  const out: string[] = [];
-  // Defensive only: MCP args arrive as parsed JSON, which can't be circular.
+// Recursively walk the args, applying `fn` to any non-empty string under a
+// PATH_KEYS-named key (and string members of a `paths` array) at ANY depth, and
+// returning args with those strings replaced by what `fn` returned.
+//
+// This is the ONE place the tool surface's path-argument shapes are known. It
+// replaces per-shape clauses (flat keys, paths[], moves[{from,to}]): a future
+// batch tool with a new nesting can't silently bypass the allowlist — or uid
+// addressing — just because nobody added its shape here (#18). Over-collection
+// is safe: worst case the guard over-blocks; silent under-collection is the
+// failure mode this eliminates.
+//
+// Structurally sharing: any object or array none of whose descendants changed is
+// returned BY REFERENCE, so a call that rewrites nothing hands back the very
+// args it was given and callers can test for a no-op with `===`.
+export function mapPaths(
+  args: Record<string, unknown>,
+  fn: (path: string) => string
+): Record<string, unknown> {
   const seen = new Set<object>();
-  const MAX_DEPTH = 8;
-  // Keys whose ARRAY values carry paths (refs = obsidian_resolve's batch input).
-  const ARRAY_PATH_KEYS = ["paths", "refs"];
 
-  function walk(value: unknown, depth: number): void {
-    if (depth > MAX_DEPTH || value === null || typeof value !== "object") return;
-    if (seen.has(value as object)) return;
+  function walk(value: unknown, depth: number): unknown {
+    if (depth > MAX_DEPTH || value === null || typeof value !== "object") return value;
+    if (seen.has(value as object)) return value;
     seen.add(value as object);
     if (Array.isArray(value)) {
-      for (const item of value) walk(item, depth + 1);
-      return;
+      let changed = false;
+      const out = value.map((item) => {
+        const mapped = walk(item, depth + 1);
+        if (mapped !== item) changed = true;
+        return mapped;
+      });
+      return changed ? out : value;
     }
+    let changed = false;
+    const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
       const isPathKey = PATH_KEYS.includes(k) || ARRAY_PATH_KEYS.includes(k);
+      let mapped: unknown;
       if (isPathKey && typeof v === "string" && v) {
-        out.push(v);
+        mapped = fn(v);
       } else if (isPathKey && Array.isArray(v)) {
-        // Arrays under path keys: collect string members, recurse the rest —
+        // Arrays under path keys: map string members, recurse the rest —
         // {path: [...]}, paths: [...], refs: [...], and paths: [{path}] all land.
-        for (const p of v) {
-          if (typeof p === "string" && p) out.push(p);
-          else walk(p, depth + 1);
-        }
+        let inner = false;
+        const arr = v.map((p) => {
+          if (typeof p === "string" && p) {
+            const m = fn(p);
+            if (m !== p) inner = true;
+            return m;
+          }
+          const m = walk(p, depth + 1);
+          if (m !== p) inner = true;
+          return m;
+        });
+        mapped = inner ? arr : v;
       } else {
-        walk(v, depth + 1);
+        mapped = walk(v, depth + 1);
       }
+      if (mapped !== v) changed = true;
+      out[k] = mapped;
     }
+    return changed ? out : value;
   }
 
-  walk(args, 0);
+  return walk(args, 0) as Record<string, unknown>;
+}
+
+/**
+ * Every path the arguments name, in the order the walk meets them. Defined over
+ * mapPaths so the collected set and the rewritable set can never drift apart.
+ */
+export function collectPaths(args: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  mapPaths(args ?? {}, (p) => {
+    out.push(p);
+    return p;
+  });
   return out;
 }
 

@@ -1,10 +1,10 @@
-// The advisory-claims tool surface: claim / release / list.
+// The advisory-claims tool surface: claim / renew / release / list.
 //
-// Three tools over the plugin-singleton LockStore (kernel/locks.ts). The verbs
-// are deliberate and closed: you CLAIM a scope, you RELEASE it, you LIST what is
-// claimed. There is no grant, no approve, no accept and no wait — a claim is a
-// statement of intent that other callers can see, not a permission another actor
-// hands out, and nothing anywhere blocks on one.
+// Four tools over the plugin-singleton LockStore (kernel/locks.ts). The verbs
+// are deliberate and closed: you CLAIM a scope, you RENEW it, you RELEASE it,
+// you LIST what is claimed. There is no grant, no approve, no accept and no wait
+// — a claim is a statement of intent that other callers can see, not a
+// permission another actor hands out, and nothing anywhere blocks on one.
 //
 // Imports nothing from `obsidian`: the store is Obsidian-free and the actor is
 // passed in, so this module is unit-testable headlessly like guarded.ts.
@@ -12,12 +12,14 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ok, fail } from "./helpers.js";
+import { guardCall, type GuardSettings } from "../guard.js";
 import {
   expiresInSeconds,
   holderOf,
   LOCK_TTL_DEFAULT_MS,
   LOCK_TTL_MAX_MS,
   LOCK_TTL_MIN_MS,
+  normalizeScope,
   type JournalActor,
   type Kernel,
   type Lock,
@@ -43,9 +45,15 @@ import {
 const RW = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
 const RO = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 
-/** Just the kernel — this surface needs nothing else from ServerCtx. */
 export interface LockToolsCtx {
   kernel?: Kernel | null;
+  /**
+   * The guard's settings. A claim is scoped to a path prefix, so it must be
+   * bounded by the path allowlist for exactly the reason writes are — see
+   * scopeAllowed. Absent ⇒ no allowlist ⇒ unrestricted, the pre-existing
+   * behavior for every session that configures none.
+   */
+  getSettings?: () => GuardSettings;
 }
 
 /** Wire shape for a claim. snake_case, like every other structured result. */
@@ -63,6 +71,37 @@ function view(lock: Lock, now: number) {
 
 const NO_KERNEL = "advisory locks need the kernel, which is not active in this build";
 
+/**
+ * A claim is a statement ABOUT A REGION OF THE VAULT, and it is visible to every
+ * other session: a notice stamped on their writes, an entry in their listings.
+ * A session sandboxed to `Projects/` that could claim `Archive/` — or `""`, the
+ * whole vault — would reach straight out of its sandbox, not to write, but to
+ * make every other session's writes carry its name. So the scope goes through
+ * the same allowlist check a path argument would.
+ *
+ * The whole-vault scope needs its own clause: it normalizes to `""`, which
+ * collectPaths drops as empty, so the ordinary check would pass it. With no
+ * allowlist configured nothing changes — including whole-vault claims.
+ */
+function scopeRefusal(scope: string, settings?: GuardSettings): { code: string; message: string } | null {
+  if (!settings?.allowlist?.length) return null;
+  const normalized = normalizeScope(scope);
+  if (normalized === "") {
+    return {
+      code: "out_of_allowlist",
+      message:
+        "a whole-vault claim is outside the vault-mcp allowlist — claim a scope inside it instead. Nothing was claimed.",
+    };
+  }
+  const blocked = guardCall({ isMutating: false, args: { path: normalized }, settings });
+  return blocked ? { code: blocked.code, message: `${blocked.message}. Nothing was claimed.` } : null;
+}
+
+/** Guard-shaped failure envelope, matching the `Error [code]: message` the guard emits. */
+function codedError(code: string, message: string) {
+  return { content: [{ type: "text" as const, text: `Error [${code}]: ${message}` }], isError: true as const };
+}
+
 export function registerLockTools(server: McpServer, ctx: LockToolsCtx, actor: () => JournalActor): void {
   server.registerTool(
     "obsidian_claim_scope",
@@ -72,7 +111,10 @@ export function registerLockTools(server: McpServer, ctx: LockToolsCtx, actor: (
         "Advisory claim over a vault path prefix, for a stated reason and a bounded time. ADVISORY ONLY: it blocks nothing " +
         "and refuses nobody — another session can still write inside your scope, and will simply be told that you claimed it " +
         "and why. Overlapping claims by different holders are allowed; the response lists any it overlaps, so you know who " +
-        "else is working here. Expires on its own (default 5 minutes, maximum 30) — renew by claiming again, or release when done.",
+        "else is working here. Expires on its own (default 5 minutes, maximum 30): extend it with obsidian_renew_scope, or " +
+        "claim the same scope again — that REPLACES your existing claim on it (same id, restated reason, restarted clock) " +
+        "rather than adding a second. obsidian_release_scope drops it early. While a path allowlist is configured, a claim " +
+        "must fall inside it.",
       inputSchema: {
         scope: z
           .string()
@@ -96,8 +138,10 @@ export function registerLockTools(server: McpServer, ctx: LockToolsCtx, actor: (
       try {
         const locks = ctx.kernel?.locks;
         if (!locks) return fail(new Error(NO_KERNEL));
+        const refused = scopeRefusal(args.scope ?? "", ctx.getSettings?.());
+        if (refused) return codedError(refused.code, refused.message);
         const holder = holderOf(actor());
-        const { lock, overlapping } = locks.claim({
+        const { lock, overlapping, replaced } = locks.claim({
           scope: args.scope ?? "",
           holder,
           reason: args.reason,
@@ -106,12 +150,54 @@ export function registerLockTools(server: McpServer, ctx: LockToolsCtx, actor: (
         const now = Date.now();
         return ok({
           claim: view(lock, now),
+          // True when this refreshed a claim you already held on this scope
+          // rather than adding one — so a caller can tell a renewal from a new
+          // claim without diffing ids.
+          replaced: replaced === true,
           // The disclosure that makes an advisory claim useful: overlapping
           // claims are permitted, so the claimer is told about them rather than
           // refused because of them.
           overlapping: overlapping.map((l) => view(l, now)),
           advisory: "Advisory only: this does not block other sessions from writing inside the scope.",
         });
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  server.registerTool(
+    "obsidian_renew_scope",
+    {
+      title: "Renew a scope claim",
+      description:
+        "Restart the clock on an advisory claim you hold, by its lock id. Scope, reason and id all stay as they are — " +
+        "only the expiry moves. Use this while long work is still running, so the claim does not lapse and stop " +
+        "disclosing. A claim that has already expired, or one held by another connection, cannot be renewed from here.",
+      inputSchema: {
+        lock_id: z.string().min(1).describe("The `id` returned by obsidian_claim_scope."),
+        ttl_ms: z
+          .number()
+          .int()
+          .min(LOCK_TTL_MIN_MS)
+          .max(LOCK_TTL_MAX_MS)
+          .optional()
+          .describe(`New lifetime in ms, from now. Default ${LOCK_TTL_DEFAULT_MS} (5 min), maximum ${LOCK_TTL_MAX_MS} (30 min).`),
+      },
+      annotations: RW,
+    },
+    async (args) => {
+      try {
+        const locks = ctx.kernel?.locks;
+        if (!locks) return fail(new Error(NO_KERNEL));
+        const renewed = locks.renew(args.lock_id, args.ttl_ms, holderOf(actor()));
+        if (!renewed)
+          return fail(
+            new Error(
+              `no live claim '${args.lock_id}' held by this connection — it may have expired, already been released, or belong to another holder`
+            )
+          );
+        return ok({ renewed: view(renewed, Date.now()) });
       } catch (e) {
         return fail(e);
       }

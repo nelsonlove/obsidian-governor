@@ -7,8 +7,8 @@ import { writeDiscovery, removeDiscovery, writeBridge, type Discovery } from "./
 import { ConnectionSetupModal, VaultMcpSettingTab } from "./connection-ui.js";
 import { findClaudeBinary, claudeIsRegistered, claudeRegister, claudeRemove, claudeEnsureConnectPlugin } from "./claude-cli.js";
 import { ExternalToolRegistry, type VaultMcpApi } from "./mcp/external-tools.js";
-import { Kernel, WriteQueue, WriteJournal, loadInstallId } from "./kernel/index.js";
-import { obsidianProbe, obsidianServerIdentity } from "./kernel/obsidian-probe.js";
+import { Kernel, WriteQueue, WriteJournal, IdempotencyStore, LockStore, UidIndex, loadInstallId } from "./kernel/index.js";
+import { obsidianProbe, obsidianServerIdentity, obsidianUidSource } from "./kernel/obsidian-probe.js";
 
 interface VaultMcpSettings {
   setupAcknowledged: boolean;
@@ -113,6 +113,27 @@ export default class VaultMcpPlugin extends Plugin {
     new ConnectionSetupModal(this.app, async () => { this.settings.setupAcknowledged = true; await this.saveSettings(); }).open();
   }
 
+  /**
+   * Keep the uid index fresh off Obsidian's own events — no polling, no timers,
+   * no filesystem reads.
+   *
+   *   • build once when the layout is ready, because before that the metadata
+   *     cache is still warming and a build would index a fraction of the vault;
+   *   • `metadataCache.changed` covers every uid EDIT — added, changed, removed
+   *     — and every newly created note, since the cache parses it on arrival;
+   *   • `vault.rename` is the one that matters most: it is precisely the event
+   *     a path-keyed store loses to, and the whole reason the index exists;
+   *   • `vault.delete` drops the mapping.
+   *
+   * registerEvent so every handler is detached when the plugin unloads.
+   */
+  private wireUidIndex(index: UidIndex): void {
+    this.app.workspace.onLayoutReady(() => index.rebuild());
+    this.registerEvent(this.app.metadataCache.on("changed", (file) => index.onChanged(file.path)));
+    this.registerEvent(this.app.vault.on("rename", (file, oldPath) => index.onRenamed(oldPath, file.path)));
+    this.registerEvent(this.app.vault.on("delete", (file) => index.onDeleted(file.path)));
+  }
+
   async onload() {
     // Load settings FIRST so the enabled gate and guard settings are available.
     await this.loadSettings();
@@ -133,11 +154,18 @@ export default class VaultMcpPlugin extends Plugin {
     // plugin's own data (`.obsidian/plugins/vault-mcp/journal/YYYY-MM.jsonl`),
     // out of the note tree so it can never be mistaken for vault content.
     const pluginDir = this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`;
+    // The identity substrate's uid index — one per plugin instance, like the
+    // queue: it is a map of the vault, not of a connection.
+    const uidIndex = new UidIndex(obsidianUidSource(this.app));
     const kernel = new Kernel(
       new WriteQueue(),
       new WriteJournal(this.app.vault.adapter, `${pluginDir}/journal`),
       obsidianProbe(this.app),
+      new IdempotencyStore(),
+      new LockStore(),
+      uidIndex,
     );
+    this.wireUidIndex(uidIndex);
 
     // Server identity — the transport asserting which vault and which install.
     // The install id is a small file beside the journal (`install-id.json`), so

@@ -31,6 +31,7 @@ import { WriteQueue, WriteTimeoutError } from "./write-queue.js";
 import { digestArgs, WriteJournal, type JournalActor, type JournalOutcome, type JournalTarget } from "./journal.js";
 import { fingerprintArgs, IdempotencyMismatchError, IdempotencyStore, type IdempotencySettlement } from "./idempotency.js";
 import { holderOf, lockNoticeText, LockStore, expiresInSeconds, type Lock, type LockNotice } from "./locks.js";
+import type { UidIndex } from "./uid-index.js";
 
 export { WriteQueue, WriteTimeoutError, WRITE_TIMEOUT_MS } from "./write-queue.js";
 export type { LateSettlement } from "./write-queue.js";
@@ -51,6 +52,7 @@ export type {
 } from "./idempotency.js";
 export {
   LockStore,
+  LockCapError,
   holderOf,
   normalizeScope,
   scopeCovers,
@@ -61,8 +63,18 @@ export {
   LOCK_TTL_MAX_MS,
   LOCK_TTL_MIN_MS,
   LOCK_MAX,
+  LOCK_MAX_PER_HOLDER,
 } from "./locks.js";
 export type { Lock, LockClaim, LockNotice } from "./locks.js";
+export {
+  UidIndex,
+  UidUnresolvedError,
+  UidAmbiguousError,
+  resolveUidArgs,
+  uidRef,
+  UID_PREFIX,
+} from "./uid-index.js";
+export type { UidSource, UidResolution, UidDuplicate, UidAddressing } from "./uid-index.js";
 export { loadInstallId, mintInstallId, INSTALL_ID_FILE } from "./install-id.js";
 export type { InstallIdAdapter, LoadedInstallId, ServerIdentity } from "./install-id.js";
 
@@ -178,12 +190,17 @@ function errorTextOfThrown(error: unknown): string {
  * something else — a bare value, an array — is passed through untouched rather
  * than reshaped: the notice is a courtesy and must never be the reason a
  * caller's parse breaks.
+ *
+ * Several claims are ONE block, one claim per LINE. Space-joining ran them into
+ * a single unreadable run-on the moment two claims overlapped a write, which is
+ * exactly the case the notice exists for; a separate content block each would
+ * make the block count vary with vault state, which callers index into.
  */
 function withLockNotice<T>(result: T, locks: Lock[], now: number): T {
   if (locks.length === 0 || result === null || typeof result !== "object") return result;
   const r = result as { content?: unknown; structuredContent?: unknown };
   if (!Array.isArray(r.content)) return result;
-  const text = locks.map((l) => lockNoticeText(l, now)).join(" ");
+  const text = locks.map((l) => lockNoticeText(l, now)).join("\n");
   const structured =
     r.structuredContent !== null &&
     typeof r.structuredContent === "object" &&
@@ -218,7 +235,15 @@ export class Kernel {
      * gains a notice saying whose work it landed in. In memory, cleared by a
      * plugin reload — see locks.ts.
      */
-    readonly locks: LockStore = new LockStore()
+    readonly locks: LockStore = new LockStore(),
+    /**
+     * The identity substrate's `uid → path` map (uid-index.ts). Supplies the
+     * journal's `target.uid` — from the index rather than a per-write
+     * frontmatter probe — and backs `uid:<value>` addressing at the tool
+     * boundary. Null in builds/tests without one: the probe remains the
+     * fallback, and uid addressing fails closed.
+     */
+    readonly uids: UidIndex | null = null
   ) {}
 
   /**
@@ -324,13 +349,20 @@ export class Kernel {
         () => {
           started = Date.now();
           queueWaitMs = started - enqueued;
-          target = this.resolveTarget(mc.args, mc.ref);
+          // Collected once and kept whole: `target.paths` is CAPPED for the
+          // record, but the advisory-claim consult below must see every path the
+          // operation names, or a claim covering only the fifty-first is missed.
+          const paths = collectPaths(mc.args ?? {});
+          target = this.targetOf(paths, mc.ref);
           try {
             // A delete or move destroys the source's identity, so uid/revBefore
             // have to be read while it still exists — but no earlier than this.
             const path = target.path;
             if (path) {
-              const uid = this.probe?.uid(path);
+              // Index first, probe as fallback: the index is the identity
+              // substrate's answer, and it still knows the uid of a path whose
+              // frontmatter the metadata cache has not (re)parsed.
+              const uid = this.uids?.uidFor(path) ?? this.probe?.uid(path);
               if (uid !== undefined) target = { ...target, uid };
               revBefore = this.probe?.rev(path);
             }
@@ -351,7 +383,10 @@ export class Kernel {
           // Obsidian cannot keep (a rogue process writes bytes regardless), so
           // the mechanism's whole value is disclosure. What foreign claims buy
           // is a notice on the result and a `lockNotice` on the record.
-          const foreign = target.path ? this.locks.covering(target.path, holderOf(mc.actor)) : [];
+          //
+          // EVERY path is consulted, not just the primary: a move INTO a claimed
+          // scope lands in somebody's work just as much as a move out of one.
+          const foreign = paths.length > 0 ? this.locks.coveringAny(paths, holderOf(mc.actor)) : [];
           if (foreign.length > 0) {
             const [closest] = foreign;
             lockNotice = { holder: closest.holder, scope: closest.scope, reason: closest.reason };
@@ -509,7 +544,11 @@ export class Kernel {
    * swallowed on the record-only paths).
    */
   private resolveTarget(args: Record<string, unknown>, ref?: string): JournalTarget {
-    const paths = collectPaths(args ?? {});
+    return this.targetOf(collectPaths(args ?? {}), ref);
+  }
+
+  /** The journal shape for an already-collected path list. Capped; probe-free. */
+  private targetOf(paths: string[], ref?: string): JournalTarget {
     if (paths.length === 0) return ref ? { ref } : {};
     return {
       path: paths[0],
@@ -521,7 +560,7 @@ export class Kernel {
   private withUid(target: JournalTarget): JournalTarget {
     if (!target.path) return target;
     try {
-      const uid = this.probe?.uid(target.path);
+      const uid = this.uids?.uidFor(target.path) ?? this.probe?.uid(target.path);
       return uid !== undefined ? { ...target, uid } : target;
     } catch {
       return target;
