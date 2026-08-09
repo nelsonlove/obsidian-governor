@@ -236,6 +236,72 @@ function parsedFromPath(path: string, cfg: JdConfig): ParsedId | null {
   return parseJdId(idTokenFromName(basename(path)), cfg);
 }
 
+/**
+ * Walk `path`'s folder segments outermost-to-innermost, validating each
+ * candidate scope token against the ancestor established so far — NOT just
+ * testing tokens in isolation. A folder token that parses as area / category
+ * / expanded-item only extends the chain when it is positionally consistent
+ * with the current context:
+ *   - area: only at the root (no scope established yet).
+ *   - category: only directly under ITS OWN area (areaOfCategory(token) must
+ *     equal the current area) — or at the root, for a bare category folder
+ *     with no area wrapper.
+ *   - expanded-item: only directly under its own area (expanded-AREA items)
+ *     or its own category (expanded-CATEGORY items).
+ * Anything else — an unparseable folder name, an id/fractal-id folder (an
+ * id's own attachment-folder, not a new scope container), or a token that
+ * parses but sits at the WRONG position (e.g. a bare "06" nested one level
+ * too deep inside another category's folder, or an id's attachment folder
+ * that happens to be named like a category, e.g. "06.11 Note/11 Attachments")
+ * — does not extend the chain and is skipped without disturbing the current
+ * context, so garbage nesting below a valid scope can never be mistaken for
+ * a deeper (or a completely unrelated) one.
+ *
+ * Returns the ordered list of valid {scope, index} entries actually found
+ * (index = the segment's position in `path.split("/")`, for slicing back to
+ * a folder path). The LAST entry is the path's deepest valid scope
+ * (`scopeOf`'s answer); ANY entry can be the container `expectedFolder`
+ * needs, keyed by token.
+ */
+function scopesAlongPath(path: string, cfg: JdConfig): Array<{ scope: Scope; index: number }> {
+  const segments = folderSegments(path);
+  const chain: Array<{ scope: Scope; index: number }> = [];
+  let current: Scope | null = null;
+  for (let i = 0; i < segments.length; i++) {
+    const p = parseJdId(folderToken(segments[i]), cfg);
+    if (!p) continue;
+    if (p.kind === "area") {
+      if (current === null) {
+        current = { kind: "area", token: p.raw };
+        chain.push({ scope: current, index: i });
+      }
+      continue;
+    }
+    if (p.kind === "category") {
+      const consistent = current === null || (current.kind === "area" && areaOfCategory(p.category) === current.token);
+      if (consistent) {
+        current = { kind: "category", token: p.raw };
+        chain.push({ scope: current, index: i });
+      }
+      continue;
+    }
+    if (p.kind === "expanded-item") {
+      const area = areaOfCategory(p.category);
+      const inExpandedArea = cfg.expandedAreas.includes(area) && current !== null && current.kind === "area" && current.token === area;
+      const inExpandedCategory =
+        cfg.expandedCategories.includes(p.category) && current !== null && current.kind === "category" && current.token === p.category;
+      if (inExpandedArea || inExpandedCategory) {
+        current = { kind: "expanded-item", token: p.raw };
+        chain.push({ scope: current, index: i });
+      }
+      continue;
+    }
+    // "id" / "fractal-id": not scope containers themselves (an id's own
+    // folder holds its attachments, not deeper scopes) — skip, unchanged.
+  }
+  return chain;
+}
+
 // ── the provider ─────────────────────────────────────────────────────────────
 
 export function jdProvider(cfg: JdConfig): ScopeProvider {
@@ -279,19 +345,17 @@ export function jdProvider(cfg: JdConfig): ScopeProvider {
     format,
     addressOf,
     validateName,
-    // Walk the path's folder segments deepest-first; the first one whose
-    // leading token parses as a container (area / category / expanded-item)
-    // is the scope — independent of what the note's OWN filename says (a
-    // note with no address, or a malformed one, still lives in a scope).
+    // The path's DEEPEST validly-positioned scope (scopesAlongPath's last
+    // entry) — independent of what the note's OWN filename says (a note
+    // with no address, or a malformed one, still lives in a scope). Position
+    // matters, not just token shape: a folder token that parses as a
+    // category but sits somewhere a category token can't validly occur
+    // (nested inside another category's folder, or inside an id's own
+    // attachment folder — e.g. ".../06.11 Note/11 Attachments/photo.md",
+    // where "11" is just a folder name, not category 11) is not a scope.
     scopeOf(path: string): Scope | null {
-      const segments = folderSegments(path);
-      for (let i = segments.length - 1; i >= 0; i--) {
-        const p = parseJdId(folderToken(segments[i]), cfg);
-        if (p && (p.kind === "area" || p.kind === "category" || p.kind === "expanded-item")) {
-          return { kind: p.kind, token: p.raw };
-        }
-      }
-      return null;
+      const chain = scopesAlongPath(path, cfg);
+      return chain.length === 0 ? null : chain[chain.length - 1].scope;
     },
 
     // Self first, root last. An expanded-item's parent depends on whether it
@@ -368,25 +432,34 @@ export function jdProvider(cfg: JdConfig): ScopeProvider {
     },
 
     // The folder an address's CONTAINER actually lives in, found by locating
-    // a folder segment among `notes` whose token matches that container.
-    // `levels` (Address.levels) is the folder-path convention: the
-    // second-to-last entry is always the container token — for "id" that's
-    // the category; for a bare "category" it's the area (levels = [area,
-    // category], so index length-2 = 0 = area); for an expanded-item inside
-    // an expanded area (2 levels, no category folder) it's the area; inside
-    // an expanded category (3 levels) it's the category; for a fractal-id
-    // it's the expanded-item's own 5-digit folder. An address with fewer
-    // than 2 levels (a bare area) has no container to find.
+    // a VALIDLY-POSITIONED folder segment among `notes` whose token matches
+    // that container (scopesAlongPath, not bare token equality — see its
+    // doc comment). `levels` (Address.levels) is the folder-path convention:
+    // the second-to-last entry is always the container token — for "id"
+    // that's the category; for a bare "category" it's the area (levels =
+    // [area, category], so index length-2 = 0 = area); for an expanded-item
+    // inside an expanded area (2 levels, no category folder) it's the area;
+    // inside an expanded category (3 levels) it's the category; for a
+    // fractal-id it's the expanded-item's own 5-digit folder. An address
+    // with fewer than 2 levels (a bare area) has no container to find.
+    //
+    // Position-validating the match matters: without it, a stray folder
+    // elsewhere in the vault sharing a category's 2-digit token — e.g.
+    // "50-59 Something/52 Other/06 Rogue/…", where "06" is nested one level
+    // too deep to be a real category folder — could be mistaken for id
+    // "06.13"'s real container. scopesAlongPath rejects that "06" outright
+    // (its immediate parent is a category, not an area), so it's never a
+    // candidate. Deterministic tie-break, tested: when two notes genuinely
+    // both carry a validly-positioned match for the same container (a
+    // vault-consistency question this method can't resolve further), the
+    // FIRST in `notes` listing order wins — not the shortest path, not any
+    // other heuristic.
     expectedFolder(addr: Address, notes: string[]): string | null {
       if (addr.levels.length < 2) return null;
       const containerToken = addr.levels[addr.levels.length - 2];
       for (const note of notes) {
-        const segments = folderSegments(note);
-        for (let i = 0; i < segments.length; i++) {
-          if (folderToken(segments[i]) === containerToken) {
-            return segments.slice(0, i + 1).join("/");
-          }
-        }
+        const hit = scopesAlongPath(note, cfg).find((entry) => entry.scope.token === containerToken);
+        if (hit) return folderSegments(note).slice(0, hit.index + 1).join("/");
       }
       return null;
     },

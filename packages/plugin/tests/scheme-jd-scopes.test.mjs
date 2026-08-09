@@ -46,6 +46,23 @@ describe("scopeOf — deepest scheme scope containing a path", () => {
     // scratch no address.md carries no address, but still lives under 06's folder.
     assert.deepEqual(p.scopeOf(NOTES[4]), { kind: "category", token: "06" });
   });
+
+  test("an id's own attachment folder is NOT a nested category, even when its name looks like one", () => {
+    // "11 Attachments" sits inside "06.11 Vault MCP" (an id's own folder), not
+    // inside an area — "11" parses as a category token in isolation, but its
+    // position (nested inside another category's territory) is invalid, so it
+    // must not shadow the real, correctly-positioned category scope "06".
+    const path = "00-09 System/06 Agent tooling/06.11 Vault MCP/11 Attachments/photo.md";
+    assert.deepEqual(p.scopeOf(path), { kind: "category", token: "06" });
+  });
+
+  test("a category token nested one level too deep (inside another category) is not a scope", () => {
+    // "06" here sits inside category "52"'s folder — not directly under an
+    // area — so it can never be a valid category scope, however tempting the
+    // bare token match looks.
+    const path = "50-59 Something/52 Other/06 Rogue/06.01 Fake.md";
+    assert.deepEqual(p.scopeOf(path), { kind: "category", token: "52" });
+  });
 });
 
 // ── chainOf ──────────────────────────────────────────────────────────────────
@@ -114,6 +131,18 @@ describe("membersOf — notes whose address falls inside the scope", () => {
     assert.deepEqual(p.membersOf({ kind: "category", token: "99" }, NOTES), []);
   });
 
+  test("numeric sort, not lexical: a 3-digit decimal (110) sorts after 11 and 12, not before", () => {
+    const notes = [
+      "00-09 System/06 Agent tooling/06.110 Third.md",
+      "00-09 System/06 Agent tooling/06.11 First.md",
+      "00-09 System/06 Agent tooling/06.12 Second.md",
+    ];
+    assert.deepEqual(
+      p.membersOf({ kind: "category", token: "06" }, notes).map((m) => m.address),
+      ["06.11", "06.12", "06.110"],
+    );
+  });
+
   test("an expanded category's members are its 5-digit expanded-items", () => {
     const notes = [
       "20-29 Something/27 Expanded/27001 First.md",
@@ -147,6 +176,30 @@ describe("expectedFolder — the folder an address's container actually lives in
 
   test("an area address has no container to find, and returns null", () => {
     assert.equal(p.expectedFolder(p.parse("00-09"), NOTES), null);
+  });
+
+  test("a rogue folder sharing the container's bare token, but wrongly positioned, is ignored", () => {
+    // "06 Rogue" is nested inside category "52"'s folder, not directly under
+    // an area — an invalid position for a category folder — so it must not
+    // be mistaken for id "06.13"'s real container, even though it comes
+    // first in listing order and its token matches.
+    const notes = [
+      "50-59 Something/52 Other/06 Rogue/06.01 Fake.md",
+      "00-09 System/06 Agent tooling/06.11 Vault MCP.md",
+    ];
+    assert.equal(p.expectedFolder(p.parse("06.13"), notes), "00-09 System/06 Agent tooling");
+  });
+
+  test("when two notes genuinely have a validly-positioned match, the first in listing order wins", () => {
+    // Both folders are legitimately positioned category "06" folders (each
+    // directly under its own matching area) — a genuine vault inconsistency
+    // this method cannot resolve further. The documented, deterministic
+    // tie-break is listing order, not path length or any other heuristic.
+    const notes = [
+      "00-09 System/06 First copy/06.01 A.md",
+      "00-09 System/06 Second copy/06.02 B.md",
+    ];
+    assert.equal(p.expectedFolder(p.parse("06.13"), notes), "00-09 System/06 First copy");
   });
 
   test("a category with no folder anywhere in the listing returns null", () => {
