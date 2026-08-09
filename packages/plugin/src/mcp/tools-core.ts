@@ -8,7 +8,7 @@ import type { App, TFile } from "obsidian";
 import { ok, fail } from "./helpers.js";
 import type { GuardSettings } from "../guard.js";
 import type { ExternalToolEntry } from "./external-tools.js";
-import type { Kernel } from "../kernel/index.js";
+import type { Kernel, ServerIdentity } from "../kernel/index.js";
 import { findObsidianBinary } from "./tools-cli.js";
 
 export interface ServerCtx {
@@ -16,8 +16,14 @@ export interface ServerCtx {
   socketPath: string;
   vaultName: string;
   enabledPlugins: () => string[];
-  /** Guard settings plus tool-specific gates (allowDangerousCli: obsidian_cli's danger gate). */
-  getSettings: () => GuardSettings & { allowDangerousCli?: boolean };
+  /**
+   * Guard settings plus policy gates:
+   *   `allowDangerousCli`        — obsidian_cli's danger gate.
+   *   `trustedReadOnlyPlugins`   — plugin ids whose `readOnlyHint: true` is
+   *                                believed. Any other publisher's read-only
+   *                                claim is distrusted; see external-tools.ts.
+   */
+  getSettings: () => GuardSettings & { allowDangerousCli?: boolean; trustedReadOnlyPlugins?: string[] };
   /** Externally-published tools (other Obsidian plugins via plugin.api). Optional: absent in tests that don't exercise it. */
   getExternalTools?: () => ExternalToolEntry[];
   /**
@@ -27,6 +33,12 @@ export interface ServerCtx {
    * the queue exists to order. Optional: absent in tests that don't exercise it.
    */
   kernel?: Kernel;
+  /**
+   * Kernel v0 server identity — `{vault, install, version}`, stamped into every
+   * journal record's actor block. Resolved once at plugin load (main.ts);
+   * absent in tests that don't exercise it.
+   */
+  serverIdentity?: ServerIdentity;
 }
 
 const RO = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };

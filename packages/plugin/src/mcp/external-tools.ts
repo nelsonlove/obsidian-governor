@@ -104,12 +104,42 @@ export class ExternalToolRegistry {
 // convention — mutating iff readOnlyHint === false — which the guard keys on).
 // When a path allowlist is configured, mutating tools whose args contain no
 // recognized path field are blocked outright (allowlist bypass prevention).
+//
+// ── read-only claims are DISTRUSTED by default (MEDIUM-4) ───────────────────
+//
+// `readOnlyHint: true` on an external tool is an assertion by third-party code
+// running in the same renderer, about code the host cannot inspect. Believing it
+// buys the publisher an exemption from every kernel guarantee at once — no queue
+// slot, no journal record, no allowlist scoping, no kernel arguments, and
+// availability in read-only mode. That is the wrong thing to hand out on a
+// publisher's say-so.
+//
+// So the claim is believed only for plugin ids the USER has listed in the
+// `trustedReadOnlyPlugins` setting (empty by default). An untrusted read-only
+// claim is treated as mutating: queued, journaled, allowlist-scoped, given the
+// kernel arguments — and, in read-only mode, blocked outright by the guard,
+// because "this tool doesn't write" is exactly the claim that mode exists to
+// stop taking on trust.
+//
+// Trust is matched on the RAW publisher id, exactly, never on the sanitized
+// tool-name form: two ids that sanitize alike must not inherit one another's
+// trust. The setting is read at connection-build time, like the tool snapshot
+// itself, so a trust change takes effect on the next session connect.
 export function registerExternalTools(server: McpServer, app: App, ctx: ServerCtx): void {
   const entries = ctx.getExternalTools?.() ?? [];
+  const trusted = new Set(ctx.getSettings().trustedReadOnlyPlugins ?? []);
   for (const { ownerId, toolName, spec } of entries) {
+    // The publisher's claim, and whether this host believes it.
+    const claimsReadOnly = spec.annotations?.readOnlyHint === true;
+    const isReadOnly = claimsReadOnly && trusted.has(ownerId);
+    if (claimsReadOnly && !isReadOnly) {
+      console.info(
+        `[vault-mcp] '${toolName}' declares readOnlyHint but '${ownerId}' is not in trustedReadOnlyPlugins; treating it as mutating`
+      );
+    }
     // F7: widen annotations passthrough — base from readOnlyHint, then overlay
     // explicit destructiveHint / idempotentHint when provided by the publisher.
-    const base: ToolAnnotations = spec.annotations?.readOnlyHint === true
+    const base: ToolAnnotations = isReadOnly
       ? { ...SHARED_ANNOTATIONS.RO }
       : { ...SHARED_ANNOTATIONS.RW };
     if (spec.annotations?.destructiveHint !== undefined) base.destructiveHint = spec.annotations.destructiveHint;
@@ -138,8 +168,9 @@ export function registerExternalTools(server: McpServer, app: App, ctx: ServerCt
           if (ownerAtBuild === undefined || currentOwner !== ownerAtBuild)
             return fail(new Error(`publisher plugin '${ownerId}' was reloaded or unloaded since this session connected; reconnect to use its tools`));
           // F3: when an allowlist is active, mutating tools that carry no recognized
-          // path argument cannot be scoped — block them outright.
-          const isReadOnly = spec.annotations?.readOnlyHint === true;
+          // path argument cannot be scoped — block them outright. `isReadOnly` is
+          // the TRUSTED verdict, not the publisher's claim: an untrusted
+          // read-only tool is scoped like any other mutator.
           if (!isReadOnly) {
             const settings = ctx.getSettings();
             if (settings.allowlist.length > 0 && collectPaths(args ?? {}).length === 0)

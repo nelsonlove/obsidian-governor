@@ -25,8 +25,19 @@ import {
   WRITE_TIMEOUT_MS,
   digestArgs,
   monthKey,
+  LockStore,
+  holderOf,
+  scopeCovers,
+  scopesOverlap,
+  LOCK_TTL_DEFAULT_MS,
+  LOCK_TTL_MAX_MS,
+  LOCK_TTL_MIN_MS,
+  loadInstallId,
+  mintInstallId,
+  INSTALL_ID_FILE,
 } from "../src/kernel/index.ts";
 import { makeGuarded, withKernelArgs, KERNEL_ARG_KEYS } from "../src/mcp/guarded.ts";
+import { registerLockTools } from "../src/mcp/tools-locks.ts";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -303,11 +314,17 @@ describe("digestArgs", () => {
 
 // ── Kernel.runMutation ───────────────────────────────────────────────────────
 
-function fakeKernel({ timeoutMs = 1000, revs = new Map(), uids = new Map(), probe, idempotency } = {}) {
+function fakeKernel({ timeoutMs = 1000, revs = new Map(), uids = new Map(), probe, idempotency, locks } = {}) {
   const adapter = fakeAdapter();
   const journal = new WriteJournal(adapter, "dir/journal", () => new Date("2026-08-08T12:00:00Z"));
   const p = probe ?? { uid: (path) => uids.get(path), rev: (path) => revs.get(path) };
-  const kernel = new Kernel(new WriteQueue(timeoutMs), journal, p, idempotency ?? new IdempotencyStore());
+  const kernel = new Kernel(
+    new WriteQueue(timeoutMs),
+    journal,
+    p,
+    idempotency ?? new IdempotencyStore(),
+    locks ?? new LockStore()
+  );
   const records = () => linesOf(adapter, "dir/journal/2026-08.jsonl");
   return { kernel, journal, adapter, records };
 }
@@ -1424,5 +1441,627 @@ describe("kernel arguments (if_rev / idempotency_key)", () => {
     assert.deepEqual(recs.map((r) => r.outcome), ["ok", "deduped", "error"]);
     assert.equal(recs[1].dedupeOf, recs[0].ts);
     assert.equal(first.content[0].text, "run 1");
+  });
+});
+
+// ── MEDIUM-A: kernel arguments are part of a key's identity ──────────────────
+//
+// The builder ruling: a keyed call presented with a DIFFERENT `if_rev` than the
+// original — including present-vs-absent in either direction — is an
+// idempotency_mismatch (reason "if_rev"), never a silent replay. The precondition
+// is half of what the caller asked for; replaying across it would report that a
+// condition held which was never evaluated.
+
+describe("MEDIUM-A: if_rev is part of the idempotency key's identity", () => {
+  const ctx = (over = {}) => ({ op: "obsidian_write_note", args: { path: "Notes/A.md" }, actor: ACTOR, ...over });
+
+  test("a replay with the SAME if_rev still replays", async () => {
+    const revs = new Map([["Notes/A.md", 100]]);
+    const { kernel, records } = fakeKernel({ revs });
+    let runs = 0;
+    const handler = async () => ({ content: [{ type: "text", text: `run ${++runs}` }] });
+
+    const first = await kernel.runMutation(ctx({ idempotencyKey: "ma1", ifRev: 100 }), handler);
+    const second = await kernel.runMutation(ctx({ idempotencyKey: "ma1", ifRev: 100 }), handler);
+    assert.equal(runs, 1, "an identical keyed retry must not re-execute");
+    assert.equal(second, first);
+
+    await tick(5);
+    assert.deepEqual(records().map((r) => r.outcome), ["ok", "deduped"]);
+  });
+
+  test("a completed key presented with a DIFFERENT if_rev is a mismatch naming both revisions", async () => {
+    const revs = new Map([["Notes/A.md", 100]]);
+    const { kernel, records } = fakeKernel({ revs });
+    await kernel.runMutation(ctx({ idempotencyKey: "ma2", ifRev: 100 }), async () => ({ content: [] }));
+
+    let ran = false;
+    const err = await kernel
+      .runMutation(ctx({ idempotencyKey: "ma2", ifRev: 200 }), async () => { ran = true; })
+      .then(() => assert.fail("a divergent-precondition replay must not resolve"), (e) => e);
+
+    assert.ok(err instanceof IdempotencyMismatchError);
+    assert.equal(err.code, "idempotency_mismatch");
+    assert.equal(err.reason, "if_rev");
+    assert.equal(err.firstIfRev, 100);
+    assert.equal(err.ifRev, 200);
+    assert.match(err.message, /if_rev 100/);
+    assert.match(err.message, /if_rev 200/);
+    assert.equal(ran, false);
+
+    await tick(5);
+    const recs = records();
+    assert.deepEqual(recs.map((r) => r.outcome), ["ok", "error"]);
+    assert.match(recs[1].error, /idempotency_key/, "a mismatch is journaled terminally, like any other");
+    assert.equal(recs[1].idempotencyKey, "ma2");
+  });
+
+  test("present-vs-absent counts, in BOTH directions", async () => {
+    const revs = new Map([["Notes/A.md", 100]]);
+    const { kernel } = fakeKernel({ revs });
+
+    // first with a precondition, retried without
+    await kernel.runMutation(ctx({ idempotencyKey: "ma3", ifRev: 100 }), async () => ({ content: [] }));
+    const dropped = await kernel
+      .runMutation(ctx({ idempotencyKey: "ma3" }), async () => assert.fail("ran"))
+      .then(() => assert.fail("dropping if_rev must not replay"), (e) => e);
+    assert.equal(dropped.reason, "if_rev");
+    assert.equal(dropped.firstIfRev, 100);
+    assert.equal(dropped.ifRev, undefined);
+    assert.match(dropped.message, /no if_rev/);
+
+    // first WITHOUT a precondition, retried with one
+    await kernel.runMutation(ctx({ idempotencyKey: "ma4" }), async () => ({ content: [] }));
+    const added = await kernel
+      .runMutation(ctx({ idempotencyKey: "ma4", ifRev: 100 }), async () => assert.fail("ran"))
+      .then(() => assert.fail("adding if_rev must not replay"), (e) => e);
+    assert.equal(added.reason, "if_rev");
+    assert.equal(added.firstIfRev, undefined);
+    assert.equal(added.ifRev, 100);
+  });
+
+  test("an IN-FLIGHT key presented with a different if_rev is a mismatch, not a waiter", async () => {
+    const revs = new Map([["Notes/A.md", 100]]);
+    const { kernel } = fakeKernel({ revs });
+    const gate = deferred();
+    const held = kernel.runMutation(ctx({ idempotencyKey: "ma5", ifRev: 100 }), () => gate.promise);
+    await tick(0);
+
+    const err = await kernel
+      .runMutation(ctx({ idempotencyKey: "ma5", ifRev: 101 }), async () => assert.fail("ran"))
+      .then(() => assert.fail("a divergent-precondition waiter must not attach"), (e) => e);
+    assert.ok(err instanceof IdempotencyMismatchError);
+    assert.equal(err.reason, "if_rev");
+
+    gate.resolve({ content: [] });
+    await held;
+  });
+
+  test("the mismatch surfaces through the tool wrapper as a typed envelope", async () => {
+    const { kernel } = fakeKernel({ revs: new Map([["A.md", 100]]) });
+    const guarded = makeGuarded({ getSettings: () => OPEN_SETTINGS, kernel, actor: () => ACTOR });
+    const write = guarded(RW_DEF, async () => ({ content: [{ type: "text", text: "wrote" }] }), "obsidian_write_note");
+
+    assert.equal((await write({ path: "A.md", if_rev: 100, idempotency_key: "ma6" }, {})).content[0].text, "wrote");
+    const res = await write({ path: "A.md", if_rev: 999, idempotency_key: "ma6" }, {});
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /Error \[idempotency_mismatch\]/);
+    assert.match(res.content[0].text, /if_rev/);
+  });
+});
+
+// ── LOW-B: a stale settle cannot overwrite a newer entry ─────────────────────
+
+describe("LOW-B: settle is guarded by reservation identity", () => {
+  test("a stale second settle cannot overwrite the entry a later call stored", async () => {
+    const store = new IdempotencyStore();
+    // First owner: settles with a THROW, which stores nothing and frees the key.
+    const first = store.claim("sk", "obsidian_write_note", "args-1");
+    assert.equal(first.kind, "owner");
+    first.settle({ ok: false, error: new Error("boom"), ts: "t1" });
+    assert.equal(store.size, 0, "a thrown failure must store nothing");
+
+    // Second owner claims the freed key and completes normally.
+    const second = store.claim("sk", "obsidian_write_note", "args-1");
+    assert.equal(second.kind, "owner");
+    second.settle({ ok: true, result: { content: [{ type: "text", text: "newer" }] }, ts: "t2" });
+    assert.equal(store.get("sk").ts, "t2");
+
+    // The first owner settles AGAIN (a double-settle bug, or a late unwind).
+    // Its reservation is long gone, so it must not clobber the newer entry.
+    first.settle({ ok: true, result: { content: [{ type: "text", text: "stale" }] }, ts: "t1" });
+    const stored = store.get("sk");
+    assert.equal(stored.ts, "t2", "a stale settle overwrote a newer entry");
+    assert.equal(stored.result.content[0].text, "newer");
+  });
+
+  test("a stale settle does not evict the live reservation of a later call", async () => {
+    const store = new IdempotencyStore();
+    const first = store.claim("sk2", "obsidian_write_note", "a");
+    first.settle({ ok: false, error: new Error("x"), ts: "t1" });
+    const second = store.claim("sk2", "obsidian_write_note", "a");
+    assert.equal(second.kind, "owner");
+    assert.equal(store.inFlight, 1);
+    first.settle({ ok: false, error: new Error("x again"), ts: "t1" });
+    assert.equal(store.inFlight, 1, "a stale settle released someone else's reservation");
+    second.settle({ ok: true, result: { content: [] }, ts: "t2" });
+    assert.equal(store.inFlight, 0);
+  });
+});
+
+// ── advisory locks: the store ────────────────────────────────────────────────
+
+describe("LockStore lifecycle", () => {
+  // A hand-driven clock: lazy expiry is the only expiry there is, so every
+  // expiry assertion here is really an assertion about what the NEXT call sees.
+  function clock(start = 1_000_000) {
+    let t = start;
+    return { now: () => t, advance: (ms) => { t += ms; } };
+  }
+
+  test("claim → list → renew → release, with holder, reason and expiry", () => {
+    const c = clock();
+    const locks = new LockStore(c.now);
+    const { lock, overlapping } = locks.claim({ scope: "Projects/Alpha", holder: "h1", reason: "refactor" });
+
+    assert.equal(lock.scope, "Projects/Alpha");
+    assert.equal(lock.holder, "h1");
+    assert.equal(lock.reason, "refactor");
+    assert.equal(lock.expiresAt - lock.claimedAt, LOCK_TTL_DEFAULT_MS, "default TTL is 5 minutes");
+    assert.deepEqual(overlapping, [], "nothing else is claimed");
+    assert.deepEqual(locks.list().map((l) => l.id), [lock.id]);
+
+    c.advance(4 * 60_000);
+    const renewed = locks.renew(lock.id, 60_000, "h1");
+    assert.equal(renewed.id, lock.id);
+    assert.equal(renewed.expiresAt, c.now() + 60_000, "renewing restarts the clock");
+
+    assert.equal(locks.release(lock.id, "h1").id, lock.id);
+    assert.deepEqual(locks.list(), []);
+    assert.equal(locks.release(lock.id, "h1"), undefined, "releasing twice is a miss, not an error");
+  });
+
+  test("expiry is lazy: an expired claim is gone the next time anyone looks", () => {
+    const c = clock();
+    const locks = new LockStore(c.now);
+    const { lock } = locks.claim({ scope: "Notes", holder: "h1", reason: "tidying", ttlMs: 60_000 });
+    assert.equal(locks.list().length, 1);
+
+    c.advance(59_999);
+    assert.equal(locks.list().length, 1, "still live one millisecond short of the TTL");
+
+    c.advance(1);
+    assert.deepEqual(locks.list(), [], "the claim vanished without a timer");
+    assert.equal(locks.size, 0);
+    assert.equal(locks.renew(lock.id, 60_000, "h1"), undefined, "an expired claim cannot be renewed");
+    assert.equal(locks.release(lock.id, "h1"), undefined);
+  });
+
+  test("TTL is clamped to the 30-minute ceiling and the 1-second floor", () => {
+    const c = clock();
+    const locks = new LockStore(c.now);
+    const long = locks.claim({ scope: "A", holder: "h", reason: "r", ttlMs: 24 * 60 * 60_000 }).lock;
+    assert.equal(long.expiresAt - long.claimedAt, LOCK_TTL_MAX_MS);
+    const short = locks.claim({ scope: "B", holder: "h", reason: "r", ttlMs: 0 }).lock;
+    assert.equal(short.expiresAt - short.claimedAt, LOCK_TTL_MIN_MS);
+  });
+
+  test("renew and release act on your OWN claim; another holder's is a miss", () => {
+    const c = clock();
+    const locks = new LockStore(c.now);
+    const { lock } = locks.claim({ scope: "Shared", holder: "h1", reason: "mine" });
+    assert.equal(locks.renew(lock.id, 60_000, "h2"), undefined, "renewing another holder's claim");
+    assert.equal(locks.release(lock.id, "h2"), undefined, "releasing another holder's claim");
+    assert.equal(locks.list().length, 1, "the claim survived the foreign attempts");
+    assert.equal(locks.release(lock.id, "h1").holder, "h1");
+  });
+
+  test("scopes normalize, and a scope escaping the vault root is refused", () => {
+    const locks = new LockStore();
+    assert.equal(locks.claim({ scope: "/Projects/Alpha/", holder: "h", reason: "r" }).lock.scope, "Projects/Alpha");
+    assert.equal(locks.claim({ scope: "Projects/./Beta", holder: "h", reason: "r" }).lock.scope, "Projects/Beta");
+    assert.equal(locks.claim({ scope: "", holder: "h", reason: "r" }).lock.scope, "", "empty = whole vault");
+    assert.equal(locks.claim({ scope: ".", holder: "h", reason: "r" }).lock.scope, "");
+    assert.throws(() => locks.claim({ scope: "../elsewhere", holder: "h", reason: "r" }), TypeError);
+  });
+
+  test("scope matching is per path segment, never a bare string prefix", () => {
+    assert.equal(scopeCovers("Projects", "Projects/Alpha/a.md"), true);
+    assert.equal(scopeCovers("Projects", "Projects"), true);
+    assert.equal(scopeCovers("Projects", "Projects-Archive/a.md"), false, "'Projects' must not cover 'Projects-Archive'");
+    assert.equal(scopeCovers("", "anything/at/all.md"), true, "the empty scope is the whole vault");
+    assert.equal(scopesOverlap("Projects", "Projects/Alpha/a.md"), true);
+    assert.equal(scopesOverlap("Projects/Alpha/a.md", "Projects"), true, "overlap is symmetric");
+    assert.equal(scopesOverlap("Projects/Alpha", "Projects/Beta"), false);
+  });
+});
+
+describe("LockStore overlap disclosure", () => {
+  test("a foreign overlapping claim is allowed AND disclosed to the claimer", () => {
+    const locks = new LockStore();
+    const first = locks.claim({ scope: "Projects", holder: "h1", reason: "restructuring" }).lock;
+
+    const { lock, overlapping } = locks.claim({ scope: "Projects/Alpha", holder: "h2", reason: "editing" });
+    assert.equal(lock.holder, "h2", "the overlapping claim stands rather than being refused — advisory means advisory");
+    assert.equal(locks.list().length, 2, "both claims are live at once");
+    assert.deepEqual(overlapping.map((l) => l.id), [first.id]);
+    assert.equal(overlapping[0].holder, "h1");
+    assert.equal(overlapping[0].reason, "restructuring", "the claimer learns WHY, not just that");
+  });
+
+  test("your own overlapping claims are not disclosed back to you", () => {
+    const locks = new LockStore();
+    locks.claim({ scope: "Projects", holder: "h1", reason: "first pass" });
+    const { overlapping } = locks.claim({ scope: "Projects/Alpha", holder: "h1", reason: "second pass" });
+    assert.deepEqual(overlapping, [], "re-claiming inside your own scope is not a conflict with yourself");
+  });
+
+  test("disjoint and expired claims are not disclosed", () => {
+    let t = 1_000_000;
+    const locks = new LockStore(() => t);
+    locks.claim({ scope: "Archive", holder: "h1", reason: "unrelated" });
+    locks.claim({ scope: "Projects", holder: "h2", reason: "expiring", ttlMs: 60_000 });
+    t += 60_001;
+    const { overlapping } = locks.claim({ scope: "Projects/Alpha", holder: "h3", reason: "later" });
+    assert.deepEqual(overlapping, [], "an expired claim overlaps nothing");
+  });
+
+  test("covering() returns foreign claims most-specific first, and never your own", () => {
+    const locks = new LockStore();
+    locks.claim({ scope: "", holder: "h1", reason: "whole vault" });
+    locks.claim({ scope: "Projects/Alpha", holder: "h2", reason: "specific" });
+    locks.claim({ scope: "Projects", holder: "h3", reason: "middling" });
+    locks.claim({ scope: "Projects/Alpha", holder: "me", reason: "my own work" });
+
+    const covering = locks.covering("Projects/Alpha/a.md", "me");
+    assert.deepEqual(covering.map((l) => l.reason), ["specific", "middling", "whole vault"]);
+    assert.deepEqual(locks.covering("Elsewhere/x.md", "me").map((l) => l.reason), ["whole vault"]);
+  });
+
+  test("holderOf derives a stable per-connection identity from the journal actor", () => {
+    assert.equal(holderOf({ transport: "mcp", client: "claude-code/1.0.0", connection: "c1" }), "claude-code/1.0.0#c1");
+    assert.equal(holderOf({ transport: "mcp", connection: "c1" }), "c1", "an anonymous client is still a holder");
+  });
+});
+
+// ── advisory notices on writes ───────────────────────────────────────────────
+
+describe("advisory lock notices", () => {
+  const OTHER = { transport: "mcp", client: "other-agent/2.0", connection: "conn-other" };
+  const ctx = (over = {}) => ({ op: "obsidian_write_note", args: { path: "Projects/Alpha/a.md" }, actor: ACTOR, ...over });
+  const okEnvelope = (data) => ({ content: [{ type: "text", text: JSON.stringify(data) }], structuredContent: data });
+
+  test("a write inside a FOREIGN claim proceeds, and the envelope says whose", async () => {
+    const { kernel, records } = fakeKernel();
+    kernel.locks.claim({ scope: "Projects/Alpha", holder: holderOf(OTHER), reason: "restructuring", ttlMs: 120_000 });
+
+    let ran = false;
+    const res = await kernel.runMutation(ctx(), async () => {
+      ran = true;
+      return okEnvelope({ written: true });
+    });
+
+    assert.equal(ran, true, "an advisory claim must NEVER block the operation");
+    assert.equal(res.isError, undefined);
+    // The original payload is untouched; the notice is an additional block.
+    assert.deepEqual(JSON.parse(res.content[0].text), { written: true });
+    assert.equal(res.content.length, 2);
+    assert.match(
+      res.content[1].text,
+      /^advisory lock: other-agent\/2\.0#conn-other claims Projects\/Alpha \(restructuring\), expires in \d+s$/
+    );
+    assert.equal(res.structuredContent.written, true);
+    assert.equal(res.structuredContent.advisory_locks.length, 1);
+    assert.equal(res.structuredContent.advisory_locks[0].holder, "other-agent/2.0#conn-other");
+    assert.equal(res.structuredContent.advisory_locks[0].scope, "Projects/Alpha");
+
+    await tick(5);
+    const [rec] = records();
+    assert.equal(rec.outcome, "ok");
+    assert.deepEqual(rec.lockNotice, {
+      holder: "other-agent/2.0#conn-other",
+      scope: "Projects/Alpha",
+      reason: "restructuring",
+    });
+  });
+
+  test("the claim HOLDER's own writes into its scope get no notice at all", async () => {
+    const { kernel, records } = fakeKernel();
+    kernel.locks.claim({ scope: "Projects/Alpha", holder: holderOf(ACTOR), reason: "my own edit", ttlMs: 120_000 });
+
+    const res = await kernel.runMutation(ctx(), async () => okEnvelope({ written: true }));
+    assert.equal(res.content.length, 1, "the point of claiming a scope is to work in it");
+    assert.equal(res.structuredContent.advisory_locks, undefined);
+
+    await tick(5);
+    assert.equal(records()[0].lockNotice, undefined);
+  });
+
+  test("a write outside every claim, and a write under an EXPIRED claim, are untouched", async () => {
+    let t = 1_000_000;
+    const locks = new LockStore(() => t);
+    const { kernel, records } = fakeKernel({ locks });
+    locks.claim({ scope: "Archive", holder: holderOf(OTHER), reason: "elsewhere", ttlMs: 60_000 });
+
+    const outside = await kernel.runMutation(ctx(), async () => okEnvelope({ n: 1 }));
+    assert.equal(outside.content.length, 1, "a disjoint claim is not this write's business");
+
+    locks.claim({ scope: "Projects/Alpha", holder: holderOf(OTHER), reason: "short", ttlMs: 60_000 });
+    t += 60_001;
+    const expired = await kernel.runMutation(ctx(), async () => okEnvelope({ n: 2 }));
+    assert.equal(expired.content.length, 1, "an expired claim notices nothing");
+
+    await tick(5);
+    for (const rec of records()) assert.equal(rec.lockNotice, undefined);
+  });
+
+  test("several foreign claims all appear in the envelope; the journal records the most specific", async () => {
+    const { kernel, records } = fakeKernel();
+    const THIRD = { transport: "mcp", client: "third/1", connection: "conn-3" };
+    kernel.locks.claim({ scope: "Projects", holder: holderOf(THIRD), reason: "broad sweep", ttlMs: 120_000 });
+    kernel.locks.claim({ scope: "Projects/Alpha", holder: holderOf(OTHER), reason: "narrow edit", ttlMs: 120_000 });
+
+    const res = await kernel.runMutation(ctx(), async () => okEnvelope({ ok: true }));
+    assert.equal(res.structuredContent.advisory_locks.length, 2);
+    assert.match(res.content[1].text, /narrow edit/);
+    assert.match(res.content[1].text, /broad sweep/);
+
+    await tick(5);
+    assert.equal(records()[0].lockNotice.reason, "narrow edit", "the closest claim is the one recorded");
+  });
+
+  test("a non-envelope handler result is passed through untouched", async () => {
+    const { kernel } = fakeKernel();
+    kernel.locks.claim({ scope: "Projects", holder: holderOf(OTHER), reason: "r", ttlMs: 120_000 });
+    assert.equal(await kernel.runMutation(ctx(), async () => 42), 42);
+    assert.deepEqual(await kernel.runMutation(ctx(), async () => ({ raw: 1 })), { raw: 1 });
+  });
+
+  test("the notice reaches the tool surface through makeGuarded", async () => {
+    const { kernel } = fakeKernel();
+    kernel.locks.claim({ scope: "Projects", holder: holderOf(OTHER), reason: "in progress", ttlMs: 120_000 });
+    const guarded = makeGuarded({ getSettings: () => OPEN_SETTINGS, kernel, actor: () => ACTOR });
+    const res = await guarded(RW_DEF, async () => ({ content: [{ type: "text", text: "{}" }] }), "obsidian_write_note")(
+      { path: "Projects/Alpha/a.md" },
+      {}
+    );
+    assert.match(res.content[1].text, /advisory lock: other-agent\/2\.0#conn-other claims Projects \(in progress\)/);
+  });
+});
+
+// ── the claim/release/list tool surface ──────────────────────────────────────
+
+describe("scope-claim tools", () => {
+  function lockServer({ kernel = fakeKernel().kernel, actor = ACTOR } = {}) {
+    const calls = new Map();
+    const server = { registerTool: (name, def, handler) => calls.set(name, { def, handler }) };
+    registerLockTools(server, { kernel }, () => actor);
+    const call = (name, args = {}) => calls.get(name).handler(args, {});
+    return { kernel, calls, call, def: (n) => calls.get(n).def };
+  }
+
+  test("claim and release are MUTATING (journaled); listing is read-only", () => {
+    const { def } = lockServer();
+    assert.equal(def("obsidian_claim_scope").annotations.readOnlyHint, false);
+    assert.equal(def("obsidian_release_scope").annotations.readOnlyHint, false);
+    assert.equal(def("obsidian_list_scope_claims").annotations.readOnlyHint, true);
+  });
+
+  test("the verbs are claim/release only — no grant, approve or accept anywhere", () => {
+    const { calls } = lockServer();
+    assert.deepEqual([...calls.keys()], ["obsidian_claim_scope", "obsidian_release_scope", "obsidian_list_scope_claims"]);
+    for (const [name, { def }] of calls) {
+      const text = `${name} ${def.title} ${def.description}`.toLowerCase();
+      for (const banned of ["grant", "approve", "accept"]) {
+        assert.equal(text.includes(banned), false, `'${banned}' must not appear in the claims vocabulary (${name})`);
+      }
+    }
+  });
+
+  test("claiming returns the claim and discloses overlapping foreign claims", async () => {
+    const { kernel, call } = lockServer();
+    kernel.locks.claim({ scope: "Projects", holder: "someone-else", reason: "sweeping", ttlMs: 120_000 });
+
+    const res = await call("obsidian_claim_scope", { scope: "Projects/Alpha", reason: "editing" });
+    assert.equal(res.isError, undefined);
+    const { claim, overlapping } = res.structuredContent;
+    assert.equal(claim.scope, "Projects/Alpha");
+    assert.equal(claim.holder, holderOf(ACTOR));
+    assert.equal(claim.reason, "editing");
+    assert.ok(claim.expires_in_s > 0);
+    assert.equal(overlapping.length, 1);
+    assert.equal(overlapping[0].holder, "someone-else");
+    assert.equal(overlapping[0].reason, "sweeping");
+  });
+
+  test("listing shows every live claim and flags your own", async () => {
+    const { kernel, call } = lockServer();
+    kernel.locks.claim({ scope: "Archive", holder: "someone-else", reason: "theirs", ttlMs: 120_000 });
+    await call("obsidian_claim_scope", { scope: "Projects", reason: "mine" });
+
+    const list = (await call("obsidian_list_scope_claims")).structuredContent;
+    assert.equal(list.holder, holderOf(ACTOR));
+    assert.deepEqual(list.claims.map((c) => [c.reason, c.mine]), [["theirs", false], ["mine", true]]);
+  });
+
+  test("releasing drops your claim; another holder's id is refused", async () => {
+    const { kernel, call } = lockServer();
+    const foreign = kernel.locks.claim({ scope: "Archive", holder: "someone-else", reason: "theirs", ttlMs: 120_000 }).lock;
+    const mine = (await call("obsidian_claim_scope", { scope: "Projects", reason: "mine" })).structuredContent.claim;
+
+    const released = await call("obsidian_release_scope", { lock_id: mine.id });
+    assert.equal(released.structuredContent.released.id, mine.id);
+    assert.deepEqual(kernel.locks.list().map((l) => l.id), [foreign.id]);
+
+    const denied = await call("obsidian_release_scope", { lock_id: foreign.id });
+    assert.equal(denied.isError, true);
+    assert.match(denied.content[0].text, /another holder/);
+    assert.equal(kernel.locks.list().length, 1, "a foreign claim survives a release attempt");
+
+    const missing = await call("obsidian_release_scope", { lock_id: "lock-nope" });
+    assert.equal(missing.isError, true);
+  });
+
+  test("re-claiming the same scope is how you renew; both claims are yours", async () => {
+    const { kernel, call } = lockServer();
+    const first = (await call("obsidian_claim_scope", { scope: "Projects", reason: "pass 1" })).structuredContent;
+    assert.deepEqual(first.overlapping, [], "your own scope never overlaps you");
+    await call("obsidian_claim_scope", { scope: "Projects", reason: "pass 2" });
+    assert.equal(kernel.locks.list().length, 2);
+  });
+
+  test("without a kernel the tools fail cleanly rather than throwing", async () => {
+    const { call } = lockServer({ kernel: null });
+    for (const name of ["obsidian_claim_scope", "obsidian_release_scope", "obsidian_list_scope_claims"]) {
+      const res = await call(name, { scope: "A", reason: "r", lock_id: "x" });
+      assert.equal(res.isError, true);
+      assert.match(res.content[0].text, /kernel/);
+    }
+  });
+
+  test("a claim journals as its own operation, with target.ref naming the scope", async () => {
+    const { kernel, records } = fakeKernel();
+    const guarded = makeGuarded({ getSettings: () => OPEN_SETTINGS, kernel, actor: () => ACTOR });
+    const calls = new Map();
+    registerLockTools(
+      { registerTool: (name, def, handler) => calls.set(name, guarded(def, handler, name)) },
+      { kernel },
+      () => ACTOR
+    );
+
+    const claimed = await calls.get("obsidian_claim_scope")({ scope: "Projects/Alpha", reason: "editing" }, {});
+    await calls.get("obsidian_release_scope")({ lock_id: claimed.structuredContent.claim.id }, {});
+    await calls.get("obsidian_list_scope_claims")({}, {});
+
+    await tick(5);
+    const recs = records();
+    assert.deepEqual(recs.map((r) => r.op), ["obsidian_claim_scope", "obsidian_release_scope"]);
+    assert.equal(recs[0].target.ref, "scope:Projects/Alpha");
+    assert.equal(recs[1].target.ref, `lock:${claimed.structuredContent.claim.id}`);
+    assert.deepEqual(recs[0].actor, ACTOR, "a claim is attributed like any other operation");
+  });
+
+  test("read-only mode blocks claiming, since there is nothing to disclose", async () => {
+    const { kernel } = fakeKernel();
+    const guarded = makeGuarded({ getSettings: () => ({ readOnly: true, allowlist: [] }), kernel, actor: () => ACTOR });
+    const calls = new Map();
+    registerLockTools(
+      { registerTool: (name, def, handler) => calls.set(name, guarded(def, handler, name)) },
+      { kernel },
+      () => ACTOR
+    );
+    const res = await calls.get("obsidian_claim_scope")({ scope: "A", reason: "r" }, {});
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /Error \[read_only\]/);
+    // …but listing still works: it is a read.
+    assert.equal((await calls.get("obsidian_list_scope_claims")({}, {})).isError, undefined);
+  });
+});
+
+// ── server identity ──────────────────────────────────────────────────────────
+
+describe("server identity", () => {
+  test("actor.server travels onto every journal record", async () => {
+    const { kernel, records } = fakeKernel();
+    const actor = {
+      transport: "mcp",
+      client: "claude-code/1.0.0",
+      connection: "abc-1",
+      server: { vault: "Assent", install: "i-123", version: "0.9.2" },
+    };
+    await kernel.runMutation({ op: "obsidian_write_note", args: { path: "A.md" }, actor }, async () => ({ content: [] }));
+    await kernel.runMutation(
+      { op: "obsidian_write_note", args: { path: "A.md" }, actor, idempotencyKey: "si1" },
+      async () => ({ content: [] })
+    );
+    await kernel.runMutation(
+      { op: "obsidian_write_note", args: { path: "A.md" }, actor, idempotencyKey: "si1" },
+      async () => assert.fail("ran")
+    );
+
+    await tick(5);
+    const recs = records();
+    assert.equal(recs.length, 3);
+    for (const rec of recs) {
+      assert.deepEqual(rec.actor.server, { vault: "Assent", install: "i-123", version: "0.9.2" });
+    }
+    assert.equal(recs[2].outcome, "deduped", "a terminal record carries the identity too");
+  });
+
+  test("an actor without server identity journals exactly as before", async () => {
+    const { kernel, records } = fakeKernel();
+    await kernel.runMutation({ op: "obsidian_write_note", args: { path: "A.md" }, actor: ACTOR }, async () => ({
+      content: [],
+    }));
+    await tick(5);
+    assert.deepEqual(records()[0].actor, ACTOR);
+    assert.equal("server" in records()[0].actor, false, "the field is additive, never synthesized");
+  });
+
+  test("holders derive from the connection, so two connections claim independently", () => {
+    const a = { transport: "mcp", client: "claude-code/1.0.0", connection: "c1", server: { vault: "V", install: "i", version: "1" } };
+    const b = { ...a, connection: "c2" };
+    assert.notEqual(holderOf(a), holderOf(b));
+  });
+});
+
+// ── install id ───────────────────────────────────────────────────────────────
+
+describe("install id", () => {
+  // The journal's adapter stub already models the four DataAdapter methods the
+  // kernel narrows to; install-id.ts needs `read` as well.
+  function idAdapter() {
+    const a = fakeAdapter();
+    a.read = async (p) => {
+      if (!a.files.has(p)) throw new Error(`ENOENT ${p}`);
+      return a.files.get(p);
+    };
+    return a;
+  }
+
+  test("mints once and returns the SAME id on every later load (file-backed)", async () => {
+    const adapter = idAdapter();
+    let minted = 0;
+    const mint = () => `install-${++minted}`;
+
+    const first = await loadInstallId(adapter, "dir", mint);
+    assert.equal(first.install, "install-1");
+    assert.equal(first.persisted, true);
+    assert.ok(adapter.files.has(`dir/${INSTALL_ID_FILE}`));
+    assert.deepEqual(JSON.parse(adapter.files.get(`dir/${INSTALL_ID_FILE}`)).install, "install-1");
+
+    // A fresh kernel instantiation — a plugin reload, an Obsidian restart —
+    // reads the id back rather than minting a second one.
+    const second = await loadInstallId(adapter, "dir", mint);
+    assert.equal(second.install, "install-1");
+    assert.equal(minted, 1, "the id must survive re-instantiation, or it isn't an install id");
+  });
+
+  test("a corrupt file is replaced rather than respected", async () => {
+    const adapter = idAdapter();
+    adapter.files.set(`dir/${INSTALL_ID_FILE}`, "{not json");
+    await quietly(async () => {
+      const loaded = await loadInstallId(adapter, "dir", () => "fresh");
+      assert.equal(loaded.install, "fresh");
+      assert.equal(loaded.persisted, true);
+    });
+    // …and it is stable from then on.
+    assert.equal((await loadInstallId(adapter, "dir", () => "other")).install, "fresh");
+  });
+
+  test("an unwritable data dir degrades to an ephemeral id, never a failed load", async () => {
+    const adapter = idAdapter();
+    adapter.write = async () => { throw new Error("EROFS"); };
+    await quietly(async () => {
+      const loaded = await loadInstallId(adapter, "dir", () => "ephemeral");
+      assert.equal(loaded.install, "ephemeral");
+      assert.equal(loaded.persisted, false, "the caller can tell the id will not survive a restart");
+    });
+  });
+
+  test("mintInstallId produces distinct, non-empty ids", () => {
+    const ids = new Set(Array.from({ length: 50 }, () => mintInstallId()));
+    assert.equal(ids.size, 50);
+    for (const id of ids) assert.ok(id.length > 8);
   });
 });

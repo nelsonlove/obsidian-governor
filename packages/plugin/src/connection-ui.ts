@@ -114,6 +114,23 @@ export class VaultMcpSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Trusted read-only plugins")
+      .setDesc(
+        "Plugin ids (one per line) whose published tools may declare themselves read-only and be believed. " +
+          "Every other publisher's read-only claim is treated as mutating: queued, journaled, allowlist-scoped, " +
+          "and blocked while read-only mode is on. Takes effect on the next session connect."
+      )
+      .addTextArea((ta) => {
+        ta.setValue(this.plugin.settings.trustedReadOnlyPlugins.join("\n"));
+        ta.inputEl.rows = 3;
+        ta.inputEl.style.width = "100%";
+        ta.onChange(async (value) => {
+          this.plugin.settings.trustedReadOnlyPlugins = value.split("\n").map((s) => s.trim()).filter(Boolean);
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
       .setName("Path allowlist")
       .setDesc("Restrict file operations to these vault-relative prefixes (one per line). Leave empty to allow the whole vault.")
       .addTextArea((ta) => {

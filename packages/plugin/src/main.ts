@@ -7,11 +7,31 @@ import { writeDiscovery, removeDiscovery, writeBridge, type Discovery } from "./
 import { ConnectionSetupModal, VaultMcpSettingTab } from "./connection-ui.js";
 import { findClaudeBinary, claudeIsRegistered, claudeRegister, claudeRemove, claudeEnsureConnectPlugin } from "./claude-cli.js";
 import { ExternalToolRegistry, type VaultMcpApi } from "./mcp/external-tools.js";
-import { Kernel, WriteQueue, WriteJournal } from "./kernel/index.js";
-import { obsidianProbe } from "./kernel/obsidian-probe.js";
+import { Kernel, WriteQueue, WriteJournal, loadInstallId } from "./kernel/index.js";
+import { obsidianProbe, obsidianServerIdentity } from "./kernel/obsidian-probe.js";
 
-interface VaultMcpSettings { setupAcknowledged: boolean; readOnly: boolean; allowlist: string[]; enabled: boolean; allowDangerousCli: boolean; }
-const DEFAULT_SETTINGS: VaultMcpSettings = { setupAcknowledged: false, readOnly: false, allowlist: [], enabled: true, allowDangerousCli: false };
+interface VaultMcpSettings {
+  setupAcknowledged: boolean;
+  readOnly: boolean;
+  allowlist: string[];
+  enabled: boolean;
+  allowDangerousCli: boolean;
+  /**
+   * Plugin ids whose tools may declare themselves read-only and be believed.
+   * Empty by default: an external tool's `readOnlyHint: true` is otherwise
+   * treated as mutating (queued, journaled, allowlist-scoped, blocked in
+   * read-only mode) — see mcp/external-tools.ts.
+   */
+  trustedReadOnlyPlugins: string[];
+}
+const DEFAULT_SETTINGS: VaultMcpSettings = {
+  setupAcknowledged: false,
+  readOnly: false,
+  allowlist: [],
+  enabled: true,
+  allowDangerousCli: false,
+  trustedReadOnlyPlugins: [],
+};
 
 class DiagnosticsModal extends Modal {
   constructor(app: any, private readonly lines: string[]) { super(app); }
@@ -119,12 +139,26 @@ export default class VaultMcpPlugin extends Plugin {
       obsidianProbe(this.app),
     );
 
+    // Server identity — the transport asserting which vault and which install.
+    // The install id is a small file beside the journal (`install-id.json`), so
+    // the identity that stamps every record lives with the records; it survives
+    // restarts, and a failure to persist degrades to an ephemeral id rather than
+    // failing the load.
+    const { install } = await loadInstallId(this.app.vault.adapter, pluginDir);
+    const serverIdentity = obsidianServerIdentity(this.app, install, this.manifest.version);
+
     const ctx = {
       pluginVersion: this.manifest.version,
       socketPath: sock,
       vaultName,
       enabledPlugins: () => Array.from((this.app as any).plugins.enabledPlugins as Set<string>),
-      getSettings: () => ({ readOnly: this.settings.readOnly, allowlist: this.settings.allowlist, allowDangerousCli: this.settings.allowDangerousCli }),
+      getSettings: () => ({
+        readOnly: this.settings.readOnly,
+        allowlist: this.settings.allowlist,
+        allowDangerousCli: this.settings.allowDangerousCli,
+        trustedReadOnlyPlugins: this.settings.trustedReadOnlyPlugins,
+      }),
+      serverIdentity,
       getExternalTools: () => this.externalRegistry.entries(),
       kernel,
     };

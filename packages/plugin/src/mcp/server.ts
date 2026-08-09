@@ -8,6 +8,7 @@ import { registerNavTools } from "./tools-nav.js";
 import { registerIntegrationTools } from "./tools-integrations.js";
 import { registerCliTools } from "./tools-cli.js";
 import { registerExternalTools } from "./external-tools.js";
+import { registerLockTools } from "./tools-locks.js";
 import { registerCodeModeTools, makeCaptureRegister, type CapturedRegistry } from "./tools-code-mode.js";
 import { makeGuarded, withKernelArgs } from "./guarded.js";
 import type { JournalActor } from "../kernel/index.js";
@@ -25,7 +26,15 @@ let connSeq = 0;
 const CONN_EPOCH = Date.now().toString(36);
 
 export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): McpServer {
-  const server = new McpServer({ name: "vault-mcp", version: ctx.pluginVersion });
+  // serverInfo, as returned by `initialize`. `title` carries the vault name so a
+  // client with two vault-mcp servers attached can tell them apart at the
+  // handshake, without a tool call — the same assertion the journal's
+  // `actor.server` makes, made once at connect time.
+  const server = new McpServer({
+    name: "vault-mcp",
+    version: ctx.pluginVersion,
+    ...(ctx.vaultName ? { title: `vault-mcp (${ctx.vaultName})` } : {}),
+  });
   const connectionId = `${CONN_EPOCH}-${++connSeq}`;
 
   // Wrap registerTool so every tool handler is guarded before registration.
@@ -46,10 +55,17 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   const origRegister: any = server.registerTool.bind(server);
   // Resolved per call, not once: the MCP client's identity only exists after
   // the initialize handshake, which happens well after the server is built.
+  // `server` is the transport's own assertion — which vault, which install,
+  // which version — and is resolved once at load, not per call.
   const actor = (): JournalActor => {
     const info = (server.server as any)?.getClientVersion?.();
     const client = info?.name ? (info.version ? `${info.name}/${info.version}` : String(info.name)) : undefined;
-    return { transport: "mcp", ...(client ? { client } : {}), connection: connectionId };
+    return {
+      transport: "mcp",
+      ...(client ? { client } : {}),
+      connection: connectionId,
+      ...(ctx.serverIdentity ? { server: ctx.serverIdentity } : {}),
+    };
   };
   const guarded = makeGuarded({ getSettings: () => ctx.getSettings(), kernel: ctx.kernel, actor });
   const registry: CapturedRegistry = new Map();
@@ -80,6 +96,11 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   registerComplementaryTools(server, app, ctx);
   registerNavTools(server, app);
   registerIntegrationTools(server, app, ctx);
+  // ── advisory scope claims (kernel v0) ──────────────────────────────────────
+  // Registered here, after the interception patch, so a claim is guarded,
+  // serialized and journaled like any other mutating operation — the claim is
+  // itself an act the audit stream should record.
+  registerLockTools(server, ctx, actor);
   // ── official-CLI proxy — conditional on the CLI binary being installed ──────
   registerCliTools(server, ctx);
   // ── externally-published tools (other Obsidian plugins via plugin.api) ─────

@@ -40,11 +40,12 @@ On the Mac, **disconnect the remote `obsidian-vault-mcp-server` connector** for 
 
 ## Tools
 
-**Up to 46 tools.** 39 are always available; 6 are **plugin-gated** (register only when their backing plugin is loaded); 1 (`obsidian_cli`) registers only when the official Obsidian CLI binary is installed:
+**Up to 49 tools.** 42 are always available; 6 are **plugin-gated** (register only when their backing plugin is loaded); 1 (`obsidian_cli`) registers only when the official Obsidian CLI binary is installed:
 
 - **Core (read/write, live `app.*`):** list/read/write/append/move/delete notes, backlinks, outlinks, resolve, frontmatter (atomic multi-key), patch, search, find-by-tag, …
 - **Complementary:** trash, parsed read, append-at-heading, run-command, command list, vault/tags/environment info, active note, open-in-editor.
 - **Navigation/control:** jump-to, view-mode, workspaces (open/save/list), bookmarks (open/list), periodic note, plugin toggle.
+- **Advisory claims:** `obsidian_claim_scope`, `obsidian_release_scope`, `obsidian_list_scope_claims` — see [Advisory scope claims](#advisory-scope-claims).
 - **Plugin-gated:** `dataview_list_query`, `dataview_table_query` (Dataview); `create_note_from_template` (Templater); `omnisearch` (Omnisearch); `fileclass_schema`, `fileclass_insert_fields` (Metadata Menu).
 - **Official-CLI proxy:** `obsidian_cli` runs any official Obsidian CLI command against this vault (file history/diff/restore, themes, snippets, publish, …). The vault is pinned; dangerous commands (`eval`, `dev:*`, `devtools`, `restart`, `reload`, `command`, `plugins:restrict`, `plugin:install`, `plugin:uninstall` — the last two because installing loads arbitrary plugin code and uninstalling can remove vault-mcp itself) need the **Allow dangerous CLI commands** setting; the tool is unavailable while a path allowlist is active (CLI args can't be path-scoped) and is blocked entirely in read-only mode.
 
@@ -69,18 +70,31 @@ Every mutating tool takes two optional arguments beyond its own. They are declar
 
   What it does **not** cover, precisely: it collapses retries of calls that **returned**. A call that failed with `Error [write_timeout]` was *abandoned* server-side and **may still have landed** — its key is deliberately **not held**, so retrying it re-executes, and the journal appends a corrective `late-ok`/`late-error` record if the original settled after all. Re-read before retrying those. (A `rev_conflict` likewise stores nothing, but there nothing was written.) Replay covers whatever the first call *returned* — a failure envelope replays as that failure, so use a **fresh key** to genuinely retry a failed operation.
 
-  A key's identity is (**key**, **operation**, **arguments**). Reusing one key for a different tool — or for the same tool with different arguments — fails with `Error [idempotency_mismatch]: …` and runs nothing, rather than replaying and silently discarding the second call's write. **Keys live in memory, per plugin instance**: reloading the plugin (or restarting Obsidian) clears them, after which the same key executes again. That is the v0 boundary — the store collapses retries within a session's lifetime, it does not make an operation exactly-once forever.
+  A key's identity is (**key**, **operation**, **arguments**, **`if_rev`**). Reusing one key for a different tool — for the same tool with different arguments — or for the same call under a *different* `if_rev`, including dropping or adding one — fails with `Error [idempotency_mismatch]: …` and runs nothing, rather than replaying and silently discarding the second call's write. The precondition counts because it is half of what the caller asked for: replaying a keyed call across a changed `if_rev` would report that a condition held when it was never evaluated. (The error names which half diverged: the operation, the arguments, or the precondition.) **Keys live in memory, per plugin instance**: reloading the plugin (or restarting Obsidian) clears them, after which the same key executes again. That is the v0 boundary — the store collapses retries within a session's lifetime, it does not make an operation exactly-once forever.
 
 Every mutating operation also appends **one JSONL line** to `.obsidian/plugins/vault-mcp/journal/YYYY-MM.jsonl` (rolled monthly, inside the plugin's own folder rather than the note tree):
 
 ```json
 {"ts":"2026-08-08T19:04:11.427Z","op":"obsidian_write_note","target":{"path":"Inbox/Idea.md","uid":"019f…"},
- "actor":{"transport":"mcp","client":"claude-code/1.0.0","connection":"m1x8g-3"},
+ "actor":{"transport":"mcp","client":"claude-code/1.0.0","connection":"m1x8g-3",
+          "server":{"vault":"Assent","install":"3f7c…","version":"0.9.2"}},
  "argsDigest":{"path":"Inbox/Idea.md","content":"<812 chars>","overwrite":true},
  "outcome":"ok","durationMs":37,"queueWaitMs":0,"revBefore":1754680000000,"revAfter":1754680051427}
 ```
 
-It records the *operation* — what happened, to what, on whose behalf — not the bytes; git already covers the bytes. `durationMs` is the handler alone and `queueWaitMs` is the time spent waiting behind other writes, so a slow operation and a queued one are distinguishable; `revBefore` is probed when the operation reaches the front of the queue, not when it was enqueued. Operations that name no vault path (running a command, toggling a plugin, an `obsidian_cli` invocation) record `target.ref`, e.g. `"command:editor:toggle-bold"`.
+It records the *operation* — what happened, to what, on whose behalf — not the bytes; git already covers the bytes. `actor.server` is the transport's own assertion of identity: which **vault**, which **install** (a persistent id in `.obsidian/plugins/vault-mcp/install-id.json`, minted once and kept beside the journal), and which plugin **version** — so a journal copied off the machine, or two vaults' journals read together, stays attributable. The `initialize` handshake carries the vault name too, in `serverInfo.title`. `durationMs` is the handler alone and `queueWaitMs` is the time spent waiting behind other writes, so a slow operation and a queued one are distinguishable; `revBefore` is probed when the operation reaches the front of the queue, not when it was enqueued. Operations that name no vault path (running a command, toggling a plugin, an `obsidian_cli` invocation) record `target.ref`, e.g. `"command:editor:toggle-bold"`.
+
+### Advisory scope claims
+
+Two agents working the same folder can at least *tell each other so*. `obsidian_claim_scope` takes a **scope** (a vault path prefix), a **reason**, and an optional `ttl_ms`, and returns a claim id.
+
+**It is advisory and nothing else.** A claim blocks no one, queues nothing, and refuses nobody:
+
+- **Overlapping claims by different holders are allowed** — and the claim response *lists* the ones it overlaps, with holder and reason, so the claimer knows who else is here.
+- **A write inside somebody else's live claim still happens.** What it gains is a notice: an extra line on the result (`advisory lock: claude-code/1.0.0#m1x8g-3 claims Projects/Alpha (restructuring), expires in 214s`), an `advisory_locks` entry in the structured result, and a `lockNotice` field on the journal record. Your own writes inside your own claim get nothing — claiming a scope is how you say you're working in it.
+- **Claims expire on their own** — default 5 minutes, maximum 30. A holder that crashes or disconnects cannot wedge a scope; expiry is lazy, so an expired claim is simply gone the next time anyone looks. Re-claim to extend, `obsidian_release_scope` to drop it early. `obsidian_list_scope_claims` shows every live claim.
+
+A claim is held per **connection** — a reconnecting session starts with none — and claims live in memory, so a plugin reload clears them. Claiming and releasing are treated as **mutating** operations: not because they touch the vault (they don't) but because a claim is exactly the sort of act the audit stream should record, so each one is journaled like any other operation (`target.ref` = `scope:<prefix>` / `lock:<id>`). One consequence: **read-only mode blocks claiming and releasing** — in a session that cannot write, there is nothing for a claim to disclose. Listing still works.
 
 Outcomes beyond `ok` / `error`: **`"conflict"`** is a failed `if_rev` precondition (nothing was written; `revBefore` is the revision actually found, `ifRev` what the caller expected), and **`"deduped"`** is an idempotency replay, with `dedupeOf` naming the `ts` of the record whose result was returned (and `error` copied across when the outcome being shared was a failure). `idempotencyKey` appears on any record whose call supplied one. `ifRev` appears only on records for calls that actually reached the precondition check — a `"deduped"` record omits it, because a replay never evaluates the precondition at all.
 
@@ -91,6 +105,7 @@ Outcomes beyond `ok` / `error`: **`"conflict"`** is a failed `if_rev` preconditi
 - **Claude Code connection** — status + the `claude mcp add` line + copy button.
 - **Read-only mode** — blocks all mutating tools (write/delete/move/trash/frontmatter-set/…). Reads still work. Useful when you don't want Claude touching the vault this session.
 - **Allow dangerous CLI commands** — off by default; lets `obsidian_cli` run code-executing/app-controlling commands (`eval`, `dev:*`, `devtools`, `restart`, `reload`, `command`, `plugins:restrict`, `plugin:install`, `plugin:uninstall`).
+- **Trusted read-only plugins** — plugin ids (one per line, empty by default) whose published tools may declare themselves read-only and be believed. See [External tool trust](#external-tool-trust).
 - **Path allowlist** — one vault-relative prefix per line (empty = whole vault). File operations outside every prefix are refused (`..` traversal is normalized and blocked). Useful to sandbox Claude to one area.
 - **Disable socket** — stops the server without uninstalling the plugin (takes effect on plugin reload).
 
@@ -127,6 +142,14 @@ then in your plugin's `onload()`:
     );
 
 The SDK handles load order (registers now or on the `vault-mcp:ready` event), re-registration when vault-mcp reloads, and cleanup. Tools appear to new Claude Code sessions on their next connect. Safety guards that apply: read-only mode always applies (mutating external tools are blocked when read-only is on); the path allowlist scopes arguments under recognized path keys (path, from, to, paths, and a few others) — when an allowlist is active, mutating external tools whose args carry no recognized path key are blocked outright, since vault-mcp cannot scope the call. To pass the allowlist check, use a recognized path argument name or clear the allowlist.
+
+### External tool trust
+
+`readOnly: true` on a published tool is an assertion by a third-party plugin about code vault-mcp cannot inspect — and believing it exempts that tool from the write queue, the journal, the path allowlist, the kernel arguments, and read-only mode, all at once. So **vault-mcp does not believe it by default**.
+
+An external tool that claims read-only is treated as **mutating** — queued, journaled, allowlist-scoped, given `if_rev`/`idempotency_key`, and **blocked entirely while read-only mode is on** — unless its publishing plugin id appears in the **Trusted read-only plugins** setting (`trustedReadOnlyPlugins` in the plugin's `data.json`; an array of plugin ids, empty by default). Matching is exact on the raw plugin id, and the setting is read when a session connects, so changes take effect on the next connect.
+
+Nothing changes on the publisher's side: the `vault-mcp-api` SDK contract is unchanged and `readOnly: true` is still the right declaration to make — this is purely host-side policy about whether to act on it. A tool that genuinely only reads keeps working either way; untrusted, it just pays for a queue slot and lands in the audit stream.
 
 ## Repo
 
