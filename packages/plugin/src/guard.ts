@@ -105,11 +105,32 @@ export function collectPaths(args: Record<string, unknown>): string[] {
  * the lookup, the addressing and the report can never disagree about what a
  * session can see.
  *
- * No allowlist ⇒ everything is visible, unchanged.
+ * It is ALSO the read boundary for every tool that enumerates the vault without
+ * being told where (slice 3.0). `guardCall` checks the paths an operation NAMES,
+ * so an argument-less read — search, list, find-by-tag, a plugin's own query —
+ * never met it: a session allowlisted to `Projects` could search the whole vault
+ * and read a hidden note's contents out of the snippets. Those handlers now bound
+ * their own iteration through this function, filtering BEFORE they read, exactly
+ * as `obsidian_repoint_link` bounds its scan.
+ *
+ * No allowlist ⇒ everything is visible, and the SAME ARRAY comes back — callers
+ * lean on that identity to skip building a filter set at all, so a call made
+ * without an allowlist behaves byte-for-byte as it did before.
  */
 export function visiblePaths(paths: string[], settings?: GuardSettings | null): string[] {
   if (!settings?.allowlist?.length) return paths;
-  return paths.filter((path) => !guardCall({ isMutating: false, args: { path }, settings }));
+  return paths.filter((path) => isVisible(path, settings));
+}
+
+/**
+ * `visiblePaths` for ONE path — for the surfaces whose disclosure is a single
+ * name rather than a list (the active note, a link's resolved destination).
+ * Defined over the same guardCall so the one-path and many-path answers cannot
+ * disagree.
+ */
+export function isVisible(path: string, settings?: GuardSettings | null): boolean {
+  if (!settings?.allowlist?.length) return true;
+  return !guardCall({ isMutating: false, args: { path }, settings });
 }
 
 // Returns a blocking reason, or null if the call is allowed.

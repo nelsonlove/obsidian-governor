@@ -1,7 +1,8 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type App, TFile } from "obsidian";
-import { ok, fail } from "./helpers.js";
+import { ok, fail, codedError } from "./helpers.js";
+import { isVisible } from "../guard.js";
 import type { ServerCtx } from "./tools-core.js";
 
 const RO = { readOnlyHint: true,  destructiveHint: false, idempotentHint: true,  openWorldHint: false };
@@ -57,7 +58,30 @@ function decodeExcerpt(s: string): string {
     .trim();
 }
 
-export function registerIntegrationTools(server: McpServer, app: App, _ctx: ServerCtx) {
+/**
+ * Refuse a query this server cannot bound, while a path allowlist is active.
+ *
+ * A Dataview query is executed by DATAVIEW, over Dataview's own index, and its
+ * result is whatever the DQL asked for — a list of links, or a table of field
+ * values lifted out of notes the query chose. There is no path argument to
+ * check and no per-row path to filter by in the general case, so the honest
+ * answer is the one `obsidian_cli` already gives for arguments it cannot scope:
+ * refuse, typed, and say why. Silently filtering rows we happened to recognize
+ * would leave the ones we didn't.
+ *
+ * No allowlist ⇒ nothing changes.
+ */
+function unscopable(tool: string): { code: string; message: string } {
+  return {
+    code: "out_of_allowlist",
+    message:
+      `${tool} is disabled while a path allowlist is active: a Dataview query runs over Dataview's own index and ` +
+      `returns values it selects for itself, so this server cannot bound it to your allowlist. Use obsidian_search_notes, ` +
+      `obsidian_find_by_tag or obsidian_search_by_frontmatter, which are bounded. Nothing was queried.`,
+  };
+}
+
+export function registerIntegrationTools(server: McpServer, app: App, ctx: ServerCtx) {
 
   // Gate on the actually-LOADED plugin instance, not app.plugins.enabledPlugins:
   // enabledPlugins can list a plugin that is configured-enabled but uninstalled
@@ -74,7 +98,8 @@ export function registerIntegrationTools(server: McpServer, app: App, _ctx: Serv
       {
         title: "Dataview LIST query",
         description:
-          "Run a Dataview DQL LIST query and return the matching values. Requires the Dataview plugin. Returns { dql, values }. Read-only.",
+          "Run a Dataview DQL LIST query and return the matching values. Requires the Dataview plugin. Returns { dql, values }. Read-only. " +
+          "Unavailable while a path allowlist is active — a Dataview query cannot be bounded to it.",
         inputSchema: {
           dql: z.string().min(1).describe("A Dataview DQL LIST query, e.g. 'LIST FROM #project WHERE status = \"active\"'."),
         },
@@ -82,6 +107,10 @@ export function registerIntegrationTools(server: McpServer, app: App, _ctx: Serv
       },
       async ({ dql }) => {
         try {
+          if (ctx.getSettings().allowlist.length) {
+            const r = unscopable("obsidian_dataview_list_query");
+            return codedError(r.code, r.message);
+          }
           // app.plugins.plugins is internal — not in public obsidian types.
           // Dataview exposes its API at plugin.api. We use api.query(dql) which
           // returns { successful: boolean, value: QueryResult } rather than
@@ -112,7 +141,8 @@ export function registerIntegrationTools(server: McpServer, app: App, _ctx: Serv
       {
         title: "Dataview TABLE query",
         description:
-          "Run a Dataview DQL TABLE query and return headers and rows. Requires the Dataview plugin. Returns { dql, headers, rows }. Read-only.",
+          "Run a Dataview DQL TABLE query and return headers and rows. Requires the Dataview plugin. Returns { dql, headers, rows }. Read-only. " +
+          "Unavailable while a path allowlist is active — a Dataview query cannot be bounded to it.",
         inputSchema: {
           dql: z.string().min(1).describe("A Dataview DQL TABLE query, e.g. 'TABLE file.ctime, status FROM #project SORT file.ctime DESC'."),
         },
@@ -120,6 +150,10 @@ export function registerIntegrationTools(server: McpServer, app: App, _ctx: Serv
       },
       async ({ dql }) => {
         try {
+          if (ctx.getSettings().allowlist.length) {
+            const r = unscopable("obsidian_dataview_table_query");
+            return codedError(r.code, r.message);
+          }
           // Same api.query approach as LIST. FLAG: verify in live session.
           const api = (app as any).plugins?.plugins?.dataview?.api;
           if (!api) return fail(new Error("dataview api not available"));
@@ -222,7 +256,8 @@ export function registerIntegrationTools(server: McpServer, app: App, _ctx: Serv
       {
         title: "Omnisearch full-text search",
         description:
-          "Run a full-text search across the vault using the Omnisearch plugin. Returns { query, hits: [{path, score, excerpt}] }. Read-only.",
+          "Run a full-text search across the vault using the Omnisearch plugin. Returns { query, hits: [{path, score, excerpt}] }. Read-only. " +
+          "Hits outside your path allowlist are dropped, excerpt and all.",
         inputSchema: {
           query: z.string().min(1).describe("Search query string."),
         },
@@ -238,11 +273,19 @@ export function registerIntegrationTools(server: McpServer, app: App, _ctx: Serv
 
           const results: Array<{ path: string; score?: number; excerpt?: string }> =
             await api.search(query);
-          const hits = results.map((r) => ({
-            path: r.path,
-            score: r.score ?? null,
-            excerpt: r.excerpt ? decodeExcerpt(r.excerpt) : null,
-          }));
+          // Omnisearch searches the whole vault and returns an EXCERPT of each
+          // match — the same argument-less full-text read obsidian_search_notes
+          // is, through someone else's index. Unlike a Dataview query every hit
+          // names its own note, so this one really can be bounded: filter by
+          // path, and the excerpt goes with it.
+          const settings = ctx.getSettings();
+          const hits = results
+            .filter((r) => isVisible(r.path, settings))
+            .map((r) => ({
+              path: r.path,
+              score: r.score ?? null,
+              excerpt: r.excerpt ? decodeExcerpt(r.excerpt) : null,
+            }));
           return ok({ query, hits });
         } catch (e) { return fail(e); }
       }
@@ -278,7 +321,14 @@ export function registerIntegrationTools(server: McpServer, app: App, _ctx: Serv
           const fcf: Map<string, unknown[]> | undefined = fieldIndex?.fileClassesFields;
           if (!(fcf instanceof Map)) return fail(new Error("metadata-menu: fileClassesFields not available"));
 
-          const keys = [...fcf.keys()];
+          // The keys ARE vault paths (minus the extension), and both failure
+          // branches below print them — so an unbounded key set makes this tool
+          // a folder listing for anyone willing to ask for a fileClass that
+          // doesn't exist. Bound the set once, here, and every answer derived
+          // from it is bounded: a hidden fileClass reads as "not found", and
+          // the ambiguity branch can only ever name what you could name.
+          const settings = ctx.getSettings();
+          const keys = [...fcf.keys()].filter((k) => isVisible(`${k}.md`, settings));
           const exact = keys.find((k) => k === fileclass);
           const byBasename = keys.filter((k) => k.split("/").pop() === fileclass);
           const key = exact ?? (byBasename.length === 1 ? byBasename[0] : undefined);

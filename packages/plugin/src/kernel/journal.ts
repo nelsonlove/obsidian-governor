@@ -85,9 +85,19 @@ export interface JournalTarget {
  * Recorded only when the handler REPORTED it (see effectsOf in mcp/guarded.ts,
  * where the tool surface's result conventions live) — never inferred, and never
  * for an operation that declared itself a dry run.
+ *
+ * Read it as SELF-REPORTING: this is what the handler said it did, exactly as
+ * claimed, not something the kernel observed or verified. The kernel has no
+ * independent view of a repoint's blast radius — that is the whole reason the
+ * field exists — so a wrong handler produces a wrong record here and the
+ * journal cannot tell. `target` is the argument-derived claim; `effects` is the
+ * handler's. Both are claims; neither is a measurement.
  */
 export interface JournalEffects {
-  /** Files the operation changed. EXACT, however many paths are listed below. */
+  /**
+   * Files the operation changed, as the handler counted them. EXACT-AS-CLAIMED:
+   * never truncated to match the (capped) `paths` list below, and never checked.
+   */
   filesChanged: number;
   /** The changed paths, capped — the shape, not the payload. Absent when none. */
   paths?: string[];

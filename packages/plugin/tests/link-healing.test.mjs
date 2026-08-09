@@ -808,4 +808,43 @@ describe("obsidian_repoint_link containment (D1)", () => {
     await flush();
     assert.equal(records()[0].effects, undefined);
   });
+
+  // D-E. `effects` is a journal field, and a journal field must never be able
+  // to cost a caller their result — the same guarantee a broken journal already
+  // has. The convention is supplied by the interception layer and reads a
+  // handler's own envelope shape, so a malformed result (or a future convention
+  // with a bug in it) is exactly the kind of thing that throws here. Pinned:
+  // the caller still gets their envelope, the record is still written, and the
+  // only thing lost is the one field that could not be computed.
+  test("a throwing effectsOf costs the caller nothing — result returned, record still written", async () => {
+    const { kernel, records } = journalKernel();
+    const envelope = { content: [{ type: "text", text: "{}" }], structuredContent: { ok: true } };
+    const errors = [];
+    const orig = console.error;
+    console.error = (...a) => errors.push(a);
+    let result;
+    try {
+      result = await kernel.runMutation(
+        {
+          op: "obsidian_repoint_link",
+          args: { target_path: "Projects/Target.md" },
+          actor: ACTOR,
+          effectsOf: () => {
+            throw new Error("effects convention blew up");
+          },
+        },
+        async () => envelope
+      );
+      await flush();
+    } finally {
+      console.error = orig;
+    }
+
+    assert.deepEqual(result, envelope, "the handler's envelope must reach the caller unchanged");
+    const [rec] = records();
+    assert.equal(rec.outcome, "ok", "a throw in a journal field must not turn a successful write into a failure");
+    assert.equal(rec.target.path, "Projects/Target.md", "the argument-derived record survives intact");
+    assert.equal(rec.effects, undefined, "the uncomputable field is simply absent");
+    assert.equal(errors.length, 1, "it is swallowed loudly, not silently");
+  });
 });

@@ -13,6 +13,7 @@ import { registerUidTools } from "./tools-uid.js";
 import { registerLinkTools, obsidianLinkSource } from "./tools-links.js";
 import { registerCodeModeTools, makeCaptureRegister, type CapturedRegistry } from "./tools-code-mode.js";
 import { makeGuarded, withKernelArgs } from "./guarded.js";
+import { visiblePaths } from "../guard.js";
 import type { JournalActor } from "../kernel/index.js";
 import { obsidianProbe } from "../kernel/obsidian-probe.js";
 import { ObsidianBackend } from "./obsidian-backend.js";
@@ -89,8 +90,17 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   // don't need an index_status block.
   // rev: the same mtime token the journal records, so a read hands back exactly
   // what a following write can pass as `if_rev`.
+  //
+  // The backend also carries the READ BOUNDARY (slice 3.0): six of its methods
+  // enumerate the vault with no path to guard, so they filter their own
+  // iteration through the allowlist. The filter is resolved per call, like the
+  // guard's own settings, so a settings change lands without a reconnect.
   const probe = obsidianProbe(app);
-  registerFsTools(server, new ObsidianBackend(app), { decodeHtml: false, rev: (p) => probe.rev(p) });
+  const visible = (paths: string[]) => visiblePaths(paths, ctx.getSettings());
+  registerFsTools(server, new ObsidianBackend(app, visible), {
+    decodeHtml: false,
+    rev: (p) => probe.rev(p),
+  });
 
   // ── remaining tools — live-only, complementary, nav, integrations ────────────
   registerCoreTools(server, app, ctx);
@@ -99,7 +109,9 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   // argument-level check can see a set the handler discovers.
   registerVaultWriteTools(server, app, ctx);
   registerComplementaryTools(server, app, ctx);
-  registerNavTools(server, app);
+  // ctx: obsidian_list_bookmarks enumerates paths the human bookmarked, which
+  // is another argument-less read of vault structure.
+  registerNavTools(server, app, ctx);
   registerIntegrationTools(server, app, ctx);
   // ── advisory scope claims (kernel v0) ──────────────────────────────────────
   // Registered here, after the interception patch, so a claim is guarded,

@@ -6,7 +6,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { App, TFile } from "obsidian";
 import { ok, fail } from "./helpers.js";
-import type { GuardSettings } from "../guard.js";
+import { isVisible, type GuardSettings } from "../guard.js";
 import type { ExternalToolEntry } from "./external-tools.js";
 import type { Kernel, ServerIdentity } from "../kernel/index.js";
 import { findObsidianBinary } from "./tools-cli.js";
@@ -74,14 +74,21 @@ export function registerCoreTools(server: McpServer, app: App, ctx: ServerCtx) {
     "obsidian_get_active_note",
     {
       title: "Get active note",
-      description: "Return the currently focused note's path, content, and the current editor selection (if any). Read-only.",
+      description:
+        "Return the currently focused note's path, content, and the current editor selection (if any). Read-only. " +
+        "Returns {active: null} when nothing is focused — or when what is focused lies outside your path allowlist.",
       inputSchema: {},
       annotations: RO,
     },
     async () => {
       try {
         const file = app.workspace.getActiveFile();
-        if (!file) return ok({ active: null });
+        // The focus is the HUMAN's, not the caller's, and this tool takes no
+        // argument the guard could check — so an allowlisted session could read
+        // any note simply by asking while its owner had it open. A hidden note
+        // reads as "nothing is focused": the same answer, so not even the fact
+        // that something is open leaks.
+        if (!file || !isVisible(file.path, ctx.getSettings())) return ok({ active: null });
         const content = await app.vault.read(file as TFile);
         // Selection, if a markdown editor is focused.
         let selection: string | null = null;

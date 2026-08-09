@@ -38,8 +38,23 @@ export class TFolder {
 
 export class TAbstractFile {}
 
-export function getAllTags() {
-  return [];
+/** Enough of a MarkdownView for `instanceof` / `getActiveViewOfType` in tools-nav. */
+export class MarkdownView {}
+
+/**
+ * Obsidian's own getAllTags flattens a file cache's inline tags and its
+ * frontmatter `tags` into one `#tag` list. The stub reads the same two places,
+ * so a fake cache drives findByTag / obsidian_tags_list realistically; a cache
+ * with neither yields [], which is what every pre-existing caller expects.
+ */
+export function getAllTags(cache) {
+  const out = [];
+  for (const t of cache?.tags ?? []) out.push(typeof t === "string" ? t : t.tag);
+  const fm = cache?.frontmatter?.tags;
+  for (const t of Array.isArray(fm) ? fm : fm ? [fm] : []) {
+    out.push(String(t).startsWith("#") ? String(t) : `#${t}`);
+  }
+  return out;
 }
 
 let installed = false;
