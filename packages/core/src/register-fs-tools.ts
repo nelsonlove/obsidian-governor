@@ -39,6 +39,14 @@ export interface RegisterFsToolsOpts {
    * `index_status`. Also read before/after for obsidian_force_reindex timing.
    */
   includeIndexStatus?: () => IndexStatusSnapshot;
+  /**
+   * Revision token for a note, cheap and synchronous (the host's mtime in ms).
+   * When provided, note reads carry the target's current `rev`, which the
+   * caller hands back as `if_rev` on a following write — the read half of
+   * optimistic concurrency. Omitted (or returning undefined) ⇒ no `rev` field,
+   * exactly as before.
+   */
+  rev?: (path: string) => number | undefined;
 }
 
 /**
@@ -60,12 +68,12 @@ type ToolRegistrar = { registerTool(name: string, meta: any, handler: (args: any
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function registerFsTools(server: any, backend: VaultBackend, opts: RegisterFsToolsOpts = {}): void {
   const reg = server as ToolRegistrar;
-  const { decodeHtml = false, includeIndexStatus } = opts;
+  const { decodeHtml = false, includeIndexStatus, rev } = opts;
 
   const dec = (s: string): string => (decodeHtml ? decodeHtmlEntities(s) : s);
 
   for (const tool of FS_TOOLS) {
-    const handler = makeHandler(tool.name, backend, dec, includeIndexStatus);
+    const handler = makeHandler(tool.name, backend, dec, includeIndexStatus, rev);
     reg.registerTool(
       tool.name,
       {
@@ -86,10 +94,21 @@ function makeHandler(
   backend: VaultBackend,
   dec: (s: string) => string,
   includeIndexStatus: (() => IndexStatusSnapshot) | undefined,
+  revOf?: (path: string) => number | undefined,
 ) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const status = (extra: Record<string, unknown> = {}): Record<string, unknown> =>
     includeIndexStatus ? { ...extra, index_status: includeIndexStatus() } : extra;
+
+  /**
+   * `{ rev }` for a path, or `{}` when the host supplies no revision source (or
+   * has none for this path). Additive: a caller that ignores `rev` sees the
+   * response it always saw.
+   */
+  const revField = (path: string): { rev?: number } => {
+    const r = revOf?.(path);
+    return r === undefined ? {} : { rev: r };
+  };
 
   switch (name) {
     // ── obsidian_list_notes ────────────────────────────────────────────────
@@ -127,7 +146,12 @@ function makeHandler(
       return async ({ path: p }: { path: string }) => {
         try {
           const decoded = dec(p);
-          return ok(status({ path: decoded, content: await backend.readNote(decoded) }));
+          // rev is sampled BEFORE the content, so a write racing this read can
+          // only make the returned rev too OLD — the caller's later `if_rev`
+          // then conflicts. Sampling after would hand back a rev newer than the
+          // content returned, and that write would silently clobber the racer.
+          const revd = revField(decoded);
+          return ok(status({ path: decoded, content: await backend.readNote(decoded), ...revd }));
         } catch (e) {
           return fail(e);
         }
@@ -137,7 +161,7 @@ function makeHandler(
     case "obsidian_read_notes":
       return async ({ paths }: { paths: string[] }) => {
         type Result =
-          | { idx: number; kind: "ok"; value: { path: string; content: string; truncated: boolean } }
+          | { idx: number; kind: "ok"; value: { path: string; content: string; truncated: boolean; rev?: number } }
           | { idx: number; kind: "err"; value: { path: string; error: string } };
 
         // Preserve input order even when duplicate paths are provided.
@@ -145,11 +169,17 @@ function makeHandler(
           paths.map(async (raw, idx): Promise<Result> => {
             const p = dec(raw);
             try {
+              // Sampled before the read, for the same reason as obsidian_read_note.
+              const revd = revField(p);
               const content = await backend.readNote(p);
               // readNote truncates and appends a trailer when len > CHARACTER_LIMIT,
               // so the returned content is CHARACTER_LIMIT + len(trailer) chars.
               // content.length > CHARACTER_LIMIT thus correctly flags truncation.
-              return { idx, kind: "ok", value: { path: p, content, truncated: content.length > CHARACTER_LIMIT } };
+              return {
+                idx,
+                kind: "ok",
+                value: { path: p, content, truncated: content.length > CHARACTER_LIMIT, ...revd },
+              };
             } catch (e) {
               return { idx, kind: "err", value: { path: p, error: e instanceof Error ? e.message : String(e) } };
             }

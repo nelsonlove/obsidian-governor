@@ -21,8 +21,16 @@
  * queue abandoned on timeout (journaled `error`) settled afterwards, and the
  * corrective record — linked by `corrects` — says how. Append-only means the
  * original record is never rewritten; the correction is a new line.
+ *
+ * `conflict` is an `if_rev` precondition failure: the target's revision at
+ * dequeue was not the one the caller expected, so NO write ran (`revBefore`
+ * holds the revision actually found).
+ *
+ * `deduped` is an idempotency-key replay: a call whose key was already seen
+ * returned the original call's result without executing anything, and
+ * `dedupeOf` names the `ts` of the record it replays.
  */
-export type JournalOutcome = "ok" | "error" | "late-ok" | "late-error";
+export type JournalOutcome = "ok" | "error" | "late-ok" | "late-error" | "conflict" | "deduped";
 
 /**
  * Who did it. Established by the transport, never claimed by the caller:
@@ -69,6 +77,12 @@ export interface JournalRecord {
   revAfter?: number;
   /** On a corrective record: the `ts` of the record it corrects. */
   corrects?: string;
+  /** The caller's `if_rev` precondition, when one was supplied. */
+  ifRev?: number;
+  /** The caller's `idempotency_key`, when one was supplied. */
+  idempotencyKey?: string;
+  /** On a `deduped` record: the `ts` of the record whose result was replayed. */
+  dedupeOf?: string;
 }
 
 /**

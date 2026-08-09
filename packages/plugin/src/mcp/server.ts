@@ -9,8 +9,9 @@ import { registerIntegrationTools } from "./tools-integrations.js";
 import { registerCliTools } from "./tools-cli.js";
 import { registerExternalTools } from "./external-tools.js";
 import { registerCodeModeTools, makeCaptureRegister, type CapturedRegistry } from "./tools-code-mode.js";
-import { makeGuarded } from "./guarded.js";
+import { makeGuarded, withKernelArgs } from "./guarded.js";
 import type { JournalActor } from "../kernel/index.js";
+import { obsidianProbe } from "../kernel/obsidian-probe.js";
 import { ObsidianBackend } from "./obsidian-backend.js";
 
 export interface BuildOpts {
@@ -52,15 +53,26 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   };
   const guarded = makeGuarded({ getSettings: () => ctx.getSettings(), kernel: ctx.kernel, actor });
   const registry: CapturedRegistry = new Map();
-  (server as any).registerTool = opts.codeMode
-    ? makeCaptureRegister(registry, guarded)
+  const capture = makeCaptureRegister(registry, guarded);
+  const register = opts.codeMode
+    ? capture
     : (name: string, def: any, handler: any) => origRegister(name, def, guarded(def, handler, name));
+  // withKernelArgs runs on the way in, so `if_rev` / `idempotency_key` are
+  // declared on every mutating tool's schema — in both modes, and for external
+  // tools too — without any registrar knowing they exist. Undeclared arguments
+  // are stripped by the SDK's own validation, so declaring here is what makes
+  // them reachable by a client at all.
+  (server as any).registerTool = (name: string, def: any, handler: any) =>
+    register(name, withKernelArgs(def), handler);
 
   // ── 17 fs-expressible tools — shared registry + live ObsidianBackend ────────
   // decodeHtml: false — no HTML entities expected from in-process calls.
   // includeIndexStatus omitted — Obsidian's cache is always live; read tools
   // don't need an index_status block.
-  registerFsTools(server, new ObsidianBackend(app), { decodeHtml: false });
+  // rev: the same mtime token the journal records, so a read hands back exactly
+  // what a following write can pass as `if_rev`.
+  const probe = obsidianProbe(app);
+  registerFsTools(server, new ObsidianBackend(app), { decodeHtml: false, rev: (p) => probe.rev(p) });
 
   // ── remaining tools — live-only, complementary, nav, integrations ────────────
   registerCoreTools(server, app, ctx);
