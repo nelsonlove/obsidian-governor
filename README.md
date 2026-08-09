@@ -54,6 +54,23 @@ Run **`obsidian_doctor`** (tool) or **`vault-mcp: Show diagnostics`** (command) 
 
 Registering ~40+ tool schemas costs context in every session. A connection whose bridge runs with **`--code-mode`** (append it to the registered command: `… node ~/.claude/vault-mcp/bridge.mjs --vault <name> --code-mode`, or set `VAULT_MCP_CODE_MODE=1`) gets just **3 meta-tools** over the same registry: `obsidian_search_tools` (keyword discovery), `obsidian_describe_tool` (input JSON Schema), `obsidian_call_tool` (invoke by name, args validated against the target's schema). Read-only mode and the path allowlist bind on the target tool exactly as on the full surface. The mode is chosen per connection via a one-line preamble the bridge sends before the MCP stream — old bridges and full-surface sessions are wire-compatible, and both kinds of session can run concurrently against the same vault. If the vault's plugin build predates preamble support, the bridge warns on stderr and falls back to the full surface rather than failing.
 
+## Write queue & journal
+
+Every **mutating** tool call (write, append, patch, move, delete, trash, frontmatter edit, repoint, CLI, mutating external tools) runs through a **single FIFO queue per plugin instance** — one vault mutation at a time, across every connected session and background agent. Reads never queue, so a slow write never stalls a session's reads.
+
+Each queued operation gets a **30-second budget** (a constant, not a setting). If it hasn't finished by then it is abandoned, that *one* call fails with `Error [write_timeout]: …`, and the queue immediately moves on — a wedged operation can never take the bridge, or anyone else's session, down with it. The vault may or may not have been modified when this happens; re-read before retrying.
+
+Every mutating operation also appends **one JSONL line** to `.obsidian/plugins/vault-mcp/journal/YYYY-MM.jsonl` (rolled monthly, inside the plugin's own folder rather than the note tree):
+
+```json
+{"ts":"2026-08-08T19:04:11.427Z","op":"obsidian_write_note","target":{"path":"Inbox/Idea.md","uid":"019f…"},
+ "actor":{"transport":"mcp","client":"claude-code/1.0.0","connection":"m1x8g-3"},
+ "argsDigest":{"path":"Inbox/Idea.md","content":"<812 chars>","overwrite":true},
+ "outcome":"ok","durationMs":37,"revBefore":1754680000000,"revAfter":1754680051427}
+```
+
+It records the *operation* — what happened, to what, on whose behalf — not the bytes; git already covers the bytes. **Note bodies are never written to it**: arguments are reduced to a digest, with bodies and long strings collapsed to `<N chars>`. The journal is **append-only** — nothing in the plugin edits or deletes a record, and pruning is a manual act on whole month files. If a journal write fails it is logged to the console and dropped; it never fails the vault operation.
+
 ## Settings (Settings → Vault MCP)
 
 - **Claude Code connection** — status + the `claude mcp add` line + copy button.
@@ -71,6 +88,7 @@ Registering ~40+ tool schemas costs context in every session. A connection whose
 | Tools don't appear in a session | You registered after the session started — restart the Claude Code session (MCP loads at start). |
 | Multiple vaults open | The registration must pin `--vault <name>` (Connect does this for the vault you run it from); `obsidian_doctor` reports the bound vault. A registration made before a second vault existed may be generic — re-run Connect, or add `--vault <name>` to the existing `claude mcp` entry. |
 | A plugin-gated tool is missing | Its backing plugin isn't loaded. Enable it; the tool appears on the next session connect. |
+| A write failed with `Error [write_timeout]` | The operation ran past the queue's 30s budget and was abandoned so the queue could continue. Usually a very large batch or a stuck Obsidian API call. Re-read the target (it may be partially written), then retry with a smaller batch. |
 
 ## Publishing tools from other plugins
 
