@@ -847,6 +847,40 @@ describe("if_rev preconditions", () => {
       RevConflictError
     );
   });
+
+  test("on a move, the checked target is the SOURCE — pinned against schema reordering", async () => {
+    // obsidian_move_note declares `from` before `to`, and collectPaths walks the
+    // argument object in declaration order, so `from` is the primary target.
+    // That is what if_rev must compare: the note whose content the caller read.
+    // If the schema (or PATH_KEYS) is ever reordered so `to` comes first, this
+    // fails rather than quietly checking the destination's revision.
+    const revs = new Map([["Src.md", 100], ["Dst.md", 900]]);
+    const { kernel, records } = fakeKernel({ revs });
+    const args = { from: "Src.md", to: "Dst.md", update_backlinks: true };
+
+    // The destination's revision must NOT be what is compared.
+    const err = await kernel
+      .runMutation({ op: "obsidian_move_note", args, actor: ACTOR, ifRev: 900 }, async () => assert.fail("ran"))
+      .then(() => assert.fail("if_rev matched the destination, not the source"), (e) => e);
+    assert.ok(err instanceof RevConflictError);
+    assert.equal(err.path, "Src.md", "the conflict must name the source path");
+    assert.equal(err.expected, 900);
+    assert.equal(err.actual, 100, "the revision compared must be the SOURCE's");
+
+    // …and the source's revision does pass.
+    let ran = false;
+    await kernel.runMutation({ op: "obsidian_move_note", args, actor: ACTOR, ifRev: 100 }, async () => {
+      ran = true;
+      return { content: [] };
+    });
+    assert.equal(ran, true);
+
+    await tick(5);
+    const recs = records();
+    assert.equal(recs[0].target.path, "Src.md", "the journal's primary target is the source");
+    assert.deepEqual(recs[0].target.paths, ["Src.md", "Dst.md"], "declaration order: source first");
+    assert.equal(recs[0].revBefore, 100);
+  });
 });
 
 // ── idempotency keys ─────────────────────────────────────────────────────────
@@ -988,6 +1022,187 @@ describe("idempotency keys", () => {
     await tick(5);
   });
 
+  // ── HIGH-1: concurrent in-flight retries ───────────────────────────────────
+
+  test("N simultaneous calls with one key run the handler exactly once", async () => {
+    // The defect this pins: with the store written only on completion, four
+    // simultaneous retries of one dropped request all miss the lookup and all
+    // write. The key must be RESERVED at entry, not on the way out.
+    const { kernel, records } = fakeKernel();
+    let runs = 0;
+    const gate = deferred();
+    const handler = async () => {
+      runs++;
+      await gate.promise;
+      return { content: [{ type: "text", text: `run ${runs}` }] };
+    };
+
+    const calls = [0, 1, 2, 3].map(() => kernel.runMutation(ctx({ idempotencyKey: "kc1" }), handler));
+    await tick(5);
+    assert.equal(runs, 1, "more than one simultaneous retry executed");
+    assert.equal(kernel.idempotency.inFlight, 1, "the key must be reserved while in flight");
+
+    gate.resolve();
+    const results = await Promise.all(calls);
+    assert.equal(runs, 1, "a waiter re-ran the handler after the winner finished");
+    for (const r of results) {
+      assert.equal(r, results[0], "every retry must get the SAME envelope the winner produced");
+      assert.equal(r.content[0].text, "run 1");
+    }
+    assert.equal(kernel.idempotency.inFlight, 0, "the reservation must be released once it settles");
+
+    await tick(5);
+    const recs = records();
+    assert.equal(recs.length, 4);
+    assert.deepEqual(recs.map((r) => r.outcome), ["ok", "deduped", "deduped", "deduped"]);
+    for (const r of recs.slice(1)) {
+      assert.equal(r.dedupeOf, recs[0].ts, "a waiter must name the winner's record");
+      assert.equal(r.idempotencyKey, "kc1");
+      assert.equal(r.durationMs, 0, "nothing ran for a waiter");
+      assert.equal(r.op, recs[0].op);
+    }
+    // Only one operation ever reached the queue.
+    assert.equal(kernel.queue.depth, 0);
+    assert.equal(kernel.queue.running, false);
+  });
+
+  test("waiters share a THROWN outcome, and only afterwards is the key free", async () => {
+    const { kernel, records } = fakeKernel({ timeoutMs: 25 });
+    const wedged = deferred();
+    let runs = 0;
+    const handler = () => { runs++; return wedged.promise; };
+
+    const calls = [0, 1, 2, 3].map(() =>
+      kernel.runMutation(ctx({ idempotencyKey: "kc2" }), handler).then(
+        () => assert.fail("a shared failure must not resolve"),
+        (e) => e
+      )
+    );
+    const errors = await Promise.all(calls);
+    assert.equal(runs, 1, "only the winner may execute");
+    for (const e of errors) {
+      assert.ok(e instanceof WriteTimeoutError, "every waiter must get the winner's failure");
+      assert.equal(e, errors[0], "one logical request, one outcome — the very same error object");
+    }
+
+    await tick(5);
+    const recs = records();
+    assert.deepEqual(recs.map((r) => r.outcome), ["error", "deduped", "deduped", "deduped"]);
+    assert.match(recs[0].error, /write-queue timeout/);
+    for (const r of recs.slice(1)) {
+      assert.equal(r.dedupeOf, recs[0].ts);
+      assert.match(r.error, /write-queue timeout/, "a deduped failure must not look like a clean replay");
+    }
+
+    // …and NOW the key is free: the thrown failure stored nothing, so a fresh
+    // call with the same key genuinely retries.
+    assert.equal(kernel.idempotency.inFlight, 0);
+    assert.equal(kernel.idempotency.size, 0, "a thrown failure must store nothing");
+    const retried = await kernel.runMutation(ctx({ idempotencyKey: "kc2" }), async () => ({
+      content: [{ type: "text", text: "retried" }],
+    }));
+    assert.equal(retried.content[0].text, "retried");
+    wedged.resolve({ content: [] });
+    await tick(5);
+  });
+
+  // ── MEDIUM-1: key identity includes the arguments ──────────────────────────
+
+  test("a stored key presented with DIFFERENT arguments is a typed mismatch, not a replay", async () => {
+    const { kernel, records } = fakeKernel();
+    await kernel.runMutation(ctx({ idempotencyKey: "kd1", args: { path: "A.md", content: "one" } }), async () => ({
+      content: [{ type: "text", text: "wrote A" }],
+    }));
+
+    let ran = false;
+    const err = await kernel
+      .runMutation(ctx({ idempotencyKey: "kd1", args: { path: "B.md", content: "one" } }), async () => { ran = true; })
+      .then(() => assert.fail("a divergent-args replay must not resolve"), (e) => e);
+
+    assert.ok(err instanceof IdempotencyMismatchError);
+    assert.equal(err.code, "idempotency_mismatch");
+    assert.equal(err.reason, "args");
+    assert.match(err.message, /DIFFERENT arguments/);
+    assert.equal(ran, false, "the write must not run — but it must not be silently discarded either");
+
+    await tick(5);
+    const recs = records();
+    assert.deepEqual(recs.map((r) => r.outcome), ["ok", "error"]);
+    assert.match(recs[1].error, /idempotency_key/);
+  });
+
+  test("argument divergence is caught below the digest, where bodies are collapsed", async () => {
+    // digestArgs renders any `content` as `<N chars>`, so two DIFFERENT bodies
+    // of equal length share a digest. Key identity must still separate them —
+    // otherwise the second write is discarded and reported as success.
+    const { kernel } = fakeKernel();
+    const write = (body) =>
+      kernel.runMutation(ctx({ idempotencyKey: "kd2", args: { path: "A.md", content: body } }), async () => ({
+        content: [{ type: "text", text: `wrote ${body}` }],
+      }));
+
+    assert.equal((await write("aaaa")).content[0].text, "wrote aaaa");
+    const err = await write("bbbb").then(() => assert.fail("equal-length bodies replayed"), (e) => e);
+    assert.ok(err instanceof IdempotencyMismatchError);
+    assert.equal(err.reason, "args");
+    // The same body still replays — the fingerprint is stable, not merely picky.
+    assert.equal((await write("aaaa")).content[0].text, "wrote aaaa");
+  });
+
+  test("argument key ORDER is not divergence: a re-serialized retry still replays", async () => {
+    const { kernel } = fakeKernel();
+    let runs = 0;
+    const handler = async () => ({ content: [{ type: "text", text: `run ${++runs}` }] });
+    await kernel.runMutation(ctx({ idempotencyKey: "kd3", args: { path: "A.md", overwrite: true } }), handler);
+    const replay = await kernel.runMutation(
+      ctx({ idempotencyKey: "kd3", args: { overwrite: true, path: "A.md" } }),
+      handler
+    );
+    assert.equal(runs, 1, "key order must not look like divergent arguments");
+    assert.equal(replay.content[0].text, "run 1");
+  });
+
+  test("an IN-FLIGHT key presented with different arguments (or a different op) is a mismatch", async () => {
+    const { kernel } = fakeKernel();
+    const gate = deferred();
+    const held = kernel.runMutation(ctx({ idempotencyKey: "kd4", args: { path: "A.md" } }), () => gate.promise);
+    await tick(0);
+
+    const argsErr = await kernel
+      .runMutation(ctx({ idempotencyKey: "kd4", args: { path: "B.md" } }), async () => assert.fail("ran"))
+      .then(() => assert.fail("a divergent-args waiter must not attach"), (e) => e);
+    assert.ok(argsErr instanceof IdempotencyMismatchError);
+    assert.equal(argsErr.reason, "args");
+
+    const opErr = await kernel
+      .runMutation(ctx({ op: "obsidian_delete_note", idempotencyKey: "kd4", args: { path: "A.md" } }), async () =>
+        assert.fail("ran"))
+      .then(() => assert.fail("a divergent-op waiter must not attach"), (e) => e);
+    assert.ok(opErr instanceof IdempotencyMismatchError);
+    assert.equal(opErr.reason, "op");
+    assert.match(opErr.message, /obsidian_write_note/);
+
+    gate.resolve({ content: [] });
+    await held;
+  });
+
+  // ── MEDIUM-2: a replay never evaluated the precondition ────────────────────
+
+  test("a deduped record carries no ifRev — the precondition was never evaluated", async () => {
+    const revs = new Map([["Notes/A.md", 100]]);
+    const { kernel, records } = fakeKernel({ revs });
+    await kernel.runMutation(ctx({ idempotencyKey: "ke1", ifRev: 100 }), async () => ({ content: [] }));
+    await kernel.runMutation(ctx({ idempotencyKey: "ke1", ifRev: 100 }), async () => assert.fail("ran"));
+
+    await tick(5);
+    const [original, replay] = records();
+    assert.equal(original.ifRev, 100, "the call that actually dequeued still records its precondition");
+    assert.equal(replay.outcome, "deduped");
+    assert.equal(replay.ifRev, undefined, "a replay never reached the dequeue check; the field must be absent");
+    assert.equal(replay.idempotencyKey, "ke1", "the argument that produced the record is still recorded");
+    assert.equal(replay.dedupeOf, original.ts);
+  });
+
   test("no key means no store entry — behavior is exactly as before", async () => {
     const { kernel, records } = fakeKernel();
     let runs = 0;
@@ -1126,14 +1341,39 @@ describe("kernel arguments (if_rev / idempotency_key)", () => {
     );
     assert.deepEqual(seen, { path: "A.md", content: "x" });
 
-    // …and on the guard-only path too, so behavior does not depend on a kernel.
+    // …and on the guard-only path too: the arguments are peeled off there as
+    // well, so a handler's contract never depends on whether a kernel exists.
+    // (`if_rev` is not passed here — without a kernel it is refused outright,
+    // which the LOW-2 test below pins.)
     const bare = makeGuarded({ getSettings: () => OPEN_SETTINGS, actor: () => ACTOR });
     let seenBare;
     await bare(RW_DEF, async (args) => { seenBare = args; return { content: [] }; }, "obsidian_write_note")(
-      { path: "A.md", if_rev: 1, idempotency_key: "k" },
+      { path: "A.md", idempotency_key: "k" },
       {}
     );
     assert.deepEqual(seenBare, { path: "A.md" });
+  });
+
+  // ── LOW-2: an unenforceable precondition fails closed ──────────────────────
+
+  test("without a kernel, if_rev is refused rather than silently ignored", async () => {
+    const bare = makeGuarded({ getSettings: () => OPEN_SETTINGS, actor: () => ACTOR });
+    let ran = false;
+    const write = bare(RW_DEF, async () => { ran = true; return { content: [{ type: "text", text: "wrote" }] }; },
+      "obsidian_write_note");
+
+    const res = await write({ path: "A.md", if_rev: 100 }, {});
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /Error \[precondition_unsupported\]/);
+    assert.match(res.content[0].text, /obsidian_write_note/);
+    assert.equal(ran, false, "an unenforceable if_rev must not fall through to an unconditional write");
+
+    // Scoped to calls that actually carry if_rev: everything else is untouched.
+    assert.equal((await write({ path: "A.md" }, {})).content[0].text, "wrote");
+    assert.equal((await write({ path: "A.md", idempotency_key: "k" }, {})).content[0].text, "wrote");
+    // …and a READ carrying if_rev is nonsense but harmless — no write to guard.
+    const read = bare(RO_DEF, async () => ({ content: [{ type: "text", text: "read" }] }), "obsidian_read_note");
+    assert.equal((await read({ path: "A.md", if_rev: 100 }, {})).content[0].text, "read");
   });
 
   test("a conflict surfaces as a typed rev_conflict envelope naming both revisions", async () => {
