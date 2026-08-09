@@ -40,12 +40,13 @@ On the Mac, **disconnect the remote `obsidian-vault-mcp-server` connector** for 
 
 ## Tools
 
-**Up to 51 tools.** 44 are always available; 6 are **plugin-gated** (register only when their backing plugin is loaded); 1 (`obsidian_cli`) registers only when the official Obsidian CLI binary is installed:
+**Up to 52 tools.** 45 are always available; 6 are **plugin-gated** (register only when their backing plugin is loaded); 1 (`obsidian_cli`) registers only when the official Obsidian CLI binary is installed:
 
 - **Core (read/write, live `app.*`):** list/read/write/append/move/delete notes, backlinks, outlinks, resolve, frontmatter (atomic multi-key), patch, search, find-by-tag, …
 - **Complementary:** trash, parsed read, append-at-heading, run-command, command list, vault/tags/environment info, active note, open-in-editor.
 - **Navigation/control:** jump-to, view-mode, workspaces (open/save/list), bookmarks (open/list), periodic note, plugin toggle.
 - **Identity:** `obsidian_resolve_uid` — look a note up by its frontmatter `uid`, or a uid up by path. See [Addressing notes by uid](#addressing-notes-by-uid).
+- **Link health:** `obsidian_check_links` — read-only report of dangling wikilinks and duplicated uids. See [Link health](#link-health).
 - **Advisory claims:** `obsidian_claim_scope`, `obsidian_renew_scope`, `obsidian_release_scope`, `obsidian_list_scope_claims` — see [Advisory scope claims](#advisory-scope-claims).
 - **Plugin-gated:** `dataview_list_query`, `dataview_table_query` (Dataview); `create_note_from_template` (Templater); `omnisearch` (Omnisearch); `fileclass_schema`, `fileclass_insert_fields` (Metadata Menu).
 - **Official-CLI proxy:** `obsidian_cli` runs any official Obsidian CLI command against this vault (file history/diff/restore, themes, snippets, publish, …). The vault is pinned; dangerous commands (`eval`, `dev:*`, `devtools`, `restart`, `reload`, `command`, `plugins:restrict`, `plugin:install`, `plugin:uninstall` — the last two because installing loads arbitrary plugin code and uninstalling can remove vault-mcp itself) need the **Allow dangerous CLI commands** setting; the tool is unavailable while a path allowlist is active (CLI args can't be path-scoped) and is blocked entirely in read-only mode.
@@ -75,15 +76,40 @@ The plugin keeps a **uid index** (`uid → path`, and the inverse) built at load
 Two references refuse rather than guess, and **nothing runs** in either case:
 
 - `Error [uid_unresolved]` — no note *you can reach* carries that uid. Better than writing a file literally named `uid:019f…`, which is what a plain path argument would have done.
-- `Error [uid_ambiguous]` — **two or more notes carry it**, and the error names them. The index records duplicates rather than picking a winner or rewriting somebody's frontmatter; use `obsidian_resolve_uid` to see them and fix the vault.
+- `Error [uid_ambiguous]` — **two or more notes *you can reach* carry it**, and the error names them. The index records duplicates rather than picking a winner or rewriting somebody's frontmatter; use `obsidian_resolve_uid` to see them and fix the vault.
 
 Both decisions are made over the notes a **path allowlist** leaves visible to your session, never the whole vault: a uid carried only outside your allowlist reads as unresolved, one carrier inside it resolves normally however many hidden ones exist, and an ambiguity names only the paths you could have named yourself. A duplicated uid is not a way to read a path out of your sandbox.
 
-**`obsidian_resolve_uid`** is the lookup, in both directions: `{uid}` → `{path, duplicates?}`, `{path}` → `{uid}`, and no argument at all → index totals plus every duplicated uid in the vault. It's read-only and reports duplicates; it never repairs them. It applies exactly the visibility rule above, so looking a uid up and addressing by it always agree.
+**`obsidian_resolve_uid`** is the lookup, in both directions: `{uid}` → `{path, duplicates?}`, `{path}` → `{uid}`, and no argument at all → index totals plus every duplicated uid. It's read-only and reports duplicates; it never repairs them. It applies exactly the visibility rule above — including the **totals**, which count only what your session can see, so a sandboxed session doesn't learn how much lives outside its allowlist.
 
 The journal records both halves: `target.path` is where the operation landed, `target.uid` is the identity it landed on (taken from the index, so it's present even when the frontmatter cache is behind).
 
-*(Link healing — rewriting references when a note moves — is not part of this; the index is the substrate it will be built on.)*
+## Link health
+
+Links are handled in two places, and the split is deliberate.
+
+**In band, a move heals its own links.** Every move this server performs — `obsidian_move_note`, `obsidian_move_notes` (batch), and any rename underneath them — goes through **`app.fileManager.renameFile`**, Obsidian's link-updating rename, never `vault.rename`. The host rewrites every backlink to the moved note canonically, exactly as it would if you had dragged the file in the sidebar. This is a guarantee, not a best effort, and a regression test pins it (a fake app whose `vault.rename` throws). Because Obsidian rewrites internally and reports no count, the move response **omits** `backlinks_updated` rather than claiming `0` — "unknown, not zero". `update_backlinks: false` is advisory here: Obsidian exposes no rename-without-rewrite API, so links are updated regardless.
+
+*Boundary:* the remote, filesystem-only [`obsidian-vault-mcp-server`](https://github.com/nelsonlove/obsidian-vault-mcp-server) has no Obsidian to delegate to. It renames on disk and then rewrites backlinks itself from its own index — real, but index-dependent (a stale or still-building index rewrites less), honoring `update_backlinks`, and reporting exact counts. Same tool name, different guarantee; that's why the live backend returns `null` counts instead of pretending to the same number.
+
+**Out of band, links rot anyway** — a note deleted in Finder, a rename done by another tool, a `[[wikilink]]` typed against a note nobody created, a uid pasted into a second note. Nothing this server did caused it.
+
+**`obsidian_check_links` reports that drift and repairs nothing.** It is read-only: no queue slot, no journal record, no `fix`/`heal` argument, and it works in read-only mode. The rail names what has drifted; deciding what it should have pointed at is yours.
+
+```jsonc
+{"scope": "Projects"}   // optional — omit for everything you can see
+→ {
+    "scope": "Projects",
+    "dangling_links":  {"note_count": 3, "link_count": 5, "truncated": false,
+                        "items": [{"from": "Projects/A.md", "link": "Old Name", "count": 2}, …]},
+    "duplicate_uids":  {"available": true, "count": 1, "truncated": false,
+                        "items": [{"uid": "019fe34f-…", "paths": ["Projects/A.md", "Projects/B.md"]}]}
+  }
+```
+
+Dangling links come from Obsidian's own `unresolvedLinks` map and duplicated uids from the uid index — both already computed, so the report never reads a file. Counts are exact for everything visible and in scope; the lists are capped at 100 each with a `truncated` flag (narrow `scope` to see more). **Nothing outside your path allowlist appears** — not a path, not the link text inside one — and a uid whose duplicate carriers straddle your scope isn't an ambiguity *for that scope*. A `scope` that normalizes to nothing or above the vault root is refused rather than quietly widened to the whole vault.
+
+To act on a report: **`obsidian_repoint_link`** rewrites every wikilink matching a name to a target you choose (`dry_run` first, `unresolved_only` to leave working links alone) — one deliberate call, one decision. A duplicated uid is fixed by editing one note's frontmatter; nothing here will pick a winner for you.
 
 ## Write queue & journal
 
