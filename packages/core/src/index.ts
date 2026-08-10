@@ -1,15 +1,22 @@
 export { ok, fail } from "./responses.js";
 
 // ── Accept-forbidden guard (issue #104) ─────────────────────────────────────
-// The shared predicate: every VaultBackend write (ObsidianBackend via the
-// plugin's write-notes-compose.ts re-export, and FilesystemBackend directly)
-// routes through this one implementation.
+// packages/core's own copy of the predicate + the canonical leading-frontmatter
+// recognizer (stripLeadingBom / LEADING_FRONTMATTER_RE, matching PR #129's
+// definition in the plugin — core cannot import from plugin, so this is a
+// parallel, not a shared, definition; unifying the two is a follow-up once
+// #129 has landed and settled). Every fs-backend write primitive
+// (fs-backend/vault.ts's VaultImpl, which both FilesystemBackend and
+// packages/server's fs-failover singleton functions call) routes through this
+// one implementation.
 export {
   AcceptForbiddenError,
   acceptTransitionReason,
   acceptForbiddenReason,
   frontmatterOf,
   parseGuardFrontmatter,
+  stripLeadingBom,
+  LEADING_FRONTMATTER_RE,
 } from "./accept-guard.js";
 export {
   SHARED_ANNOTATIONS,

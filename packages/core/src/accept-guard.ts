@@ -2,13 +2,12 @@
 //
 // Extracted from packages/plugin/src/mcp/write-notes-compose.ts (issue #104):
 // this predicate previously lived ONLY in the plugin, so ObsidianBackend was
-// guarded but FilesystemBackend (packages/core) passed content straight
-// through — meaning packages/server's fs-failover mode (used when Obsidian is
-// down) served UNGUARDED writes. Moving the pure decision logic here lets
-// every VaultBackend implementation call the SAME predicate: ObsidianBackend
-// (via write-notes-compose.ts, which now re-exports from here) and
-// FilesystemBackend (fs-backend/filesystem-backend.ts) both reach this one
-// implementation. DRY — one predicate, two callers.
+// guarded but the shared filesystem write primitive (fs-backend/vault.ts,
+// wrapping VaultImpl — the implementation BOTH FilesystemBackend and
+// packages/server's fs-failover mode's module-level singleton functions call)
+// passed content straight through. Moving the pure decision logic here lets
+// every VaultBackend implementation call the SAME predicate. DRY — one
+// predicate, every write path.
 //
 // Obsidian-free by construction: everything here operates on plain objects
 // and an injected YAML-parse function, so it is a real unit-testable module
@@ -61,14 +60,42 @@ function isAcceptedKey(key: string): boolean {
   return /^accepted([-_ ].*)?$/.test(key.trim().toLowerCase());
 }
 
+// ── the ONE recognizer for a note's leading frontmatter fence ───────────────
+//
+// #126 (fixed in the plugin by PR #129, `write-notes-compose.ts`): a guard
+// that recognizes LESS frontmatter than the write path honors is a bypass,
+// not caution. `stripLeadingBom` + `LEADING_FRONTMATTER_RE` are THIS
+// package's copy of that same canonical shape (packages/core cannot import
+// from packages/plugin — the dependency runs the other way), kept here as
+// the single definition every recognizer/editor in packages/core binds to,
+// so a second, narrower copy can't quietly reappear and reopen the hole in
+// a different backend. See accept-guard.test.ts's parity suite.
+//
+// A literal U+FEFF byte is never written into this file's source — `0xfeff`
+// is compared by code point, matching PR #129's own `stripLeadingBom`.
+
+/** A leading byte-order mark, removed. Obsidian's own parser looks past a BOM to find the opening `---`; so must anything deciding what the vault will honor. Strips exactly ONE — a second BOM is content, not a marker, and must not be stripped. */
+export function stripLeadingBom(text: string): string {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+}
+
+/**
+ * The one definition of a note's leading frontmatter fence: `---` as the very
+ * first line (after `stripLeadingBom`), CRLF-tolerant, trailing spaces/tabs on
+ * the fence lines tolerated, closed by a matching `---` (EOF-terminated or
+ * followed by a newline). Every recognizer/editor of leading frontmatter in
+ * this package binds to this ONE pattern instead of re-deriving the shape.
+ */
+export const LEADING_FRONTMATTER_RE = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/;
+
 /** Extract & parse the leading YAML frontmatter of a markdown string; null when there is none. `parseYaml` injected. */
 export function frontmatterOf(
   markdown: string,
   parseYaml: (yaml: string) => unknown
 ): Record<string, unknown> | null {
-  // A note's frontmatter counts only when `---` is its very first line
-  // (Obsidian's own rule, mirrored here for parity).
-  const m = /^﻿?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(markdown);
+  // Obsidian reads a note's frontmatter only when `---` is its very first
+  // line (a BOM before it is transparent — stripLeadingBom).
+  const m = LEADING_FRONTMATTER_RE.exec(stripLeadingBom(markdown));
   if (!m) return null;
   let parsed: unknown;
   try {
@@ -168,8 +195,11 @@ export function acceptForbiddenReason(fm: Record<string, unknown> | undefined | 
 // parsed — this parser exists so that recognition is actually reachable on
 // the fs write path (parity with S3 in the original plugin-only guard).
 //
-// Best-effort, matching the codebase's existing style for this class of
-// helper (see fs-backend/vault.ts's `parseSingleKeyFromLines` /
+// It binds to the SAME `LEADING_FRONTMATTER_RE` / `stripLeadingBom` as
+// `frontmatterOf` above — one fence recognizer, not two that can drift.
+//
+// Best-effort otherwise, matching the codebase's existing style for this
+// class of helper (see fs-backend/vault.ts's `parseSingleKeyFromLines` /
 // fs-backend/index-store.ts's `parseAllFrontmatter`): scalars, quoted
 // scalars, inline arrays `[a, b]`, block arrays (`key:\n  - a`), and inline
 // maps `{k: v}` (one level, scalar values only — enough to detect an
@@ -216,7 +246,7 @@ function guardInlineMap(inner: string): Record<string, string | number | boolean
  * See the block comment above for scope/limits.
  */
 export function parseGuardFrontmatter(markdown: string): Record<string, unknown> | null {
-  const m = /^﻿?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(markdown);
+  const m = LEADING_FRONTMATTER_RE.exec(stripLeadingBom(markdown));
   if (!m) return null;
   const lines = m[1].split(/\r?\n/);
   const out: Record<string, unknown> = {};
