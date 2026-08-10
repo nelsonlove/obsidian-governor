@@ -24,6 +24,14 @@ beforeEach(async () => {
   await mkdir(tmpRoot, { recursive: true });
 });
 
+// Matches the accept-forbidden guard's refusal shape by CODE, not message text —
+// AcceptForbiddenError's stringified form is "AcceptForbiddenError: <reason>. ...",
+// which does not literally contain "accept_forbidden" (that's the `.code`
+// property, per accept-guard.ts).
+function isAcceptForbidden(e: unknown): boolean {
+  return e instanceof Error && (e as { code?: string }).code === "accept_forbidden";
+}
+
 describe("resolveInVault — lexical guards", () => {
   test("resolves a plain relative path inside the vault", () => {
     const abs = vault.resolveInVault("Projects/Plan.md");
@@ -107,7 +115,7 @@ describe("accept-forbidden guard — module-level singleton functions (issue #10
   test("writeNote with acceptance-status: accepted is REFUSED", async () => {
     await assert.rejects(
       () => vault.writeNote("note.md", "---\nacceptance-status: accepted\n---\nbody", false),
-      /accept_forbidden/,
+      isAcceptForbidden,
     );
   });
 
@@ -124,7 +132,7 @@ describe("accept-forbidden guard — module-level singleton functions (issue #10
   test("appendNote creating a NEW note whose fence asserts acceptance is REFUSED", async () => {
     await assert.rejects(
       () => vault.appendNote("note.md", "---\nacceptance-status: accepted\n---\nbody"),
-      /accept_forbidden/,
+      isAcceptForbidden,
     );
   });
 
@@ -137,7 +145,7 @@ describe("accept-forbidden guard — module-level singleton functions (issue #10
     await vault.writeNote("note.md", "---\nname: N\n---\nbody", false);
     await assert.rejects(
       () => vault.setFrontmatterField("note.md", "acceptance-status", "accepted"),
-      /accept_forbidden/,
+      isAcceptForbidden,
     );
     const value = await vault.getFrontmatterField("note.md", "acceptance-status");
     assert.equal(value, undefined, "the field must not have been written");
@@ -170,7 +178,7 @@ describe("accept-forbidden guard — module-level singleton functions (issue #10
           "prepend",
           "---\nacceptance-status: accepted\n---",
         ),
-      /accept_forbidden/,
+      isAcceptForbidden,
     );
     // And confirm the original content is untouched.
     assert.equal(await vault.readNote("note.md"), "some text\n^anchor\nmore text");
@@ -197,12 +205,12 @@ describe("accept-forbidden guard — recognition parity across fence variants", 
   const ACCEPTED_BODY = "acceptance-status: accepted\n---\nbody";
 
   test("plain control case: no BOM/CRLF/trailing-ws is refused", async () => {
-    await assert.rejects(() => vault.writeNote("a.md", `---\n${ACCEPTED_BODY}`, false), /accept_forbidden/);
+    await assert.rejects(() => vault.writeNote("a.md", `---\n${ACCEPTED_BODY}`, false), isAcceptForbidden);
   });
 
   test("a leading BOM (U+FEFF), stripped exactly once, is refused", async () => {
     const withBom = "\uFEFF---\n" + ACCEPTED_BODY;
-    await assert.rejects(() => vault.writeNote("b.md", withBom, false), /accept_forbidden/);
+    await assert.rejects(() => vault.writeNote("b.md", withBom, false), isAcceptForbidden);
   });
 
   test("a SECOND leading BOM is content, not a marker — NOT stripped, and correctly leaves the fence unrecognized", async () => {
@@ -218,12 +226,12 @@ describe("accept-forbidden guard — recognition parity across fence variants", 
 
   test("CRLF line endings are refused", async () => {
     const crlf = "---\r\n" + ACCEPTED_BODY.replace(/\n/g, "\r\n");
-    await assert.rejects(() => vault.writeNote("d.md", crlf, false), /accept_forbidden/);
+    await assert.rejects(() => vault.writeNote("d.md", crlf, false), isAcceptForbidden);
   });
 
   test("trailing spaces/tabs after the opening and closing --- are refused", async () => {
     const trailing = "--- \t\n" + "acceptance-status: accepted\n" + "---\t\nbody";
-    await assert.rejects(() => vault.writeNote("e.md", trailing, false), /accept_forbidden/);
+    await assert.rejects(() => vault.writeNote("e.md", trailing, false), isAcceptForbidden);
   });
 });
 
