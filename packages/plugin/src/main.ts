@@ -52,9 +52,13 @@ const DEFAULT_SETTINGS: VaultMcpSettings = {
   enabled: true,
   allowDangerousCli: false,
   trustedReadOnlyPlugins: [],
-  // Cloned so settings edits can never mutate the module-level default rows.
+  // Cloned so settings edits can never mutate the module-level default rows
+  // (item 6: schemes now clones symmetrically with vocabularies — a shallow
+  // `.map((s) => ({...s}))` would miss a nested `config` object were one ever
+  // added to DEFAULT_SCHEMES's entries, so this uses structuredClone for a
+  // real deep copy rather than assuming the shape stays flat).
   vocabularies: DEFAULT_VOCABULARIES.map((v) => ({ ...v })),
-  schemes: DEFAULT_SCHEMES,
+  schemes: structuredClone(DEFAULT_SCHEMES),
 };
 
 class DiagnosticsModal extends Modal {

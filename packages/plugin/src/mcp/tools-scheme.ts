@@ -144,6 +144,21 @@ function folderOf(path: string): string {
   return idx === -1 ? "" : path.slice(0, idx);
 }
 
+interface FreeBlock {
+  next: string | null;
+  gaps: string[];
+  truncated: boolean;
+  /** False for a scope kind that can NEVER allocate (a plain area, an
+   * expanded-item, or — item 1's fix — a category folded into an expanded
+   * area's band), as opposed to `exhausted` (true only for an
+   * allocate-capable scope that is genuinely full). See
+   * ScopeProvider.allocatable. */
+  allocatable: boolean;
+  /** Present only when `allocatable` is false and the provider has one —
+   * points at where allocation is possible instead. */
+  hint?: string;
+}
+
 /**
  * Up to 20 currently-open addresses in `scope`, via the provider's own
  * `nextFree` alone — no scheme-specific knowledge beyond the public
@@ -158,6 +173,13 @@ function folderOf(path: string): string {
  * when non-empty — the same answer `obsidian_next_address` gives for the
  * same scope and notes.
  *
+ * A scope that is structurally never allocatable (`provider.allocatable`
+ * reports `allocatable: false` — a plain area, an expanded-item, or a
+ * category folded into an expanded area's band) short-circuits to an empty,
+ * untruncated gap list with `allocatable: false` and (when the provider
+ * offers one) a `hint` — no point probing `nextFree` 20 times against a
+ * scope that can never return anything but null.
+ *
  * `truncated` mirrors tools-links.ts's convention (`MAX_ITEMS` + a boolean
  * flag on every capped list): the 20-item cap is a summary bound, not a
  * claim about how many slots are actually open, and a caller must be able to
@@ -166,7 +188,11 @@ function folderOf(path: string): string {
  * id rather than a genuinely scarce gap. Costs one extra `nextFree` probe,
  * and only when the loop actually ran all 20 iterations.
  */
-function computeFree(provider: ScopeProvider, scope: Scope, notes: string[]): { next: string | null; gaps: string[]; truncated: boolean } {
+function computeFree(provider: ScopeProvider, scope: Scope, notes: string[]): FreeBlock {
+  const alloc = provider.allocatable(scope);
+  if (!alloc.allocatable) {
+    return { next: null, gaps: [], truncated: false, allocatable: false, ...(alloc.hint ? { hint: alloc.hint } : {}) };
+  }
   const gaps: string[] = [];
   let working = notes;
   for (let i = 0; i < 20; i++) {
@@ -177,7 +203,7 @@ function computeFree(provider: ScopeProvider, scope: Scope, notes: string[]): { 
     working = [...working, `${formatted} .gap-probe.md`];
   }
   const truncated = gaps.length === 20 && provider.nextFree(scope, working) !== null;
-  return { next: gaps[0] ?? null, gaps, truncated };
+  return { next: gaps[0] ?? null, gaps, truncated, allocatable: true };
 }
 
 export function registerSchemeTools(server: McpServer, ctx: SchemeToolsCtx): void {
@@ -285,7 +311,10 @@ export function registerSchemeTools(server: McpServer, ctx: SchemeToolsCtx): voi
         "\"27\"). This COMPUTES ONLY — it reserves nothing, so a second call, or a competing session, can compute the " +
         "identical answer right up until a note actually lands there. Pair this with `obsidian_claim_scope` to hold " +
         "the slot exclusively while you create the note. Under a path allowlist, the address returned may already be " +
-        "held by a note outside your allowlist, since a hidden note's slot cannot read as taken. Read-only.",
+        "held by a note outside your allowlist, since a hidden note's slot cannot read as taken. `allocatable: false` " +
+        "marks a scope that can NEVER allocate (a plain area, an expanded-item, or a category folded into an " +
+        "expanded area's band — those allocate via that area's own scope instead, named in `hint` when applicable), " +
+        "distinct from `exhausted: true`, which means an allocatable scope is simply full right now. Read-only.",
       inputSchema: {
         scope: z.string().min(1).describe('A scope token in the scheme\'s own grammar, e.g. "06", "90-99", "27".'),
         scheme: z
@@ -304,11 +333,21 @@ export function registerSchemeTools(server: McpServer, ctx: SchemeToolsCtx): voi
         const { instance } = pick;
         const scope = parseScopeToken(instance, args.scope);
         if (!scope) return codedError("invalid_scope", `"${args.scope}" does not parse as a scope in scheme "${instance.id}"`);
+        const alloc = instance.provider.allocatable(scope);
+        if (!alloc.allocatable) {
+          return ok({
+            scope: args.scope,
+            next: null,
+            exhausted: false,
+            allocatable: false,
+            ...(alloc.hint ? { hint: alloc.hint } : {}),
+          });
+        }
         const notes = visible(ctx.notes());
         const next = instance.provider.nextFree(scope, notes);
         return next
-          ? ok({ scope: args.scope, next: instance.provider.format(next), exhausted: false })
-          : ok({ scope: args.scope, next: null, exhausted: true });
+          ? ok({ scope: args.scope, next: instance.provider.format(next), exhausted: false, allocatable: true })
+          : ok({ scope: args.scope, next: null, exhausted: true, allocatable: true });
       } catch (e) {
         return fail(e);
       }
@@ -323,9 +362,11 @@ export function registerSchemeTools(server: McpServer, ctx: SchemeToolsCtx): voi
       description:
         "List the visible notes that belong to a scope (e.g. category \"06\"), address-ordered, plus the next free " +
         "address and up to 20 currently-open slots (`free.truncated: true` when more exist beyond the cap). " +
-        "Read-only; pair `free.next` with `obsidian_claim_scope` the same way `obsidian_next_address` does — this " +
-        "tool computes, it does not reserve. Under a path allowlist, `members` omits notes you cannot see, so a slot " +
-        "listed as free may already be held by one of them.",
+        "`free.allocatable: false` marks a scope that can NEVER allocate (a plain area, an expanded-item, or a " +
+        "category folded into an expanded area's band — see `free.hint`), distinct from a full allocatable scope's " +
+        "empty `free.gaps`. Read-only; pair `free.next` with `obsidian_claim_scope` the same way `obsidian_next_address` " +
+        "does — this tool computes, it does not reserve. Under a path allowlist, `members` omits notes you cannot see, " +
+        "so a slot listed as free may already be held by one of them.",
       inputSchema: {
         scope: z.string().min(1).describe('A scope token in the scheme\'s own grammar, e.g. "06", "90-99", "27".'),
         scheme: z
