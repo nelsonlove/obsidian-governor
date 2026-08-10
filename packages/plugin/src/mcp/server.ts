@@ -6,7 +6,7 @@ import { registerVaultWriteTools } from "./tools-vault-write.js";
 import { registerComplementaryTools } from "./tools-complementary.js";
 import { registerNavTools } from "./tools-nav.js";
 import { registerIntegrationTools } from "./tools-integrations.js";
-import { registerCliTools } from "./tools-cli.js";
+import { registerCliTools, obsidianTemplateReader } from "./tools-cli.js";
 import { registerExternalTools } from "./external-tools.js";
 import { registerLockTools } from "./tools-locks.js";
 import { registerUidTools } from "./tools-uid.js";
@@ -172,9 +172,11 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   // fileManager.renameFile, so this reports the drift that came from OUTSIDE.
   registerLinkTools(server, obsidianLinkSource(app), ctx);
   // ── official-CLI proxy — conditional on the CLI binary being installed ──────
-  // parseYaml is injected for the accept-forbidden guard's content-fence scan
-  // (tools-cli.ts stays obsidian-free; obsidian is types-only in node tests).
-  registerCliTools(server, ctx, { parseYaml });
+  // parseYaml is injected for the accept-forbidden guard's content-fence scan;
+  // readTemplate for the template guard (create template= / quickadd:run-
+  // template path= draw content from a vault note the params only NAME).
+  // Both injected so tools-cli.ts stays obsidian-free for headless tests.
+  registerCliTools(server, ctx, { parseYaml, readTemplate: obsidianTemplateReader(app) });
   // ── externally-published tools (other Obsidian plugins via plugin.api) ─────
   registerExternalTools(server, app, ctx);
 
