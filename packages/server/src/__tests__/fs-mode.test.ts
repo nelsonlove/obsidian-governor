@@ -246,3 +246,79 @@ describe("createFsHandler / buildFsServer", () => {
     }
   });
 });
+
+/**
+ * Issue #104 — the accept-forbidden guard, exercised through the REAL exposed
+ * MCP tool (obsidian_write_note) on the REAL fs-failover handler, not just
+ * against the underlying FilesystemBackend/VaultImpl classes directly. An
+ * independent PR review of the initial #104 patch found that guarding
+ * FilesystemBackend alone was not sufficient: this server's own
+ * makeBackend() (fs-mode.ts) wraps the MODULE-LEVEL singleton functions
+ * exported from @vault-mcp/core (writeNote/appendNote/setFrontmatterField/
+ * patchNote, bound to a private VaultImpl singleton) — a SEPARATE code path
+ * from the FilesystemBackend class. The guard had to move into VaultImpl
+ * itself (the shared implementation both paths delegate to) for it to
+ * actually reach this handler. This suite is the regression test for that:
+ * it fails if the guard is ever wired to the wrong implementation again.
+ */
+describe("obsidian_write_note — accept-forbidden guard reaches the real fs-failover handler (issue #104)", () => {
+  test("a write carrying acceptance-status: accepted is REFUSED through the real MCP tool", async () => {
+    const { client, teardown } = await makeClientFromFsServer();
+    try {
+      const result = await client.callTool({
+        name: "obsidian_write_note",
+        arguments: {
+          path: "fs-mode-accept-guard-test/Accepted.md",
+          content: "---\nacceptance-status: accepted\n---\nbody",
+          overwrite: false,
+        },
+      });
+      assert.ok(result.isError, "expected the write to be refused (isError: true)");
+      const text = (result.content as Array<{ type: string; text: string }>)[0].text;
+      assert.match(text, /accept_forbidden|accept-forbidden|acceptance/i);
+
+      // And confirm nothing landed on disk.
+      const readResult = await client.callTool({
+        name: "obsidian_read_note",
+        arguments: { path: "fs-mode-accept-guard-test/Accepted.md" },
+      });
+      assert.ok(readResult.isError, "the refused note must not exist on disk");
+    } finally {
+      await teardown();
+    }
+  });
+
+  test("a normal (non-accepted) write still SUCCEEDS through the real MCP tool", async () => {
+    const { client, teardown } = await makeClientFromFsServer();
+    try {
+      const result = await client.callTool({
+        name: "obsidian_write_note",
+        arguments: {
+          path: "fs-mode-accept-guard-test/Normal.md",
+          content: "---\nname: N\n---\nordinary body",
+          overwrite: false,
+        },
+      });
+      assert.ok(!result.isError, `unexpected error: ${JSON.stringify(result.content)}`);
+    } finally {
+      await teardown();
+    }
+  });
+
+  test("a write carrying an accepted-family value behind a leading BOM is REFUSED (recognition parity)", async () => {
+    const { client, teardown } = await makeClientFromFsServer();
+    try {
+      const result = await client.callTool({
+        name: "obsidian_write_note",
+        arguments: {
+          path: "fs-mode-accept-guard-test/BomAccepted.md",
+          content: "\uFEFF---\nacceptance-status: accepted\n---\nbody",
+          overwrite: false,
+        },
+      });
+      assert.ok(result.isError, "a BOM-prefixed accepted fence must be refused, not silently honored unguarded");
+    } finally {
+      await teardown();
+    }
+  });
+});
