@@ -4,8 +4,8 @@
 
 vault-mcp is an Obsidian plugin that connects AI agents (Claude Code, or anything that speaks
 MCP) to your vault the *governed* way: agents see your vault the way Obsidian does, every change
-they make is recorded and attributed, and one rule is enforced in the code itself — **an agent
-can never mark its own work as accepted. That's yours.**
+they make is recorded and attributed, and one rule is enforced at the shared write primitive:
+**an agent cannot mark its own work as accepted through it. That's yours.**
 
 > **Desktop only.** Uses Node `net`/`fs` from Obsidian's renderer; `isDesktopOnly: true`.
 
@@ -34,8 +34,10 @@ keeps it that way.**
   becomes a file you can read.
 - **Nothing gets accepted without you.** An agent may mark its work `proposed`; a guard at the
   shared write path rejects any attempt — through any tool, any value type, any smuggling route
-  we've found (and we keep looking) — to write `accepted`. Reviewing and accepting happens in a
-  human-only review pane (the companion **Acceptance** plugin), never through the API.
+  we've found (and we keep looking) — to write `accepted`. Reviewing and accepting is meant to
+  happen only in a human-only review pane (the companion **Acceptance** plugin) — never through
+  the API on the surfaces the guard covers today; the surfaces it doesn't cover yet are named,
+  tracked gaps, not silent ones (see [Honest limits](#honest-limits)).
 - **Notes that don't get lost.** Address a note by its frontmatter `uid:` and the reference
   survives every rename and move. Johnny Decimal user? `jd:06.11` works everywhere a path does.
   Moves heal their own backlinks; a link-health report names what's drifted (and repairs nothing
@@ -83,10 +85,12 @@ design, and this one's answers are canonical.
 ## The one rule
 
 **Acceptance is a human gesture, and it goes in no API.** There is no accept tool, no accept
-argument, and no way to smuggle acceptance in as data: the accept-forbidden guard at the shared
-write primitive rejects any write that would introduce `acceptance-status: accepted` (or
-`accepted-by` / `accepted-on`), on every write surface including the CLI proxy, while leaving
-your own existing accepted values untouched. Accepting stays a person's gesture in the
+argument, and no way to smuggle acceptance in as data **through the shared write primitive**: it
+rejects any write that would introduce `acceptance-status: accepted` (or `accepted-by` /
+`accepted-on`), on every write surface that routes through it — including the CLI proxy — while
+leaving your own existing accepted values untouched. A handful of surfaces don't route through
+it yet; those are named, tracked gaps, not silent ones — see [Honest limits](#honest-limits).
+Accepting stays a person's gesture in the
 [Acceptance](docs/README.md#the-acceptance-review-surface) review pane.
 
 This is the heart of the design — documented in full, including its honest limits and the
@@ -96,8 +100,8 @@ currently-open hardening work, in **[docs/acceptance-model.md](docs/acceptance-m
 
 - **Detection and recovery, not prevention.** Obsidian can't intercept disk writes; anything
   promising otherwise is theater. The guarantee is narrower and real: nothing arriving through
-  a supported surface can forge acceptance, everything is journaled, and out-of-band changes
-  surface as drift.
+  a surface the guard covers can forge acceptance, every write on the plugin's guarded path is
+  journaled, and out-of-band changes surface as drift.
 - **The FS-fallback path is the one documented exception to "journaled."** The headless
   filesystem-failover mode in `packages/server` — refused by default, explicit opt-in only —
   writes with no journal and no serialized queue until Obsidian reconnects
@@ -106,6 +110,13 @@ currently-open hardening work, in **[docs/acceptance-model.md](docs/acceptance-m
 - **Actively hardened, in the open.** The write perimeter is under continuous adversarial
   review; known gaps are tracked as public issues on this repo (milestone `0.8.1 — perimeter`)
   rather than papered over. The docs bound every claim to what's actually shipped.
+- **The guard doesn't cover every surface yet — named, not papered over.** Templated note
+  creation ([#137](https://github.com/nelsonlove/obsidian-vault-mcp-plugin/issues/137),
+  [#105](https://github.com/nelsonlove/obsidian-vault-mcp-plugin/issues/105)), CLI flag-form
+  arguments ([#107](https://github.com/nelsonlove/obsidian-vault-mcp-plugin/issues/107)), and a
+  couple of lower-severity paths can currently introduce or resurrect acceptance without going
+  through the guarded primitive. Each is a public, tracked issue; the full residual list lives
+  in [docs/acceptance-model.md](docs/acceptance-model.md).
 - **The review pane ships separately today** (the Acceptance plugin, folding into vault-mcp as
   a governance module). vault-mcp is fully useful without it — you just read the journal
   instead of clicking a queue.

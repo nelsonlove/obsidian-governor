@@ -18,7 +18,7 @@ surface, the socket/bridge architecture, the path allowlist). These docs go deep
 
 | Doc | What it covers |
 | --- | --- |
-| **[acceptance-model.md](acceptance-model.md)** | **The heart of the design.** Acceptance is human-only — "the accept verb goes in no API." The accept-forbidden guard at the shared write primitive, on every write surface including the CLI proxy, and its one documented residual. |
+| **[acceptance-model.md](acceptance-model.md)** | **The heart of the design.** Acceptance is human-only — "the accept verb goes in no API." The accept-forbidden guard at the shared write primitive, on every write surface that routes through it (including the CLI proxy), and its documented residuals (tracked publicly; not yet all closed). |
 | [kernel-v0.md](kernel-v0.md) | Kernel v0 primitives: the serialized write queue, the append-only write journal, `if_rev` optimistic concurrency, idempotency keys, advisory scope locks, and server/install identity. |
 | [identity-and-links.md](identity-and-links.md) | The identity substrate: the uid index, `uid:` addressing that survives rename/move, link healing, `obsidian_check_links`, `obsidian_repoint_link`, and read-boundary containment. |
 | [agent-writes.md](agent-writes.md) | The agent-facing write/review surface: **B1** `obsidian_write_notes` (batch write + opt-in `stamp`), **B2** agent change-`intent`, and **B3** `obsidian_pending_review`. |
@@ -59,13 +59,18 @@ The end-to-end shape:
   record per operation, optimistic concurrency, idempotent retries.
 - **Agents can stamp identity** (a created-seeded UUIDv7 `uid`, `created`/`modified`,
   canonical frontmatter order) and **attach an advisory `intent`** ("why I'm making this
-  change") that rides the journal record — but they **can never write acceptance**.
+  change") that rides the journal record — but stamping itself **never writes acceptance**
+  (it defaults and preserves `acceptance-status`, never mints or elevates it); the guard against
+  acceptance arriving by other routes is the shared write primitive, and its known gaps are
+  tracked (see the top-level [README's Honest limits](../README.md#honest-limits)).
 - **Agents can see what's pending** via `obsidian_pending_review`, so a well-behaved agent
   avoids stepping on a note a human is about to review.
-- **The human keeps the sole accept veto.** Acceptance is a gesture made in the
-  **[Acceptance review surface](#the-acceptance-review-surface)** — never through any tool,
-  never by any agent, never through the CLI. The kernel enforces this structurally (see
-  [acceptance-model.md](acceptance-model.md)).
+- **The human keeps the sole accept veto — by design, and by enforcement on the surfaces the
+  guard covers.** Acceptance is a gesture made in the
+  **[Acceptance review surface](#the-acceptance-review-surface)** — never through a tool, agent,
+  or CLI call the guard sees. The kernel enforces this structurally where it's wired in (see
+  [acceptance-model.md](acceptance-model.md) for the mechanism and its named, tracked
+  residuals).
 
 ### The Acceptance review surface
 
