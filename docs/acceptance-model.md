@@ -58,11 +58,21 @@ different byte, because a lone `\r` is content to the write path and a line brea
 scan.
 
 So the boundary is defined once, in `@vault-mcp/core`
-(`frontmatter-boundary.ts`: `stripLeadingBom`, `LEADING_FRONTMATTER_RE`,
+(`accept-guard.ts`: `stripLeadingBom`, `LEADING_FRONTMATTER_RE`,
 `leadingFrontmatterBlock`) — in **core** specifically, so both the Obsidian backend and the
-filesystem backend can bind to it rather than each re-deriving a boundary. `frontmatterOf` and
-the accept scanner's leading-fence check are two callers of that one recognizer, run against
-the raw honored bytes.
+filesystem backend can bind to it rather than each re-deriving a boundary. `frontmatterOf`,
+`parseGuardFrontmatter` and the accept scanner's leading-fence check are all callers of that
+one recognizer, run against the raw honored bytes.
+
+**One caller is a known exception, stated rather than glossed:** the CLI content path
+(`contentAcceptRefusal`) must expand the `\n`/`\t` escapes the CLI itself expands before the
+vault sees them, so it necessarily decides over a *reconstruction* of the honored document
+rather than the bytes it was handed. That reconstruction is a model of another program's
+escape semantics, and a model can be wrong — it does not currently account for an escaped
+backslash. That is a real residual (#153), and it is the
+reason the rule above is "decide over the honored bytes" rather than "never normalize": where
+normalization is unavoidable, the normalization itself becomes part of the guard's attack
+surface and has to be reasoned about explicitly.
 
 The scanner then adds a deliberately **broader** second pass — embedded fences over a
 line-ending-folded copy — because appended content the note will carry cannot be read back

@@ -195,10 +195,17 @@ export function cliAcceptRefusal(
  * injects obsidian.parseYaml).
  */
 export function contentAcceptRefusal(content: string, parseYaml?: (yaml: string) => unknown): string | null {
-  // The CLI un-escapes these before the vault sees them, so the expanded form
-  // IS the document that will be honored — that is what the leading-fence
-  // check must decide over. Line-ending folding is applied only to the
-  // embedded-fence scan (see scanForAcceptFence).
+  // The CLI un-escapes these before the vault sees them, so this expansion is
+  // the guard's best RECONSTRUCTION of the document that will be honored —
+  // and that reconstruction is what the leading-fence check decides over.
+  //
+  // Say "reconstruction", not "is": this models another program's escape
+  // semantics, and the model is known incomplete — it has no notion of an
+  // ESCAPED BACKSLASH, so a payload using one can make the guard see a fence
+  // end where the honored document has none. That residual is tracked (#153); it predates this code and is not closed here.
+  // Unlike the template path, the escapes cannot simply be left alone: the
+  // caller's bytes are NOT what lands, so scanning them raw would be a
+  // different — and larger — gap.
   const honored = content
     .replace(/\\r\\n|\\n/g, "\n") // literal \n (and \r\n) escapes the CLI expands
     .replace(/\\t/g, "\t"); // literal \t escapes
