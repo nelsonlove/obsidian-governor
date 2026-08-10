@@ -22,7 +22,11 @@
 //     would otherwise bypass it. property:set and content writes (create/append/
 //     prepend/periodic) are checked with the SAME accepted-family rule before
 //     the command runs. quickadd / eval / command run arbitrary macros/code and
-//     cannot be inspected — a documented RESIDUAL, not blocked here.
+//     cannot be inspected — DENIED BY DEFAULT via the command policy
+//     (cli-policy.ts), re-enabled only per-command through human-only settings.
+//   - Command policy (cli-policy.ts): a settings deny list (always wins) plus
+//     the deny-by-default opaque-accept set above; refusals are typed
+//     Error [cli_denied] and run before the danger gate, which still applies.
 
 import { z } from "zod";
 import { execFile } from "node:child_process";
@@ -33,6 +37,7 @@ import type { ServerCtx } from "./tools-core.js";
 // Reuse the SAME accepted-family rule the MCP note-write primitive uses — no
 // second definition of "accepted" on the CLI path (see cliAcceptRefusal below).
 import { acceptForbiddenReason } from "./write-notes-compose.js";
+import { cliCommandRefusal, configPathRefusal, OPAQUE_ACCEPT_CLI_COMMANDS } from "./cli-policy.js";
 
 // Mutating + can reach outside the vault (plugin installs fetch the network).
 const CLI_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };
@@ -89,15 +94,14 @@ export const DANGEROUS_LIST_DESC = [...DANGEROUS_EXACT].sort().join(", ") + ", a
 // CLI path has no "carry an existing human-granted value forward" expression),
 // so the introduce check is exactly right.
 //
-// RESIDUAL — flagged for a policy decision, connects to the board item
-// "obsidian_cli / run_command needs an allowlist/denylist": `quickadd` /
-// `quickadd:run` run arbitrary QuickAdd macros, and `eval` / `command` run
-// arbitrary code (already behind the danger gate). A macro/script can set
-// acceptance opaquely and CANNOT be inspected pre-exec. We deliberately do NOT
-// block quickadd — that would break legitimate macro use — so the residual is
-// documented here and named in the tool description, not silently closed. A
-// `create template=<t>` also draws frontmatter from a template note we cannot
-// read pre-exec; a lesser residual, same class.
+// RESIDUAL — CLOSED by the command policy (cli-policy.ts): the opaque
+// macro/code commands (`quickadd`/`quickadd:run`/`quickadd:run-template`/
+// `eval`/`command`) can set acceptance where no guard can inspect, so they
+// are DENIED BY DEFAULT and re-enabled only per-command through the human-only
+// `cliPolicy.allowOpaque` setting. The policy composes with (never replaces)
+// the danger gate below — a re-enabled `eval` still needs allowDangerousCli.
+// A `create template=<t>` also draws frontmatter from a template note we
+// cannot read pre-exec; a lesser residual, same class, still open.
 
 // property:set family — sets one property (documented `name=<prop> value=<val>`)
 // or, in shorthand, direct key=value params. `frontmatter:` alias included
@@ -112,9 +116,10 @@ const CONTENT_WRITE_RE =
   /^(?:create|append|prepend|base:create|(?:daily|weekly|monthly|quarterly|yearly):(?:create|append|prepend))$/;
 
 // Arbitrary-macro / code-execution commands that can set acceptance opaquely.
-// Named for the tool description + report — NOT blocked here (eval/command are
-// already behind the danger gate; quickadd is the live residual).
-export const CLI_OPAQUE_ACCEPT_RESIDUAL = ["command", "eval", "quickadd", "quickadd:run", "quickadd:run-template"];
+// The authoritative deny-by-default set now lives in cli-policy.ts
+// (OPAQUE_ACCEPT_CLI_COMMANDS); this re-export keeps the historical name for
+// the tool description + report surfaces.
+export const CLI_OPAQUE_ACCEPT_RESIDUAL: readonly string[] = OPAQUE_ACCEPT_CLI_COMMANDS;
 
 /**
  * The reason a CLI invocation would introduce acceptance, or null when it is
@@ -291,6 +296,7 @@ export function registerCliTools(
         "Output is the CLI's raw stdout/stderr plus exit_code — non-zero exits return isError with the same structure. " +
         "Requires the Obsidian CLI feature (Settings → General → Command line interface). " +
         `Dangerous commands (${DANGEROUS_LIST_DESC}) are blocked unless enabled in plugin settings. ` +
+        `Opaque macro/code commands (${[...OPAQUE_ACCEPT_CLI_COMMANDS].join(", ")}) are DENIED by default — the acceptance guard cannot inspect what they execute — and return Error [cli_denied]; a human can re-enable a specific one in settings. ` +
         "Acceptance is human-only: a property:set or content write that would introduce acceptance-status: accepted (or accepted-by/accepted-on) is refused with Error [accept_forbidden] — agents write only acceptance-status: proposed. " +
         "On timeout, the command may still have completed inside Obsidian (only the CLI forwarder is killed) — verify state before retrying a mutation. " +
         "Prefer a dedicated obsidian_* tool when one exists — those return structured data.",
@@ -315,6 +321,22 @@ export function registerCliTools(
           );
         }
         const command = args.command.trim();
+        // Command policy — the deny list and the deny-by-default opaque-accept
+        // set (cli-policy.ts). Checked FIRST: a policy-denied command is
+        // refused whatever the danger gate would say, and re-enabling an
+        // opaque command via settings does not skip the danger gate below —
+        // the two compose, both human-controlled.
+        const policyReason = cliCommandRefusal(command, settings.cliPolicy);
+        if (policyReason) {
+          return codedError("cli_denied", policyReason);
+        }
+        // Config territory is unreachable through the proxy whatever the
+        // external binary's own path handling — the human-only settings
+        // property must not rest on an unverified assumption about it.
+        const configReason = configPathRefusal(args.params, args.flags);
+        if (configReason) {
+          return codedError("cli_denied", configReason);
+        }
         if (isDangerousCliCommand(command) && !settings.allowDangerousCli) {
           return fail(
             `CLI command '${command}' is dangerous (code execution / app control) and is blocked. Enable "Allow dangerous CLI commands" in the vault-mcp settings to permit it.`

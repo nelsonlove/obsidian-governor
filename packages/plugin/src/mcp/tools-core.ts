@@ -11,6 +11,7 @@ import type { ExternalToolEntry } from "./external-tools.js";
 import type { Kernel, ModuleSettings, ServerIdentity, VocabInstanceSettings } from "../kernel/index.js";
 import { findObsidianBinary } from "./tools-cli.js";
 import type { SchemeInstanceConfig } from "../kernel/scheme/registry.js";
+import type { CliCommandPolicy } from "./cli-policy.js";
 
 export interface ServerCtx {
   pluginVersion: string;
@@ -38,6 +39,10 @@ export interface ServerCtx {
      * (mcp/modules-mount.ts) reads these; absent ⇒ every built-in module at
      * its default. */
     modules?: ModuleSettings;
+    /** Command policy for obsidian_cli / obsidian_run_command
+     * (mcp/cli-policy.ts). Absent ⇒ the defaults: the opaque-accept set
+     * denied, everything else allowed. */
+    cliPolicy?: CliCommandPolicy;
   };
   /** The configured controlled-vocabulary sources (tools-vocab.ts). Optional:
    * absent means the defaults; absent in tests that don't exercise it. */

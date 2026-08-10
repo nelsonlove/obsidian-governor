@@ -52,6 +52,15 @@ interface VaultMcpSettings {
    * mcp/modules-mount.ts.
    */
   modules: ModuleSettings;
+  /**
+   * Command policy for the arbitrary-execution surfaces (obsidian_cli +
+   * obsidian_run_command): a deny list (always wins) and the per-command
+   * re-enable list for the deny-by-default opaque-accept set (quickadd/eval/
+   * command; quickadd:* run_command ids). Human-only by construction — no MCP
+   * surface writes plugin settings, and the surfaces that could reach one
+   * indirectly are what this policy denies. See mcp/cli-policy.ts.
+   */
+  cliPolicy: { deny: string[]; allowOpaque: string[] };
 }
 const DEFAULT_SETTINGS: VaultMcpSettings = {
   setupAcknowledged: false,
@@ -68,6 +77,7 @@ const DEFAULT_SETTINGS: VaultMcpSettings = {
   vocabularies: DEFAULT_VOCABULARIES.map((v) => ({ ...v })),
   schemes: structuredClone(DEFAULT_SCHEMES),
   modules: {},
+  cliPolicy: { deny: [], allowOpaque: [] },
 };
 
 class DiagnosticsModal extends Modal {
@@ -91,7 +101,23 @@ export default class VaultMcpPlugin extends Plugin {
     unregisterTools: (owner) => this.externalRegistry.unregisterTools(owner),
   };
 
-  async loadSettings() { this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData()); }
+  async loadSettings() {
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    // Object.assign is shallow: a hand-edited data.json carrying a PARTIAL
+    // cliPolicy (one list, not both) would leave the other undefined and
+    // crash the settings tab; a WRONG-TYPED one (a string where a list
+    // belongs) would crash the policy matcher mid-call. Normalize to fresh
+    // arrays of strings — dropping malformed values, never throwing — and
+    // never alias DEFAULT_SETTINGS' own arrays (the schemes structuredClone
+    // discipline). Policy semantics are unaffected: a dropped malformed
+    // entry can only mean MORE denied, never less.
+    const list = (v: unknown): string[] =>
+      Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : [];
+    this.settings.cliPolicy = {
+      deny: list(this.settings.cliPolicy?.deny),
+      allowOpaque: list(this.settings.cliPolicy?.allowOpaque),
+    };
+  }
   async saveSettings() { await this.saveData(this.settings); }
 
   private discoveryCount(): number {
@@ -233,6 +259,7 @@ export default class VaultMcpPlugin extends Plugin {
         trustedReadOnlyPlugins: this.settings.trustedReadOnlyPlugins,
         schemes: this.settings.schemes,
         modules: this.settings.modules,
+        cliPolicy: this.settings.cliPolicy,
       }),
       serverIdentity,
       getExternalTools: () => this.externalRegistry.entries(),
