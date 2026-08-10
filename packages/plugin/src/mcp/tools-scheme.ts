@@ -34,7 +34,13 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ok, fail, codedError } from "./helpers.js";
 import { visiblePaths, type GuardSettings } from "../guard.js";
 import type { Address, Scope, ScopeProvider } from "../kernel/scheme/provider.js";
-import { excludeRoots, type SchemeInstance, type SchemeInstanceConfig, type SchemeRegistry } from "../kernel/scheme/registry.js";
+import {
+  excludeRoots,
+  SchemeUnavailableError,
+  type SchemeInstance,
+  type SchemeInstanceConfig,
+  type SchemeRegistry,
+} from "../kernel/scheme/registry.js";
 
 const RO = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 
@@ -63,19 +69,25 @@ const PROVIDER_EXAMPLES: Record<string, string[]> = {
   "johnny-decimal": ["06.11", "92021.10", "00-09"],
 };
 
-type Pick_ = { instance: SchemeInstance } | { error: string };
+type Pick_ = { instance: SchemeInstance } | { error: string } | { unavailable: string };
 
 /**
  * Select the scheme instance an argument names, or the sole configured
- * instance when none is given. The two "can't decide" cases (nothing
- * configured, several configured and none named) are both `{error}` — every
- * call site turns that into a `fail()`, since it is an argument problem, not
- * a scope problem (that's `invalid_scope`, below).
+ * instance when none is given. Three outcomes: `{instance}`, an ordinary
+ * `{error}` for the two "can't decide" cases (nothing configured, several
+ * configured and none named — an argument problem, not a scope problem,
+ * turned into a `fail()` by every call site), and `{unavailable}` (#88) when
+ * `schemeArg` names an id that IS configured but SKIPPED (no live
+ * instance) — every call site turns that into a coded `scheme_unavailable`
+ * refusal instead, distinct from plain "unknown", since the id is spoken
+ * for and the caller should fix the config, not the id.
  */
 function pickInstance(registry: SchemeRegistry, schemeArg?: string): Pick_ {
   if (schemeArg) {
     const instance = registry.get(schemeArg);
-    return instance ? { instance } : { error: `unknown scheme id "${schemeArg}"` };
+    if (instance) return { instance };
+    if (registry.skipped().has(schemeArg)) return { unavailable: new SchemeUnavailableError(schemeArg).message };
+    return { error: `unknown scheme id "${schemeArg}"` };
   }
   const instances = registry.instances();
   if (instances.length === 0) return { error: "no scheme instances are configured" };
@@ -89,15 +101,21 @@ function pickInstance(registry: SchemeRegistry, schemeArg?: string): Pick_ {
 
 /**
  * `obsidian_resolve_address`'s `address` direction: a "jd:06.11"-shaped ref
- * resolves via the registry's own parseRef; a bare "06.11" resolves only when
- * EXACTLY one scheme instance is configured (this tool takes no `scheme`
- * argument — bare addressing needs no ambiguity to resolve). The error
- * message is tool-specific (there is no `scheme` argument to point a caller
- * at), which is why this doesn't just reuse `pickInstance`.
+ * resolves via the registry's own parseRefDetailed; a bare "06.11" resolves
+ * only when EXACTLY one scheme instance is configured (this tool takes no
+ * `scheme` argument — bare addressing needs no ambiguity to resolve). The
+ * error message is tool-specific (there is no `scheme` argument to point a
+ * caller at), which is why this doesn't just reuse `pickInstance` for the
+ * bare-address fallback — but a ref naming a SKIPPED id (#88) reuses
+ * `SchemeUnavailableError`'s own message verbatim, same as `pickInstance`.
  */
-function resolveBareOrRef(registry: SchemeRegistry, raw: string): { instance: SchemeInstance; addr: Address } | { error: string } {
-  const viaRef = registry.parseRef(raw);
-  if (viaRef) return viaRef;
+function resolveBareOrRef(
+  registry: SchemeRegistry,
+  raw: string
+): { instance: SchemeInstance; addr: Address } | { error: string } | { unavailable: string } {
+  const detailed = registry.parseRefDetailed(raw);
+  if (detailed.kind === "resolved") return detailed;
+  if (detailed.kind === "skipped") return { unavailable: new SchemeUnavailableError(detailed.id).message };
   const instances = registry.instances();
   if (instances.length !== 1) {
     return {
@@ -112,16 +130,19 @@ function resolveBareOrRef(registry: SchemeRegistry, raw: string): { instance: Sc
 }
 
 /** `obsidian_expected_location`'s `address` direction: same as above but WITH
- * a `scheme` argument to fall back on, so it reuses `pickInstance` verbatim. */
+ * a `scheme` argument to fall back on, so it reuses `pickInstance` verbatim
+ * (including its `{unavailable}` outcome) once the ref shape itself doesn't
+ * already name a skipped id. */
 function resolveAddressAndInstance(
   registry: SchemeRegistry,
   raw: string,
   schemeArg?: string
-): { instance: SchemeInstance; addr: Address } | { error: string } {
-  const viaRef = registry.parseRef(raw);
-  if (viaRef) return viaRef;
+): { instance: SchemeInstance; addr: Address } | { error: string } | { unavailable: string } {
+  const detailed = registry.parseRefDetailed(raw);
+  if (detailed.kind === "resolved") return detailed;
+  if (detailed.kind === "skipped") return { unavailable: new SchemeUnavailableError(detailed.id).message };
   const pick = pickInstance(registry, schemeArg);
-  if ("error" in pick) return pick;
+  if ("error" in pick || "unavailable" in pick) return pick;
   const addr = pick.instance.provider.parse(raw);
   return addr ? { instance: pick.instance, addr } : { error: `"${raw}" does not parse as an address` };
 }
@@ -247,7 +268,22 @@ export function registerSchemeTools(server: McpServer, ctx: SchemeToolsCtx): voi
             examples,
           };
         });
-        return ok({ schemes });
+        // Skipped instances (#88 — configured but no live instance: unknown
+        // provider, invalid config, invalid excludedRoots, or a duplicate id
+        // with no live row of its own) are listed too, but bare-bones:
+        // {id, available: false} — no `config`, no `problems`, no
+        // `capabilities`. This is DISCOVERABILITY without disclosure, same
+        // asymmetry as `instance.excludedRoots` above being withheld even
+        // though `config` is shown in full: a problem string can quote the
+        // very config value that failed validation (a bad `excludedRoots`
+        // entry is the clearest case — the string IS a path), so surfacing
+        // it here, on a tool NOT gated by settings access, would leak
+        // through a side channel exactly like an unfiltered `excludedRoots`
+        // would. A caller who wants the reason reads it in settings (#74);
+        // this tool only ever confirms an id is spoken for and currently
+        // unavailable.
+        const skippedEntries = [...registry.skipped().keys()].map((id) => ({ id, available: false as const }));
+        return ok({ schemes: [...schemes, ...skippedEntries] });
       } catch (e) {
         return fail(e);
       }
@@ -284,6 +320,7 @@ export function registerSchemeTools(server: McpServer, ctx: SchemeToolsCtx): voi
 
         if (args.address) {
           const resolved = resolveBareOrRef(registry, args.address);
+          if ("unavailable" in resolved) return codedError("scheme_unavailable", resolved.unavailable);
           if ("error" in resolved) return fail(new Error(resolved.error));
           const { addr } = resolved;
           const scopedNotes = excludeRoots(notes, resolved.instance.excludedRoots);
@@ -364,6 +401,7 @@ export function registerSchemeTools(server: McpServer, ctx: SchemeToolsCtx): voi
       try {
         const registry = ctx.registry();
         const pick = pickInstance(registry, args.scheme);
+        if ("unavailable" in pick) return codedError("scheme_unavailable", pick.unavailable);
         if ("error" in pick) return fail(new Error(pick.error));
         const { instance } = pick;
         const scope = parseScopeToken(instance, args.scope);
@@ -417,6 +455,7 @@ export function registerSchemeTools(server: McpServer, ctx: SchemeToolsCtx): voi
       try {
         const registry = ctx.registry();
         const pick = pickInstance(registry, args.scheme);
+        if ("unavailable" in pick) return codedError("scheme_unavailable", pick.unavailable);
         if ("error" in pick) return fail(new Error(pick.error));
         const { instance } = pick;
         const scope = parseScopeToken(instance, args.scope);
@@ -465,6 +504,7 @@ export function registerSchemeTools(server: McpServer, ctx: SchemeToolsCtx): voi
 
         if (args.address) {
           const resolved = resolveAddressAndInstance(registry, args.address, args.scheme);
+          if ("unavailable" in resolved) return codedError("scheme_unavailable", resolved.unavailable);
           if ("error" in resolved) return fail(new Error(resolved.error));
           const { instance, addr } = resolved;
           const scopedNotes = excludeRoots(notes, instance.excludedRoots);
@@ -481,6 +521,7 @@ export function registerSchemeTools(server: McpServer, ctx: SchemeToolsCtx): voi
           return ok({ address: null, expected_folder: null, actual_folder: null, placed: null });
         }
         const pick = args.scheme ? pickInstance(registry, args.scheme) : null;
+        if (pick && "unavailable" in pick) return codedError("scheme_unavailable", pick.unavailable);
         if (pick && "error" in pick) return fail(new Error(pick.error));
         const candidateInstances = pick ? [pick.instance] : registry.instances();
         for (const instance of candidateInstances) {

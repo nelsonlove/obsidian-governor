@@ -14,6 +14,7 @@ import {
   SchemeRegistry,
   AddressUnresolvedError,
   AddressAmbiguousError,
+  SchemeUnavailableError,
   requireOneAddress,
 } from "../src/kernel/scheme/registry.js";
 import { DEFAULT_JD_CONFIG } from "../src/kernel/scheme/jd.js";
@@ -394,5 +395,177 @@ describe("requireOneAddress — throws on 0 or 2+ candidates, else returns the o
 
   test("a ref that isn't scheme-shaped (not registered / unparseable) also throws AddressUnresolvedError", () => {
     assert.throws(() => requireOneAddress(reg, "nope:06.11", NOTES), AddressUnresolvedError);
+  });
+});
+
+// ── skipped() / parseRefDetailed / SchemeUnavailableError — issue #88 ──────────
+//
+// Typed refusal for a tool call naming a SKIPPED instance (configured but no
+// live instance — unknown provider, invalid config, invalid excludedRoots, or
+// a duplicate id with no live row of its own). Settings-tab surfacing of the
+// same information landed in #74 (the console.error lines makeRegistry
+// already emits); this is the remaining half — the registry retains the
+// skipped ids so a CALL naming one gets a typed refusal instead of reading as
+// an ordinary, never-registered id.
+
+describe("SchemeRegistry.skipped() — ids configured but with no live instance", () => {
+  test("an unknown provider skip is retained in skipped()", () => {
+    const originalError = console.error;
+    console.error = () => {};
+    let reg;
+    try {
+      reg = makeRegistry([{ id: "bogus", provider: "not-a-real-provider" }]);
+    } finally {
+      console.error = originalError;
+    }
+    assert.ok(reg.skipped().has("bogus"));
+    assert.ok(reg.skipped().get("bogus").length > 0);
+  });
+
+  test("an invalid-config skip is retained in skipped()", () => {
+    const originalError = console.error;
+    console.error = () => {};
+    let reg;
+    try {
+      reg = makeRegistry([{ id: "jd", provider: "johnny-decimal", config: { contentDecimalFloor: 100 } }]);
+    } finally {
+      console.error = originalError;
+    }
+    assert.ok(reg.skipped().has("jd"));
+    assert.match(reg.skipped().get("jd").join(";"), /contentDecimalFloor/);
+  });
+
+  test("an invalid-excludedRoots skip is retained in skipped(), naming the bad entry", () => {
+    const originalError = console.error;
+    console.error = () => {};
+    let reg;
+    try {
+      reg = makeRegistry([{ id: "jd", provider: "johnny-decimal", excludedRoots: ["/DISTINCTIVE-MARKER-ROOT"] }]);
+    } finally {
+      console.error = originalError;
+    }
+    assert.ok(reg.skipped().has("jd"));
+    assert.match(reg.skipped().get("jd").join(";"), /DISTINCTIVE-MARKER-ROOT/);
+  });
+
+  test("a duplicate id with NO live instance (first row itself skipped) is retained in skipped()", () => {
+    const originalError = console.error;
+    console.error = () => {};
+    let reg;
+    try {
+      reg = makeRegistry([
+        { id: "jd", provider: "bogus" },
+        { id: "jd", provider: "johnny-decimal" },
+      ]);
+    } finally {
+      console.error = originalError;
+    }
+    assert.equal(reg.get("jd"), null);
+    assert.ok(reg.skipped().has("jd"), "no live instance claims the id — it must read as skipped");
+  });
+
+  test("a duplicate id that DOES have a live instance is NOT in skipped() — the live instance serves, nothing to refuse", () => {
+    const originalError = console.error;
+    console.error = () => {};
+    let reg;
+    try {
+      reg = makeRegistry([
+        { id: "jd", provider: "johnny-decimal" },
+        { id: "jd", provider: "johnny-decimal", config: { contentDecimalFloor: 5 } },
+      ]);
+    } finally {
+      console.error = originalError;
+    }
+    assert.ok(reg.get("jd"), "sanity: the first row did register");
+    assert.equal(reg.skipped().has("jd"), false, "a live instance already serves this id — not a refusal case");
+  });
+
+  test("an id never mentioned in any config is absent from skipped() too (distinct from 'skipped')", () => {
+    const reg = makeRegistry(DEFAULT_SCHEMES);
+    assert.equal(reg.skipped().has("never-configured"), false);
+  });
+
+  test("a registry built directly (bypassing makeRegistry) has an empty skipped() map", () => {
+    const reg = new SchemeRegistry([]);
+    assert.equal(reg.skipped().size, 0);
+  });
+});
+
+describe("parseRefDetailed — distinguishes resolved / skipped / none", () => {
+  test("a well-formed ref against a registered scheme is 'resolved'", () => {
+    const reg = makeRegistry(DEFAULT_SCHEMES);
+    const detailed = reg.parseRefDetailed("jd:06.11");
+    assert.equal(detailed.kind, "resolved");
+    assert.equal(detailed.instance.id, "jd");
+  });
+
+  test("a ref naming a SKIPPED id is 'skipped', carrying the id and its problems", () => {
+    const originalError = console.error;
+    console.error = () => {};
+    let reg;
+    try {
+      reg = makeRegistry([{ id: "jd", provider: "not-a-real-provider" }]);
+    } finally {
+      console.error = originalError;
+    }
+    const detailed = reg.parseRefDetailed("jd:06.11");
+    assert.equal(detailed.kind, "skipped");
+    assert.equal(detailed.id, "jd");
+    assert.ok(detailed.problems.length > 0);
+  });
+
+  test("a ref naming a skipped id still returns null from parseRef (backward-compatible)", () => {
+    const originalError = console.error;
+    console.error = () => {};
+    let reg;
+    try {
+      reg = makeRegistry([{ id: "jd", provider: "not-a-real-provider" }]);
+    } finally {
+      console.error = originalError;
+    }
+    assert.equal(reg.parseRef("jd:06.11"), null);
+  });
+
+  test("an unregistered, never-skipped id is 'none'", () => {
+    const reg = makeRegistry(DEFAULT_SCHEMES);
+    assert.deepEqual(reg.parseRefDetailed("nope:06.11"), { kind: "none" });
+  });
+
+  test("a plain path with no colon is 'none'", () => {
+    const reg = makeRegistry(DEFAULT_SCHEMES);
+    assert.deepEqual(reg.parseRefDetailed("Unfiled/loose.md"), { kind: "none" });
+  });
+
+  test("a filename containing a colon that isn't scheme-shaped is 'none' (pinned: must keep passing through as an ordinary path)", () => {
+    const reg = makeRegistry(DEFAULT_SCHEMES);
+    assert.deepEqual(reg.parseRefDetailed("Notes/a:b.md"), { kind: "none" });
+  });
+
+  test("'uid:...' is reserved and always 'none', even against a skipped 'uid' id (which can't happen, but the reserved check runs first)", () => {
+    const reg = makeRegistry(DEFAULT_SCHEMES);
+    assert.deepEqual(reg.parseRefDetailed("uid:abc"), { kind: "none" });
+  });
+});
+
+describe("SchemeUnavailableError — names only the id, never the problem strings", () => {
+  test("code is 'scheme_unavailable' and the message names the id", () => {
+    const err = new SchemeUnavailableError("jd");
+    assert.equal(err.code, "scheme_unavailable");
+    assert.match(err.message, /"jd"/);
+  });
+
+  test("the message never echoes a problem string, even one with a distinctive marker naming vault territory", () => {
+    const originalError = console.error;
+    console.error = () => {};
+    let reg;
+    try {
+      reg = makeRegistry([{ id: "jd", provider: "johnny-decimal", excludedRoots: ["/DISTINCTIVE-MARKER-ROOT"] }]);
+    } finally {
+      console.error = originalError;
+    }
+    // Sanity: the marker really is in the recorded problem.
+    assert.match(reg.skipped().get("jd").join(";"), /DISTINCTIVE-MARKER-ROOT/);
+    const err = new SchemeUnavailableError("jd");
+    assert.equal(err.message.includes("DISTINCTIVE-MARKER-ROOT"), false, "problem text must never reach the refusal message");
   });
 });
