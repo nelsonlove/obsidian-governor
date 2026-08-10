@@ -26,6 +26,7 @@ surface, the socket/bridge architecture, the path allowlist). These docs go deep
 | [scope-provider.md](scope-provider.md) | The scope provider module: Johnny Decimal `jd:` addressing and read-only allocation (compute, not reserve). |
 | [vocabulary.md](vocabulary.md) | The vocabulary provider module: read-only validation of tags, properties, types, and glossary terms. |
 | [conformance.md](conformance.md) | The TS conformance engine: rule packs, the ratchet (baseline-diffed findings), the ported legacy checks, and the headless CLI. |
+| [reference.md](reference.md) | The precise operational contracts: addressing (`uid:`/schemes), write queue & journal semantics, `if_rev`/idempotency, advisory claims, the path allowlist and its oracles, external-tool trust, Code Mode. |
 
 ## How the pieces fit — the Assent review channel
 
