@@ -333,7 +333,7 @@ export function registerCliTools(
         // Config territory is unreachable through the proxy whatever the
         // external binary's own path handling — the human-only settings
         // property must not rest on an unverified assumption about it.
-        const configReason = configPathRefusal(args.params);
+        const configReason = configPathRefusal(args.params, args.flags);
         if (configReason) {
           return codedError("cli_denied", configReason);
         }

@@ -136,6 +136,28 @@ describe("configPathRefusal: config territory unreachable through the proxy", ()
   test("non-string params are ignored", () => {
     assert.equal(configPathRefusal({ silent: true, depth: 3 }), null);
   });
+
+  test("case-fold: .Obsidian / .OBSIDIAN / mixed case all refuse (APFS is case-insensitive)", () => {
+    // On macOS's default case-insensitive APFS, ".Obsidian" resolves to
+    // ".obsidian", so any casing must be caught or the backstop leaks.
+    assert.ok(configPathRefusal({ file: ".Obsidian/plugins/vault-mcp/data.json" }));
+    assert.ok(configPathRefusal({ file: ".OBSIDIAN/plugins/vault-mcp/data.json" }));
+    assert.ok(configPathRefusal({ file: ".oBsIdIaN/community-plugins.json" }));
+    assert.ok(configPathRefusal({ target: "sub\\.Obsidian\\x" }));
+    // A benign lookalike still stays clean regardless of casing.
+    assert.equal(configPathRefusal({ file: "notes/X.Obsidian.md" }), null);
+  });
+
+  test("path-valued flags are scanned too (--file=.obsidian/… escapes params otherwise)", () => {
+    assert.ok(configPathRefusal(undefined, ["--file=.obsidian/plugins/vault-mcp/data.json"]));
+    assert.ok(configPathRefusal(undefined, ["--file=.Obsidian/plugins/vault-mcp/data.json"]));
+    assert.ok(configPathRefusal(undefined, ["--path=../outside.md"]));
+    assert.ok(configPathRefusal(undefined, ["--target=sub\\.OBSIDIAN\\x"]));
+    // Boolean/format flags (no '=value') and clean path flags stay allowed.
+    assert.equal(configPathRefusal(undefined, ["--json"]), null);
+    assert.equal(configPathRefusal(undefined, ["--file=Projects/A.md"]), null);
+    assert.equal(configPathRefusal({ file: "Projects/A.md" }, ["--json"]), null);
+  });
 });
 
 // ── handler integration: the policy refuses BEFORE anything executes ─────────
@@ -213,6 +235,26 @@ describe("obsidian_cli handler: policy wiring", () => {
     assert.match(res.content[0].text, /cli_denied/);
     assert.match(res.content[0].text, /\.obsidian territory/);
     assert.equal(calls.length, 0);
+  });
+
+  test("a case-folded .Obsidian param refuses cli_denied and never executes", async () => {
+    const { handler, calls } = cliServer({});
+    const res = await handler({ command: "create", params: { file: ".Obsidian/plugins/vault-mcp/data.json", content: "x" } });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /cli_denied/);
+    assert.match(res.content[0].text, /\.obsidian territory/);
+    assert.equal(calls.length, 0);
+  });
+
+  test("a path-valued flag naming .obsidian refuses cli_denied and never executes", async () => {
+    for (const command of ["create", "prepend"]) {
+      const { handler, calls } = cliServer({});
+      const res = await handler({ command, flags: ["--file=.obsidian/plugins/vault-mcp/data.json"] });
+      assert.equal(res.isError, true, command);
+      assert.match(res.content[0].text, /cli_denied/, command);
+      assert.match(res.content[0].text, /\.obsidian territory/, command);
+      assert.equal(calls.length, 0, command);
+    }
   });
 
   test("settings deny list blocks an otherwise-ordinary command", async () => {

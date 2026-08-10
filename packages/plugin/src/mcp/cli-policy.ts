@@ -111,31 +111,55 @@ export function cliCommandRefusal(command: string, policy?: CliCommandPolicy): s
 }
 
 /**
- * Config-territory guard for CLI param VALUES: the "human-only settings"
- * property assumes no MCP surface can write plugin settings. The MCP write
- * primitives enforce that structurally (they refuse non-`.md` paths), but
- * `obsidian_cli` forwards param values to the external CLI binary unvalidated
- * — whether the binary's `create file=…`/`property:set` would accept a path
- * into `.obsidian/` is the binary's business, not something we can verify
- * from here. So the proxy refuses to forward ANY param value that names
- * `.obsidian` territory or tries to traverse out of the vault (`..`
- * segments), for every command — reads included (the journal lives there
- * too, and no legitimate CLI use targets config through this proxy).
- * Belt-and-suspenders: even if the binary would refuse anyway, the policy's
- * guarantee no longer rests on an unverified assumption about it.
+ * Config-territory guard for CLI param AND flag VALUES: the "human-only
+ * settings" property assumes no MCP surface can write plugin settings. The MCP
+ * write primitives enforce that structurally (they refuse non-`.md` paths), but
+ * `obsidian_cli` forwards param values (and verbatim flags) to the external CLI
+ * binary unvalidated — whether the binary's `create file=…`/`property:set`
+ * would accept a path into `.obsidian/` is the binary's business, not something
+ * we can verify from here. So the proxy refuses to forward ANY param value —
+ * or any path-valued flag (`--file=.obsidian/…`) — that names `.obsidian`
+ * territory or tries to traverse out of the vault (`..` segments), for every
+ * command — reads included (the journal lives there too, and no legitimate CLI
+ * use targets config through this proxy). Belt-and-suspenders: even if the
+ * binary would refuse anyway, the policy's guarantee no longer rests on an
+ * unverified assumption about it.
  */
-export function configPathRefusal(params?: Record<string, string | number | boolean>): string | null {
+export function configPathRefusal(
+  params?: Record<string, string | number | boolean>,
+  flags?: string[],
+): string | null {
   for (const [key, value] of Object.entries(params ?? {})) {
     if (typeof value !== "string") continue;
-    // Normalize separators; check segment-wise so "x.obsidian.md" stays clean
-    // while ".obsidian", "./.obsidian/x", or "a\\.obsidian\\b" refuse.
-    const segments = value.trim().replace(/\\/g, "/").split("/");
-    if (segments.includes(".obsidian")) {
-      return `param '${key}' names .obsidian territory — plugin config and state are not reachable through the CLI proxy.`;
-    }
-    if (segments.includes("..")) {
-      return `param '${key}' contains a '..' path segment — the CLI proxy stays inside the vault.`;
-    }
+    const reason = pathValueRefusal(`param '${key}'`, value);
+    if (reason) return reason;
+  }
+  // Flags ride verbatim into the argv (`--file=.obsidian/…/data.json`), so a
+  // path-valued flag would escape the param scan entirely. A flag carries a
+  // value only after its first `=`; boolean/format flags (`--json`) have none.
+  for (const flag of flags ?? []) {
+    if (typeof flag !== "string") continue;
+    const eq = flag.indexOf("=");
+    if (eq < 0) continue;
+    const reason = pathValueRefusal(`flag '${flag.slice(0, eq)}'`, flag.slice(eq + 1));
+    if (reason) return reason;
+  }
+  return null;
+}
+
+/** Refuse a single path-shaped value that names .obsidian territory or escapes
+ * the vault. Segment-wise so "x.obsidian.md" stays clean while ".obsidian",
+ * "./.obsidian/x", or "a\\.obsidian\\b" refuse. The `.obsidian` compare is
+ * CASE-FOLDED: on case-insensitive filesystems (macOS APFS default, the primary
+ * platform) ".Obsidian"/".OBSIDIAN" resolve to ".obsidian", so any casing must
+ * be caught or the config-tamper backstop leaks. */
+function pathValueRefusal(label: string, value: string): string | null {
+  const segments = value.trim().replace(/\\/g, "/").split("/");
+  if (segments.some((s) => s.toLowerCase() === ".obsidian")) {
+    return `${label} names .obsidian territory — plugin config and state are not reachable through the CLI proxy.`;
+  }
+  if (segments.includes("..")) {
+    return `${label} contains a '..' path segment — the CLI proxy stays inside the vault.`;
   }
   return null;
 }
