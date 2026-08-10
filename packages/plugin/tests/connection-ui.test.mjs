@@ -20,7 +20,7 @@ import assert from "node:assert/strict";
 import { installObsidianStub } from "./obsidian-stub.mjs";
 
 installObsidianStub();
-const { parseCommaList, parseFloorField, floorFieldProblem } = await import("../src/connection-ui.ts");
+const { parseCommaList, parseFloorField, floorFieldProblem, parseLineList } = await import("../src/connection-ui.ts");
 
 // ── parseCommaList (pre-existing, pinned here since it had no test file yet) ──
 
@@ -32,6 +32,19 @@ describe("parseCommaList", () => {
   test("all-blank input yields undefined (provider default), not []", () => {
     assert.equal(parseCommaList("   "), undefined);
     assert.equal(parseCommaList(""), undefined);
+  });
+});
+
+// ── parseLineList (new: the excludedRoots textarea) ─────────────────────────
+
+describe("parseLineList", () => {
+  test("splits on newlines, trims, and drops blank lines", () => {
+    assert.deepEqual(parseLineList(" Vault archaeology \n\nOther root \n  "), ["Vault archaeology", "Other root"]);
+  });
+
+  test("all-blank input yields undefined, not [] — field is removed, not persisted empty", () => {
+    assert.equal(parseLineList(""), undefined);
+    assert.equal(parseLineList("   \n  \n"), undefined);
   });
 });
 
