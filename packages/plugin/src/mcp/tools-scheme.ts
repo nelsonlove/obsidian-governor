@@ -34,7 +34,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ok, fail, codedError } from "./helpers.js";
 import { visiblePaths, type GuardSettings } from "../guard.js";
 import type { Address, Scope, ScopeProvider } from "../kernel/scheme/provider.js";
-import type { SchemeInstance, SchemeInstanceConfig, SchemeRegistry } from "../kernel/scheme/registry.js";
+import { excludeRoots, type SchemeInstance, type SchemeInstanceConfig, type SchemeRegistry } from "../kernel/scheme/registry.js";
 
 const RO = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 
@@ -253,8 +253,11 @@ export function registerSchemeTools(server: McpServer, ctx: SchemeToolsCtx): voi
         "Look up a scheme address, in either direction. Give `address` (e.g. `jd:06.11`, or bare `06.11` when exactly " +
         "one scheme is configured) to get the note's current path (plus `duplicates` if more than one visible note " +
         "claims it); an address that parses but names no note reports `found: false` with the parsed shape, not an " +
-        "error. Give `path` to get that note's address in whichever configured scheme recognizes it. Read-only: this " +
-        "reports duplicates, it never repairs them.",
+        "error. Give `path` to get that note's address in whichever configured scheme recognizes it. A scheme " +
+        "instance configured with `excludedRoots` does not speak for a note under one of those roots: looking up " +
+        "such a note's `path` reports `address: null, reason: \"excluded\"` rather than the address it would " +
+        "otherwise carry (the path itself still works as an ordinary argument elsewhere — this bounds scheme " +
+        "resolution only). Read-only: this reports duplicates, it never repairs them.",
       inputSchema: {
         address: z.string().min(1).optional().describe('A scheme address, e.g. "jd:06.11" or bare "06.11".'),
         path: z.string().min(1).optional().describe("A vault-relative path to resolve to its address (the reverse direction)."),
@@ -273,7 +276,8 @@ export function registerSchemeTools(server: McpServer, ctx: SchemeToolsCtx): voi
           const resolved = resolveBareOrRef(registry, args.address);
           if ("error" in resolved) return fail(new Error(resolved.error));
           const { addr } = resolved;
-          const candidates = registry.resolve(resolved.instance, addr, notes);
+          const scopedNotes = excludeRoots(notes, resolved.instance.excludedRoots);
+          const candidates = registry.resolve(resolved.instance, addr, scopedNotes);
           if (candidates.length === 0) {
             return ok({ address: args.address, found: false, parsed: { kind: addr.kind, levels: addr.levels } });
           }
@@ -292,7 +296,16 @@ export function registerSchemeTools(server: McpServer, ctx: SchemeToolsCtx): voi
         }
         for (const instance of registry.instances()) {
           const addr = instance.provider.addressOf(path);
-          if (addr) return ok({ path, address: instance.provider.format(addr), scheme: instance.id });
+          if (!addr) continue;
+          // The instance does not speak for its own excluded territory: a
+          // note the caller named directly is not HIDDEN (they have it),
+          // but the scheme should not CLAIM it either. `reason: "excluded"`
+          // distinguishes this from "no scheme recognizes this note at all"
+          // (plain `address: null, scheme: null`).
+          if (excludeRoots([path], instance.excludedRoots).length === 0) {
+            return ok({ path, address: null, scheme: null, reason: "excluded" });
+          }
+          return ok({ path, address: instance.provider.format(addr), scheme: instance.id });
         }
         return ok({ path, address: null, scheme: null });
       } catch (e) {
@@ -310,8 +323,9 @@ export function registerSchemeTools(server: McpServer, ctx: SchemeToolsCtx): voi
         "Compute the next unused address within a scope (e.g. category \"06\", area \"90-99\", expanded category " +
         "\"27\"). This COMPUTES ONLY — it reserves nothing, so a second call, or a competing session, can compute the " +
         "identical answer right up until a note actually lands there. Pair this with `obsidian_claim_scope` to hold " +
-        "the slot exclusively while you create the note. Under a path allowlist, the address returned may already be " +
-        "held by a note outside your allowlist, since a hidden note's slot cannot read as taken. `allocatable: false` " +
+        "the slot exclusively while you create the note. Under a path allowlist, or an instance configured with " +
+        "`excludedRoots`, the address returned may already be held by a note outside your allowlist or under an " +
+        "excluded root, since a hidden or excluded note's slot cannot read as taken. `allocatable: false` " +
         "marks a scope that can NEVER allocate (a plain area, an expanded-item, or a category folded into an " +
         "expanded area's band — those allocate via that area's own scope instead, named in `hint` when applicable), " +
         "distinct from `exhausted: true`, which means an allocatable scope is simply full right now. Read-only.",
@@ -343,7 +357,7 @@ export function registerSchemeTools(server: McpServer, ctx: SchemeToolsCtx): voi
             ...(alloc.hint ? { hint: alloc.hint } : {}),
           });
         }
-        const notes = visible(ctx.notes());
+        const notes = excludeRoots(visible(ctx.notes()), instance.excludedRoots);
         const next = instance.provider.nextFree(scope, notes);
         return next
           ? ok({ scope: args.scope, next: instance.provider.format(next), exhausted: false, allocatable: true })
@@ -365,8 +379,9 @@ export function registerSchemeTools(server: McpServer, ctx: SchemeToolsCtx): voi
         "`free.allocatable: false` marks a scope that can NEVER allocate (a plain area, an expanded-item, or a " +
         "category folded into an expanded area's band — see `free.hint`), distinct from a full allocatable scope's " +
         "empty `free.gaps`. Read-only; pair `free.next` with `obsidian_claim_scope` the same way `obsidian_next_address` " +
-        "does — this tool computes, it does not reserve. Under a path allowlist, `members` omits notes you cannot see, " +
-        "so a slot listed as free may already be held by one of them.",
+        "does — this tool computes, it does not reserve. Under a path allowlist, or an instance configured with " +
+        "`excludedRoots`, `members` omits notes you cannot see or that live under an excluded root, so a slot " +
+        "listed as free may already be held by one of them.",
       inputSchema: {
         scope: z.string().min(1).describe('A scope token in the scheme\'s own grammar, e.g. "06", "90-99", "27".'),
         scheme: z
@@ -385,7 +400,7 @@ export function registerSchemeTools(server: McpServer, ctx: SchemeToolsCtx): voi
         const { instance } = pick;
         const scope = parseScopeToken(instance, args.scope);
         if (!scope) return codedError("invalid_scope", `"${args.scope}" does not parse as a scope in scheme "${instance.id}"`);
-        const notes = visible(ctx.notes());
+        const notes = excludeRoots(visible(ctx.notes()), instance.excludedRoots);
         const members = instance.provider.membersOf(scope, notes).map((m) => ({ address: m.address, path: m.path }));
         const free = computeFree(instance.provider, scope, notes);
         return ok({ scope: args.scope, members, free });
@@ -405,7 +420,9 @@ export function registerSchemeTools(server: McpServer, ctx: SchemeToolsCtx): voi
         "container currently lives. Give `path` to check an existing note against its own address; give `address` " +
         "(optionally with `scheme` for a bare one) to ask about that address directly. `expected_folder` is `null` " +
         "when it cannot be derived (nothing in the vault establishes the container yet), in which case `placed` is " +
-        "also `null` — there is nothing to compare against. Read-only.",
+        "also `null` — there is nothing to compare against. An instance configured with `excludedRoots` never " +
+        "considers a candidate container folder under one of those roots, and does not answer for a `path` that " +
+        "itself lives under one (falls through as unrecognized by that instance). Read-only.",
       inputSchema: {
         path: z.string().min(1).optional().describe("A vault-relative path to check against its own address."),
         address: z.string().min(1).optional().describe('A scheme address to check directly, e.g. "jd:06.11" or bare "06.11".'),
@@ -429,9 +446,10 @@ export function registerSchemeTools(server: McpServer, ctx: SchemeToolsCtx): voi
           const resolved = resolveAddressAndInstance(registry, args.address, args.scheme);
           if ("error" in resolved) return fail(new Error(resolved.error));
           const { instance, addr } = resolved;
+          const scopedNotes = excludeRoots(notes, instance.excludedRoots);
           const address = instance.provider.format(addr);
-          const expected_folder = instance.provider.expectedFolder(addr, notes);
-          const candidates = registry.resolve(instance, addr, notes);
+          const expected_folder = instance.provider.expectedFolder(addr, scopedNotes);
+          const candidates = registry.resolve(instance, addr, scopedNotes);
           const actual_folder = candidates.length > 0 ? folderOf(candidates[0]) : null;
           const placed = expected_folder === null ? null : expected_folder === actual_folder;
           return ok({ address, expected_folder, actual_folder, placed });
@@ -447,8 +465,15 @@ export function registerSchemeTools(server: McpServer, ctx: SchemeToolsCtx): voi
         for (const instance of candidateInstances) {
           const addr = instance.provider.addressOf(path);
           if (!addr) continue;
+          // Same boundary as obsidian_resolve_address: an instance does not
+          // speak for its own excluded territory, so a note living under one
+          // of its excludedRoots is treated as unrecognized BY THIS INSTANCE
+          // (falls through to the next one, or to the "outside every scheme
+          // scope" return below) rather than reporting an address for it.
+          if (excludeRoots([path], instance.excludedRoots).length === 0) continue;
+          const scopedNotes = excludeRoots(notes, instance.excludedRoots);
           const address = instance.provider.format(addr);
-          const expected_folder = instance.provider.expectedFolder(addr, notes);
+          const expected_folder = instance.provider.expectedFolder(addr, scopedNotes);
           const actual_folder = folderOf(path);
           const placed = expected_folder === null ? null : expected_folder === actual_folder;
           return ok({ address, expected_folder, actual_folder, placed });
