@@ -36,7 +36,7 @@ import { spawnEnv, findBinary } from "../claude-cli.js";
 import type { ServerCtx } from "./tools-core.js";
 // Reuse the SAME accepted-family rule the MCP note-write primitive uses — no
 // second definition of "accepted" on the CLI path (see cliAcceptRefusal below).
-import { acceptForbiddenReason, stripLeadingBom } from "./write-notes-compose.js";
+import { acceptForbiddenReason, leadingFrontmatterBlock, stripLeadingBom } from "./write-notes-compose.js";
 import { cliCommandRefusal, configPathRefusal, OPAQUE_ACCEPT_CLI_COMMANDS } from "./cli-policy.js";
 
 // Mutating + can reach outside the vault (plugin installs fetch the network).
@@ -101,13 +101,25 @@ export const DANGEROUS_LIST_DESC = [...DANGEROUS_EXACT].sort().join(", ") + ", a
 //     (cli-policy.ts), re-enabled only per-command through the human-only
 //     `cliPolicy.allowOpaque` setting; a re-enabled `eval` still needs
 //     allowDangerousCli.
-//   • The former lesser residual — `create template=<t>` drawing frontmatter
-//     from a template note the params only NAME — is CLOSED by the template
-//     guard below: the template IS a vault file, so it is resolved, read, and
-//     scanned with the same rule pre-exec; unresolvable fails closed. A
-//     re-enabled `quickadd:run-template` gets the same static scan on its
-//     `path=` template as belt (its runtime-computed frontmatter stays
-//     opaque, which is why it remains in the policy's default-deny set).
+//   • `create template=<t>` draws frontmatter from a template note the params
+//     only NAME. The template guard below resolves and reads it and applies
+//     the same rule pre-exec (unresolvable fails closed), which closes the
+//     STATIC case: a template carrying a literal accepted fence is refused.
+//
+//     It does NOT close the path. Be precise about the boundary, because an
+//     overclaim here is worse than a documented gap: Obsidian expands
+//     Templates variables (`{{title}}`, `{{date:FMT}}`) AFTER this scan, and
+//     the format string honors moment's `[…]` literal escape — so an
+//     expansion can emit both the acceptance assertion and the fence
+//     characters from a template that contains neither. The scanned bytes are
+//     then not the landed bytes, which is the same defect shape as #126 one
+//     level up. Tracked as its own finding; see the template guard's own
+//     comment below and docs/acceptance-model.md.
+//
+//     A re-enabled `quickadd:run-template` gets the same static scan on its
+//     `path=` template as belt, with the same limit (its runtime-computed
+//     frontmatter stays opaque, which is why it remains in the policy's
+//     default-deny set).
 
 // property:set family — sets one property (documented `name=<prop> value=<val>`)
 // or, in shorthand, direct key=value params. `frontmatter:` alias included
@@ -182,11 +194,14 @@ export function cliAcceptRefusal(
  * injects obsidian.parseYaml).
  */
 export function contentAcceptRefusal(content: string, parseYaml?: (yaml: string) => unknown): string | null {
-  const expanded = content
+  // The CLI un-escapes these before the vault sees them, so the expanded form
+  // IS the document that will be honored — that is what the leading-fence
+  // check must decide over. Line-ending folding is applied only to the
+  // embedded-fence scan (see scanForAcceptFence).
+  const honored = content
     .replace(/\\r\\n|\\n/g, "\n") // literal \n (and \r\n) escapes the CLI expands
-    .replace(/\\t/g, "\t") // literal \t escapes
-    .replace(/\r\n?/g, "\n"); // real CR / CRLF
-  return scanForAcceptFence(expanded, parseYaml);
+    .replace(/\\t/g, "\t"); // literal \t escapes
+  return scanForAcceptFence(honored, parseYaml);
 }
 
 /**
@@ -198,43 +213,73 @@ export function contentAcceptRefusal(content: string, parseYaml?: (yaml: string)
  * disk, so only real newlines are normalized.
  */
 export function templateContentAcceptRefusal(content: string, parseYaml?: (yaml: string) => unknown): string | null {
-  return scanForAcceptFence(content.replace(/\r\n?/g, "\n"), parseYaml);
+  // Template bytes come off disk unmodified — they are already the honored
+  // document.
+  return scanForAcceptFence(content, parseYaml);
 }
 
-function scanForAcceptFence(normalized: string, parseYaml?: (yaml: string) => unknown): string | null {
-  // A leading BOM is transparent to Obsidian's frontmatter parser (and to
-  // `frontmatterOf`, the write path's own recognizer), so it must be
-  // transparent here too — a guard stricter than the write path is a bypass,
-  // not caution. #126: `﻿---\nacceptance-status: accepted\n---` scanned
-  // clean and was honored on landing. Parity is pinned by
-  // tests/accept-fence-parity.test.mjs, not just by this comment.
-  const expanded = stripLeadingBom(normalized);
+/**
+ * Two checks, deliberately different in kind:
+ *
+ *  1. **The leading fence** — decided by `leadingFrontmatterBlock`, the SAME
+ *     recognizer the write path uses, applied to the SAME BYTES the vault will
+ *     honor. Parity is structural here, not a matter of two normalizations
+ *     happening to agree: #126 was a BOM asymmetry, and scanning a
+ *     CRLF-folded copy re-opened the identical class on `\r` (a lone CR inside
+ *     a scalar is content to the write path, a line break to a folded scan).
+ *     Deciding over the raw document removes the whole class rather than its
+ *     latest instance.
+ *  2. **Embedded fences** — a deliberately BROADER, conservative sweep over a
+ *     line-ending-folded copy. `append` content is not a note's leading
+ *     frontmatter, and the resulting note cannot be read pre-exec, so an
+ *     acceptance-asserting block anywhere in written content is refused.
+ *     Broader than the write path is fine; narrower is the bypass.
+ */
+function scanForAcceptFence(honored: string, parseYaml?: (yaml: string) => unknown): string | null {
+  const leading = leadingFrontmatterBlock(honored);
+  if (leading !== null) {
+    const reason = acceptReasonForBlock(leading, parseYaml);
+    if (reason) return reason;
+  }
+  const folded = stripLeadingBom(honored).replace(/\r\n?/g, "\n");
   const fenceRe = /(?:^|\n)---[ \t]*\n([\s\S]*?)\n---[ \t]*(?:\n|$)/g;
   let m: RegExpExecArray | null;
-  let sawFence = false;
-  while ((m = fenceRe.exec(expanded)) !== null) {
+  let sawFence = leading !== null;
+  while ((m = fenceRe.exec(folded)) !== null) {
     sawFence = true;
-    if (!parseYaml) continue;
-    let parsed: unknown;
-    try {
-      parsed = parseYaml(m[1]);
-    } catch {
-      // A fence a real parser cannot read: cannot assert acceptance structurally,
-      // but treat one that mentions the acceptance field textually as suspect
-      // rather than let it through.
-      if (/acceptance[-_]status/i.test(m[1]) && /\baccepted\b|accepted[-_]/i.test(m[1])) {
-        return "carries an accepted acceptance-status fence";
-      }
-      continue;
-    }
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      const reason = acceptForbiddenReason(parsed as Record<string, unknown>);
-      if (reason) return reason;
-    }
+    const reason = acceptReasonForBlock(m[1], parseYaml);
+    if (reason) return reason;
   }
   return sawFence && !parseYaml
     ? "carries a frontmatter fence that cannot be verified without a YAML parser"
     : null;
+}
+
+/**
+ * Does one YAML block assert acceptance? Shared by both checks above so they
+ * cannot disagree about a block's meaning either — the same reasoning that
+ * put the boundary itself in one place.
+ *
+ * With no parser injected the caller fails closed on the presence of any fence
+ * (defensive; production always injects obsidian.parseYaml). A block a real
+ * parser cannot read cannot be judged structurally, so one that mentions the
+ * acceptance field textually is treated as suspect rather than let through.
+ */
+function acceptReasonForBlock(block: string, parseYaml?: (yaml: string) => unknown): string | null {
+  if (!parseYaml) return null;
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(block);
+  } catch {
+    if (/acceptance[-_]status/i.test(block) && /\baccepted\b|accepted[-_]/i.test(block)) {
+      return "carries an accepted acceptance-status fence";
+    }
+    return null;
+  }
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    return acceptForbiddenReason(parsed as Record<string, unknown>);
+  }
+  return null;
 }
 
 // ── template guard: the create-from-template closure ─────────────────────────
