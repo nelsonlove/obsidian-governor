@@ -171,6 +171,16 @@ export interface MutationContext {
    */
   ifRev?: number;
   /**
+   * Advisory agent-authored description of WHY this change is being made (B2:
+   * the PR-description of the proposal-is-a-PR model). Journal-only: recorded
+   * on the record beside op/actor, surfaced by review UIs as "agent says",
+   * never trusted, never written to the note, and NEVER an acceptance signal —
+   * nothing in the kernel reads it back. Deliberately NOT part of idempotency
+   * identity: advisory text does not change what was written, so a replay may
+   * reword it and each record keeps its own call's text.
+   */
+  intent?: string;
+  /**
    * Retry-collapsing key. A second call carrying a key this kernel has already
    * completed replays that result without executing anything or taking a queue
    * slot; one that is still IN FLIGHT awaits the first call and adopts its
@@ -535,10 +545,11 @@ export class Kernel {
    * that actually reached the dequeue check. `ifRev` is deliberately NOT part of
    * the terminal-record path: see journalTerminal.
    */
-  private preconditionFields(mc: MutationContext): { ifRev?: number; idempotencyKey?: string } {
+  private preconditionFields(mc: MutationContext): { ifRev?: number; idempotencyKey?: string; intent?: string } {
     return {
       ...(mc.ifRev !== undefined ? { ifRev: mc.ifRev } : {}),
       ...(mc.idempotencyKey !== undefined ? { idempotencyKey: mc.idempotencyKey } : {}),
+      ...(mc.intent !== undefined ? { intent: mc.intent } : {}),
     };
   }
 
@@ -570,6 +581,10 @@ export class Kernel {
       queueWaitMs: 0,
       ...(extra.dedupeOf !== undefined ? { dedupeOf: extra.dedupeOf } : {}),
       ...(mc.idempotencyKey !== undefined ? { idempotencyKey: mc.idempotencyKey } : {}),
+      // `intent` IS recorded here, unlike `ifRev`: it asserts nothing about a
+      // check — it is this caller's own description of its ask, which is
+      // exactly what a deduped/mismatch record documents.
+      ...(mc.intent !== undefined ? { intent: mc.intent } : {}),
     });
   }
 

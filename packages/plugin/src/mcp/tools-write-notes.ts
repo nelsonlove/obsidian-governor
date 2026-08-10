@@ -37,7 +37,7 @@ const RW = { readOnlyHint: false, destructiveHint: false, idempotentHint: false,
 
 /** The guarded single-writer this tool drives, one call per item. Returns an MCP result envelope. */
 export type GuardedWrite = (
-  args: { path: string; content: string; overwrite: boolean; if_rev?: number; idempotency_key?: string },
+  args: { path: string; content: string; overwrite: boolean; if_rev?: number; idempotency_key?: string; intent?: string },
   extra: unknown
 ) => Promise<{ isError?: boolean; content?: Array<{ text?: string }>; structuredContent?: Record<string, unknown> }>;
 
@@ -132,11 +132,21 @@ export function registerWriteNotesTool(
           .boolean()
           .default(false)
           .describe("Opt-in server-side stamping: uid (v7, created-seeded, only if absent) + created/modified + canonical order + default acceptance-status:proposed. Never writes acceptance."),
+        intent: z
+          .string()
+          .min(1)
+          .max(2000)
+          .optional()
+          .describe(
+            "Why this change-set is being made — advisory agent-authored text recorded on EVERY item's journal " +
+              "record (review surfaces display it per pending row as \"agent says\"). Journal-only: never written " +
+              "to the notes, never trusted, never an acceptance signal."
+          ),
       },
       annotations: RW,
     },
     async (
-      { notes, stamp }: { notes: Array<{ path: string; frontmatter?: Record<string, unknown>; body?: string; if_rev?: number; idempotency_key?: string }>; stamp?: boolean },
+      { notes, stamp, intent }: { notes: Array<{ path: string; frontmatter?: Record<string, unknown>; body?: string; if_rev?: number; idempotency_key?: string }>; stamp?: boolean; intent?: string },
       extra: unknown
     ) => {
       const doStamp = stamp === true;
@@ -178,6 +188,10 @@ export function registerWriteNotesTool(
               overwrite: true,
               ...(item.if_rev !== undefined ? { if_rev: item.if_rev } : {}),
               ...(item.idempotency_key !== undefined ? { idempotency_key: item.idempotency_key } : {}),
+              // The batch-level intent describes the change-SET; the guarded
+              // single-writer peels it per item, so every item's journal record
+              // carries it and Stewardship's per-note rows each show it.
+              ...(intent !== undefined ? { intent } : {}),
             },
             extra
           );

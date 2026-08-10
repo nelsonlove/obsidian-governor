@@ -297,3 +297,30 @@ describe("obsidian_write_notes — accept-forbidden guard", () => {
     assert.equal(body.errors[0].code, "accept_forbidden");
   });
 });
+
+describe("obsidian_write_notes — B2 batch intent", () => {
+  test("a batch-level intent lands on every per-item journal record", async () => {
+    const { call, records } = harness();
+    const res = await call({
+      notes: [
+        { path: "Inbox/A.md", frontmatter: { name: "A" }, body: "aaa" },
+        { path: "Inbox/B.md", frontmatter: { name: "B" }, body: "bbb" },
+      ],
+      intent: "seed the inbox pair for the 03.12 migration",
+    });
+    assert.equal(structured(res).error_count, 0);
+    await new Promise((r) => setTimeout(r, 10));
+    const recs = records();
+    assert.equal(recs.length, 2);
+    for (const rec of recs) {
+      assert.equal(rec.intent, "seed the inbox pair for the 03.12 migration");
+    }
+  });
+
+  test("no intent — per-item records carry no intent field", async () => {
+    const { call, records } = harness();
+    await call({ notes: [{ path: "Inbox/C.md", frontmatter: { name: "C" }, body: "c" }] });
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal("intent" in records()[0], false);
+  });
+});
