@@ -18,7 +18,7 @@ import { VocabRegistry, DEFAULT_VOCABULARIES, type VocabInstanceSettings } from 
 import { makeRegistry, DEFAULT_SCHEMES, type SchemeInstanceConfig } from "../kernel/scheme/registry.js";
 import { buildSnapshot } from "./snapshot.js";
 import { runEngine } from "./engine.js";
-import { vocabPack, schemePack } from "./packs/index.js";
+import { vocabPack, schemePack, structurePack, portPack, stePack } from "./packs/index.js";
 import { parseBaseline, renderBaseline, ratchet, type RatchetResult } from "./ratchet.js";
 import type { Finding } from "./finding.js";
 import type { RulePack } from "./rule-pack.js";
@@ -51,6 +51,11 @@ export async function runConformance(opts: RunOpts): Promise<RunResult> {
   packs.push(vocabPack(vocabInstances.map((i) => i.provider)));
   // scheme instances: from settings, independent of the listing.
   packs.push(schemePack(makeRegistry(opts.schemes).instances()));
+  // ported legacy checks: native packs over the snapshot's raw sources +
+  // blueprint listing (conformance_check / port_lint / ste_lint).
+  packs.push(structurePack());
+  packs.push(portPack());
+  packs.push(stePack());
 
   const findings = runEngine(packs, snapshot);
   const result = ratchet(findings, parseBaseline(opts.baselineText));
@@ -115,12 +120,13 @@ export function writeFence(noteText: string, body: string): string {
   return noteText.replace(re, () => block);
 }
 
-// Phase 1 ships only the vocab + scheme packs; the four legacy checks
-// (drift/blueprint/ste/port) are not yet ported. Until they are, a
-// `--rebaseline` against the LIVE baseline would overwrite its 124 accepted
-// legacy findings with only vocab/scheme keys — destroying accepted debt. So
-// rebaselining the default (live) baseline is refused while the pack set is
-// incomplete; a fixture baseline (explicit --baseline=) is always allowed.
+// Three of the four legacy checks are now ported (structure ← conformance_check,
+// port ← port_lint, ste ← ste_lint); drift_audit is still Python-only. Until it
+// is ported too, a `--rebaseline` against the LIVE baseline would overwrite its
+// 56 accepted drift_audit findings (they no longer appear in a live TS run) —
+// destroying accepted debt. So rebaselining the default (live) baseline is
+// refused while the pack set is incomplete; a fixture baseline (explicit
+// --baseline=) is always allowed.
 const PHASE1_PACKS_INCOMPLETE = true;
 
 async function main(argv: string[]): Promise<void> {
@@ -131,9 +137,9 @@ async function main(argv: string[]): Promise<void> {
   const baselinePath = baselineArg ? resolve(baselineArg) : join(root, BASELINE_REL);
   if (rebaseline && !baselineArg && PHASE1_PACKS_INCOMPLETE) {
     throw new Error(
-      "refusing to --rebaseline the live baseline while the legacy packs (drift/blueprint/ste/port) are unported — " +
-        "it would overwrite the accepted legacy debt with only vocab/scheme keys. Target a fixture with --baseline=<path>, " +
-        "or wait for Phase 2.",
+      "refusing to --rebaseline the live baseline while drift_audit is unported — " +
+        "it would overwrite the accepted drift_audit debt (absent from a live TS run). Target a fixture with --baseline=<path>, " +
+        "or wait for the drift_audit port.",
     );
   }
   const baselineText = existsSync(baselinePath) ? await readFile(baselinePath, "utf8") : "";
