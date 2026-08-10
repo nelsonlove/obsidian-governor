@@ -52,6 +52,14 @@ function deferred() {
 
 const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
 
+// Drains pending microtasks (promise .then chains) without touching the
+// (possibly mocked) timer queue — for tests that need the write-queue's
+// internal Promise.resolve().then(...).then(...) chain to settle without
+// racing real wall-clock time.
+async function flushMicrotasks(turns = 10) {
+  for (let i = 0; i < turns; i++) await Promise.resolve();
+}
+
 // Stand-in for Obsidian's DataAdapter — the four methods WriteJournal narrows to.
 function fakeAdapter() {
   const files = new Map();
@@ -170,21 +178,35 @@ describe("WriteQueue timeout", () => {
     assert.equal(queue.running, false);
   });
 
-  test("an abandoned operation settling later cannot double-release the queue", async () => {
+  test("an abandoned operation settling later cannot double-release the queue", async (t) => {
+    // Real-timer version of this test raced the queue's OWN 20ms timeout: the
+    // second operation ("held") is subject to the same fixed timeout as the
+    // first, so pacing the test with real setTimeout ticks (tick(5) x3 = 15ms
+    // of intended wall clock) could — under load, when the event loop lags —
+    // let more than 20ms of *actual* wall clock pass before the test resolves
+    // `gate`, tripping "held"'s own timeout and invalidating the assertions
+    // that follow. Mocking setTimeout removes wall clock from the picture
+    // entirely: the queue's 20ms timer only fires when the test explicitly
+    // advances the clock, so "held" cannot time out behind the test's back no
+    // matter how slow or contended the machine running it is.
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
     const queue = new WriteQueue(20);
     const wedged = deferred();
-    await assert.rejects(queue.run("stuck", () => wedged.promise), WriteTimeoutError);
+    const stuck = queue.run("stuck", () => wedged.promise);
+    t.mock.timers.tick(20); // fires the queue's own timeout, abandoning "stuck"
+    await assert.rejects(stuck, WriteTimeoutError);
 
     const gate = deferred();
     const held = queue.run("held", () => gate.promise);
-    await tick(5);
     // The abandoned operation finishes now — it must not free the slot the
-    // next operation is holding.
+    // next operation is holding. No clock advance happens here, so "held"
+    // cannot time out itself while the test inspects the queue.
     wedged.resolve("late");
-    await tick(5);
+    await flushMicrotasks();
     let jumperRan = false;
     const jumper = queue.run("jumper", async () => { jumperRan = true; });
-    await tick(5);
+    await flushMicrotasks();
     assert.equal(jumperRan, false, "a late-settling abandoned operation released the queue");
     gate.resolve("ok");
     assert.equal(await held, "ok");
