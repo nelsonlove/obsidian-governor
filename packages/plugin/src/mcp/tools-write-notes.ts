@@ -48,6 +48,8 @@ export interface WriteNotesDeps {
   revOf?: (path: string) => number | undefined;
   /** Serialize frontmatter to YAML — obsidian.stringifyYaml in production. */
   stringifyYaml: (obj: Record<string, unknown>) => string;
+  /** Parse a YAML frontmatter block — obsidian.parseYaml in production. For the accept-forbidden body-injection check. */
+  parseYaml?: (yaml: string) => unknown;
   /** Mint a created-seeded uid — uuidv7 in production. */
   mintUid: (createdMs: number) => string;
   /** Format an ms timestamp for frontmatter — formatLocalTimestamp in production. */
@@ -154,6 +156,7 @@ export function registerWriteNotesTool(
             mintUid: deps.mintUid,
             formatTs: deps.formatTs,
             stringifyYaml: deps.stringifyYaml,
+            parseYaml: deps.parseYaml,
           });
         } catch (e) {
           if (e instanceof AcceptForbiddenError) {
