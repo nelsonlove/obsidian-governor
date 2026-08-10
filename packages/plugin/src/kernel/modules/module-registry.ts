@@ -31,6 +31,7 @@
 
 import type {
   ModuleHostCtx,
+  ModuleSettingsSchema,
   ToolDef,
   ToolHandler,
   ToolRegistrar,
@@ -42,6 +43,19 @@ import { mergeModuleConfig, type ModuleSettings } from "./settings.js";
  * reads as advancing a baseline or minting acceptance. Case-insensitive
  * substring match on the registered name. */
 const FORBIDDEN_NAME_FRAGMENTS = ["accept", "approve", "baseline"];
+
+/**
+ * The schema this module's `modules.<id>.config` is actually merged/
+ * validated against: `manifest.config` when present, else the deprecated
+ * `settingsSchema` (config-host design: "registry reads manifest.config
+ * first, falls back"). A module carrying BOTH (mid-migration) has its
+ * manifest win outright rather than merging the two — one schema in
+ * effect, never a silent blend of an old and a new one.
+ */
+function effectiveSchema(m: VaultModule): ModuleSettingsSchema | undefined {
+  if (m.manifest?.config) return { defaults: m.manifest.config.defaults, validate: m.manifest.config.validate };
+  return m.settingsSchema;
+}
 
 export function forbiddenToolName(name: string): boolean {
   const lower = name.toLowerCase();
@@ -122,7 +136,7 @@ export class ModuleRegistry {
   /** The module's schema defaults merged under the user's config. */
   configFor(id: string): Record<string, unknown> {
     const m = this.modules.find((x) => x.id === id);
-    return mergeModuleConfig(m?.settingsSchema?.defaults, this.settings[id]?.config);
+    return mergeModuleConfig(m && effectiveSchema(m)?.defaults, this.settings[id]?.config);
   }
 
   /**
@@ -161,7 +175,7 @@ export class ModuleRegistry {
       // defect, reported, and must not cost the modules after it their tools.
       let configProblems: string[] = [];
       try {
-        configProblems = m.settingsSchema?.validate?.(config) ?? [];
+        configProblems = effectiveSchema(m)?.validate?.(config) ?? [];
       } catch (e) {
         this.runProblems.push(
           `module '${m.id}' config validate() threw: ${e instanceof Error ? e.message : String(e)}`,

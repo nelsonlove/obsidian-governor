@@ -1,10 +1,13 @@
 /**
- * connection-ui.test.mjs — Item 4 of the scope-followups cycle: pure helpers
- * behind the settings tab's JD scheme fields, especially the new
- * `floorFieldProblem`, which lets the tab surface a non-numeric
- * content-decimal-floor entry as a validation problem instead of silently
- * dropping it to the provider default (parseFloorField's existing, and
- * unchanged, behavior).
+ * connection-ui.test.mjs — pure helpers behind the settings tab's
+ * manifest-driven config fields (#81: config-host), including the
+ * generalized `numberFieldProblem`, which lets the generic renderer refuse
+ * (loudly, never silently) an unparseable "number"-typed field instead of
+ * saving `undefined` with only a footnote — the old `parseFloorField`/
+ * `floorFieldProblem` pair this generalizes did save the silently-emptied
+ * value; `parseNumberField`/`numberFieldProblem` are used together
+ * differently (see connection-ui.ts's `renderConfigField`, "number" case):
+ * a non-null problem now means the save is SKIPPED, not merely footnoted.
  *
  * connection-ui.ts imports classes from "obsidian" at module scope (Modal,
  * PluginSettingTab, Setting, Notice — used as base classes / constructed at
@@ -20,7 +23,7 @@ import assert from "node:assert/strict";
 import { installObsidianStub } from "./obsidian-stub.mjs";
 
 installObsidianStub();
-const { parseCommaList, parseFloorField, floorFieldProblem, parseLineList } = await import("../src/connection-ui.ts");
+const { parseCommaList, parseNumberField, numberFieldProblem, parseLineList } = await import("../src/connection-ui.ts");
 
 // ── parseCommaList (pre-existing, pinned here since it had no test file yet) ──
 
@@ -48,47 +51,56 @@ describe("parseLineList", () => {
   });
 });
 
-// ── parseFloorField (pre-existing) ──────────────────────────────────────────
+// ── parseNumberField (generalized from the old JD-specific parseFloorField) ─
 
-describe("parseFloorField", () => {
-  test("blank yields undefined (provider default applies)", () => {
-    assert.equal(parseFloorField(""), undefined);
-    assert.equal(parseFloorField("   "), undefined);
+describe("parseNumberField", () => {
+  test("blank yields undefined (removes the key — 'use the default')", () => {
+    assert.equal(parseNumberField(""), undefined);
+    assert.equal(parseNumberField("   "), undefined);
   });
 
   test("a valid integer parses through", () => {
-    assert.equal(parseFloorField("5"), 5);
-    assert.equal(parseFloorField(" 20 "), 20);
+    assert.equal(parseNumberField("5"), 5);
+    assert.equal(parseNumberField(" 20 "), 20);
   });
 
-  test("a non-numeric value silently becomes undefined (default) — the exact behavior floorFieldProblem exists to surface", () => {
-    assert.equal(parseFloorField("abc"), undefined);
+  test("a non-numeric value silently becomes undefined — the exact behavior numberFieldProblem exists to surface, and why the renderer checks numberFieldProblem BEFORE calling this", () => {
+    assert.equal(parseNumberField("abc"), undefined);
   });
 });
 
-// ── floorFieldProblem (Item 4: new) ─────────────────────────────────────────
+// ── numberFieldProblem ───────────────────────────────────────────────────────
 
-describe("floorFieldProblem — surfaces what parseFloorField silently drops", () => {
+describe("numberFieldProblem — surfaces what parseNumberField cannot express on its own", () => {
   test("blank is never a problem — it's the documented 'use the default' case", () => {
-    assert.equal(floorFieldProblem(""), null);
-    assert.equal(floorFieldProblem("   "), null);
+    assert.equal(numberFieldProblem("Content-decimal floor", ""), null);
+    assert.equal(numberFieldProblem("Content-decimal floor", "   "), null);
   });
 
   test("a valid integer is never a problem", () => {
-    assert.equal(floorFieldProblem("5"), null);
-    assert.equal(floorFieldProblem(" 20 "), null);
+    assert.equal(numberFieldProblem("Content-decimal floor", "5"), null);
+    assert.equal(numberFieldProblem("Content-decimal floor", " 20 "), null);
   });
 
-  test("a non-numeric value is reported, naming the offending text", () => {
-    const problem = floorFieldProblem("abc");
+  test("a non-numeric value is reported, naming the field label and the offending text", () => {
+    const problem = numberFieldProblem("Content-decimal floor", "abc");
     assert.equal(typeof problem, "string");
+    assert.match(problem, /Content-decimal floor/);
     assert.match(problem, /abc/);
   });
 
-  test("a value that parses but is out of validateJdConfig's 0-99 range is NOT this function's concern (that's validateJdConfig's job downstream)", () => {
-    // 500 is a valid NUMBER (Number("500") is not NaN) — floorFieldProblem
-    // only catches "not a number at all"; range checking is validateJdConfig's
-    // job on the resulting config, applied separately by the settings tab.
-    assert.equal(floorFieldProblem("500"), null);
+  test("the message says the value was NOT saved — the loud-refusal contract the renderer relies on (never a silent coerce-to-default)", () => {
+    assert.match(numberFieldProblem("X", "abc"), /not saved/);
+  });
+
+  test("different fields get their own label in the message, so two fields' problems are distinguishable", () => {
+    assert.match(numberFieldProblem("Retry limit", "abc"), /Retry limit/);
+  });
+
+  test("a value that parses but is out of a module's own range is NOT this function's concern (that's manifest.config.validate's job downstream)", () => {
+    // 500 is a valid NUMBER (Number("500") is not NaN) — numberFieldProblem
+    // only catches "not a number at all"; range checking is the module's
+    // own validate()'s job on the resulting config.
+    assert.equal(numberFieldProblem("Content-decimal floor", "500"), null);
   });
 });
