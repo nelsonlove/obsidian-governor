@@ -16,7 +16,7 @@
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { FS_TOOLS } from "@vault-mcp/core";
@@ -105,4 +105,65 @@ describe("fs-expressible tool inventory (#25)", () => {
     }
   });
 
+});
+
+// ── scope-provider read-only tools (Task 6) ─────────────────────────────────
+// A different flavor of drift guard than the FS_TOOLS invariants above: those
+// tools are defined in @vault-mcp/core and merely delegated to; these five are
+// defined in tools-scheme.ts itself, so the check is source-presence rather
+// than an imported constant. Also pins the not-a-tool ruling: an
+// obsidian_scheme_audit tool was considered and rejected (findings.ts is rail
+// material for a later task, not a tool) — this must never regress silently.
+
+const EXPECTED_SCHEME_TOOL_NAMES = [
+  "obsidian_schemes",
+  "obsidian_resolve_address",
+  "obsidian_next_address",
+  "obsidian_list_scope",
+  "obsidian_expected_location",
+];
+
+async function collectSourceFiles(dir) {
+  const entries = await readdir(dir, { withFileTypes: true });
+  const files = [];
+  for (const entry of entries) {
+    const full = resolve(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...(await collectSourceFiles(full)));
+    } else if (entry.name.endsWith(".ts")) {
+      files.push(full);
+    }
+  }
+  return files;
+}
+
+describe("scope-provider read-only tools (#task-6)", () => {
+  test("tools-scheme.ts registers all five expected tool names, byte-for-byte", async () => {
+    const path = resolve(HERE, "../src/mcp/tools-scheme.ts");
+    const source = await readFile(path, "utf-8");
+    for (const name of EXPECTED_SCHEME_TOOL_NAMES) {
+      assert.ok(source.includes(`"${name}"`), `tools-scheme.ts must register "${name}"`);
+    }
+  });
+
+  test("server.ts wires registerSchemeTools beside registerUidTools", async () => {
+    const serverPath = resolve(HERE, "../src/mcp/server.ts");
+    const source = await readFile(serverPath, "utf-8");
+    assert.ok(
+      source.includes("registerSchemeTools") && source.includes("tools-scheme"),
+      "server.ts must import and call registerSchemeTools",
+    );
+  });
+
+  test("no obsidian_scheme_audit tool exists anywhere in src/ (the not-a-tool ruling, pinned)", async () => {
+    const srcDir = resolve(HERE, "../src");
+    const files = await collectSourceFiles(srcDir);
+    for (const file of files) {
+      const source = await readFile(file, "utf-8");
+      assert.ok(
+        !source.includes("obsidian_scheme_audit"),
+        `${file} must not reference "obsidian_scheme_audit" — it was never a tool`,
+      );
+    }
+  });
 });

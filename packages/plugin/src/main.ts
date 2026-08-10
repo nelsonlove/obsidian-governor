@@ -9,6 +9,7 @@ import { findClaudeBinary, claudeIsRegistered, claudeRegister, claudeRemove, cla
 import { ExternalToolRegistry, type VaultMcpApi } from "./mcp/external-tools.js";
 import { Kernel, WriteQueue, WriteJournal, IdempotencyStore, LockStore, UidIndex, loadInstallId, DEFAULT_VOCABULARIES, type VocabInstanceSettings } from "./kernel/index.js";
 import { obsidianProbe, obsidianServerIdentity, obsidianUidSource } from "./kernel/obsidian-probe.js";
+import { DEFAULT_SCHEMES, type SchemeInstanceConfig } from "./kernel/scheme/registry.js";
 
 interface VaultMcpSettings {
   setupAcknowledged: boolean;
@@ -31,6 +32,18 @@ interface VaultMcpSettings {
    * hand-edit data.json (v1).
    */
   vocabularies: VocabInstanceSettings[];
+  /**
+   * Scope-provider instances (scheme id + provider name + per-provider
+   * config). Defaults to DEFAULT_SCHEMES — the single "jd" instance backed by
+   * the Johnny Decimal provider with its own default config. Scheme semantics
+   * are configuration, not hardwired (Nelson's ruling): only the default
+   * instance's JD config gets a settings-tab UI (comma-separated expanded
+   * areas/categories + content-decimal floor); additional instances or
+   * exotic overrides stay data.json-editable, no UI (YAGNI) — see
+   * kernel/scheme/registry.ts for the deep-merge-over-defaults and
+   * skip-and-report-on-invalid-config behavior this list feeds.
+   */
+  schemes: SchemeInstanceConfig[];
 }
 const DEFAULT_SETTINGS: VaultMcpSettings = {
   setupAcknowledged: false,
@@ -41,6 +54,7 @@ const DEFAULT_SETTINGS: VaultMcpSettings = {
   trustedReadOnlyPlugins: [],
   // Cloned so settings edits can never mutate the module-level default rows.
   vocabularies: DEFAULT_VOCABULARIES.map((v) => ({ ...v })),
+  schemes: DEFAULT_SCHEMES,
 };
 
 class DiagnosticsModal extends Modal {
@@ -204,6 +218,7 @@ export default class VaultMcpPlugin extends Plugin {
         allowlist: this.settings.allowlist,
         allowDangerousCli: this.settings.allowDangerousCli,
         trustedReadOnlyPlugins: this.settings.trustedReadOnlyPlugins,
+        schemes: this.settings.schemes,
       }),
       serverIdentity,
       getExternalTools: () => this.externalRegistry.entries(),

@@ -40,12 +40,13 @@ On the Mac, **disconnect the remote `obsidian-vault-mcp-server` connector** for 
 
 ## Tools
 
-**Up to 52 tools.** 45 are always available; 6 are **plugin-gated** (register only when their backing plugin is loaded); 1 (`obsidian_cli`) registers only when the official Obsidian CLI binary is installed:
+**Up to 57 tools.** 50 are always available; 6 are **plugin-gated** (register only when their backing plugin is loaded); 1 (`obsidian_cli`) registers only when the official Obsidian CLI binary is installed:
 
 - **Core (read/write, live `app.*`):** list/read/write/append/move/delete notes, backlinks, outlinks, resolve, frontmatter (atomic multi-key), patch, search, find-by-tag, …
 - **Complementary:** trash, parsed read, append-at-heading, run-command, command list, vault/tags/environment info, active note, open-in-editor.
 - **Navigation/control:** jump-to, view-mode, workspaces (open/save/list), bookmarks (open/list), periodic note, plugin toggle.
 - **Identity:** `obsidian_resolve_uid` — look a note up by its frontmatter `uid`, or a uid up by path. See [Addressing notes by uid](#addressing-notes-by-uid).
+- **Scope providers (Johnny Decimal, read-only):** `obsidian_schemes` (list configured scheme instances, capabilities and grammar examples), `obsidian_resolve_address` (address ↔ path lookup), `obsidian_next_address` (compute — never reserve — the next free address in a scope), `obsidian_list_scope` (a scope's members and open slots), `obsidian_expected_location` (where a note or address is expected to live). See [Scheme addressing](#scheme-addressing).
 - **Link health:** `obsidian_check_links` — read-only report of dangling wikilinks, duplicated uids, and uid coverage. See [Link health](#link-health).
 - **Advisory claims:** `obsidian_claim_scope`, `obsidian_renew_scope`, `obsidian_release_scope`, `obsidian_list_scope_claims` — see [Advisory scope claims](#advisory-scope-claims).
 - **Plugin-gated:** `dataview_list_query`, `dataview_table_query` (Dataview); `create_note_from_template` (Templater); `omnisearch` (Omnisearch); `fileclass_schema`, `fileclass_insert_fields` (Metadata Menu).
@@ -83,6 +84,27 @@ Both decisions are made over the notes a **path allowlist** leaves visible to yo
 **`obsidian_resolve_uid`** is the lookup, in both directions: `{uid}` → `{path, duplicates?}`, `{path}` → `{uid}`, and no argument at all → index totals plus every duplicated uid. It's read-only and reports duplicates; it never repairs them. It applies exactly the visibility rule above — including the **totals**, which count only what your session can see, so a sandboxed session doesn't learn how much lives outside its allowlist.
 
 The journal records both halves: `target.path` is where the operation landed, `target.uid` is the identity it landed on (taken from the index, so it's present even when the frontmatter cache is behind).
+
+## Scheme addressing
+
+Beside `uid:`, a path argument also accepts `<scheme>:<address>` — for the default configuration, `jd:06.11` (Johnny Decimal). It resolves at the same interception point as uid addressing, immediately after it: `uid:` is reserved and always gets first look, so a call can freely mix the two (`uid:` for a note whose scheme address you don't know, `jd:` for one you do). Like uid addressing, it works on reads and writes alike and handlers never see the reference — they get the resolved path.
+
+```jsonc
+{"path": "jd:06.11", "content": "…"}                    // obsidian_write_note
+{"from": "jd:06.11", "to": "jd:06.12"}                   // any path argument
+```
+
+Resolution is computed against the **visible** notes only, so a session sandboxed by a [path allowlist](#the-path-allowlist) sees exactly the candidates `obsidian_resolve_address` itself would report: `Error [address_unresolved]` when no note *you can reach* carries the address (even if a hidden note does), `Error [address_ambiguous]` naming only the candidates you could have named yourself. An address whose sole claimant is hidden never confirms the address exists — it reads as unresolved, not "found but out of allowlist".
+
+Five read-only tools cover the scheme's own view of the vault — none of them mutate anything, and `obsidian_next_address`/`obsidian_list_scope`'s free-slot answers are **computed, not reserved** (pair with [advisory scope claims](#advisory-scope-claims) for exclusivity while you create the note):
+
+- **`obsidian_schemes`** — every configured scheme instance: id, provider, capabilities, the config override in effect, and a couple of example addresses in its own grammar.
+- **`obsidian_resolve_address`** — `{address}` → path (plus `duplicates` if more than one visible note claims it, never picked for you) or `{found: false}` with the parsed shape; `{path}` → its address in whichever configured scheme recognizes it.
+- **`obsidian_next_address`** — `{scope}` (e.g. category `"06"`) → the next free address in that scope, or `{exhausted: true}`.
+- **`obsidian_list_scope`** — `{scope}` → its visible members in address order, plus up to 20 open slots (`free.truncated: true` when more exist).
+- **`obsidian_expected_location`** — `{path}` or `{address}` → where the scheme says it belongs, and whether it's there.
+
+Under an allowlist, a hidden note can hold a slot these tools report as free — the same visibility rule that keeps addressing from being a sandbox bypass also means "next free" is only ever free among what your session can see.
 
 ## Link health
 
@@ -203,6 +225,7 @@ One vault-relative prefix per line, empty for the whole vault. It is checked aft
 | `obsidian_omnisearch` | hits outside the allowlist are dropped, excerpt and all |
 | `obsidian_fileclass_schema` | the fileClass key set is bounded, so the "available"/"ambiguous" messages can't enumerate folders |
 | `obsidian_check_links`, `obsidian_resolve_uid`, `obsidian_repoint_link` | filtered as described in [Link health](#link-health) and [Addressing notes by uid](#addressing-notes-by-uid) |
+| `obsidian_resolve_address`, `obsidian_next_address`, `obsidian_list_scope`, `obsidian_expected_location` | resolved and computed over visible notes only, as described in [Scheme addressing](#scheme-addressing) — a hidden note's address never resolves, and never occupies a slot these tools call free |
 | `obsidian_dataview_list_query`, `obsidian_dataview_table_query`, `obsidian_cli` | **refused** with `Error [out_of_allowlist]` — a Dataview query runs over Dataview's own index and returns values it selects for itself, and CLI arguments can't be path-scoped, so neither can be bounded honestly |
 
 With no allowlist configured, every one of these behaves exactly as it always did.
