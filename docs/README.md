@@ -110,9 +110,11 @@ accept verb to an agent.
   values over a hand-rolled YAML subset, so constructs the vault's real YAML honors but the
   subset does not model are still a gap; `moveNote`'s backlink rewrite is an unguarded
   content write; and a live-vault read-back confirming the guard recognizes everything
-  Obsidian honors is still owed. Of the tools tracked by **#105**,
-  `create_note_from_template` and `obsidian_run_command` are now gated; `fileclass_insert_fields`
-  is not. The acceptance model's guarantees below are stated for the **plugin's guarded write
+  Obsidian honors is still owed. Of the tools tracked by **#105**, only `obsidian_run_command`
+  is gated. `obsidian_create_note_from_template` is **not**: #79 gated the `obsidian_cli`
+  twin (`create template=`) in `tools-cli.ts`, while the MCP tool lives in
+  `tools-integrations.ts` and calls Templater directly, reaching neither that guard nor
+  `obsidian-backend`'s. `fileclass_insert_fields` is not gated either. The acceptance model's guarantees below are stated for the **plugin's guarded write
   surfaces**; these issues are the honest boundary of that claim until closed. **Separately** (#92): that same `packages/server`
   fs-failover surface has no write journal and no serialized write queue either — those
   live in the plugin's kernel, which `packages/server` does not and must not depend on. FS-mode
