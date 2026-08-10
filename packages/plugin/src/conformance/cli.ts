@@ -18,7 +18,7 @@ import { VocabRegistry, DEFAULT_VOCABULARIES, type VocabInstanceSettings } from 
 import { makeRegistry, DEFAULT_SCHEMES, type SchemeInstanceConfig } from "../kernel/scheme/registry.js";
 import { buildSnapshot } from "./snapshot.js";
 import { runEngine } from "./engine.js";
-import { vocabPack, schemePack, structurePack, portPack, stePack } from "./packs/index.js";
+import { vocabPack, schemePack, structurePack, portPack, stePack, driftPack } from "./packs/index.js";
 import { parseBaseline, renderBaseline, ratchet, type RatchetResult } from "./ratchet.js";
 import type { Finding } from "./finding.js";
 import type { RulePack } from "./rule-pack.js";
@@ -69,6 +69,7 @@ export async function runConformance(opts: RunOpts): Promise<RunResult> {
     packs.push(structurePack());
     packs.push(portPack());
     packs.push(stePack());
+    packs.push(driftPack());
   }
 
   const findings = runEngine(packs, snapshot);
