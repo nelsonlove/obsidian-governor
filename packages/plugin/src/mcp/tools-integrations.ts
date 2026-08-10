@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { runCommandRefusal } from "./cli-policy.js";
 import { templateContentAcceptRefusal } from "./tools-cli.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type App, TFile, parseYaml} from "obsidian";
@@ -401,12 +402,28 @@ export function registerIntegrationTools(server: McpServer, app: App, ctx: Serve
           const mm = (app as any).plugins?.plugins?.["metadata-menu"];
           if (!mm) return fail(new Error("metadata-menu plugin not available"));
 
-          // Open the note first so file-scoped commands have a target.
-          await app.workspace.openLinkText(p, "", false);
-
           // Execute MM's insert-missing-fields command (id verified live 2026-06-26).
           // app.commands is internal — cast required.
           const commandId = "metadata-menu:insert_missing_fields";
+
+          // ── command policy, BEFORE anything runs (issue #105 part 3) ───────
+          // #105's own characterization: this tool is `executeCommandById` in
+          // disguise, so it inherits `obsidian_run_command`'s reachability
+          // while bypassing the gate #76 put on that surface. Same predicate,
+          // same policy object, same `cli_denied` shape — deliberately NOT a
+          // second deny list, because two lists means two things to keep in
+          // sync and only one that will be.
+          //
+          // Checked before `openLinkText` for the reason #76 records: opening
+          // the file leaks an action for a command that is about to be refused.
+          const policyReason = runCommandRefusal(commandId, ctx.getSettings().cliPolicy);
+          if (policyReason) {
+            return codedError("cli_denied", policyReason);
+          }
+
+          // Open the note only once the command is permitted, so a file-scoped
+          // command has a target.
+          await app.workspace.openLinkText(p, "", false);
           const executed = (app as any).commands?.executeCommandById(commandId) as boolean | undefined;
           // executeCommandById returns false when the command id is unknown, and
           // the whole expression is undefined if app.commands itself is absent —
