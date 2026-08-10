@@ -110,7 +110,7 @@ function reportedEffects(args: Record<string, unknown>, result: unknown): Journa
 
 // ── kernel arguments ─────────────────────────────────────────────────────────
 //
-// `if_rev` and `idempotency_key` are KERNEL arguments, not tool arguments: no
+// `if_rev`, `idempotency_key` and `intent` are KERNEL arguments, not tool arguments: no
 // handler knows about them, and adding them by hand to ~25 mutating schemas
 // would guarantee that the next mutating tool forgets one. They are declared
 // generically (withKernelArgs, applied to every mutating registration) and
@@ -145,8 +145,20 @@ const IDEMPOTENCY_KEY = z
       "10-minute window, cleared on plugin reload. Use a fresh key per logical operation."
   );
 
+const INTENT = z
+  .string()
+  .min(1)
+  .max(2000)
+  .optional()
+  .describe(
+    "Why this change is being made — advisory, agent-authored free text recorded in the write journal beside the " +
+      "operation (the PR-description of a proposed change; review surfaces display it as \"agent says\"). " +
+      "Journal-only: it is never written to the note, never trusted, and never an acceptance signal of any kind. " +
+      "Unlike idempotency identity, a retried call may reword it freely."
+  );
+
 /** The kernel argument names, stripped from every mutating call's args. */
-export const KERNEL_ARG_KEYS = ["if_rev", "idempotency_key"] as const;
+export const KERNEL_ARG_KEYS = ["if_rev", "idempotency_key", "intent"] as const;
 
 /**
  * Declare the kernel arguments on a MUTATING tool's input schema. Read-only
@@ -160,6 +172,7 @@ export function withKernelArgs(def: any): any {
   const inputSchema = { ...(def.inputSchema ?? {}) };
   if (!("if_rev" in inputSchema)) inputSchema.if_rev = IF_REV;
   if (!("idempotency_key" in inputSchema)) inputSchema.idempotency_key = IDEMPOTENCY_KEY;
+  if (!("intent" in inputSchema)) inputSchema.intent = INTENT;
   return { ...def, inputSchema };
 }
 
@@ -168,12 +181,14 @@ function splitKernelArgs(args: Record<string, unknown>): {
   toolArgs: Record<string, unknown>;
   ifRev?: number;
   idempotencyKey?: string;
+  intent?: string;
 } {
-  const { if_rev: ifRev, idempotency_key: idempotencyKey, ...toolArgs } = args;
+  const { if_rev: ifRev, idempotency_key: idempotencyKey, intent, ...toolArgs } = args;
   return {
     toolArgs,
     ...(typeof ifRev === "number" ? { ifRev } : {}),
     ...(typeof idempotencyKey === "string" && idempotencyKey ? { idempotencyKey } : {}),
+    ...(typeof intent === "string" && intent ? { intent } : {}),
   };
 }
 
@@ -266,7 +281,7 @@ export function makeGuarded(opts: GuardedOpts) {
     //     failure mode is at-least-once (the pre-kernel status quo), not a
     //     destructive one: the operation still does what the caller asked, a
     //     retry just isn't deduplicated.
-    const { toolArgs, ifRev, idempotencyKey } = splitKernelArgs(callArgs);
+    const { toolArgs, ifRev, idempotencyKey, intent } = splitKernelArgs(callArgs);
     if (isMutating && !opts.kernel && ifRev !== undefined) {
       return codedError(
         "precondition_unsupported",
@@ -285,6 +300,7 @@ export function makeGuarded(opts: GuardedOpts) {
           effectsOf: (result) => reportedEffects(toolArgs, result),
           ...(ifRev !== undefined ? { ifRev } : {}),
           ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
+          ...(intent !== undefined ? { intent } : {}),
         },
         () => handler(toolArgs, extra)
       );
