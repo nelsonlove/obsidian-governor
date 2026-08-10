@@ -94,14 +94,20 @@ export const DANGEROUS_LIST_DESC = [...DANGEROUS_EXACT].sort().join(", ") + ", a
 // CLI path has no "carry an existing human-granted value forward" expression),
 // so the introduce check is exactly right.
 //
-// RESIDUAL — CLOSED by the command policy (cli-policy.ts): the opaque
-// macro/code commands (`quickadd`/`quickadd:run`/`quickadd:run-template`/
-// `eval`/`command`) can set acceptance where no guard can inspect, so they
-// are DENIED BY DEFAULT and re-enabled only per-command through the human-only
-// `cliPolicy.allowOpaque` setting. The policy composes with (never replaces)
-// the danger gate below — a re-enabled `eval` still needs allowDangerousCli.
-// A `create template=<t>` also draws frontmatter from a template note we
-// cannot read pre-exec; a lesser residual, same class, still open.
+// RESIDUAL — CLOSED on both fronts, two mechanisms that compose:
+//   • The opaque macro/code commands (`quickadd`/`quickadd:run`/
+//     `quickadd:run-template`/`eval`/`command`) can set acceptance where no
+//     guard can inspect — DENIED BY DEFAULT by the command policy
+//     (cli-policy.ts), re-enabled only per-command through the human-only
+//     `cliPolicy.allowOpaque` setting; a re-enabled `eval` still needs
+//     allowDangerousCli.
+//   • The former lesser residual — `create template=<t>` drawing frontmatter
+//     from a template note the params only NAME — is CLOSED by the template
+//     guard below: the template IS a vault file, so it is resolved, read, and
+//     scanned with the same rule pre-exec; unresolvable fails closed. A
+//     re-enabled `quickadd:run-template` gets the same static scan on its
+//     `path=` template as belt (its runtime-computed frontmatter stays
+//     opaque, which is why it remains in the policy's default-deny set).
 
 // property:set family — sets one property (documented `name=<prop> value=<val>`)
 // or, in shorthand, direct key=value params. `frontmatter:` alias included
@@ -169,7 +175,7 @@ export function cliAcceptRefusal(
  * injected, we fail CLOSED on any fence at all (defensive; production always
  * injects obsidian.parseYaml).
  */
-function contentAcceptRefusal(content: string, parseYaml?: (yaml: string) => unknown): string | null {
+export function contentAcceptRefusal(content: string, parseYaml?: (yaml: string) => unknown): string | null {
   const expanded = content
     .replace(/\\r\\n|\\n/g, "\n") // literal \n (and \r\n) escapes the CLI expands
     .replace(/\\t/g, "\t") // literal \t escapes
@@ -200,6 +206,99 @@ function contentAcceptRefusal(content: string, parseYaml?: (yaml: string) => unk
   return sawFence && !parseYaml
     ? "carries a frontmatter fence that cannot be verified without a YAML parser"
     : null;
+}
+
+// ── template guard: the create-from-template closure ─────────────────────────
+//
+// `create template=<name>` copies a TEMPLATE NOTE's content — frontmatter
+// included — into the new note, and `quickadd:run-template path=<p>` creates
+// from a template file directly. Neither's payload appears in the call's
+// params, so the content scan above never sees it: an agent could park an
+// `accepted` fence in an innocent note and launder it into a new note through
+// the template path. Both templates ARE inspectable, though — they are vault
+// files — so the closure is to resolve + read the template pre-exec (via the
+// injected `readTemplate`; obsidian-free here, wired from server.ts) and run
+// the SAME contentAcceptRefusal rule over it.
+//
+// Fail-closed discipline, matching the guard's own precedents: an
+// unresolvable/unreadable template refuses (an uninspectable write must not
+// fail open — the `if_rev`-without-kernel rule), and a missing `readTemplate`
+// dep refuses any template-carrying call outright (the no-parser rule).
+// Resolution here may be STRICTER than the CLI's own (we try the templates
+// folder and the literal path; the CLI may accept fuzzier names) — a
+// legitimate call refused by strictness gets a clear message naming the
+// template; it can be retried with the exact name. Conservative by design.
+
+/** Commands that draw content from a template the params don't carry, and the
+ * param that names the template. */
+const TEMPLATE_PARAM: Record<string, string> = {
+  create: "template",
+  "quickadd:run-template": "path",
+};
+
+/**
+ * The reason a template-carrying invocation is refused, or null. Non-template
+ * calls (no entry in TEMPLATE_PARAM, or the param absent/empty) are always
+ * clean — the guard adds nothing to ordinary creates.
+ */
+export async function templateAcceptRefusal(
+  command: string,
+  params: Record<string, string | number | boolean> | undefined,
+  readTemplate: ((name: string) => Promise<string | null>) | undefined,
+  parseYaml?: (yaml: string) => unknown,
+): Promise<string | null> {
+  const paramKey = TEMPLATE_PARAM[command.trim()];
+  if (!paramKey) return null;
+  const name = params?.[paramKey];
+  if (typeof name !== "string" || name.length === 0) return null;
+  if (!readTemplate) {
+    return `template '${name}' cannot be inspected in this build (no template reader) — an uninspectable template must not fail open`;
+  }
+  let body: string | null;
+  try {
+    body = await readTemplate(name);
+  } catch {
+    body = null;
+  }
+  if (body === null) {
+    return `template '${name}' could not be resolved for pre-exec inspection — an uninspectable template must not fail open (use the template's exact name or vault path)`;
+  }
+  const reason = contentAcceptRefusal(body, parseYaml);
+  return reason ? `template '${name}' ${reason}` : null;
+}
+
+/**
+ * The live template reader (server.ts injects it): resolves a template
+ * reference against the literal vault path first, then the core Templates
+ * plugin's configured folder. Structurally typed — no `obsidian` import.
+ * Returns null when nothing resolves; the caller fails closed.
+ */
+export function obsidianTemplateReader(app: {
+  vault: {
+    getAbstractFileByPath(path: string): unknown;
+    cachedRead(file: unknown): Promise<string>;
+  };
+}): (name: string) => Promise<string | null> {
+  return async (name: string) => {
+    const folder = (app as any).internalPlugins?.plugins?.templates?.instance?.options?.folder;
+    const candidates = [
+      name,
+      `${name}.md`,
+      ...(typeof folder === "string" && folder.length > 0 ? [`${folder}/${name}`, `${folder}/${name}.md`] : []),
+    ];
+    for (const p of candidates) {
+      const f = app.vault.getAbstractFileByPath(p);
+      // A folder has `children`; a file does not — the same discriminant the
+      // backend uses. Skip non-files.
+      if (!f || typeof f !== "object" || "children" in (f as object)) continue;
+      try {
+        return await app.vault.cachedRead(f);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  };
 }
 
 // Lowercase-only ON PURPOSE: the CLI's commands are all lowercase, and a
@@ -271,7 +370,14 @@ const defaultExec: CliExec = (bin, args, timeoutMs) =>
 export function registerCliTools(
   server: McpServer,
   ctx: ServerCtx,
-  deps?: { binary?: string | null; exec?: CliExec; parseYaml?: (yaml: string) => unknown }
+  deps?: {
+    binary?: string | null;
+    exec?: CliExec;
+    parseYaml?: (yaml: string) => unknown;
+    /** Resolve+read a template reference (template guard). Absent ⇒ any
+     * template-carrying call fails closed. */
+    readTemplate?: (name: string) => Promise<string | null>;
+  }
 ) {
   // Conditional registration at build time is the dynamic-registration
   // mechanism (same as integration tools): no binary → no tool this session.
@@ -351,6 +457,16 @@ export function registerCliTools(
             "accept_forbidden",
             `${acceptReason}. Acceptance is a human gesture, in no API — the CLI proxy will not persist it. ` +
               `Agents write only acceptance-status: proposed; never accepted / accepted-by / accepted-on.`
+          );
+        }
+        // Template guard — same rule, applied to the template the params only
+        // NAME: create-from-template copies a vault note's frontmatter the
+        // content scan above never sees. Unresolvable ⇒ fail closed.
+        const templateReason = await templateAcceptRefusal(command, args.params, deps?.readTemplate, parseYaml);
+        if (templateReason) {
+          return codedError(
+            "accept_forbidden",
+            `${templateReason}. Acceptance is a human gesture, in no API — the CLI proxy will not persist it.`
           );
         }
         const argv = buildCliArgs({ vaultName: ctx.vaultName, command, params: args.params, flags: args.flags });
