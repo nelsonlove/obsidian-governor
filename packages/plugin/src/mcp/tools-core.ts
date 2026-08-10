@@ -8,7 +8,7 @@ import type { App, TFile } from "obsidian";
 import { ok, fail } from "./helpers.js";
 import { isVisible, type GuardSettings } from "../guard.js";
 import type { ExternalToolEntry } from "./external-tools.js";
-import type { Kernel, ServerIdentity, VocabInstanceSettings } from "../kernel/index.js";
+import type { Kernel, ModuleSettings, ServerIdentity, VocabInstanceSettings } from "../kernel/index.js";
 import { findObsidianBinary } from "./tools-cli.js";
 import type { SchemeInstanceConfig } from "../kernel/scheme/registry.js";
 
@@ -34,6 +34,10 @@ export interface ServerCtx {
     allowDangerousCli?: boolean;
     trustedReadOnlyPlugins?: string[];
     schemes?: SchemeInstanceConfig[];
+    /** Module-host rows (`modules.<id>.enabled` / `.config`) — the mount
+     * (mcp/modules-mount.ts) reads these; absent ⇒ every built-in module at
+     * its default. */
+    modules?: ModuleSettings;
   };
   /** The configured controlled-vocabulary sources (tools-vocab.ts). Optional:
    * absent means the defaults; absent in tests that don't exercise it. */

@@ -76,6 +76,16 @@ export class ModuleRegistry {
     return [...this.constructionProblems, ...this.runProblems];
   }
 
+  /** Report a defect found OUTSIDE the registry's own checks — for host-side
+   * registrar wrappers (e.g. a mount refusing a non-read-only module tool)
+   * whose refusals belong with this run's problems. Scoped like every other
+   * registerAll finding: reset by the next registerAll. (Pushing onto
+   * `problems` directly mutates the getter's temporary and lands nowhere —
+   * this is the supported way in.) */
+  report(problem: string): void {
+    this.runProblems.push(problem);
+  }
+
   constructor(modules: VaultModule[], settings: ModuleSettings = {}) {
     this.settings = settings;
     const seen = new Set<string>();

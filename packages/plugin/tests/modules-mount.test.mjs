@@ -1,0 +1,192 @@
+/**
+ * modules-mount.test.mjs — the module-host MOUNT (mcp/modules-mount.ts): the
+ * two built-in capability modules registering THROUGH the ModuleRegistry, and
+ * the mount-step security gate's testable halves:
+ *
+ *   gate 1 (handler reachability): every module-contributed tool is
+ *          explicitly read-only, and the mount REFUSES one that is not;
+ *   gate 2 (minimal host ctx): mountHost hands modules exactly
+ *          {getSettings, visible} — no kernel, no sources, no registrar;
+ *   gate 3 (registry-only registration): server.ts no longer calls
+ *          registerSchemeTools/registerVocabTools directly (source scan);
+ *   plus settings-toggling over the real modules, and tripwire/collision
+ *   plumbing staying live on the mount path.
+ *
+ * Headless: modules-mount.ts imports nothing from `obsidian`; the vault
+ * arrives as a fake VocabSource + a static note listing.
+ */
+
+import { test, describe } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync, readdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+import { fakeServer } from "./fake-server.mjs";
+import { mountModules, mountHost, builtinModules } from "../src/mcp/modules-mount.ts";
+import { ModuleRegistry } from "../src/kernel/modules/index.ts";
+
+const SRC = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "src");
+
+/** A tiny fake vault for the vocab source; the scheme module gets `notes`. */
+const NOTES = ["00-09 System/06 Agent tooling/06.20 obsidian-vault-mcp-plugin.md"];
+const vocabSource = {
+  paths: () => NOTES,
+  frontmatter: () => null,
+  body: async () => null,
+};
+
+function deps(overrides = {}) {
+  return {
+    getSettings: () => ({ ...(overrides.settings ?? {}) }),
+    schemeNotes: () => NOTES,
+    vocabSource,
+    ...overrides.deps,
+  };
+}
+
+function mount(overrides = {}) {
+  const server = fakeServer();
+  const registry = mountModules((n, d, h) => server.registerTool(n, d, h), deps(overrides));
+  return { server, registry };
+}
+
+describe("mountModules: the two built-in modules register through the registry", () => {
+  test("default settings: scheme + vocab tools all present, no problems", () => {
+    const { server, registry } = mount();
+    const names = [...server.tools.keys()];
+    // The scheme module's five and the vocab module's four, exactly as the
+    // direct registrations used to contribute them.
+    for (const n of [
+      "obsidian_schemes",
+      "obsidian_resolve_address",
+      "obsidian_next_address",
+      "obsidian_list_scope",
+      "obsidian_expected_location",
+      "obsidian_vocabularies",
+      "obsidian_resolve_term",
+      "obsidian_validate_terms",
+      "obsidian_list_vocabulary",
+    ]) {
+      assert.ok(names.includes(n), `missing ${n}`);
+    }
+    assert.deepEqual(registry.problems, []);
+    const described = registry.describe();
+    assert.deepEqual(described.map((d) => d.id), ["scheme", "vocab"]);
+    assert.ok(described.every((d) => d.enabled && d.tools.length > 0));
+  });
+
+  test("settings-toggle: modules.scheme.enabled=false unmounts only the scheme surface", () => {
+    const { server, registry } = mount({ settings: { modules: { scheme: { enabled: false } } } });
+    const names = [...server.tools.keys()];
+    assert.ok(!names.some((n) => n.includes("address") || n === "obsidian_schemes" || n === "obsidian_list_scope"));
+    assert.ok(names.includes("obsidian_vocabularies"));
+    assert.equal(registry.isEnabled("scheme"), false);
+    assert.equal(registry.isEnabled("vocab"), true);
+  });
+
+  test("settings-toggle: vocab off, scheme on", () => {
+    const { server } = mount({ settings: { modules: { vocab: { enabled: false } } } });
+    const names = [...server.tools.keys()];
+    assert.ok(names.includes("obsidian_schemes"));
+    assert.ok(!names.some((n) => n.startsWith("obsidian_vocab") || n.endsWith("_term") || n.endsWith("_terms")));
+  });
+
+  test("a registered scheme tool actually answers over the injected listing", async () => {
+    const { server } = mount();
+    const { handler } = server.tools.get("obsidian_schemes");
+    const res = await handler({});
+    assert.equal(res.isError, undefined);
+    assert.ok(res.structuredContent.schemes.some((s) => s.id === "jd"));
+  });
+});
+
+describe("mount gate 1: read-only-only registrar", () => {
+  test("every mounted tool is explicitly read-only", () => {
+    const { server } = mount();
+    for (const [name, { def }] of server.tools) {
+      assert.equal(def.annotations?.readOnlyHint, true, `${name} must be read-only`);
+    }
+  });
+
+  test("a module tool without readOnlyHint:true is refused and reported, not registered", () => {
+    // A drifted module contributing a mutating (and an unannotated) tool,
+    // pushed through the same readOnlyOnly registrar shape the mount builds.
+    const server = fakeServer();
+    const d = deps();
+    const hostile = {
+      id: "drift",
+      posture: "capability",
+      capabilities: ["x"],
+      enabled: true,
+      register(reg) {
+        reg("obsidian_drift_write", { annotations: { readOnlyHint: false } }, () => ({}));
+        reg("obsidian_drift_bare", {}, () => ({}));
+      },
+    };
+    const reg2 = new ModuleRegistry([hostile], {});
+    const readOnlyOnly = (name, def, handler) => {
+      if (def?.annotations?.readOnlyHint !== true) {
+        reg2.report(`module tool '${name}' is not explicitly read-only — refused`);
+        return;
+      }
+      server.registerTool(name, def, handler);
+    };
+    reg2.registerAll(readOnlyOnly, mountHost(d));
+    assert.ok(!server.tools.has("obsidian_drift_write"));
+    assert.ok(!server.tools.has("obsidian_drift_bare"));
+    assert.equal(reg2.problems.filter((p) => p.includes("refused")).length, 2);
+  });
+});
+
+describe("mount gate 2: the host ctx handed to modules is minimal", () => {
+  test("mountHost exposes exactly {getSettings, visible} — nothing else", () => {
+    const host = mountHost(deps());
+    assert.deepEqual(Object.keys(host).sort(), ["getSettings", "visible"]);
+    assert.equal(typeof host.getSettings, "function");
+    assert.equal(typeof host.visible, "function");
+  });
+
+  test("host.visible applies the allowlist", () => {
+    const host = mountHost(deps({ settings: { allowlist: ["Projects"] } }));
+    assert.deepEqual(host.visible(["Projects/a.md", "Archive/b.md"]), ["Projects/a.md"]);
+  });
+
+  test("builtinModules declares exactly the two capability modules", () => {
+    const mods = builtinModules(deps());
+    assert.deepEqual(mods.map((m) => [m.id, m.posture]), [
+      ["scheme", "capability"],
+      ["vocab", "capability"],
+    ]);
+  });
+});
+
+describe("mount gate 3: registry-only registration (source scan)", () => {
+  // The scan is over ALL of src/, not a hand-kept file list (the
+  // link-healing scan's lesson): a new file calling the scheme/vocab
+  // registrars directly would bypass the tripwire and collision checks.
+  function tsFiles(dir) {
+    return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) return tsFiles(p);
+      return e.isFile() && p.endsWith(".ts") ? [p] : [];
+    });
+  }
+
+  test("registerSchemeTools/registerVocabTools are CALLED only in modules-mount.ts", () => {
+    const offenders = [];
+    for (const f of tsFiles(SRC)) {
+      const base = path.basename(f);
+      if (base === "modules-mount.ts" || base === "tools-scheme.ts" || base === "tools-vocab.ts") continue;
+      const src = readFileSync(f, "utf8");
+      if (/register(Scheme|Vocab)Tools\s*\(/.test(src)) offenders.push(base);
+    }
+    assert.deepEqual(offenders, [], `direct scheme/vocab registration outside the mount: ${offenders}`);
+  });
+
+  test("the scan is live: it would catch a planted violation", () => {
+    // Feed the regex a synthetic source line to prove the pattern matches the
+    // call form (not just the import form the allowlisted files contain).
+    assert.ok(/register(Scheme|Vocab)Tools\s*\(/.test("  registerSchemeTools(server, ctx);"));
+    assert.ok(!/register(Scheme|Vocab)Tools\s*\(/.test('import { registerSchemeTools } from "./tools-scheme.js";'));
+  });
+});

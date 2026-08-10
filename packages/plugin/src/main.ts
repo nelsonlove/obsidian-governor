@@ -7,7 +7,7 @@ import { writeDiscovery, removeDiscovery, writeBridge, type Discovery } from "./
 import { ConnectionSetupModal, VaultMcpSettingTab } from "./connection-ui.js";
 import { findClaudeBinary, claudeIsRegistered, claudeRegister, claudeRemove, claudeEnsureConnectPlugin } from "./claude-cli.js";
 import { ExternalToolRegistry, type VaultMcpApi } from "./mcp/external-tools.js";
-import { Kernel, WriteQueue, WriteJournal, IdempotencyStore, LockStore, UidIndex, loadInstallId, DEFAULT_VOCABULARIES, type VocabInstanceSettings } from "./kernel/index.js";
+import { Kernel, WriteQueue, WriteJournal, IdempotencyStore, LockStore, UidIndex, loadInstallId, DEFAULT_VOCABULARIES, type VocabInstanceSettings, type ModuleSettings } from "./kernel/index.js";
 import { obsidianProbe, obsidianServerIdentity, obsidianUidSource } from "./kernel/obsidian-probe.js";
 import { DEFAULT_SCHEMES, type SchemeInstanceConfig } from "./kernel/scheme/registry.js";
 
@@ -44,6 +44,14 @@ interface VaultMcpSettings {
    * skip-and-report-on-invalid-config behavior this list feeds.
    */
   schemes: SchemeInstanceConfig[];
+  /**
+   * The module host's per-module rows (`{ enabled?, config? }` keyed by
+   * module id — "scheme", "vocab"). An absent row means the module's default
+   * (both built-ins default enabled); `enabled: false` unmounts that module's
+   * whole tool surface on the next connection. See kernel/modules/ and
+   * mcp/modules-mount.ts.
+   */
+  modules: ModuleSettings;
 }
 const DEFAULT_SETTINGS: VaultMcpSettings = {
   setupAcknowledged: false,
@@ -59,6 +67,7 @@ const DEFAULT_SETTINGS: VaultMcpSettings = {
   // real deep copy rather than assuming the shape stays flat).
   vocabularies: DEFAULT_VOCABULARIES.map((v) => ({ ...v })),
   schemes: structuredClone(DEFAULT_SCHEMES),
+  modules: {},
 };
 
 class DiagnosticsModal extends Modal {
@@ -223,6 +232,7 @@ export default class VaultMcpPlugin extends Plugin {
         allowDangerousCli: this.settings.allowDangerousCli,
         trustedReadOnlyPlugins: this.settings.trustedReadOnlyPlugins,
         schemes: this.settings.schemes,
+        modules: this.settings.modules,
       }),
       serverIdentity,
       getExternalTools: () => this.externalRegistry.entries(),
