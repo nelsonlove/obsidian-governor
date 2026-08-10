@@ -27,9 +27,11 @@ keeps it that way.**
 - **Agents that see your vault like Obsidian does.** Live backlinks, link resolution, Dataview
   queries with real types, Templater, Metadata Menu schemas — not a folder of text files parsed
   from disk. Answers are canonical because they come from the running app.
-- **A paper trail for everything.** Every mutating operation lands in an append-only journal:
-  what happened, to which note, by which agent, in which session — and, when the agent says so,
-  *why*. "What did it do while I was out" becomes a file you can read.
+- **A paper trail for everything.** Every mutating operation through the plugin's guarded path
+  lands in an append-only journal: what happened, to which note, by which agent, in which
+  session — and, when the agent says so, *why*. (The optional headless FS-fallback mode is a
+  documented exception — see [Honest limits](#honest-limits).) "What did it do while I was out"
+  becomes a file you can read.
 - **Nothing gets accepted without you.** An agent may mark its work `proposed`; a guard at the
   shared write path rejects any attempt — through any tool, any value type, any smuggling route
   we've found (and we keep looking) — to write `accepted`. Reviewing and accepting happens in a
