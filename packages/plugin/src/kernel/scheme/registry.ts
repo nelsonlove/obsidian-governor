@@ -145,12 +145,25 @@ export class AddressAmbiguousError extends Error {
   }
 }
 
-/** Resolve `ref` (e.g. "jd:06.11") against `notes` to exactly one path, or
- * throw. A ref that isn't a resolvable scheme address at all (unregistered
- * id, unparseable address, "uid:", not scheme-shaped) is treated the same as
- * zero candidates — there is nothing for the caller to have meant. */
-export function requireOneAddress(reg: SchemeRegistry, ref: string, notes: string[]): string {
-  const parsed = reg.parseRef(ref);
+// A duplicate can in principle be large; an error message should not be — same
+// convention (and same cap) as UidAmbiguousError's MAX_LISTED_PATHS in
+// uid-index.ts. The candidates are already allowlist-VISIBLE-only by the time
+// they get here, so this bounds the wire size, not disclosure.
+const MAX_LISTED_CANDIDATES = 10;
+
+/**
+ * The post-parse half of `requireOneAddress`: given a ref ALREADY PARSED (or
+ * `null`, meaning `ref` never parsed as a scheme reference at all), decide the
+ * one matching path or throw. Factored out so a caller that must parse `ref`
+ * itself anyway to decide whether it's scheme-shaped — resolveSchemeArgs,
+ * below — never parses it a SECOND time just to resolve it.
+ */
+function resolveParsedAddress(
+  reg: SchemeRegistry,
+  parsed: { instance: SchemeInstance; addr: Address } | null,
+  ref: string,
+  notes: string[]
+): string {
   if (!parsed) {
     throw new AddressUnresolvedError(`"${ref}" does not resolve to any address`);
   }
@@ -159,9 +172,19 @@ export function requireOneAddress(reg: SchemeRegistry, ref: string, notes: strin
     throw new AddressUnresolvedError(`no note found for "${ref}"`);
   }
   if (candidates.length > 1) {
-    throw new AddressAmbiguousError(`"${ref}" is ambiguous between: ${candidates.join(", ")}`, candidates);
+    const listed = candidates.slice(0, MAX_LISTED_CANDIDATES);
+    const more = candidates.length > listed.length ? `, +${candidates.length - listed.length} more` : "";
+    throw new AddressAmbiguousError(`"${ref}" is ambiguous between: ${listed.join(", ")}${more}`, candidates);
   }
   return candidates[0];
+}
+
+/** Resolve `ref` (e.g. "jd:06.11") against `notes` to exactly one path, or
+ * throw. A ref that isn't a resolvable scheme address at all (unregistered
+ * id, unparseable address, "uid:", not scheme-shaped) is treated the same as
+ * zero candidates — there is nothing for the caller to have meant. */
+export function requireOneAddress(reg: SchemeRegistry, ref: string, notes: string[]): string {
+  return resolveParsedAddress(reg, reg.parseRef(ref), ref, notes);
 }
 
 // ── scheme addressing (`jd:<address>`) ──────────────────────────────────────
@@ -205,9 +228,13 @@ export interface SchemeAddressing {
  * a value whose `parseRef` is null: a filename that happens to contain a colon,
  * or an unregistered scheme id, is never mistaken for an address.
  *
- * `notes` is called LAZILY — only once a scheme-shaped value is actually
- * encountered — so an ordinary call (no scheme addressing used) never pays for
- * enumerating the vault.
+ * `notes()` — and the allowlist filter over it — is computed LAZILY and AT MOST
+ * ONCE per call: nothing runs until a scheme-shaped value is actually met, and
+ * from then on every further value in the SAME call reuses the one listing.
+ * Before this memoization a K-address batch enumerated and allowlist-filtered
+ * the whole vault K times (O(K x N) against a single mapPaths walk) — a real
+ * cost on a large vault, and one a read-only sandboxed session could trigger
+ * synchronously, unserialized, since reads never take the write queue.
  */
 export function resolveSchemeArgs(
   args: Record<string, unknown>,
@@ -216,9 +243,15 @@ export function resolveSchemeArgs(
   settings?: GuardSettings | null
 ): SchemeAddressing {
   const resolved: Array<{ ref: string; path: string }> = [];
+  // undefined ⇒ not yet computed for this call; set once, on the FIRST
+  // scheme-shaped value, then reused for every subsequent one.
+  let visible: string[] | undefined;
   const rewritten = mapPaths(args ?? {}, (value) => {
-    if (!reg || !reg.parseRef(value)) return value;
-    const path = requireOneAddress(reg, value, visiblePaths(notes(), settings));
+    if (!reg) return value;
+    const parsed = reg.parseRef(value);
+    if (!parsed) return value;
+    if (visible === undefined) visible = visiblePaths(notes(), settings);
+    const path = resolveParsedAddress(reg, parsed, value, visible);
     resolved.push({ ref: value, path });
     return path;
   });

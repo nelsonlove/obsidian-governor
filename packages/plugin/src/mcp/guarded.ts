@@ -228,9 +228,14 @@ export interface GuardedOpts {
   schemes?: () => SchemeRegistry | null;
   /**
    * Vault markdown paths scheme addressing resolves an address against.
-   * Called LAZILY by resolveSchemeArgs — only when a scheme-shaped value is
-   * actually encountered — so an ordinary call never pays for enumerating
-   * the vault. Same source `registerSchemeTools` uses.
+   * Called LAZILY by resolveSchemeArgs — only once per call, on the first
+   * scheme-shaped value encountered, then reused for the rest of that call —
+   * so an ordinary call never pays for enumerating the vault. Same source
+   * `registerSchemeTools` uses. `opts.schemes` present without this ⇒ defaults
+   * to `() => []`, so a scheme-shaped value FAILS CLOSED as `address_unresolved`
+   * (0 candidates) rather than throwing — server.ts always wires both together,
+   * so this is a defensive default for a misconfigured embed, not a supported
+   * combination with its own test.
    */
   schemeNotes?: () => string[];
 }
@@ -244,18 +249,19 @@ export interface GuardedOpts {
 // (mapPaths), every argument the allowlist scopes is addressable and vice versa.
 //
 // It runs BEFORE guardCall so the allowlist checks the RESOLVED path — a uid
-// must not be a way around a path sandbox. The consequence is that an
-// allowlisted session could learn a path outside its sandbox from the refusal
-// message, so resolved paths are folded back to their `uid:` form in the
-// guard's text (uidSafe): the refusal still says which argument was wrong
-// without disclosing where it pointed.
+// must not be a way around a path sandbox. The REAL disclosure control is at
+// the source, not at the refusal: resolution itself runs over the
+// allowlist-VISIBLE candidates only (UidIndex.requireOne), so a resolved path
+// is always already inside the allowlist and can never be the path guardCall
+// itself blocks on — `uid_ambiguous` can only ever name paths this session
+// could have named itself, and a uid carried solely outside the sandbox reads
+// as `uid_unresolved` rather than confirming it exists. That is also what
+// obsidian_resolve_uid reports, so looking a uid up and addressing by it agree.
 //
-// The uid errors themselves are bounded at the source rather than scrubbed
-// after the fact: resolution runs over the allowlist-VISIBLE candidates only
-// (UidIndex.requireOne), so `uid_ambiguous` can only ever name paths this
-// session could have named itself, and a uid carried solely outside the sandbox
-// reads as `uid_unresolved`. That is also what obsidian_resolve_uid reports, so
-// looking a uid up and addressing by it agree.
+// Resolved paths are ALSO folded back to their `uid:` form in the guard's
+// refusal text (addressSafe, below, extended for scheme addressing) —
+// belt-and-suspenders against a future guardCall message naming more than the
+// one path it blocks on, not a hole open today.
 
 // ── scheme addressing ────────────────────────────────────────────────────────
 //
@@ -268,15 +274,21 @@ export interface GuardedOpts {
 //
 // Also runs BEFORE guardCall, for the identical reason: the allowlist must
 // check the RESOLVED path, not the address, or `jd:06.11` would be a sandbox
-// bypass. The identical disclosure risk follows, and is closed the identical
-// way — resolved scheme paths fold back to their `jd:<address>` ref form in
-// the guard's refusal text (addressSafe, below), and resolution itself runs
-// over the allowlist-VISIBLE notes only (resolveSchemeArgs -> requireOneAddress
-// over visiblePaths), so `address_ambiguous` can only ever name notes this
-// session could have named itself and an address whose only claimant is
+// bypass. Resolution itself runs over the allowlist-VISIBLE notes only
+// (resolveSchemeArgs -> requireOneAddress over visiblePaths), so — exactly
+// like a resolved uid path above — a resolved scheme path is always already
+// inside the allowlist and can never be the path guardCall itself blocks on;
+// that visibility gate is the real disclosure control, not the fold-back.
+// What it actually buys: `address_ambiguous` can only ever name notes this
+// session could have named itself, and an address whose only claimant is
 // hidden reads as `address_unresolved` — never `out_of_allowlist`, which would
 // confirm the address exists. That is also what obsidian_resolve_address
 // reports, so looking an address up and addressing by it agree.
+//
+// Resolved scheme paths are ALSO folded back to their `jd:<address>` ref form
+// in the guard's refusal text (addressSafe, below) — the same
+// belt-and-suspenders as the uid case, combined into one pass rather than a
+// second copy of the loop.
 //
 // A value that isn't scheme-shaped at all — an ordinary path, or one that
 // merely contains a colon ("Notes/a:b.md") — is left untouched: parseRef
@@ -287,8 +299,12 @@ export interface GuardedOpts {
  * appears, so a refusal discloses neither. One pass over the combined
  * resolution lists — an allowlist refusal must hide everything either
  * addressing scheme resolved, not just whichever ran first.
+ *
+ * Exported so it can be tested DIRECTLY, independent of whether any given
+ * guardCall message shape currently happens to route a resolved path through
+ * it — see the "addressSafe" unit tests in scheme-addressing.test.mjs.
  */
-function addressSafe(
+export function addressSafe(
   message: string,
   uidResolved: Array<{ uid: string; path: string }>,
   schemeResolved: Array<{ ref: string; path: string }> = []

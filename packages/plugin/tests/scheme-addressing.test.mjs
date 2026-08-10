@@ -23,7 +23,7 @@ import {
   resolveSchemeArgs,
 } from "../src/kernel/scheme/registry.ts";
 import { UidIndex } from "../src/kernel/index.ts";
-import { makeGuarded } from "../src/mcp/guarded.ts";
+import { makeGuarded, addressSafe } from "../src/mcp/guarded.ts";
 
 // ── fixtures ──────────────────────────────────────────────────────────────────
 
@@ -123,6 +123,33 @@ describe("resolveSchemeArgs", () => {
     assert.equal(calls, 1);
   });
 
+  // Fix-round item (IMPORTANT 2): visiblePaths(notes(), settings) used to run
+  // INSIDE the per-value mapPaths callback, so a K-address batch enumerated and
+  // allowlist-filtered the whole vault K times. It is now computed at most once
+  // per resolveSchemeArgs call, on the first scheme-shaped value, and reused
+  // for the rest of the walk.
+  test("notes() is memoized per call — several scheme-shaped values enumerate the vault ONCE, not once per value", () => {
+    const reg = makeRegistry(DEFAULT_SCHEMES);
+    let calls = 0;
+    const notesFn = () => {
+      calls++;
+      return NOTES;
+    };
+    const { args } = resolveSchemeArgs(
+      { paths: ["jd:06.11", "jd:06.12", "jd:92021.10"] },
+      reg,
+      notesFn
+    );
+    assert.equal(calls, 1, "one listing serves every scheme-shaped value in the call, not one per value");
+    assert.deepEqual(args, {
+      paths: [
+        VAULT_MCP_PATH,
+        "00-09 System/06 Agent tooling/06.12 Bridge.md",
+        "90-99 Projects/92021 Big thing/92021.10 Sub.md",
+      ],
+    });
+  });
+
   test("an unknown address throws AddressUnresolvedError", () => {
     const reg = makeRegistry(DEFAULT_SCHEMES);
     assert.throws(
@@ -148,6 +175,31 @@ describe("resolveSchemeArgs", () => {
     );
   });
 
+  // Fix-round item (MINOR b): the message caps how many candidates it NAMES at
+  // 10, matching UidAmbiguousError's MAX_LISTED_PATHS convention in
+  // uid-index.ts — the candidates are already allowlist-visible-only by this
+  // point, so this bounds wire size, not disclosure. `.candidates` itself stays
+  // the full list (a caller that wants all of them still can).
+  test("more than 10 claimants caps the NAMED candidates in the message, but not the .candidates array", () => {
+    const reg = makeRegistry(DEFAULT_SCHEMES);
+    const dupNotes = Array.from(
+      { length: 12 },
+      (_, i) => `00-09 System/06 Agent tooling/06.11 Dup${i}.md`
+    );
+    assert.throws(
+      () => resolveSchemeArgs({ path: "jd:06.11" }, reg, () => dupNotes),
+      (e) => {
+        assert.ok(e instanceof AddressAmbiguousError);
+        assert.equal(e.candidates.length, 12, "the full candidate list is preserved on the error object");
+        const named = dupNotes.slice(0, 10).every((p) => e.message.includes(p));
+        assert.ok(named, "the first 10 candidates are named in the message");
+        assert.equal(e.message.includes(dupNotes[11]), false, "the 12th is not spelled out");
+        assert.match(e.message, /\+2 more/);
+        return true;
+      }
+    );
+  });
+
   test("resolution is scoped to the allowlist-VISIBLE notes only", () => {
     const reg = makeRegistry(DEFAULT_SCHEMES);
     const settings = { readOnly: false, allowlist: ["90-99 Projects"] };
@@ -159,6 +211,60 @@ describe("resolveSchemeArgs", () => {
     // "jd:92021.10" IS inside the allowlist — resolves normally.
     const { args } = resolveSchemeArgs({ path: "jd:92021.10" }, reg, () => NOTES, settings);
     assert.equal(args.path, "90-99 Projects/92021 Big thing/92021.10 Sub.md");
+  });
+});
+
+// ── addressSafe — fold-back, tested directly ───────────────────────────────────
+//
+// Fix-round item (IMPORTANT 1): resolution is allowlist-VISIBLE-only, so a
+// resolved path can never be the one path guardCall's own refusal message
+// names (it was visible, so it was allowed) — the end-to-end disclosure tests
+// above therefore cannot exercise addressSafe's folding loop itself; they only
+// prove the OUTCOME (nothing leaks). These test the fold-back directly,
+// independent of whether any given guardCall message shape currently happens
+// to route a resolved path through it.
+
+describe("addressSafe — fold-back, tested directly", () => {
+  test("folds a resolved uid back to its uid: form", () => {
+    const out = addressSafe(
+      "path 'Notes/A.md' is outside the vault-mcp allowlist",
+      [{ uid: "uid-a", path: "Notes/A.md" }]
+    );
+    assert.equal(out, "path 'uid:uid-a' is outside the vault-mcp allowlist");
+  });
+
+  test("folds a resolved scheme address back to its jd: form", () => {
+    const out = addressSafe(
+      "path 'Notes/A.md' is outside the vault-mcp allowlist",
+      [],
+      [{ ref: "jd:06.11", path: "Notes/A.md" }]
+    );
+    assert.equal(out, "path 'jd:06.11' is outside the vault-mcp allowlist");
+  });
+
+  test("folds a uid pair AND a scheme pair in the SAME message, one pass", () => {
+    const out = addressSafe(
+      "moved 'Notes/A.md' over 'Notes/B.md'",
+      [{ uid: "uid-a", path: "Notes/A.md" }],
+      [{ ref: "jd:06.11", path: "Notes/B.md" }]
+    );
+    assert.equal(out, "moved 'uid:uid-a' over 'jd:06.11'");
+  });
+
+  test("a message naming neither resolved path is left untouched", () => {
+    const out = addressSafe(
+      "path 'Elsewhere.md' is outside the vault-mcp allowlist",
+      [{ uid: "uid-a", path: "Notes/A.md" }],
+      [{ ref: "jd:06.11", path: "Notes/B.md" }]
+    );
+    assert.equal(out, "path 'Elsewhere.md' is outside the vault-mcp allowlist");
+  });
+
+  test("the scheme list defaults to empty — uid-only calls are unaffected", () => {
+    const out = addressSafe("path 'Notes/A.md' is outside the vault-mcp allowlist", [
+      { uid: "uid-a", path: "Notes/A.md" },
+    ]);
+    assert.equal(out, "path 'uid:uid-a' is outside the vault-mcp allowlist");
   });
 });
 
@@ -209,7 +315,16 @@ describe("scheme addressing through the guarded wrapper", () => {
     assert.deepEqual(seen, [], "nothing ran");
   });
 
-  test("an allowlist refusal folds a resolved scheme address back to its jd: form, disclosing neither", async () => {
+  // NOTE: resolution is allowlist-VISIBLE-only (see "resolution is scoped to
+  // the allowlist-VISIBLE notes only" above), so the resolved "from" here is
+  // ALREADY inside the allowlist and can never itself be the path guardCall
+  // blocks on — the disclosure control is that visibility gate, not this
+  // end-to-end refusal text. addressSafe's own folding behavior is unit-tested
+  // directly, below ("addressSafe — fold-back, tested directly"); this test
+  // pins the outcome an allowlisted caller actually sees: nothing about the
+  // resolved address's real path leaks into a refusal triggered by a DIFFERENT
+  // argument in the same call.
+  test("an allowlist refusal on a different argument never discloses a resolved scheme address's real path", async () => {
     const { guarded, seen, handler } = harness({ allowlist: ["00-09 System"], notes: NOTES });
     const res = await guarded(RW_DEF, handler, "obsidian_move_note")(
       { from: "jd:06.11", to: "Secret/Elsewhere.md" },
@@ -220,7 +335,7 @@ describe("scheme addressing through the guarded wrapper", () => {
     assert.equal(
       res.content[0].text.includes(VAULT_MCP_PATH),
       false,
-      "the resolved path is folded back to its jd: form, never spelled out"
+      "no resolved path leaks into the refusal text"
     );
     assert.deepEqual(seen, []);
   });
