@@ -198,6 +198,16 @@ export interface MutationContext {
    */
   intent?: string;
   /**
+   * The address form(s) the caller actually used (`uid:<value>` / scheme refs
+   * like `jd:<address>`), paired with the paths they resolved to at the
+   * interception point — enqueue-time CALL metadata like `argsDigest`, not
+   * vault state, so no dequeue sampling applies. Journal-only, audit-of-intent
+   * (issue #91): `target` says what was touched; this says what was ASKED for.
+   * Like `intent`, deliberately NOT part of idempotency identity, and recorded
+   * on terminal records too — it describes this caller's own ask.
+   */
+  addressedAs?: Array<{ ref: string; path: string }>;
+  /**
    * Retry-collapsing key. A second call carrying a key this kernel has already
    * completed replays that result without executing anything or taking a queue
    * slot; one that is still IN FLIGHT awaits the first call and adopts its
@@ -562,11 +572,19 @@ export class Kernel {
    * that actually reached the dequeue check. `ifRev` is deliberately NOT part of
    * the terminal-record path: see journalTerminal.
    */
-  private preconditionFields(mc: MutationContext): { ifRev?: number; idempotencyKey?: string; intent?: string } {
+  private preconditionFields(mc: MutationContext): {
+    ifRev?: number;
+    idempotencyKey?: string;
+    intent?: string;
+    addressedAs?: Array<{ ref: string; path: string }>;
+  } {
     return {
       ...(mc.ifRev !== undefined ? { ifRev: mc.ifRev } : {}),
       ...(mc.idempotencyKey !== undefined ? { idempotencyKey: mc.idempotencyKey } : {}),
       ...(mc.intent !== undefined ? { intent: mc.intent } : {}),
+      ...(mc.addressedAs !== undefined && mc.addressedAs.length > 0
+        ? { addressedAs: mc.addressedAs.slice(0, MAX_JOURNALED_PATHS) }
+        : {}),
     };
   }
 
@@ -598,10 +616,13 @@ export class Kernel {
       queueWaitMs: 0,
       ...(extra.dedupeOf !== undefined ? { dedupeOf: extra.dedupeOf } : {}),
       ...(mc.idempotencyKey !== undefined ? { idempotencyKey: mc.idempotencyKey } : {}),
-      // `intent` IS recorded here, unlike `ifRev`: it asserts nothing about a
-      // check — it is this caller's own description of its ask, which is
-      // exactly what a deduped/mismatch record documents.
+      // `intent` and `addressedAs` ARE recorded here, unlike `ifRev`: they
+      // assert nothing about a check — each is this caller's own description
+      // of its ask, which is exactly what a deduped/mismatch record documents.
       ...(mc.intent !== undefined ? { intent: mc.intent } : {}),
+      ...(mc.addressedAs !== undefined && mc.addressedAs.length > 0
+        ? { addressedAs: mc.addressedAs.slice(0, MAX_JOURNALED_PATHS) }
+        : {}),
     });
   }
 

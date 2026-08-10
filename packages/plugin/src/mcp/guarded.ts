@@ -27,6 +27,7 @@ import {
   UidUnresolvedError,
   WriteTimeoutError,
   resolveUidArgs,
+  UID_PREFIX,
   type Kernel,
   type JournalActor,
   type JournalEffects,
@@ -392,6 +393,14 @@ export function makeGuarded(opts: GuardedOpts) {
       );
     }
     if (!isMutating || !opts.kernel) return handler(toolArgs, extra);
+    // Audit-of-intent (#91): the address forms the caller actually used,
+    // paired with what they resolved to at THIS interception — `target`
+    // records what was touched; this records what was asked for, so a stale
+    // or wrong index is visible in the record rather than silently absorbed.
+    const addressedAs = [
+      ...addressed.resolved.map(({ uid, path }) => ({ ref: `${UID_PREFIX}${uid}`, path })),
+      ...schemeResolved,
+    ];
     try {
       return await opts.kernel.runMutation(
         {
@@ -403,6 +412,7 @@ export function makeGuarded(opts: GuardedOpts) {
           ...(ifRev !== undefined ? { ifRev } : {}),
           ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
           ...(intent !== undefined ? { intent } : {}),
+          ...(addressedAs.length > 0 ? { addressedAs } : {}),
         },
         () => handler(toolArgs, extra)
       );
