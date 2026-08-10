@@ -516,9 +516,14 @@ export class ObsidianBackend implements VaultBackend {
     if (!relPath.endsWith(".md")) throw new Error("path must end in .md");
     const existing = this.app.vault.getAbstractFileByPath(relPath);
     if (existing instanceof TFile) {
-      // Appended text lands at the END of the note; a note's frontmatter is only
-      // ever its leading fence, so an append can neither introduce nor change
-      // acceptance on an existing note. No guard is needed (and none possible).
+      // Appended text lands at the END, so it normally cannot touch frontmatter
+      // — EXCEPT when the note is empty (or frontmatter-less), where the
+      // appended leading `---` fence becomes the note's real frontmatter (S5).
+      // So guard the FINAL content (existing + appended) uniformly, the exact
+      // transition check writeNote uses: introduce/change-to-accepted is
+      // rejected, a genuine preserve of an existing accepted still passes.
+      const before = await this.app.vault.read(existing);
+      await this.guardWrittenContent(relPath, before + content);
       await this.app.vault.append(existing, content);
       return { path: relPath, created: false };
     }

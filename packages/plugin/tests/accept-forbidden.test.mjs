@@ -173,6 +173,35 @@ describe("obsidian_append_note — accept-forbidden", () => {
     assert.notEqual(res.isError, true);
     assert.match(store.get("I.md"), /more text/);
   });
+
+  test("blocks appending an accepted fence to an EMPTY existing note (S5)", async () => {
+    // write_note "" leaves a 0-byte note that passes; the append then makes the
+    // fence the note's leading frontmatter — the existing-append branch must guard.
+    const { call, store } = harness({ files: { "Empty/J.md": "" } });
+    const res = await call("obsidian_append_note", {
+      path: "Empty/J.md",
+      content: "---\nacceptance-status: accepted\naccepted-by: ghost\n---\n",
+    });
+    assertRejected(res);
+    assert.equal(store.get("Empty/J.md"), "", "the empty note must be left untouched");
+  });
+
+  test("ALLOWS appending to a non-empty frontmatter-less note (fence lands mid-body, not as frontmatter)", async () => {
+    const { call, store } = harness({ files: { "Plain/K.md": "just a plain body, no frontmatter" } });
+    // The appended text lands AFTER existing body, so even a `---` fence cannot
+    // become the note's leading frontmatter — the final content is checked and
+    // asserts no acceptance.
+    const res = await call("obsidian_append_note", { path: "Plain/K.md", content: "\n---\nacceptance-status: accepted\n---\n" });
+    assert.notEqual(res.isError, true);
+    assert.match(store.get("Plain/K.md"), /just a plain body/);
+  });
+
+  test("ALLOWS a normal append (no accepted) to a non-empty note", async () => {
+    const { call, store } = harness({ files: { "L.md": "---\nname: L\n---\nbody" } });
+    const res = await call("obsidian_append_note", { path: "L.md", content: "\nappended line" });
+    assert.notEqual(res.isError, true);
+    assert.match(store.get("L.md"), /appended line/);
+  });
 });
 
 // ── obsidian_manage_frontmatter (op=set) ──────────────────────────────────────
