@@ -17,7 +17,7 @@
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { excludedRootRefusal, DEFAULT_EXCLUDED_ROOTS } from "../src/conformance/cli.ts";
+import { excludedRootRefusal, DEFAULT_EXCLUDED_ROOTS, excludedRootsFrom } from "../src/conformance/cli.ts";
 
 describe("#112 — an excluded root must never silently clear accepted debt", () => {
   test("a baseline key UNDER an excluded root refuses, naming the key and the root", () => {
@@ -56,7 +56,35 @@ describe("#112 — an excluded root must never silently clear accepted debt", ()
     assert.equal(excludedRootRefusal(new Set(["ste_lint|editable|anything/x.md|"]), []), null);
   });
 
-  test("the archive is excluded by default (the ruling), and it is the only default", () => {
-    assert.deepEqual(DEFAULT_EXCLUDED_ROOTS, ["Vault archaeology"]);
+  // Which roots are archives is a property of a VAULT, not of this plugin.
+  // Shipping a vault's folder name as a source constant makes the rail silently
+  // wrong for every other vault and turns a policy knob into a release.
+  test("NO vault-specific path ships as a default — govern everything unless told otherwise", () => {
+    assert.deepEqual(DEFAULT_EXCLUDED_ROOTS, [], "a general-purpose plugin must not name one vault's folders");
+  });
+
+  describe("exclusions come from the invocation", () => {
+    test("--exclude= flags win, and repeat", () => {
+      assert.deepEqual(
+        excludedRootsFrom(["--exclude=Archive", "--exclude=Old stuff"], {}),
+        ["Archive", "Old stuff"],
+      );
+    });
+
+    test("ASSENT_EXCLUDED_ROOTS is the fallback, comma-separated and trimmed", () => {
+      assert.deepEqual(
+        excludedRootsFrom([], { ASSENT_EXCLUDED_ROOTS: "Archive , Vault archaeology" }),
+        ["Archive", "Vault archaeology"],
+      );
+    });
+
+    test("flags override the env rather than merging (one source per run, auditable)", () => {
+      assert.deepEqual(excludedRootsFrom(["--exclude=A"], { ASSENT_EXCLUDED_ROOTS: "B" }), ["A"]);
+    });
+
+    test("neither ⇒ govern everything", () => {
+      assert.deepEqual(excludedRootsFrom([], {}), []);
+      assert.deepEqual(excludedRootsFrom([], { ASSENT_EXCLUDED_ROOTS: "  ,  " }), []);
+    });
   });
 });

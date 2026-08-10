@@ -18,9 +18,12 @@
 // the pack emits neither, exactly as the ratchet parser dropped them. The pack
 // id IS the `script` field: "conformance_check".
 
+import { vaultConventionsFrom } from "../vault-conventions.js";
 import type { Finding } from "../finding.js";
 import type { RulePack, SourceFile, VaultSnapshot } from "../rule-pack.js";
 import { firstSegment, hasDotOrTrashSegment } from "./legacy-scope.js";
+
+const CONV = vaultConventionsFrom(process.env);
 
 export const STRUCTURE_PACK_ID = "conformance_check";
 
@@ -29,7 +32,7 @@ export const STRUCTURE_PACK_ID = "conformance_check";
  * files under here. `{% include %}` still resolves against the full blueprint
  * listing, matching the Python (which reads include targets off disk by path). */
 export const DEFAULT_BLUEPRINT_ROOT =
-  "00-09 System/00 System management/00.05 Registries for the system";
+  CONV.registriesRoot;
 
 const COMMENT = /{#[\s\S]*?#}/g;
 const INCLUDE = /{%-?\s*include\s+"([^"]+)"\s*-?%}/g;
@@ -147,7 +150,7 @@ export function structurePack(opts: StructurePackOpts = {}): RulePack {
         // ungoverned Assent / Vault archaeology roots.
         if (hasDotOrTrashSegment(src.path)) continue;
         const root = firstSegment(src.path);
-        if (root.startsWith("_") || root === "Assent" || root === "Vault archaeology") continue;
+        if (root.startsWith("_") || CONV.ungovernedRoots.includes(root)) continue;
 
         const { bp, heads } = noteInfo(src.text);
         if (bp === null) continue;

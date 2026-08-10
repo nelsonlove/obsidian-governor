@@ -109,20 +109,38 @@ export async function runConformance(opts: RunOpts): Promise<RunResult> {
 }
 
 /**
- * Roots the rail does not govern (@assent's ruling, 2026-08-10, issue #112).
+ * Roots the rail does not govern — **configured, never hardcoded.**
  *
- * The rail governs LIVE content, not the frozen archive. `Vault archaeology/`
- * is retained evidence from prior vault generations — its blueprints reference
- * pre-consolidation paths that no longer exist, so it produced ~350 findings
- * nobody intends to act on, drowning the signal from the governed tree.
+ * The rail governs live content, not frozen archives (@assent's ruling, #112).
+ * But WHICH roots are archives is a property of a particular vault, and this is
+ * a general-purpose plugin: baking one vault's folder names into shipped source
+ * makes the rail silently wrong for every other vault, and makes a policy knob
+ * require a release to change. The first version of this shipped
+ * `["Vault archaeology"]` as a source constant — that was the mistake, and it
+ * is the same class as `BASELINE_REL` below, which is tracked separately.
  *
- * This is a SCOPE decision, not a severity one: excluded content is not
- * "findings we tolerate" (that is what the accepted-debt baseline is for), it
- * is content the rail makes no claim about at all. The distinction matters
- * because the two have opposite failure modes — tolerated debt should stay
- * visible and shrink; ungoverned territory should be silent and declared.
+ * So the default is EMPTY (govern everything, the safe default for an unknown
+ * vault), and exclusions arrive from the invocation:
+ *   --exclude=<root>            repeatable
+ *   ASSENT_EXCLUDED_ROOTS       comma-separated
+ * A vault that wants an archive excluded says so where its own configuration
+ * lives, which is also what makes the exclusion auditable per-run rather than
+ * invisible in a binary.
  */
-export const DEFAULT_EXCLUDED_ROOTS = ["Vault archaeology"];
+export const DEFAULT_EXCLUDED_ROOTS: string[] = [];
+
+/** Excluded roots for this invocation: `--exclude=` flags, else the env var, else none. */
+export function excludedRootsFrom(argv: string[], env: Record<string, string | undefined>): string[] {
+  const flags = argv
+    .filter((a) => a.startsWith("--exclude="))
+    .map((a) => a.slice("--exclude=".length).trim())
+    .filter(Boolean);
+  if (flags.length) return flags;
+  return (env.ASSENT_EXCLUDED_ROOTS ?? "")
+    .split(",")
+    .map((r) => r.trim())
+    .filter(Boolean);
+}
 
 /**
  * The reason an excluded root would silently discard accepted debt, or null.
@@ -325,7 +343,7 @@ export function rebaselineTargetRefusal(baselinePath: string, root: string): str
     );
   }
 
-  const livePath = join(resolve(root), BASELINE_REL);
+  const livePath = join(resolve(root), baselineRelFrom(process.env));
 
   // 2. Same name.
   if (resolve(baselinePath) === livePath) return liveRefusal(baselinePath);
@@ -462,7 +480,22 @@ function renderReport(
 
 // ── thin process entry (not unit-tested; the wiring above is) ─────────────────
 
-const BASELINE_REL = "Assent/Build/conformance/Conformance baseline.md";
+/**
+ * Vault-relative location of the accepted-debt baseline.
+ *
+ * A CONVENTION, not a law of the plugin: it is where this fleet's vault keeps
+ * its baseline, and any other vault will keep it somewhere else. Overridable
+ * without a release via `ASSENT_BASELINE_REL` (vault-relative) or `--baseline=`
+ * (absolute), so the default is a starting point rather than a hardcoded
+ * assumption about somebody's folder layout.
+ */
+export const DEFAULT_BASELINE_REL = "Assent/Build/conformance/Conformance baseline.md";
+
+/** The baseline's vault-relative path for this invocation. */
+export function baselineRelFrom(env: Record<string, string | undefined>): string {
+  const v = (env.ASSENT_BASELINE_REL ?? "").trim();
+  return v || DEFAULT_BASELINE_REL;
+}
 const FENCE = "```ratchet-baseline";
 
 /** ASSENT_CONTENT_ROOT wins, else walk up from `start` to the `.obsidian`
@@ -525,7 +558,8 @@ export async function runCli(argv: string[]): Promise<void> {
   const rootArg = argv.find((a) => a.startsWith("--root="))?.slice("--root=".length);
   const root = rootArg ? resolve(rootArg) : discoverRoot(process.cwd());
   const baselineArg = argv.find((a) => a.startsWith("--baseline="))?.slice("--baseline=".length);
-  const baselinePath = baselineArg ? resolve(baselineArg) : join(root, BASELINE_REL);
+  const baselineRel = baselineRelFrom(process.env);
+  const baselinePath = baselineArg ? resolve(baselineArg) : join(root, baselineRel);
   // A MISSING baseline is refused, not silently treated as empty. An empty
   // baseline makes every finding read NEW and every accepted-debt key read
   // CLEARED — a report that looks like catastrophic regression but is really a
@@ -542,7 +576,7 @@ export async function runCli(argv: string[]): Promise<void> {
   // `--govern-all` opts back in to a whole-vault run. Checked BEFORE the run:
   // an exclusion that would strand accepted debt is refused, not reported
   // afterwards, so no CLEARED line ever appears for a key we chose not to look at.
-  const excludedRoots = argv.includes("--govern-all") ? [] : DEFAULT_EXCLUDED_ROOTS;
+  const excludedRoots = argv.includes("--govern-all") ? [] : excludedRootsFrom(argv, process.env);
   const strandRefusal = excludedRootRefusal(parseBaseline(baselineText), excludedRoots);
   if (strandRefusal) throw new Error(strandRefusal);
 
