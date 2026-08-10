@@ -140,15 +140,24 @@ describe("registerCliTools", () => {
 
   test("dangerous command is blocked by default, with the setting named", async () => {
     const server = fakeServer();
+    // `restart` is dangerous but NOT in the opaque-accept set, so the danger
+    // gate is the one that fires (eval/command hit the command policy first —
+    // pinned in cli-policy.test.mjs).
     registerCliTools(server, ctxWith({}), { binary: "/bin/obsidian", exec: okExec });
-    const res = await server.tools.get("obsidian_cli").handler({ command: "eval" });
+    const res = await server.tools.get("obsidian_cli").handler({ command: "restart" });
     assert.equal(res.isError, true);
     assert.match(res.content[0].text, /Allow dangerous CLI commands/);
   });
 
   test("dangerous command runs when allowDangerousCli is on", async () => {
     const server = fakeServer();
-    registerCliTools(server, ctxWith({ allowDangerousCli: true }), { binary: "/bin/obsidian", exec: okExec });
+    // eval also needs the command policy's per-command re-enable now — the
+    // fail-closed default of the opaque-accept set (cli-policy.ts).
+    registerCliTools(
+      server,
+      ctxWith({ allowDangerousCli: true, cliPolicy: { deny: [], allowOpaque: ["eval"] } }),
+      { binary: "/bin/obsidian", exec: okExec }
+    );
     const res = await server.tools.get("obsidian_cli").handler({ command: "eval", params: { code: "1+1" } });
     assert.notEqual(res.isError, true);
   });
@@ -286,8 +295,11 @@ describe("cliAcceptRefusal — unrelated commands are clean", () => {
       assert.equal(cliAcceptRefusal(cmd, { file: "Note", query: "accepted" }, parseYaml), null);
     });
   }
-  test("the opaque-macro residual is named for the report/description", () => {
-    assert.deepEqual(CLI_OPAQUE_ACCEPT_RESIDUAL, ["command", "eval", "quickadd", "quickadd:run", "quickadd:run-template"]);
+  test("the opaque-macro set is named for the report/description (authoritative copy in cli-policy.ts)", () => {
+    assert.deepEqual(
+      [...CLI_OPAQUE_ACCEPT_RESIDUAL].sort(),
+      ["command", "eval", "quickadd", "quickadd:run", "quickadd:run-template"],
+    );
   });
 });
 
@@ -346,10 +358,14 @@ describe("registerCliTools — accept guard wired into the handler", () => {
     assert.equal(calls.length, 1);
   });
 
-  test("RESIDUAL: quickadd is NOT stopped by the accept guard (documented, left for policy)", async () => {
+  test("the former quickadd residual is CLOSED: denied by the command policy, not the accept guard", async () => {
     const { handler, calls } = recordingServer();
     const res = await handler({ command: "quickadd", params: { choice: "Some Macro" } });
-    assert.notEqual(res.isError, true);
-    assert.equal(calls.length, 1);
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /cli_denied/);
+    assert.equal(calls.length, 0);
+    // The accept guard itself still does not match quickadd — the closure is
+    // the policy's, and cliAcceptRefusal stays scoped to inspectable writes.
+    assert.equal(cliAcceptRefusal("quickadd", { choice: "Some Macro" }, parseYaml), null);
   });
 });

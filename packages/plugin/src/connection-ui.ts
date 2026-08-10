@@ -4,6 +4,7 @@ import { buildRegisterCommand } from "./register-command.js";
 import { bridgeDestPath } from "./paths.js";
 import { findClaudeBinary, claudeIsRegistered } from "./claude-cli.js";
 import { DANGEROUS_LIST_DESC } from "./mcp/tools-cli.js";
+import { OPAQUE_ACCEPT_CLI_COMMANDS, OPAQUE_ACCEPT_COMMAND_IDS } from "./mcp/cli-policy.js";
 import { validateJdConfig, type JdConfig } from "./kernel/scheme/jd.js";
 
 /** Parse a comma-separated text field into a trimmed, non-empty string list.
@@ -160,6 +161,50 @@ export class VaultMcpSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         })
       );
+
+    // Command policy (mcp/cli-policy.ts). The opaque-accept set — quickadd,
+    // quickadd:run, quickadd:run-template, eval, command, and quickadd:*
+    // run_command ids — is denied by DEFAULT; the re-enable list below is the
+    // one human-only way back in. The deny list always wins over a re-enable.
+    new Setting(containerEl)
+      .setName("Re-enabled opaque commands")
+      .setDesc(
+        `Opaque macro/code commands (${[...OPAQUE_ACCEPT_CLI_COMMANDS].join(", ")}; ${[...OPAQUE_ACCEPT_COMMAND_IDS].join(", ")} ` +
+          "command ids) are denied by default — the acceptance guard cannot inspect what they execute. List a " +
+          "specific command or exact command id here (one per line; no wildcards — each entry re-enables exactly " +
+          "one) to re-enable it. eval/command additionally require the dangerous-CLI toggle above. Takes effect immediately."
+      )
+      .addTextArea((ta) => {
+        ta.setValue(this.plugin.settings.cliPolicy.allowOpaque.join("\n"));
+        ta.inputEl.rows = 3;
+        ta.inputEl.style.width = "100%";
+        ta.onChange(async (value) => {
+          this.plugin.settings.cliPolicy = {
+            ...this.plugin.settings.cliPolicy,
+            allowOpaque: value.split("\n").map((s) => s.trim()).filter(Boolean),
+          };
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("Denied commands")
+      .setDesc(
+        "Additional obsidian_cli commands or obsidian_run_command ids to deny (one per line; a trailing * makes " +
+          "a prefix pattern, e.g. templater:*). Deny always wins — including over the re-enable list above."
+      )
+      .addTextArea((ta) => {
+        ta.setValue(this.plugin.settings.cliPolicy.deny.join("\n"));
+        ta.inputEl.rows = 3;
+        ta.inputEl.style.width = "100%";
+        ta.onChange(async (value) => {
+          this.plugin.settings.cliPolicy = {
+            ...this.plugin.settings.cliPolicy,
+            deny: value.split("\n").map((s) => s.trim()).filter(Boolean),
+          };
+          await this.plugin.saveSettings();
+        });
+      });
 
     new Setting(containerEl)
       .setName("Trusted read-only plugins")
