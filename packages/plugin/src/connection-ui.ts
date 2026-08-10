@@ -4,6 +4,31 @@ import { buildRegisterCommand } from "./register-command.js";
 import { bridgeDestPath } from "./paths.js";
 import { findClaudeBinary, claudeIsRegistered } from "./claude-cli.js";
 import { DANGEROUS_LIST_DESC } from "./mcp/tools-cli.js";
+import type { JdConfig } from "./kernel/scheme/jd.js";
+
+/** Parse a comma-separated text field into a trimmed, non-empty string list.
+ * An all-blank input (or one that trims to nothing) yields `undefined` rather
+ * than `[]` — "blank means the provider default", matching the
+ * contentDecimalFloor field's "blank = default" convention, not "explicitly
+ * override to nothing". Pure so it's usable outside the (obsidian-only,
+ * headlessly-untestable) settings tab if ever needed. */
+export function parseCommaList(value: string): string[] | undefined {
+  const items = value
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return items.length === 0 ? undefined : items;
+}
+
+/** Parse the content-decimal-floor text field: blank -> undefined (provider
+ * default applies), otherwise the parsed number (validated server-side by
+ * validateJdConfig — this just avoids writing NaN into settings). */
+export function parseFloorField(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (trimmed === "") return undefined;
+  const n = Number(trimmed);
+  return Number.isNaN(n) ? undefined : n;
+}
 
 export function registerCommandFor(app: App): string {
   // Pin the current vault so the command stays unambiguous once a second vault
@@ -143,6 +168,55 @@ export class VaultMcpSettingTab extends PluginSettingTab {
         });
       });
 
+    // Schemes. Scheme semantics are configuration, not hardwired (Nelson's
+    // ruling): only the default "jd" instance's config gets a UI here —
+    // additional instances or exotic overrides stay data.json-editable, no
+    // UI (YAGNI; see kernel/scheme/registry.ts and VaultMcpSettings.schemes).
+    containerEl.createEl("h3", { text: "Schemes" });
+    const jdInstance = this.plugin.settings.schemes[0];
+    if (jdInstance && jdInstance.provider === "johnny-decimal") {
+      const jdConfig: Partial<JdConfig> = jdInstance.config ?? {};
+
+      new Setting(containerEl)
+        .setName("Expanded areas")
+        .setDesc(
+          "Comma-separated area bands (e.g. \"90-99\") that use 5-digit sequential ids instead of category/decimal ids. " +
+            "Leave blank to use the provider default (90-99)."
+        )
+        .addText((t) => {
+          t.setValue((jdConfig.expandedAreas ?? []).join(", "));
+          t.onChange(async (value) => {
+            await this.updateJdConfig({ expandedAreas: parseCommaList(value) });
+          });
+        });
+
+      new Setting(containerEl)
+        .setName("Expanded categories")
+        .setDesc(
+          "Comma-separated categories (e.g. \"27\") that use 5-digit flat ids instead of category.decimal ids. " +
+            "Leave blank to use the provider default (27)."
+        )
+        .addText((t) => {
+          t.setValue((jdConfig.expandedCategories ?? []).join(", "));
+          t.onChange(async (value) => {
+            await this.updateJdConfig({ expandedCategories: parseCommaList(value) });
+          });
+        });
+
+      new Setting(containerEl)
+        .setName("Content-decimal floor")
+        .setDesc(
+          "Lowest two-digit decimal (0-99) a category allocates as content — decimals below it are reserved. " +
+            "Leave blank for the default (10)."
+        )
+        .addText((t) => {
+          t.setValue(jdConfig.contentDecimalFloor === undefined ? "" : String(jdConfig.contentDecimalFloor));
+          t.onChange(async (value) => {
+            await this.updateJdConfig({ contentDecimalFloor: parseFloorField(value) });
+          });
+        });
+    }
+
     new Setting(containerEl)
       .setName("Socket enabled")
       .setDesc(
@@ -159,5 +233,30 @@ export class VaultMcpSettingTab extends PluginSettingTab {
           this.display();
         });
       });
+  }
+
+  /**
+   * Merge `partial` into schemes[0].config and save. Deliberately
+   * non-mutating at every level it touches: `this.plugin.settings.schemes`
+   * defaults to the module-level DEFAULT_SCHEMES constant (main.ts
+   * DEFAULT_SETTINGS.schemes = DEFAULT_SCHEMES) until the first save writes
+   * data.json, so an in-place `schemes[0].config = …` or `schemes[0] = …`
+   * would mutate that shared array/object and silently contaminate every
+   * OTHER instance (and test) that still expects the untouched default.
+   * Building fresh objects and a fresh array here, rather than mutating in
+   * place, keeps DEFAULT_SCHEMES byte-identical no matter how many times a
+   * user edits these fields.
+   */
+  private async updateJdConfig(partial: Partial<JdConfig>): Promise<void> {
+    const schemes = this.plugin.settings.schemes;
+    const jd = schemes[0];
+    if (!jd) return;
+    const nextConfig: Record<string, unknown> = { ...(jd.config ?? {}) };
+    for (const [key, value] of Object.entries(partial)) {
+      if (value === undefined) delete nextConfig[key];
+      else nextConfig[key] = value;
+    }
+    this.plugin.settings.schemes = [{ ...jd, config: nextConfig as Partial<JdConfig> }, ...schemes.slice(1)];
+    await this.plugin.saveSettings();
   }
 }
