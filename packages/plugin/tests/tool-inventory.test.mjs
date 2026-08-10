@@ -123,6 +123,74 @@ const EXPECTED_SCHEME_TOOL_NAMES = [
   "obsidian_expected_location",
 ];
 
+// ── Full-inventory lock (TOOL-INVENTORY.md ↔ source) ────────────────────────
+// The two locks above cover 22 of the tools; the other ~44 drifted silently —
+// TOOL-INVENTORY.md calls itself "source of record" yet was missing every tool
+// added by the scheme/pending-review/write-notes PRs. This lock makes that
+// structurally impossible: the set of tool names REGISTERED in source must
+// equal the set of backticked obsidian_* names the inventory documents, in
+// both directions.
+//
+// "Registered in source" is a syntactic scan, deliberately matching every
+// registration idiom in the codebase — `server.registerTool(`, a `register(`
+// callback parameter (tools-write-notes.ts), and a local `reg(` alias
+// (tools-code-mode.ts) — always with the tool name as the first argument on
+// the same or next line. FS_TOOLS names come from the imported constant, not
+// the scan, since core defines them as data. A registration idiom this scan
+// does not recognize will surface as a doc-side "extra" the moment the doc
+// documents the new tool, so the lock fails loudly rather than rotting.
+
+const REGISTRATION_CALL_RE = /(?:\bregisterTool|\bregister|\breg)\(\s*\n?\s*"(obsidian_[a-z0-9_]+)"/g;
+
+async function registeredToolNames() {
+  const srcDir = resolve(HERE, "../src");
+  const names = new Set(FS_TOOLS.map((t) => t.name));
+  for (const file of await collectSourceFiles(srcDir)) {
+    const source = await readFile(file, "utf-8");
+    for (const m of source.matchAll(REGISTRATION_CALL_RE)) names.add(m[1]);
+  }
+  return names;
+}
+
+describe("full tool inventory lock (TOOL-INVENTORY.md)", () => {
+  test("every registered tool name appears in TOOL-INVENTORY.md, and vice versa", async () => {
+    const registered = await registeredToolNames();
+    const doc = await readFile(resolve(HERE, "../TOOL-INVENTORY.md"), "utf-8");
+    const documented = new Set(
+      [...doc.matchAll(/`(obsidian_[a-z0-9_]+)`/g)].map((m) => m[1]),
+    );
+
+    const undocumented = [...registered].filter((n) => !documented.has(n)).sort();
+    const phantom = [...documented].filter((n) => !registered.has(n)).sort();
+
+    assert.deepEqual(
+      undocumented,
+      [],
+      `tools registered in source but missing from TOOL-INVENTORY.md: ${undocumented.join(", ")}`,
+    );
+    assert.deepEqual(
+      phantom,
+      [],
+      `tool names in TOOL-INVENTORY.md that no source file registers: ${phantom.join(", ")}`,
+    );
+  });
+
+  test("scan sanity: the scan finds the tools each existing lock already pins", async () => {
+    // Guards the REGEX SCAN itself: if the registration pattern rots, these
+    // names vanish and this fails before the set-equality test could pass on
+    // two empty sets. Only the non-FS names below actually exercise the scan —
+    // the FS names are seeded from the imported FS_TOOLS constant, so they'd
+    // survive a broken regex; they're included only so the pin list reads as
+    // "every idiom", with scheme (registerTool), write_notes (register),
+    // pending_review (registerTool) and call_tool (reg) covering all three.
+    const registered = await registeredToolNames();
+    for (const name of [...EXPECTED_FS_TOOL_NAMES, ...EXPECTED_SCHEME_TOOL_NAMES,
+      "obsidian_write_notes", "obsidian_pending_review", "obsidian_call_tool"]) {
+      assert.ok(registered.has(name), `registration scan lost "${name}"`);
+    }
+  });
+});
+
 async function collectSourceFiles(dir) {
   const entries = await readdir(dir, { withFileTypes: true });
   const files = [];

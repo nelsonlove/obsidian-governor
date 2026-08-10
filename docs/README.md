@@ -109,5 +109,3 @@ accept verb to an agent.
   `fileclass_insert_fields`) are not yet gated (#105). The acceptance model's guarantees
   below are stated for the **plugin's guarded write surfaces**; these issues are the honest
   boundary of that claim until closed.
-</content>
-</invoke>

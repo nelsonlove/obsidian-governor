@@ -2,17 +2,23 @@
 
 Source of record for every tool the plugin's MCP server registers.  Generated
 by reading `packages/plugin/src/mcp/server.ts` and all `tools-*.ts` files.
-The fs-expressible list is locked by `tests/tool-inventory.test.mjs` (#25).
+The FULL set is locked by `tests/tool-inventory.test.mjs`: the names documented
+here must equal the names registered in source, both directions, or the suite
+fails (the fs-expressible and scheme sub-locks from #25/task-6 still apply).
 
-**Count summary:** 17 fs-expressible + 32 always-live = **49 base** tools,
-plus up to 6 conditional integration tools and 1 CLI-conditional tool
-(`obsidian_cli`) = **up to 56 total**.
+**Count summary:** 17 fs-expressible + 30 always-live + 9 module-mounted
+(default enabled, settings-toggleable) = **56 base** tools, plus up to
+6 conditional integration tools and 1 CLI-conditional tool (`obsidian_cli`)
+= **up to 63 total**.  The 3 Code Mode meta-tools are an alternative
+per-connection surface and are not counted (a session sees one surface or the
+other, never both).
 
 Cross-check: the observed live set with Dataview + Templater + Metadata Menu
-loaded (but NOT Omnisearch) reported 44 tools: 39 + 5 = 44 ✓ — an observation
-that PREDATES the kernel-v0 tools (locks ×4, uid ×1, links ×1) and the vocab
-tools (×4); the next live observation should report 54 under the same plugin
-set.
+loaded (but NOT Omnisearch, no CLI binary) reported 44 tools — an observation
+that PREDATES the kernel-v0 tools (locks ×4, uid ×1, links ×1), the vocab
+module (×4), the scheme module (×5), `obsidian_write_notes` and
+`obsidian_pending_review`; the same plugin set today registers
+17 + 30 + 9 + 5 = **61**.
 
 ---
 
@@ -45,7 +51,7 @@ against its `FilesystemBackend`.
 
 ---
 
-## Section 2 — live-only, always registered (32)
+## Section 2 — live-only, always registered (30)
 
 These tools depend on live Obsidian `app.*` state and cannot be expressed on the
 filesystem.  They are unconditionally registered on every `buildMcpServer` call,
@@ -64,6 +70,18 @@ regardless of which community plugins are installed.
 |---|---|
 | `obsidian_move_notes` | Batch move/rename (live-only — not in the shared 17) |
 | `obsidian_repoint_link` | Repoint every `[[link_name]]` at `target_path`, vault-wide (live-only; fixes broken links that rename-based rewrite can't touch). Flags: `dry_run`, `unresolved_only` (skip still-resolving links), `drop_echo_alias` (drop [[x\|x]] echo aliases) |
+
+### `tools-write-notes.ts` — `registerWriteNotesTool` (1 tool, kernel B1)
+
+| Tool name | Description |
+|---|---|
+| `obsidian_write_notes` | Batch whole-note writes, each item an independent kernel-routed write with its own journal record, `if_rev`/`idempotency_key`, and optional server-side frontmatter stamping (`stamp: true`) |
+
+### `tools-pending-review.ts` — `registerPendingReviewTools` (1 tool, kernel B3b)
+
+| Tool name | Description |
+|---|---|
+| `obsidian_pending_review` | Read-only view of Stewardship's published review queue (`pending-index.json`); data-only coupling, no accept verb |
 
 ### `tools-complementary.ts` — `registerComplementaryTools` (9 tools)
 
@@ -114,7 +132,28 @@ regardless of which community plugins are installed.
 |---|---|
 | `obsidian_check_links` | Dangling links + duplicated uids + uid coverage, report-only |
 
-### `tools-vocab.ts` — `registerVocabTools` (4 tools, vocab provider)
+---
+
+## Section 2b — module-mounted, default enabled (9)
+
+Registered through the module host (`modules-mount.ts` → `ModuleRegistry`), not
+directly: `server.ts` calls `mountModules`, and each module's tools register
+only when the module is enabled (`settings.modules.<id>.enabled`, defaulting to
+the module's own `enabled: true`).  Both modules ship default-ON, so these 9
+are present on a stock connection; a settings toggle takes effect on the next
+session connect.
+
+### `tools-scheme.ts` — `registerSchemeTools` via the `scheme` module (5 tools)
+
+| Tool name | Description |
+|---|---|
+| `obsidian_schemes` | Enumerate scheme instances: capabilities, config, grammar examples (skipped instances appear as `{id, available: false}`) |
+| `obsidian_resolve_address` | Address → path(s), or path → address; duplicates reported, never picked |
+| `obsidian_next_address` | Compute the next free address in a scope (computes only — reserves nothing) |
+| `obsidian_list_scope` | Members of a scope in address order, plus up to 20 open slots |
+| `obsidian_expected_location` | Per-note or per-address placement report |
+
+### `tools-vocab.ts` — `registerVocabTools` via the `vocab` module (4 tools)
 
 | Tool name | Description |
 |---|---|
@@ -171,18 +210,23 @@ the full surface or these 3, never both.
 
 ---
 
-## Observed live set cross-check
+## Observed live set cross-check (historical)
 
 The 44-tool set observed with Dataview + Templater + Metadata Menu loaded
-(Omnisearch absent, CLI binary not counted) maps exactly to the inventory above:
+(Omnisearch absent, CLI binary not counted) mapped exactly to the inventory as
+it stood then:
 
 - 17 fs-expressible ✓
-- 22 always-live ✓
+- 22 always-live at the time ✓ (now 30 + 9 module-mounted — see Sections 2/2b)
 - 5 integration (Dataview×2 + Templater×1 + Metadata Menu×2) ✓
 - `obsidian_omnisearch` absent — Omnisearch plugin not loaded ✓
-- (`obsidian_cli` additionally registers when the CLI binary is installed — 45 with it)
+- (`obsidian_cli` additionally registers when the CLI binary is installed)
 
-**No tool in the observed-44 list is unaccounted for in source.**
+**No tool in the observed-44 list was unaccounted for in source.**  Under the
+same plugin set the current surface registers 61 (see the count summary); the
+source↔doc lock in `tests/tool-inventory.test.mjs` keeps this file current, and
+any future live observation should be checked against that lock rather than
+this historical snapshot.
 
 ---
 
@@ -199,7 +243,10 @@ The 44-tool set observed with Dataview + Templater + Metadata Menu loaded
 | `packages/plugin/src/mcp/tools-locks.ts` | `registerLockTools` | 4 always-live |
 | `packages/plugin/src/mcp/tools-uid.ts` | `registerUidTools` | 1 always-live |
 | `packages/plugin/src/mcp/tools-links.ts` | `registerLinkTools` | 1 always-live |
-| `packages/plugin/src/mcp/tools-vocab.ts` | `registerVocabTools` | 4 always-live |
+| `packages/plugin/src/mcp/tools-write-notes.ts` | `registerWriteNotesTool` | 1 always-live |
+| `packages/plugin/src/mcp/tools-pending-review.ts` | `registerPendingReviewTools` | 1 always-live |
+| `packages/plugin/src/mcp/tools-scheme.ts` | `registerSchemeTools` (via `modules-mount.ts`) | 5 module-mounted |
+| `packages/plugin/src/mcp/tools-vocab.ts` | `registerVocabTools` (via `modules-mount.ts`) | 4 module-mounted |
 | `packages/plugin/src/mcp/tools-integrations.ts` | `registerIntegrationTools` | up to 6 conditional |
 | `packages/plugin/src/mcp/tools-cli.ts` | `registerCliTools` | 1 conditional (CLI binary) |
-| `packages/plugin/src/mcp/tools-vault-read.ts` | `registerVaultReadTools` (no-op stub) | 0 (all 9 migrated) |
+| `packages/plugin/src/mcp/tools-code-mode.ts` | `registerCodeModeTools` | 3 (alternative surface, uncounted) |
