@@ -352,6 +352,26 @@ export function composeNote(args: ComposeArgs): ComposeResult {
     // value VERBATIM (never changed — including a human-granted `accepted`),
     // else default `proposed`. The accept-forbidden guard below rejects an
     // accepted value the payload introduces; a preserved existing one is allowed.
+    //
+    // DEMOTION RULE — when the payload is silent (as it is on every ordinary
+    // stamped write that isn't itself editing acceptance), stamping must never
+    // invent a change to acceptance-status: preserve-existing, not refuse-typed
+    // or default-away. This is the ONLY correct reading here because `existing`
+    // must be keyed on the note's real on-disk path for it to mean anything —
+    // an `existing` that is empty because the caller addressed the note by
+    // `uid:`/`jd:` and the lookup missed the resolved path is NOT "no existing
+    // acceptance-status", it is a wrong answer, and defaulting to `proposed` in
+    // that case silently demotes a human's `accepted` (the bug this guards
+    // against — see tools-write-notes.ts's resolveTarget wiring). This matches
+    // the SHARED accept-guard convention `acceptTransitionReason` implements
+    // (also `obsidian_write_note`/`obsidian_manage_frontmatter`/`obsidian_patch_note`
+    // via ObsidianBackend's guardWrittenContent/guardResultingFrontmatter): a
+    // TYPED, explicit acceptance-status value in the payload — proposed,
+    // rejected, anything non-accepted — is always honored as the caller's own
+    // edit and is never itself refused (acceptTransitionReason only blocks
+    // introducing or changing INTO the accepted family); it is only stamp's own
+    // SILENT default-filling, when the payload says nothing at all, that must
+    // preserve rather than invent.
     if (!("acceptance-status" in merged)) {
       if ("acceptance-status" in existing) merged["acceptance-status"] = existing["acceptance-status"];
       else merged["acceptance-status"] = "proposed";
