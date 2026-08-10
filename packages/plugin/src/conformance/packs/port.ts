@@ -16,6 +16,7 @@
 
 import type { Finding } from "../finding.js";
 import type { RulePack, VaultSnapshot } from "../rule-pack.js";
+import { requireSources } from "../rule-pack.js";
 import { hasDotOrTrashSegment, isUnderscoreRoot } from "./legacy-scope.js";
 
 export const PORT_PACK_ID = "port_lint";
@@ -67,7 +68,7 @@ export function portPack(): RulePack {
       // De-dupe (name, path, token) so identical-token hits in one file
       // collapse to one finding — the ratchet key excludes line + context.
       const seen = new Set<string>();
-      for (const src of snapshot.sources ?? []) {
+      for (const src of requireSources(snapshot, PORT_PACK_ID)) {
         // port_lint's ratchet feed (gen3_note_paths) excludes dot/.trash
         // segments and `_`-prefixed roots. It does NOT exclude Assent /
         // Vault archaeology (unlike the other two scripts).

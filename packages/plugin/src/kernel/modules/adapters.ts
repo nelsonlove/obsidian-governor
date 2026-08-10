@@ -44,6 +44,7 @@
 // (`registerTool`), which is all those functions use.
 
 import type { ModuleHostCtx, ModulePosture, ModuleSettingsSchema, ToolRegistrar, VaultModule } from "./module.js";
+import type { ConfigBinding, ModuleManifest } from "./manifest.js";
 
 /** What an adapted registrar is handed as its `server`: exactly the one
  * method the registerXTools idiom uses. New registrars should declare this
@@ -59,7 +60,14 @@ export interface AdapterMeta {
   enabled: boolean;
   /** Default "capability" — the only posture the v1 registry instantiates. */
   posture?: ModulePosture;
+  /** @deprecated see manifest below. */
   settingsSchema?: ModuleSettingsSchema;
+  /** The module's config-host subscription (manifest.ts) — typed config
+   * fields + capability directory. */
+  manifest?: ModuleManifest;
+  /** Where this module's config actually lives, for a module whose config
+   * predates the module host (manifest.ts's `ConfigBinding` doc). */
+  configBinding?: ConfigBinding;
 }
 
 /**
@@ -80,6 +88,8 @@ export function moduleFromRegistrar<C>(
     capabilities: meta.capabilities,
     enabled: meta.enabled,
     ...(meta.settingsSchema ? { settingsSchema: meta.settingsSchema } : {}),
+    ...(meta.manifest ? { manifest: meta.manifest } : {}),
+    ...(meta.configBinding ? { configBinding: meta.configBinding } : {}),
     register(reg, host, config) {
       registrar({ registerTool: reg }, ctxOf(host, config));
     },

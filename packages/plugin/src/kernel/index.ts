@@ -103,7 +103,17 @@ export { VocabRegistry, DEFAULT_VOCABULARIES } from "./vocab/registry.js";
 export type { VocabInstance, VocabInstanceSettings } from "./vocab/registry.js";
 // The module host (#68) — re-exported here as part of the mount step, the
 // integration its barrel comment deferred to.
-export { ModuleRegistry, forbiddenToolName, moduleFromRegistrar, DEFAULT_MODULE_SETTINGS, mergeModuleConfig } from "./modules/index.js";
+export {
+  ModuleRegistry,
+  forbiddenToolName,
+  moduleFromRegistrar,
+  DEFAULT_MODULE_SETTINGS,
+  mergeModuleConfig,
+  toolDocDrift,
+  toolDocReadOnlyDrift,
+  safeValidate,
+  collect,
+} from "./modules/index.js";
 export type {
   ModuleDescription,
   ModuleHostCtx,
@@ -117,6 +127,15 @@ export type {
   VaultModule,
   AdapterMeta,
   RegistrarServer,
+  ConfigBinding,
+  ConfigField,
+  ConfigFieldType,
+  ModuleManifest,
+  SurfaceDoc,
+  ToolDoc,
+  HostedDirectory,
+  HostedField,
+  HostedModule,
 } from "./modules/index.js";
 
 /**
