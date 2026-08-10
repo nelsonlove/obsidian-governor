@@ -29,6 +29,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 // These will be populated in the `before()` hook below.
 let buildFsServer: (typeof import("../fs-mode.js"))["buildFsServer"];
 let createFsHandler: (typeof import("../fs-mode.js"))["createFsHandler"];
+let FS_WRITES_ENV_VAR: (typeof import("../fs-mode.js"))["FS_WRITES_ENV_VAR"];
 let FS_TOOLS: (typeof import("@vault-mcp/core"))["FS_TOOLS"];
 
 // ── Temp vault setup ─────────────────────────────────────────────────────────
@@ -46,6 +47,7 @@ before(async () => {
   const fsMod = await import("../fs-mode.js");
   buildFsServer = fsMod.buildFsServer;
   createFsHandler = fsMod.createFsHandler;
+  FS_WRITES_ENV_VAR = fsMod.FS_WRITES_ENV_VAR;
 
   const coreMod = await import("@vault-mcp/core");
   FS_TOOLS = coreMod.FS_TOOLS;
@@ -72,11 +74,17 @@ after(async () => {
  * Uses buildFsServer (the internal factory helper exported from fs-mode.ts)
  * so tests drive exactly the same server construction that createFsHandler.handle()
  * uses per-request — without needing a live Express server.
+ *
+ * `allowWrites` defaults to true here so tests that exercise write tools for
+ * OTHER reasons (round-trips, the accept-forbidden guard) aren't tripped up by
+ * the FS-write gate (issue #92) — that gate has its own dedicated describe
+ * block below, which passes allowWrites explicitly per case.
  */
 async function makeClientFromFsServer(
   indexStatus?: boolean,
+  allowWrites = true,
 ): Promise<{ client: Client; teardown: () => Promise<void> }> {
-  const server = buildFsServer({ indexStatus });
+  const server = buildFsServer({ indexStatus, allowWrites });
 
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "test-client", version: "0.0.1" });
@@ -319,6 +327,164 @@ describe("obsidian_write_note — accept-forbidden guard reaches the real fs-fai
       assert.ok(result.isError, "a BOM-prefixed accepted fence must be refused, not silently honored unguarded");
     } finally {
       await teardown();
+    }
+  });
+});
+
+/**
+ * Issue #92 — FS-mode writes bypass the plugin kernel's serialized write
+ * queue and append-only write journal entirely (FS mode has no kernel to
+ * route through; packages/server does not, and must not, depend on
+ * packages/plugin). Rather than silently shipping unaudited writes under
+ * the same tool names as the journaled LIVE path, FS-mode writes are
+ * refused by default and require an explicit opt-in — this suite is the
+ * regression test for that gate.
+ */
+describe("FS-mode write gate (issue #92)", () => {
+  test("obsidian_write_note is refused by default (no allowWrites option, no env var)", async () => {
+    const { client, teardown } = await makeClientFromFsServer(undefined, false);
+    try {
+      const result = await client.callTool({
+        name: "obsidian_write_note",
+        arguments: {
+          path: "fs-mode-write-gate-test/ShouldNotExist.md",
+          content: "body",
+          overwrite: false,
+        },
+      });
+      assert.ok(result.isError, "expected the write to be refused (isError: true)");
+      const text = (result.content as Array<{ type: string; text: string }>)[0].text;
+      assert.match(text, /fs_writes_disabled/);
+
+      // Confirm nothing landed on disk.
+      const readResult = await client.callTool({
+        name: "obsidian_read_note",
+        arguments: { path: "fs-mode-write-gate-test/ShouldNotExist.md" },
+      });
+      assert.ok(readResult.isError, "the refused write must not have created the note");
+    } finally {
+      await teardown();
+    }
+  });
+
+  test("obsidian_append_note, obsidian_delete_note, and obsidian_manage_frontmatter (set) are also refused by default", async () => {
+    const { client, teardown } = await makeClientFromFsServer(undefined, false);
+    try {
+      const appendResult = await client.callTool({
+        name: "obsidian_append_note",
+        arguments: { path: "fs-mode-write-gate-test/Append.md", content: "more" },
+      });
+      assert.ok(appendResult.isError, "append must be refused by default");
+      assert.match(
+        (appendResult.content as Array<{ type: string; text: string }>)[0].text,
+        /fs_writes_disabled/,
+      );
+
+      const fmResult = await client.callTool({
+        name: "obsidian_manage_frontmatter",
+        arguments: { path: "fs-mode-write-gate-test/Fm.md", key: "title", op: "set", value: "x" },
+      });
+      assert.ok(fmResult.isError, "manage_frontmatter set must be refused by default");
+      assert.match(
+        (fmResult.content as Array<{ type: string; text: string }>)[0].text,
+        /fs_writes_disabled/,
+      );
+
+      const deleteResult = await client.callTool({
+        name: "obsidian_delete_note",
+        arguments: { path: "fs-mode-write-gate-test/Nonexistent.md", confirm: true },
+      });
+      assert.ok(deleteResult.isError, "delete must be refused by default");
+      assert.match(
+        (deleteResult.content as Array<{ type: string; text: string }>)[0].text,
+        /fs_writes_disabled/,
+      );
+    } finally {
+      await teardown();
+    }
+  });
+
+  test("obsidian_write_note succeeds when allowWrites: true is explicitly opted in", async () => {
+    const { client, teardown } = await makeClientFromFsServer(undefined, true);
+    try {
+      const result = await client.callTool({
+        name: "obsidian_write_note",
+        arguments: {
+          path: "fs-mode-write-gate-test/Allowed.md",
+          content: "# Allowed\nbody",
+          overwrite: false,
+        },
+      });
+      assert.ok(!result.isError, `unexpected error: ${JSON.stringify(result.content)}`);
+
+      const readResult = await client.callTool({
+        name: "obsidian_read_note",
+        arguments: { path: "fs-mode-write-gate-test/Allowed.md" },
+      });
+      assert.ok(!readResult.isError);
+      const data = JSON.parse((readResult.content as Array<{ type: string; text: string }>)[0].text);
+      assert.equal(data.content, "# Allowed\nbody");
+    } finally {
+      await teardown();
+    }
+  });
+
+  test("obsidian_write_note succeeds when VAULT_MCP_FS_ALLOW_WRITES env var is set, with no explicit option", async () => {
+    const prev = process.env[FS_WRITES_ENV_VAR];
+    process.env[FS_WRITES_ENV_VAR] = "true";
+    try {
+      // buildFsServer({ indexStatus }) — allowWrites intentionally omitted, so
+      // makeBackend() must fall back to reading the env var itself.
+      const server = buildFsServer({ indexStatus: false });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const client = new Client({ name: "test-client", version: "0.0.1" });
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      try {
+        const result = await client.callTool({
+          name: "obsidian_write_note",
+          arguments: {
+            path: "fs-mode-write-gate-test/EnvAllowed.md",
+            content: "via env var",
+            overwrite: false,
+          },
+        });
+        assert.ok(!result.isError, `unexpected error: ${JSON.stringify(result.content)}`);
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    } finally {
+      if (prev === undefined) delete process.env[FS_WRITES_ENV_VAR];
+      else process.env[FS_WRITES_ENV_VAR] = prev;
+    }
+  });
+
+  test("reads (obsidian_list_notes, obsidian_read_note) work identically whether or not writes are allowed", async () => {
+    // Seed a note directly on disk (bypassing the gated write tools).
+    const noteDir = path.join(tmpVault, "fs-mode-write-gate-read-test");
+    await mkdir(noteDir, { recursive: true });
+    await writeFile(path.join(noteDir, "ReadMe.md"), "# Read fallback\nstill works", "utf8");
+
+    for (const allowWrites of [false, true]) {
+      const { client, teardown } = await makeClientFromFsServer(undefined, allowWrites);
+      try {
+        const listResult = await client.callTool({
+          name: "obsidian_list_notes",
+          arguments: { subdir: "fs-mode-write-gate-read-test", limit: 10, offset: 0 },
+        });
+        assert.ok(!listResult.isError, `list failed (allowWrites=${allowWrites})`);
+
+        const readResult = await client.callTool({
+          name: "obsidian_read_note",
+          arguments: { path: "fs-mode-write-gate-read-test/ReadMe.md" },
+        });
+        assert.ok(!readResult.isError, `read failed (allowWrites=${allowWrites})`);
+        const data = JSON.parse((readResult.content as Array<{ type: string; text: string }>)[0].text);
+        assert.equal(data.content, "# Read fallback\nstill works");
+      } finally {
+        await teardown();
+      }
     }
   });
 });

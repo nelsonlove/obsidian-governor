@@ -18,6 +18,12 @@ It is a single Express process (`src/front.ts`) that:
 
 **FS-mode write caveat:** writes while Obsidian is closed are direct disk edits.
 Obsidian Sync reconciles them on relaunch; they are canonical after that point.
+They are also **unaudited** (issue #92): FS mode has no journal and no serialized
+write queue — those live in the plugin's kernel, and this package does not (and
+must not) depend on `packages/plugin`. FS-mode writes are therefore **refused by
+default**; a deployment opts in explicitly via `VAULT_MCP_FS_ALLOW_WRITES=true`
+(`src/fs-mode.ts`'s `isFsWritesEnabled`/`FsWritesDisabledError`), and `GET /health`
+reports the current setting as `fsWritesEnabled`. Reads are never gated.
 
 ## Auth (dual + per-user allowlist)
 

@@ -22,19 +22,22 @@ front.ts (LaunchAgent)  ── presence poll ──►  ~/.claude/vault-mcp/<vau
 
 | Obsidian state | Mode | Tool surface | Notes |
 | --- | --- | --- | --- |
-| Running + plugin enabled | `live` | 44 tools (full `obsidian_*` set) | Writes go through Obsidian APIs — canonical, sync-safe |
-| Closed / plugin disabled | `fs` | 17 tools (FS read + write) | Writes are direct disk edits; Obsidian Sync reconciles on relaunch |
+| Running + plugin enabled | `live` | 44 tools (full `obsidian_*` set) | Writes go through Obsidian APIs — canonical, sync-safe, **journaled and serialized** by the plugin kernel |
+| Closed / plugin disabled | `fs` | 17 tools (FS read + write) | Writes are direct disk edits; Obsidian Sync reconciles on relaunch. **Unaudited by default** (issue #92): FS mode has no journal and no serialized write queue (no kernel to route through), so FS-mode writes are **refused** unless the deployment opts in via `VAULT_MCP_FS_ALLOW_WRITES=true`. Reads are never affected. |
 | Reopened after closure | `live` | Back to 44 tools (auto) | Open SSE channels get a `notifications/tools/list_changed` push |
 
 `GET /health` returns:
 
 ```json
-{ "status": "ok", "mode": "live|fs", "authEnabled": true, "fsWriteSyncCaveat": true }
+{ "status": "ok", "mode": "live|fs", "authEnabled": true, "fsWriteSyncCaveat": true, "fsWritesEnabled": false }
 ```
 
 `mode` tells a monitor which surface is active. `fsWriteSyncCaveat` is always
 `true`; it's a standing reminder that FS-mode writes are not Sync-committed until
-Obsidian reopens.
+Obsidian reopens. `fsWritesEnabled` reflects `VAULT_MCP_FS_ALLOW_WRITES` — `false`
+(the default) means FS-mode writes are currently refused with
+`Error [fs_writes_disabled]`; `true` means this deployment has explicitly opted
+into unjournaled, unserialized FS-mode writes.
 
 ## 1. Token + env
 
@@ -154,6 +157,7 @@ Two Clerk realities shaped the wiring:
 | `VAULT_MCP_BRIDGE` | `~/.claude/vault-mcp/bridge.mjs` | plugin stdio bridge to spawn per LIVE session |
 | `VAULT_MCP_IDLE_MS` | `1800000` (30 min) | idle-reap window for LIVE sessions |
 | `VAULT_MCP_MAX_SESSIONS` | `32` | concurrent LIVE-backend cap |
+| `VAULT_MCP_FS_ALLOW_WRITES` | `false` | opt into FS-mode writes (issue #92) — FS mode has no journal/serialized queue, so writes are refused (`Error [fs_writes_disabled]`) unless this is set. Reads are unaffected either way |
 | `PORT` / `HOST` | `8787` / `127.0.0.1` | local listen (tunnel target); keep on loopback |
 | `AUTH_ENABLED` | `false` | enable the OAuth path + PRM discovery |
 | `MCP_RESOURCE_URL` | — | PRM resource id + required JWT `aud` |
