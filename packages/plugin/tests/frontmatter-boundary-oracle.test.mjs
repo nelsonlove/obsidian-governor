@@ -8,8 +8,19 @@
  * *write path honors ⟹ guard refuses*, but both sides now call the SAME
  * recognizer — so any loosening of that recognizer moves both sides together
  * and parity stays green while the guard silently drifts away from the vault.
- * Demonstrated: relaxing the anchor to `^[ \t]*---` reopens #126 verbatim with
- * the entire parity suite still passing.
+ * Demonstrated: relaxing the anchor to `^[ \t]*---` leaves the entire parity
+ * suite passing while this file fails.
+ *
+ * Be precise about what that loosening actually costs, because the imprecise
+ * version ("it reopens #126") is wrong and was corrected in review: with a
+ * shared recognizer, a guard that recognizes MORE is not the #126 bypass —
+ * #126 was the guard recognizing LESS than the write path. The hazard of
+ * over-recognition runs the other way: the write path starts honoring
+ * frontmatter the vault does not, and that reaches the accept guard through
+ * `acceptTransitionReason`'s preserve-unchanged allowance, where a fabricated
+ * "before" can make an introduce look like a carry-forward. Different
+ * mechanism, same reason to pin the recognizer to reality rather than to
+ * itself.
  *
  * Parity pins the two implementations to EACH OTHER. This file pins the shared
  * implementation to REALITY. Both are needed; neither substitutes.

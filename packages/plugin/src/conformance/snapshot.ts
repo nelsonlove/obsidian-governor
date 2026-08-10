@@ -121,6 +121,18 @@ export async function buildSnapshot(opts: SnapshotOpts): Promise<VaultSnapshot> 
       }
       // Universal-newline normalize (CRLF/CR → LF) up front, so both the parsed
       // listing and the raw sources see the same LF text Python's read_text saw.
+      //
+      // KNOWN PARITY EDGE (#125 item 3, carried forward from the superseded
+      // `de1868e`): the ported packs then split this on \n, whereas Python's
+      // `str.splitlines()` — which the original rail used — ALSO breaks on
+      // \v, \f, \x85, U+2028 and U+2029. A note containing any of those would
+      // give the TS packs one line where Python saw two, so a finding whose
+      // regex is line-anchored could differ. Verified zero live occurrences
+      // across the parity runs, which is why the ports were accepted as
+      // byte-equal; it is a latent edge, not a live one. Deliberately NOT
+      // "fixed" by widening the split: that would change keys for a case that
+      // does not occur, and the Python rail it had to match is now retired.
+      // Tracked with the other latent parity edges in #112.
       const raw = text.replace(/\r\n?/g, "\n");
       if (isBlueprint) {
         blueprints.push({ path: vaultPath, text: raw });

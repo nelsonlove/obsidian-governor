@@ -11,6 +11,8 @@
 // the host is guarded, serialized and journaled exactly like a hand-registered
 // tool, and the whole host is unit-testable without a vault or an SDK server.
 
+import type { ConfigBinding, ModuleManifest } from "./manifest.js";
+
 /**
  * How a module faces the bridge.
  *
@@ -120,6 +122,20 @@ export interface VaultModule {
   capabilities: string[];
   /** Default enabled state. `ModuleSettings[id].enabled` overrides it. */
   enabled: boolean;
+  /** @deprecated grown into `manifest.config` — kept for one release so a
+   * module that hasn't migrated yet still works. `ModuleRegistry` reads
+   * `manifest.config` first and falls back to this when absent. */
   settingsSchema?: ModuleSettingsSchema;
+  /** The module's full config-host subscription: typed config fields +
+   * validation, and the capability directory the settings tab renders.
+   * `undefined` for a module that hasn't migrated onto a manifest yet — the
+   * generic renderer still gives it a (minimal) section rather than
+   * skipping it. */
+  manifest?: ModuleManifest;
+  /** Where this module's config ACTUALLY lives, when it predates the
+   * module host and isn't stored at `modules.<id>.config` (scheme, vocab —
+   * see manifest.ts's `ConfigBinding` doc and design §3). Absent ⇒ the
+   * config host reads/writes `modules.<id>.config` directly. */
+  configBinding?: ConfigBinding;
   register(reg: ToolRegistrar, host: ModuleHostCtx, config: Record<string, unknown>): void;
 }

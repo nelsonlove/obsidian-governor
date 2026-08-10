@@ -19,6 +19,7 @@
 
 import type { Finding } from "../finding.js";
 import type { RulePack, VaultSnapshot } from "../rule-pack.js";
+import { requireSources } from "../rule-pack.js";
 import { hasDotOrTrashSegment, firstSegment } from "./legacy-scope.js";
 
 export const STE_PACK_ID = "ste_lint";
@@ -111,7 +112,7 @@ export function stePack(): RulePack {
       // De-dupe (path, "name 'token'") so identical-token hits in one file
       // collapse — the ratchet key excludes line + context.
       const seen = new Set<string>();
-      for (const src of snapshot.sources ?? []) {
+      for (const src of requireSources(snapshot, STE_PACK_ID)) {
         // scan_vault scope: no dot/.trash segments, no `_`-prefixed root, no
         // ungoverned Assent root. Then classify → editable only.
         if (hasDotOrTrashSegment(src.path)) continue;

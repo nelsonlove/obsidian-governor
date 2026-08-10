@@ -25,3 +25,20 @@ export {
   type ModuleInstanceSettings,
   type ModuleSettings,
 } from "./settings.js";
+export {
+  toolDocDrift,
+  toolDocReadOnlyDrift,
+  safeValidate,
+  type ConfigBinding,
+  type ConfigField,
+  type ConfigFieldType,
+  type ModuleManifest,
+  type SurfaceDoc,
+  type ToolDoc,
+} from "./manifest.js";
+export {
+  collect,
+  type HostedDirectory,
+  type HostedField,
+  type HostedModule,
+} from "./config-host.js";
