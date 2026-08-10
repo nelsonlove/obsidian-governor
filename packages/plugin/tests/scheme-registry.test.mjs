@@ -69,6 +69,26 @@ describe("makeRegistry — building instances from config", () => {
     assert.ok(called, "expected console.error to be called for the bad config entry");
   });
 
+  test("prototype-key provider names (__proto__, constructor, toString, hasOwnProperty, valueOf) are skipped, not thrown", () => {
+    const PROTOTYPE_KEYS = ["__proto__", "constructor", "toString", "hasOwnProperty", "valueOf"];
+    for (const provider of PROTOTYPE_KEYS) {
+      const originalError = console.error;
+      let called = false;
+      console.error = () => {
+        called = true;
+      };
+      let reg;
+      try {
+        reg = makeRegistry([{ id: "bogus", provider }]);
+      } finally {
+        console.error = originalError;
+      }
+      assert.equal(reg.instances().length, 0, `provider "${provider}" should register 0 instances`);
+      assert.equal(reg.get("bogus"), null, `provider "${provider}" should not be gettable`);
+      assert.ok(called, `expected console.error to be called for provider "${provider}"`);
+    }
+  });
+
   test("a bad config entry does not prevent good entries alongside it from registering", () => {
     const originalError = console.error;
     console.error = () => {};

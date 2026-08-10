@@ -107,7 +107,9 @@ export class SchemeRegistry {
 export function makeRegistry(configs: SchemeInstanceConfig[]): SchemeRegistry {
   const instances: SchemeInstance[] = [];
   for (const cfg of configs) {
-    const factory = PROVIDER_FACTORIES[cfg.provider];
+    const factory = Object.prototype.hasOwnProperty.call(PROVIDER_FACTORIES, cfg.provider)
+      ? PROVIDER_FACTORIES[cfg.provider]
+      : undefined;
     if (!factory) {
       console.error(`[scheme-registry] unknown provider "${cfg.provider}" for scheme id "${cfg.id}" — instance skipped`);
       continue;
