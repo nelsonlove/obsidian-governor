@@ -89,6 +89,68 @@ describe("makeRegistry — building instances from config", () => {
     }
   });
 
+  // ── Item 5: duplicate scheme ids — FIRST wins, later duplicates skipped ────
+
+  test("a duplicate scheme id: the FIRST entry wins, later duplicates are skipped with console.error naming the id", () => {
+    const originalError = console.error;
+    const messages = [];
+    console.error = (msg) => messages.push(msg);
+    let reg;
+    try {
+      reg = makeRegistry([
+        { id: "jd", provider: "johnny-decimal", config: { contentDecimalFloor: 5 } },
+        { id: "jd", provider: "johnny-decimal", config: { contentDecimalFloor: 50 } },
+      ]);
+    } finally {
+      console.error = originalError;
+    }
+    assert.equal(reg.instances().length, 1);
+    const inst = reg.get("jd");
+    const notes = ["00-09 System/06 Agent tooling/06.00 JDex.md"];
+    const next = inst.provider.nextFree({ kind: "category", token: "06" }, notes);
+    // FIRST entry's config (floor 5) wins, not the second (floor 50).
+    assert.equal(inst.provider.format(next), "06.05");
+    assert.equal(messages.length, 1);
+    assert.match(messages[0], /"jd"/);
+    assert.match(messages[0], /duplicate/i);
+  });
+
+  test("three entries sharing one id: only the first registers, the other two are each reported", () => {
+    const originalError = console.error;
+    const messages = [];
+    console.error = (msg) => messages.push(msg);
+    let reg;
+    try {
+      reg = makeRegistry([
+        { id: "jd", provider: "johnny-decimal", config: { contentDecimalFloor: 1 } },
+        { id: "jd", provider: "johnny-decimal", config: { contentDecimalFloor: 2 } },
+        { id: "jd", provider: "johnny-decimal", config: { contentDecimalFloor: 3 } },
+      ]);
+    } finally {
+      console.error = originalError;
+    }
+    assert.equal(reg.instances().length, 1);
+    assert.equal(reg.get("jd").provider.parse === undefined, false);
+    assert.equal(messages.length, 2, "two later duplicates should each be reported");
+  });
+
+  test("a duplicate id does not prevent a DIFFERENT id alongside it from registering", () => {
+    const originalError = console.error;
+    console.error = () => {};
+    let reg;
+    try {
+      reg = makeRegistry([
+        { id: "jd", provider: "johnny-decimal" },
+        { id: "jd", provider: "johnny-decimal", config: { contentDecimalFloor: 5 } },
+        { id: "jd2", provider: "johnny-decimal" },
+      ]);
+    } finally {
+      console.error = originalError;
+    }
+    assert.equal(reg.instances().length, 2);
+    assert.deepEqual(reg.instances().map((i) => i.id).sort(), ["jd", "jd2"]);
+  });
+
   test("a bad config entry does not prevent good entries alongside it from registering", () => {
     const originalError = console.error;
     console.error = () => {};

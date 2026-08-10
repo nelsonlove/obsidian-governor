@@ -106,7 +106,21 @@ export class SchemeRegistry {
 
 export function makeRegistry(configs: SchemeInstanceConfig[]): SchemeRegistry {
   const instances: SchemeInstance[] = [];
+  // FIRST wins on a duplicate id (item 5 fix): a later entry sharing an
+  // already-registered id is skip-and-reported, same convention as an
+  // unknown provider or an invalid config — not silently last-wins, which
+  // let a later, possibly-unintended entry shadow an earlier one with no
+  // trace in the log. Tracked by id alongside `instances` rather than
+  // `byId.has(...)` inside the SchemeRegistry constructor, since that
+  // constructor is also used directly (see e.g. requireOneAddress's tests)
+  // and must keep its own simpler last-wins-by-Map semantics for a caller
+  // that already deduplicated.
+  const seenIds = new Set<string>();
   for (const cfg of configs) {
+    if (seenIds.has(cfg.id)) {
+      console.error(`[scheme-registry] duplicate scheme id "${cfg.id}" — first entry wins, this one is skipped`);
+      continue;
+    }
     const factory = Object.prototype.hasOwnProperty.call(PROVIDER_FACTORIES, cfg.provider)
       ? PROVIDER_FACTORIES[cfg.provider]
       : undefined;
@@ -121,6 +135,7 @@ export function makeRegistry(configs: SchemeInstanceConfig[]): SchemeRegistry {
       );
       continue;
     }
+    seenIds.add(cfg.id);
     instances.push({ id: cfg.id, providerName: cfg.provider, provider: factory.make(cfg.config) });
   }
   return new SchemeRegistry(instances);
