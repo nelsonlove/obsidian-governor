@@ -239,11 +239,17 @@ describe("cliAcceptRefusal — property:set family", () => {
 
 describe("cliAcceptRefusal — content writes (create/append/prepend + periodic)", () => {
   const fence = (v) => `---\nacceptance-status: ${v}\n---\nbody`;
-  for (const cmd of ["create", "append", "prepend", "daily:append", "weekly:prepend", "monthly:create"]) {
+  for (const cmd of ["create", "append", "prepend", "base:create", "daily:append", "weekly:prepend", "monthly:create"]) {
     test(`REJECTS ${cmd} whose content carries an accepted fence`, () => {
       assert.ok(cliAcceptRefusal(cmd, { content: fence("accepted") }, parseYaml));
     });
   }
+  test("REJECTS base:create with an accepted fence (same name=/content= writer as create)", () => {
+    assert.ok(cliAcceptRefusal("base:create", { name: "My Base", content: fence("accepted") }, parseYaml));
+  });
+  test("ALLOWS a normal base:create (no acceptance)", () => {
+    assert.equal(cliAcceptRefusal("base:create", { name: "My Base", content: "# View\n\nrows" }, parseYaml), null);
+  });
   test("REJECTS an accepted-family VALUE array form (acceptance-status: [accepted])", () => {
     assert.ok(cliAcceptRefusal("create", { content: "---\nacceptance-status: [accepted]\n---\nx" }, parseYaml));
   });
@@ -281,7 +287,7 @@ describe("cliAcceptRefusal — unrelated commands are clean", () => {
     });
   }
   test("the opaque-macro residual is named for the report/description", () => {
-    assert.deepEqual(CLI_OPAQUE_ACCEPT_RESIDUAL, ["command", "eval", "quickadd", "quickadd:run"]);
+    assert.deepEqual(CLI_OPAQUE_ACCEPT_RESIDUAL, ["command", "eval", "quickadd", "quickadd:run", "quickadd:run-template"]);
   });
 });
 

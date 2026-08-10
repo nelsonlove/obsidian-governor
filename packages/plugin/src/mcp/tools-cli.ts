@@ -104,15 +104,17 @@ export const DANGEROUS_LIST_DESC = [...DANGEROUS_EXACT].sort().join(", ") + ", a
 // defensively; get/list/remove are not introduces and are not matched.
 const PROPERTY_SET_RE = /^(?:property|frontmatter):(?:set|add|update|patch)$/;
 
-// content-writing family — create/append/prepend and the periodic-note variants.
-// `content=` carries the body (and any frontmatter fence).
+// content-writing family — create/append/prepend, the periodic-note variants,
+// and base:create (a base item written with the same name=/content= params). All
+// take a caller-controlled `content=` that carries the body (and any frontmatter
+// fence), so all are inspectable pre-exec — none is an opaque residual.
 const CONTENT_WRITE_RE =
-  /^(?:create|append|prepend|(?:daily|weekly|monthly|quarterly|yearly):(?:create|append|prepend))$/;
+  /^(?:create|append|prepend|base:create|(?:daily|weekly|monthly|quarterly|yearly):(?:create|append|prepend))$/;
 
 // Arbitrary-macro / code-execution commands that can set acceptance opaquely.
 // Named for the tool description + report — NOT blocked here (eval/command are
 // already behind the danger gate; quickadd is the live residual).
-export const CLI_OPAQUE_ACCEPT_RESIDUAL = ["command", "eval", "quickadd", "quickadd:run"];
+export const CLI_OPAQUE_ACCEPT_RESIDUAL = ["command", "eval", "quickadd", "quickadd:run", "quickadd:run-template"];
 
 /**
  * The reason a CLI invocation would introduce acceptance, or null when it is
