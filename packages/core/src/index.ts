@@ -1,4 +1,16 @@
 export { ok, fail } from "./responses.js";
+
+// ── Accept-forbidden guard (issue #104) ─────────────────────────────────────
+// The shared predicate: every VaultBackend write (ObsidianBackend via the
+// plugin's write-notes-compose.ts re-export, and FilesystemBackend directly)
+// routes through this one implementation.
+export {
+  AcceptForbiddenError,
+  acceptTransitionReason,
+  acceptForbiddenReason,
+  frontmatterOf,
+  parseGuardFrontmatter,
+} from "./accept-guard.js";
 export {
   SHARED_ANNOTATIONS,
   FS_TOOLS,

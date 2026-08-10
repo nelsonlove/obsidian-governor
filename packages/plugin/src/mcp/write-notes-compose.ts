@@ -28,143 +28,24 @@
 //     on. A uid on a template merge-payload mass-corrupts instance uids, so a
 //     write that must not be stamped simply omits the flag.
 
-/** Typed refusal for the accept-forbidden guard — rendered as `Error [accept_forbidden]`. */
-export class AcceptForbiddenError extends Error {
-  readonly code = "accept_forbidden";
-  constructor(reason: string) {
-    super(
-      `${reason}. The transport never persists acceptance — the accept verb is in no API. ` +
-        `Remove the accepted/accepted-by/accepted-on field and retry; acceptance is a human gesture only.`
-    );
-    this.name = "AcceptForbiddenError";
-  }
-}
-
-/**
- * True for a frontmatter VALUE that ASSERTS acceptance (`accepted`, `accepted-*`),
- * across every value-TYPE it can take: a scalar string, an array of them
- * (`[accepted]`), or a map wrapping one (`{value: accepted}`). String-only was
- * the S3 hole — an array/map form asserted acceptance while slipping the guard.
- */
-function isAcceptedValue(v: unknown): boolean {
-  if (typeof v === "string") {
-    const s = v.trim().toLowerCase();
-    return s === "accepted" || s.startsWith("accepted-") || s.startsWith("accepted ");
-  }
-  if (Array.isArray(v)) return v.some(isAcceptedValue);
-  if (v && typeof v === "object") return Object.values(v as Record<string, unknown>).some(isAcceptedValue);
-  return false;
-}
-
-/** A frontmatter KEY that is an acceptance-provenance field: `accepted`, `accepted-by`, `accepted-on`, `accepted_by`, … */
-function isAcceptedKey(key: string): boolean {
-  return /^accepted([-_ ].*)?$/.test(key.trim().toLowerCase());
-}
-
 // ── the accept-forbidden guard, over RESULTING vs on-disk frontmatter ─────────
 //
 // The scar is "the accept verb is in no API": no MCP write may INTRODUCE or
-// CHANGE a note's acceptance to the accepted-family. It is enforced over the
-// note that WOULD LAND ON DISK (frontmatter parsed from the final markdown,
-// body-embedded fences included — S2), for every value-type (S3), at the shared
-// write primitive so every write tool inherits it (S1) — which also denies the
-// stamp-laundering path, since the introducing write is already rejected (S4).
-//
-// The one thing it must NOT break: a legitimate content edit that carries an
-// existing (human-granted) accepted value forward UNCHANGED. So the rule is a
-// TRANSITION, not a snapshot — preserve is allowed, introduce/change is not.
-
-/** Extract & parse the leading YAML frontmatter of a markdown string; null when there is none. `parseYaml` injected. */
-export function frontmatterOf(
-  markdown: string,
-  parseYaml: (yaml: string) => unknown
-): Record<string, unknown> | null {
-  // Obsidian reads a note's frontmatter only when `---` is its very first line.
-  const m = /^\uFEFF?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(markdown);
-  if (!m) return null;
-  let parsed: unknown;
-  try {
-    parsed = parseYaml(m[1]);
-  } catch {
-    return null;
-  }
-  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
-}
-
-/** Stable deep-equal over JSON-serializable frontmatter values (for the preserve-unchanged allowance). */
-function fmEqual(a: unknown, b: unknown): boolean {
-  if (a === b) return true;
-  if (!a || !b || typeof a !== "object" || typeof b !== "object") return false;
-  if (Array.isArray(a) !== Array.isArray(b)) return false;
-  const ao = a as Record<string, unknown>;
-  const bo = b as Record<string, unknown>;
-  const ak = Object.keys(ao);
-  const bk = Object.keys(bo);
-  if (ak.length !== bk.length) return false;
-  return ak.every((k) => Object.prototype.hasOwnProperty.call(bo, k) && fmEqual(ao[k], bo[k]));
-}
-
-/** Case-insensitive lookup: the presence + value of `key` in `fm`, keys matched by trimmed lowercase. */
-function lookupCI(fm: Record<string, unknown> | null | undefined, key: string): { present: boolean; value: unknown } {
-  if (fm) {
-    const want = key.trim().toLowerCase();
-    for (const k of Object.keys(fm)) if (k.trim().toLowerCase() === want) return { present: true, value: fm[k] };
-  }
-  return { present: false, value: undefined };
-}
-
-/**
- * The reason a write is accept-forbidden given the note's RESULTING frontmatter
- * and its BEFORE-on-disk frontmatter, or null when the write is clean.
- *
- * REJECTED when the result INTRODUCES or CHANGES an accepted-family assertion:
- *   • any acceptance-provenance key (`accepted`, `accepted-by`, `accepted-on`,
- *     `accepted_*`) present in the result that was not already present on disk
- *     with an EQUAL value; or
- *   • `acceptance-status` (`acceptance_status`) whose resulting value ASSERTS
- *     accepted (string / array / map) and did not already hold that exact value.
- * Preserving an existing (human-set) value verbatim is ALLOWED.
- */
-export function acceptTransitionReason(
-  before: Record<string, unknown> | null | undefined,
-  after: Record<string, unknown> | null | undefined
-): string | null {
-  if (!after) return null;
-  for (const key of Object.keys(after)) {
-    const kl = key.trim().toLowerCase();
-    if (isAcceptedKey(key)) {
-      const prev = lookupCI(before, key);
-      if (!(prev.present && fmEqual(prev.value, after[key]))) {
-        return `write would ${prev.present ? "change" : "introduce"} the acceptance field '${key}'`;
-      }
-    } else if (kl === "acceptance-status" || kl === "acceptance_status") {
-      if (isAcceptedValue(after[key])) {
-        const prev = lookupCI(before, key);
-        if (!(prev.present && fmEqual(prev.value, after[key]))) {
-          return `write would set ${key} to an accepted value`;
-        }
-      }
-    }
-  }
-  return null;
-}
-
-/**
- * The reason a frontmatter block is accept-forbidden, or null if it is clean.
- * Checks the CALLER's payload — a caller trying to write acceptance through the
- * transport — not the existing on-disk note. Applies whether or not `stamp` is set.
- */
-export function acceptForbiddenReason(fm: Record<string, unknown> | undefined | null): string | null {
-  if (!fm) return null;
-  for (const key of Object.keys(fm)) {
-    if (isAcceptedKey(key)) return `frontmatter carries the acceptance field '${key}'`;
-    const k = key.trim().toLowerCase();
-    if ((k === "acceptance-status" || k === "acceptance_status") && isAcceptedValue(fm[key])) {
-      return `frontmatter sets ${key}='${String(fm[key])}'`;
-    }
-  }
-  return null;
-}
+// CHANGE a note's acceptance to the accepted-family. Extracted to
+// packages/core/src/accept-guard.ts (issue #104) so FilesystemBackend inherits
+// the SAME predicate ObsidianBackend uses — re-exported here unchanged so
+// every existing import of this module (obsidian-backend.ts, tools-cli.ts,
+// tests) keeps working without a call-site change. See accept-guard.ts for
+// the full invariant writeup and the (before, after) transition semantics
+// (preserve an existing accepted value verbatim is allowed; introduce/change
+// is not).
+import {
+  AcceptForbiddenError,
+  acceptTransitionReason,
+  acceptForbiddenReason,
+  frontmatterOf,
+} from "@vault-mcp/core";
+export { AcceptForbiddenError, acceptTransitionReason, acceptForbiddenReason, frontmatterOf };
 
 // ── canonical frontmatter field order ────────────────────────────────────────
 //
