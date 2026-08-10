@@ -153,6 +153,35 @@ describe("membersOf — notes whose address falls inside the scope", () => {
       ["27001", "27002"],
     );
   });
+
+  test("membersOf on the category token of an expanded AREA (e.g. '92') still returns that band's members, even though the category itself can't allocate decimals (item 1)", () => {
+    const members = p.membersOf({ kind: "category", token: "92" }, NOTES);
+    assert.deepEqual(
+      members.map((m) => m.address),
+      ["92021.10"],
+    );
+  });
+
+  // ── Item 2: area listing collates an expanded category's members by
+  // [category, item-within-category], not by raw numeric value ──────────────
+
+  test("area listing sorts an expanded category's members between its numeric neighbors, not after every plain category", () => {
+    // File order deliberately scrambled: with the old buggy sort key
+    // ([raw, -1] for an expanded-item, compared directly against a plain
+    // category's [category, decimal]), 27001/27002 would sort AFTER 28.11
+    // (27001 > 28 numerically) instead of between 26.11 and 28.11.
+    const notes = [
+      "20-29 Something/28 Foo/28.11 X.md",
+      "20-29 Something/27 Expanded/27002 Second.md",
+      "20-29 Something/26 Bar/26.11 Y.md",
+      "20-29 Something/27 Expanded/27001 First.md",
+    ];
+    const members = p.membersOf({ kind: "area", token: "20-29" }, notes);
+    assert.deepEqual(
+      members.map((m) => m.address),
+      ["26.11", "27001", "27002", "28.11"],
+    );
+  });
 });
 
 // ── expectedFolder ───────────────────────────────────────────────────────────
@@ -232,6 +261,18 @@ describe("nextFree — next unused address in a scope", () => {
     assert.equal(p.nextFree({ kind: "area", token: "00-09" }, NOTES), null);
   });
 
+  // ── Item 1: a category scope inside an expanded AREA is not decimal-allocatable ──
+
+  test("a category scope whose area is expanded (e.g. '92', area 90-99) is NOT decimal-allocatable -> null (item 1 bug fix)", () => {
+    // Before the fix this returned "92.10" — an invalid id: expanded bands
+    // use 5-digit band-sequential ids, never per-category decimals.
+    assert.equal(p.nextFree({ kind: "category", token: "92" }, NOTES), null);
+  });
+
+  test("a category scope whose area is expanded stays null regardless of notes content", () => {
+    assert.equal(p.nextFree({ kind: "category", token: "92" }, []), null);
+  });
+
   test("an expanded area allocates the next 5-digit sequential id", () => {
     assert.equal(p.format(p.nextFree({ kind: "area", token: "90-99" }, NOTES)), "92022");
   });
@@ -281,5 +322,47 @@ describe("nextFree — configurable contentDecimalFloor (default preserves today
       "00-09 System/06 Agent tooling/06.05 Taken.md",
     ];
     assert.equal(withFloor5.format(withFloor5.nextFree({ kind: "category", token: "06" }, notes)), "06.06");
+  });
+});
+
+// ── Item 3: allocatable — structurally-never-allocatable vs genuinely full ──
+
+describe("allocatable — whether a scope kind can EVER allocate, independent of vault content", () => {
+  test("a plain category is allocatable", () => {
+    assert.deepEqual(p.allocatable({ kind: "category", token: "06" }), { allocatable: true });
+  });
+
+  test("an expanded category is allocatable", () => {
+    assert.deepEqual(p.allocatable({ kind: "category", token: "27" }), { allocatable: true });
+  });
+
+  test("an expanded area is allocatable", () => {
+    assert.deepEqual(p.allocatable({ kind: "area", token: "90-99" }), { allocatable: true });
+  });
+
+  test("a plain (non-expanded) area is not allocatable, with a hint", () => {
+    const result = p.allocatable({ kind: "area", token: "00-09" });
+    assert.equal(result.allocatable, false);
+    assert.equal(typeof result.hint, "string");
+    assert.ok(result.hint.length > 0);
+  });
+
+  test("a category folded into an expanded area's band is not allocatable, hinting the band scope by name", () => {
+    const result = p.allocatable({ kind: "category", token: "92" });
+    assert.equal(result.allocatable, false);
+    assert.match(result.hint, /90-99/);
+  });
+
+  test("an expanded-item scope (fractal-id allocation) is not allocatable", () => {
+    const result = p.allocatable({ kind: "expanded-item", token: "92021" });
+    assert.equal(result.allocatable, false);
+  });
+
+  test("allocatable is a structural (config-only) judgment, independent of notes — it takes no notes argument", () => {
+    // Sanity: calling it twice with the same scope always agrees, since it
+    // never consults vault content.
+    const a = p.allocatable({ kind: "category", token: "92" });
+    const b = p.allocatable({ kind: "category", token: "92" });
+    assert.deepEqual(a, b);
   });
 });

@@ -83,6 +83,18 @@ describe("registration", () => {
     assert.match(desc, /allowlist/);
     assert.match(desc, /truncated/);
   });
+
+  test("obsidian_next_address's description documents the allocatable vs exhausted distinction (item 3)", () => {
+    const { server } = toolServer();
+    const desc = server.tools.get("obsidian_next_address").def.description.toLowerCase();
+    assert.match(desc, /allocatable/);
+  });
+
+  test("obsidian_list_scope's description documents the allocatable vs exhausted distinction (item 3)", () => {
+    const { server } = toolServer();
+    const desc = server.tools.get("obsidian_list_scope").def.description.toLowerCase();
+    assert.match(desc, /allocatable/);
+  });
 });
 
 // ── obsidian_schemes ──────────────────────────────────────────────────────────
@@ -245,15 +257,41 @@ describe("obsidian_next_address", () => {
   test("category scope: lowest unused content decimal", async () => {
     const { call } = toolServer();
     const res = await call("obsidian_next_address", { scope: "06" });
-    assert.deepEqual(res.structuredContent, { scope: "06", next: "06.10", exhausted: false });
+    assert.deepEqual(res.structuredContent, { scope: "06", next: "06.10", exhausted: false, allocatable: true });
   });
 
-  test("a full category reports exhausted: true, next: null", async () => {
+  test("a full category reports exhausted: true, next: null, allocatable: true (it CAN allocate, it's just full)", async () => {
     const filler = [];
     for (let n = 10; n <= 99; n++) filler.push(`00-09 System/06 Agent tooling/06.${n} Filler.md`);
     const { call } = toolServer({ notes: filler });
     const res = await call("obsidian_next_address", { scope: "06" });
-    assert.deepEqual(res.structuredContent, { scope: "06", next: null, exhausted: true });
+    assert.deepEqual(res.structuredContent, { scope: "06", next: null, exhausted: true, allocatable: true });
+  });
+
+  // ── Item 3: allocatable — never-allocatable scopes distinguished from full ones ──
+
+  test("a plain (non-expanded) area is allocatable: false, exhausted: false, with a hint", async () => {
+    const { call } = toolServer();
+    const res = await call("obsidian_next_address", { scope: "00-09" });
+    assert.deepEqual(res.structuredContent, {
+      scope: "00-09",
+      next: null,
+      exhausted: false,
+      allocatable: false,
+      hint: "a plain area has no address of its own — allocate within one of its categories",
+    });
+  });
+
+  test("a category folded into an expanded area's band (item 1) is allocatable: false, hinting the band scope by name", async () => {
+    const { call } = toolServer();
+    const res = await call("obsidian_next_address", { scope: "92" });
+    assert.deepEqual(res.structuredContent, {
+      scope: "92",
+      next: null,
+      exhausted: false,
+      allocatable: false,
+      hint: 'allocate via scope "90-99"',
+    });
   });
 
   test("an unparseable scope is a coded invalid_scope refusal", async () => {
@@ -332,12 +370,44 @@ describe("obsidian_list_scope", () => {
     assert.equal(res.structuredContent.free.truncated, false);
   });
 
-  test("a fully-exhausted scope (0 free slots) also reports truncated: false", async () => {
+  test("a fully-exhausted scope (0 free slots) also reports truncated: false, allocatable: true", async () => {
     const filler = [];
     for (let n = 10; n <= 99; n++) filler.push(`00-09 System/06 Agent tooling/06.${n} Filler.md`);
     const { call } = toolServer({ notes: filler });
     const res = await call("obsidian_list_scope", { scope: "06" });
-    assert.deepEqual(res.structuredContent.free, { next: null, gaps: [], truncated: false });
+    assert.deepEqual(res.structuredContent.free, { next: null, gaps: [], truncated: false, allocatable: true });
+  });
+
+  // ── Item 3: allocatable — never-allocatable scopes distinguished from full ones ──
+
+  test("a plain (non-expanded) area's free block reports allocatable: false with a hint, no gap probing", async () => {
+    const { call } = toolServer();
+    const res = await call("obsidian_list_scope", { scope: "00-09" });
+    assert.deepEqual(res.structuredContent.free, {
+      next: null,
+      gaps: [],
+      truncated: false,
+      allocatable: false,
+      hint: "a plain area has no address of its own — allocate within one of its categories",
+    });
+  });
+
+  test("a category folded into an expanded area's band still lists its own members, but free.allocatable is false", async () => {
+    const { call } = toolServer();
+    const res = await call("obsidian_list_scope", { scope: "92" });
+    // membersOf stays coherent (item 1's note): the fractal-id under 92021 is
+    // still a member of category "92" even though "92" itself can't allocate.
+    assert.deepEqual(
+      res.structuredContent.members.map((m) => m.address),
+      ["92021.10", "92021.11"],
+    );
+    assert.deepEqual(res.structuredContent.free, {
+      next: null,
+      gaps: [],
+      truncated: false,
+      allocatable: false,
+      hint: 'allocate via scope "90-99"',
+    });
   });
 
   test("an expanded scope's synthetic sequential ids are truncated too, past the cap", async () => {

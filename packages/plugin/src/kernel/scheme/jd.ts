@@ -317,6 +317,44 @@ function scopesAlongPath(path: string, cfg: JdConfig): Array<{ scope: Scope; ind
   return chain;
 }
 
+/**
+ * Whether `scope` is EVER capable of allocation, independent of vault
+ * content (a purely structural, config-only judgment — no `notes` argument,
+ * unlike `nextFree`). This is the piece the tools layer (obsidian_next_address
+ * / obsidian_list_scope) needs to distinguish "this kind of scope can never
+ * allocate" (`allocatable: false`, with a hint pointing at where allocation
+ * IS possible) from "this scope is allocatable but genuinely full right now"
+ * (`allocatable: true`, `exhausted: true` from `nextFree` returning null over
+ * the actual notes listing) — both of which `nextFree` alone reports as an
+ * indistinguishable null.
+ *
+ * Mirrors nextFree's own three-way dispatch (plain vs. expanded category,
+ * plain vs. expanded area) structurally, rather than by probing
+ * `nextFree(scope, [])` — that would give the same answer for every kind
+ * here (an allocate-capable kind always has room when nothing is used yet),
+ * but expresses the "which KIND is this" judgment implicitly instead of
+ * naming it, and provides no hint text.
+ */
+function allocatabilityOf(scope: Scope, cfg: JdConfig): { allocatable: boolean; hint?: string } {
+  if (scope.kind === "category") {
+    if (cfg.expandedCategories.includes(scope.token)) return { allocatable: true };
+    const area = areaOfCategory(scope.token);
+    if (cfg.expandedAreas.includes(area)) {
+      // Item 1's case: this category's band allocates instead.
+      return { allocatable: false, hint: `allocate via scope "${area}"` };
+    }
+    return { allocatable: true };
+  }
+  if (scope.kind === "area") {
+    if (cfg.expandedAreas.includes(scope.token)) return { allocatable: true };
+    return { allocatable: false, hint: "a plain area has no address of its own — allocate within one of its categories" };
+  }
+  if (scope.kind === "expanded-item") {
+    return { allocatable: false, hint: "fractal-id allocation within an expanded item is not part of this version's allocate surface" };
+  }
+  return { allocatable: false };
+}
+
 // ── the provider ─────────────────────────────────────────────────────────────
 
 export function jdProvider(cfg: JdConfig): ScopeProvider {
@@ -419,6 +457,14 @@ export function jdProvider(cfg: JdConfig): ScopeProvider {
       // category (ids) or the 5-digit item number (expanded-item/fractal-id);
       // `secondary` is the decimal part where one exists, else -1 so a bare
       // container sorts before its own content.
+      // expanded-item's primary key is its CATEGORY (not its raw 5-digit
+      // value) so an expanded category's members collate alongside their
+      // numeric neighbors within the enclosing area — e.g. area 20-29 with
+      // category 27 expanded: 27001/27002 must sort between 26.x and 28.x,
+      // not after 28.x/29.x the way comparing raw 27001 against a bare 28
+      // would put them (item 2 bug fix). The secondary key (p.raw itself)
+      // only has to break ties WITHIN one category, where it already sorts
+      // in allocation order — no need to subtract the category prefix out.
       const sortKey = (p: ParsedId): [number, number] => {
         switch (p.kind) {
           case "id":
@@ -426,7 +472,7 @@ export function jdProvider(cfg: JdConfig): ScopeProvider {
           case "category":
             return [parseInt(p.category, 10), -1];
           case "expanded-item":
-            return [parseInt(p.raw, 10), -1];
+            return [parseInt(p.category, 10), parseInt(p.raw, 10)];
           case "fractal-id":
             return [parseInt(p.raw.split(".")[0], 10), parseInt(p.decimal as string, 10)];
           default:
@@ -509,6 +555,17 @@ export function jdProvider(cfg: JdConfig): ScopeProvider {
         if (next > base + 999) return null;
         return parse(String(next).padStart(5, "0"));
       }
+      if (scope.kind === "category" && cfg.expandedAreas.includes(areaOfCategory(scope.token))) {
+        // Item 1 bug fix: a category folded into an expanded AREA's band
+        // (e.g. "92" under band "90-99") has no per-category decimal space
+        // of its own — the whole band uses 5-digit band-sequential ids
+        // instead. Allocating "92.10" here would be an invalid id; the band
+        // scope itself (kind "area", token "90-99") is where allocation
+        // happens. See `allocatable` below for the structural (config-only)
+        // version of this same judgment, which the tool layer uses to
+        // report this as "never allocatable" rather than "exhausted".
+        return null;
+      }
       if (scope.kind === "category") {
         const used = new Set<number>();
         for (const note of notes) {
@@ -540,6 +597,10 @@ export function jdProvider(cfg: JdConfig): ScopeProvider {
       // Plain (non-expanded) area, or an expanded-item scope: v1 does not
       // allocate here.
       return null;
+    },
+
+    allocatable(scope: Scope) {
+      return allocatabilityOf(scope, cfg);
     },
   };
 }
