@@ -178,6 +178,8 @@ journal, the path allowlist, and third-party tool trust, live in
 
 Deep-dive index with the architecture story: [docs/README.md](docs/README.md).
 
+**Where this is going:** [the vision walkthrough](docs/vision-walkthrough.md) — the whole product written as if shipped, with an appendix mapping every claim to today's status. The roadmap, in narrative order.
+
 ## Repo
 
 `~/repos/obsidian-vault-mcp-plugin`. See `CLAUDE.md` for the locked architecture decisions.
