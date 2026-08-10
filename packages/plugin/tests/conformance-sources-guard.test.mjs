@@ -48,7 +48,14 @@ describe("#125 — an ABSENT sources listing refuses; an EMPTY one is a real ans
     });
 
     test(`${id}: snapshot with an EMPTY sources listing runs cleanly (empty is a real answer)`, () => {
-      const findings = runEngine([make()], { ...base, sources: [], blueprints: [] });
+      // Every listing the pack needs, all EMPTY — the point is that empty is a
+      // real answer. drift additionally needs files/dirs/obsidianConfig/walkOrder,
+      // so a fixture supplying only sources would fail for the right reason and
+      // obscure what this test is about.
+      const findings = runEngine([make()], {
+        ...base,
+        sources: [], blueprints: [], files: [], dirs: [], obsidianConfig: [], walkOrder: [],
+      });
       const errs = findings.filter((f) => f.script === ENGINE_ID && f.check === "pack_error");
       assert.deepEqual(errs, [], `${id} must accept a genuinely empty listing`);
     });
