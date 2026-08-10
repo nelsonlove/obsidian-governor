@@ -76,6 +76,7 @@ export class ModuleRegistry {
     return [...this.constructionProblems, ...this.runProblems];
   }
 
+
   constructor(modules: VaultModule[], settings: ModuleSettings = {}) {
     this.settings = settings;
     const seen = new Set<string>();
@@ -135,8 +136,21 @@ export class ModuleRegistry {
    * packaging bug, not a runtime race), and refuses forbidden names (the
    * accept tripwire above). A module whose register() throws loses its own
    * remaining tools and nothing else.
+   *
+   * `opts.gate` lets the CALLER refuse a registration too (the mount's
+   * read-only-only rule): return a problem string to refuse, null to accept.
+   * It runs BEFORE the registration is recorded, so a gate-refused tool never
+   * appears in describe() and never reserves its name — the bookkeeping
+   * describes what actually reached the registrar, not what was attempted.
+   * (This is why the gate is an option here rather than a wrapper around
+   * `reg`: an outer wrapper refusing AFTER the fact would leave describe()
+   * claiming a tool that was never registered.)
    */
-  registerAll(reg: ToolRegistrar, host: ModuleHostCtx): void {
+  registerAll(
+    reg: ToolRegistrar,
+    host: ModuleHostCtx,
+    opts: { gate?: (name: string, def: ToolDef) => string | null } = {},
+  ): void {
     this.contributed = new Map();
     this.runProblems = [];
     const taken = new Set<string>();
@@ -166,6 +180,11 @@ export class ModuleRegistry {
         }
         if (taken.has(name)) {
           this.runProblems.push(`module '${m.id}' tried to register '${name}' — refused: name already registered`);
+          return;
+        }
+        const refusal = opts.gate?.(name, def) ?? null;
+        if (refusal !== null) {
+          this.runProblems.push(`module '${m.id}' tried to register '${name}' — refused: ${refusal}`);
           return;
         }
         taken.add(name);

@@ -146,12 +146,20 @@ describe("scope-provider read-only tools (#task-6)", () => {
     }
   });
 
-  test("server.ts wires registerSchemeTools beside registerUidTools", async () => {
+  test("server.ts reaches the scheme tools through the module-host mount", async () => {
+    // The mount step moved scheme (and vocab) registration INSIDE the
+    // ModuleRegistry: server.ts calls mountModules, and modules-mount.ts is
+    // the one place registerSchemeTools is invoked (pinned exhaustively by
+    // the source scan in modules-mount.test.mjs — this pin covers the wiring
+    // direction: the mount is actually reached from the built server).
     const serverPath = resolve(HERE, "../src/mcp/server.ts");
     const source = await readFile(serverPath, "utf-8");
+    assert.ok(source.includes("mountModules"), "server.ts must call mountModules");
+    const mountPath = resolve(HERE, "../src/mcp/modules-mount.ts");
+    const mountSource = await readFile(mountPath, "utf-8");
     assert.ok(
-      source.includes("registerSchemeTools") && source.includes("tools-scheme"),
-      "server.ts must import and call registerSchemeTools",
+      mountSource.includes("registerSchemeTools") && mountSource.includes("tools-scheme"),
+      "modules-mount.ts must import and call registerSchemeTools",
     );
   });
 

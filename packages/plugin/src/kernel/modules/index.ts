@@ -1,8 +1,9 @@
 // kernel/modules — the module host: the Module contract, the registry that
 // instantiates enabled modules from settings, and the adapter for the
-// existing registerXTools idiom. Additive skeleton (nothing imports this
-// yet); the server.ts mount and the kernel/index.ts re-export are the later,
-// sequenced integration step.
+// existing registerXTools idiom. Mounted since the module-host-mount step:
+// mcp/modules-mount.ts assembles the built-in capability modules and
+// server.ts registers them through the ModuleRegistry; kernel/index.ts
+// re-exports this barrel.
 export type {
   ModuleHostCtx,
   ModulePosture,

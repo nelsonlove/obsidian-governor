@@ -10,9 +10,9 @@ import { registerCliTools } from "./tools-cli.js";
 import { registerExternalTools } from "./external-tools.js";
 import { registerLockTools } from "./tools-locks.js";
 import { registerUidTools } from "./tools-uid.js";
-import { registerSchemeTools } from "./tools-scheme.js";
 import { registerLinkTools, obsidianLinkSource } from "./tools-links.js";
-import { registerVocabTools, obsidianVocabSource } from "./tools-vocab.js";
+import { obsidianVocabSource } from "./tools-vocab.js";
+import { mountModules } from "./modules-mount.js";
 import { registerCodeModeTools, makeCaptureRegister, type CapturedRegistry } from "./tools-code-mode.js";
 import { makeGuarded, withKernelArgs } from "./guarded.js";
 import { visiblePaths } from "../guard.js";
@@ -139,26 +139,29 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   // Addressing by uid needs no tool of its own — `uid:<value>` binds at the
   // interception point above — so this is purely the lookup, in both directions.
   registerUidTools(server, ctx);
-  // ── scope-provider read-only tools (schemes/resolve/next/list/expected) ────
-  // registry() is rebuilt from settings on every call, so a scheme config
-  // edit lands live without a reconnect — the same reason ObsidianBackend's
-  // `visible` above is resolved per call rather than once at connect time.
-  registerSchemeTools(server, {
-    registry: () => makeRegistry(ctx.getSettings().schemes ?? DEFAULT_SCHEMES),
-    notes: () => app.vault.getMarkdownFiles().map((f) => f.path),
+  // ── capability modules: scope-provider + vocab, mounted through the host ───
+  // Ruled decision #2 realized: the two capability modules register THROUGH
+  // the ModuleRegistry — settings-toggleable (`modules.<id>.enabled`), behind
+  // the accept/baseline tripwire, collision refusal, and the mount's
+  // read-only-only registrar. The registrar handed over is the PATCHED
+  // registerTool above, so module tools land at the same guard/queue/journal
+  // interception point as every hand-registered tool, in both modes.
+  const moduleRegistry = mountModules((name, def, handler) => (server as any).registerTool(name, def, handler), {
     getSettings: () => ctx.getSettings(),
+    getVocabularies: ctx.getVocabularies,
+    schemeNotes: () => app.vault.getMarkdownFiles().map((f) => f.path),
+    vocabSource: obsidianVocabSource(app),
   });
+  // Skip-and-report only reports if someone reads the report: every mount
+  // defect (unknown module id in settings, a gate-refused tool, a config
+  // finding) lands loudly in the console rather than evaporating with the
+  // discarded registry. console.error, not a throw — a degraded module
+  // surface must not cost the connection (the journal's own convention).
+  for (const p of moduleRegistry.problems) console.error("[vault-mcp] module host:", p);
   // ── link drift, reported not repaired (slice 2.2) ──────────────────────────
   // Read-only by construction: moves already heal their own links through
   // fileManager.renameFile, so this reports the drift that came from OUTSIDE.
   registerLinkTools(server, obsidianLinkSource(app), ctx);
-  // ── the controlled vocabulary's read surface (step 5, vocab provider) ──────
-  // Validation and resolution only — the enforcement ladder is a later slice,
-  // and the whole-vault rule pack (kernel/vocab/findings.ts) is not a tool.
-  registerVocabTools(server, obsidianVocabSource(app), {
-    getSettings: ctx.getSettings,
-    getVocabularies: ctx.getVocabularies,
-  });
   // ── official-CLI proxy — conditional on the CLI binary being installed ──────
   // parseYaml is injected for the accept-forbidden guard's content-fence scan
   // (tools-cli.ts stays obsidian-free; obsidian is types-only in node tests).

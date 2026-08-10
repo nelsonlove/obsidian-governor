@@ -191,6 +191,43 @@ export class VaultMcpSettingTab extends PluginSettingTab {
         });
       });
 
+    // Modules. The capability modules mounted through the module host
+    // (kernel/modules/, mcp/modules-mount.ts): each toggle unmounts that
+    // module's whole tool surface. Registration is per-connection, so changes
+    // land on the next session connect — no reload needed.
+    containerEl.createEl("h3", { text: "Modules" });
+    const moduleRows: Array<{ id: string; name: string; desc: string }> = [
+      {
+        id: "scheme",
+        name: "Scope provider module",
+        desc:
+          "The five scheme tools (obsidian_schemes, resolve/next address, list scope, expected location). " +
+          "`jd:` addressing in path arguments is kernel-level (like `uid:`) and stays available either way. " +
+          "Takes effect on the next session connect.",
+      },
+      {
+        id: "vocab",
+        name: "Vocabulary provider module",
+        desc:
+          "The controlled-vocabulary tools (obsidian_vocabularies, resolve/validate terms, list vocabulary) over " +
+          "the configured registries and glossary. Takes effect on the next session connect.",
+      },
+    ];
+    for (const row of moduleRows) {
+      new Setting(containerEl)
+        .setName(row.name)
+        .setDesc(row.desc)
+        .addToggle((t) =>
+          t.setValue(this.plugin.settings.modules[row.id]?.enabled ?? true).onChange(async (value) => {
+            this.plugin.settings.modules = {
+              ...this.plugin.settings.modules,
+              [row.id]: { ...this.plugin.settings.modules[row.id], enabled: value },
+            };
+            await this.plugin.saveSettings();
+          })
+        );
+    }
+
     // Schemes. Scheme semantics are configuration, not hardwired (Nelson's
     // ruling): only the default "jd" instance's config gets a UI here —
     // additional instances or exotic overrides stay data.json-editable, no
