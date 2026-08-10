@@ -25,6 +25,7 @@ import { join, relative, resolve, dirname, basename, sep } from "node:path";
 import { parseAllFrontmatter } from "@vault-mcp/core";
 import type { VocabNote } from "../kernel/vocab/blueprint.js";
 import type { SourceFile, VaultSnapshot } from "./rule-pack.js";
+import { intendedRealPath, isInside } from "./path-identity.js";
 
 export interface SnapshotOpts {
   /** Absolute content root to walk. */
@@ -69,51 +70,25 @@ const DEFAULT_SKIP = new Set([".git", ".obsidian", ".trash", "node_modules"]);
 // that exact question had three live bypasses — a decoupled `--root`, a
 // hardlink, and a realpath-fallback that could be forced). Those helpers are
 // not exported from `cli.ts`, and `cli.ts`'s baseline/rebaseline guard is live
-// acceptance-path code this issue is scoped to leave untouched, so `realish`
-// and `isWithin` below are a FRESH implementation of the SAME technique —
-// realpath resolution, a dangling symlink followed by hand rather than
-// silently falling back to a lexical resolve, no fallback that could launder
-// an alias — not an import. See the PR body for why.
-
-/** The real path `p` resolves to, following symlinks — including a DANGLING
- * symlink, whose target is followed by hand rather than treated as
- * non-existent. Silently falling back to a lexical resolve on a resolution
- * failure is itself a bypass (the #144 lesson): a dangling symlink aimed
- * outside the boundary must still resolve to its true, out-of-boundary
- * target, not to its own in-boundary name. Returns null only when identity
- * genuinely cannot be established (a symlink loop, or an unreadable
- * ancestor); callers must treat null as refuse, never as "not a match". */
-function realish(p: string, depth = 0): string | null {
-  if (depth > 8) return null; // symlink loop
-  const abs = resolve(p);
-  try {
-    return realpathSync(abs);
-  } catch {
-    /* does not exist yet, or a dangling link — fall through */
-  }
-  try {
-    const st = lstatSync(abs);
-    if (st.isSymbolicLink()) {
-      return realish(resolve(dirname(abs), readlinkSync(abs)), depth + 1);
-    }
-  } catch {
-    /* no lstat either — a plain non-existent path; resolve its parent */
-  }
-  const parent = dirname(abs);
-  if (parent === abs) return null;
-  const realParent = realish(parent, depth + 1);
-  return realParent === null ? null : resolve(realParent, basename(abs));
-}
-
-/** `child` is inside `parent` (or is `parent`), compared on already-resolved
- * paths. The separator is appended to `parent` before the prefix check so
- * `/vault-2` is never mistaken for being inside `/vault` — a plain
- * `startsWith` would launder exactly that case (also the trailing-slash
- * variant: `resolve()` already strips a caller's trailing slash on both
- * sides before this runs). */
-function isWithin(parent: string, child: string): boolean {
-  return child === parent || child.startsWith(parent.endsWith(sep) ? parent : parent + sep);
-}
+// PATH IDENTITY IS IMPORTED, NEVER RE-IMPLEMENTED (#169).
+//
+// `realish`/`isWithin` used to live here as a fresh implementation of the same
+// technique, because #144's helpers were unexported and that file is live
+// acceptance-path code. They are exported now, so this imports them.
+//
+// The reason this matters more than ordinary DRY: the string-comparison
+// predecessor of this comparison was bypassed THREE separate ways (#144 —
+// caller-controlled `root`, hardlink/case alias, and a realpath fallback that
+// could fabricate the record). Two copies of a security comparison means two
+// places a future bypass has to be fixed, and only one of them will be.
+//
+// Verified equivalent before collapsing rather than assumed: a differential run
+// over 12 path shapes (resolvable and dangling symlinks, a symlink loop, a
+// non-existent path, `.`/`..`, the filesystem root) and 6 containment pairs
+// found ZERO divergence. "Same technique" is not "same behaviour" — the two
+// did differ cosmetically (`resolve` vs `join` on the re-appended basename;
+// `isInside` resolves its inputs where `isWithin` assumed pre-resolved ones),
+// and `isInside` is the strictly more defensive of the pair.
 
 /** A single path SEGMENT (one directory or file name — no separators) that is
  * refused EVEN WHEN it falls inside a declared boundary and even when the
@@ -180,7 +155,7 @@ function declaredBoundary(opts: SnapshotOpts): string | null {
  * the symlink is necessarily entitled to see echoed back.
  */
 function assertRootPermitted(opts: SnapshotOpts): string {
-  const realRoot = realish(opts.root);
+  const realRoot = intendedRealPath(opts.root);
   if (realRoot === null) {
     throw new Error(
       `buildSnapshot: refusing to walk ${opts.root} — its real path could not be established (unreadable ` +
@@ -206,7 +181,7 @@ function assertRootPermitted(opts: SnapshotOpts): string {
     );
   }
 
-  const realBoundary = realish(boundary);
+  const realBoundary = intendedRealPath(boundary);
   if (realBoundary === null) {
     throw new Error(
       `buildSnapshot: refusing to walk — the declared boundary could not be resolved. An indeterminate ` +
@@ -214,7 +189,7 @@ function assertRootPermitted(opts: SnapshotOpts): string {
     );
   }
 
-  if (!isWithin(realBoundary, realRoot)) {
+  if (!isInside(realBoundary, realRoot)) {
     throw new Error(
       `buildSnapshot: refusing to walk ${opts.root} — it resolves outside the declared content-root boundary. ` +
         `A corpus measurement may only read notes within the vault its boundary declares.`,
@@ -307,7 +282,7 @@ export async function buildSnapshot(opts: SnapshotOpts): Promise<VaultSnapshot> 
       // will actually honor, so it gets the identical checks `root` got,
       // BEFORE that read happens.
       if (entry.isSymbolicLink()) {
-        const real = realish(abs);
+        const real = intendedRealPath(abs);
         if (real === null) {
           throw new Error(
             `buildSnapshot: refusing to read ${vaultPath} — its real path could not be established (unreadable ` +
@@ -321,7 +296,7 @@ export async function buildSnapshot(opts: SnapshotOpts): Promise<VaultSnapshot> 
               `territory (${denied}). This is refused even though it sits inside an otherwise-permitted tree.`,
           );
         }
-        if (!isWithin(realBoundary, real)) {
+        if (!isInside(realBoundary, real)) {
           throw new Error(
             `buildSnapshot: refusing to read ${vaultPath} — it is a symlink resolving outside the declared ` +
               `content-root boundary.`,

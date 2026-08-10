@@ -18,6 +18,7 @@ import { pathToFileURL } from "node:url";
 import { VocabRegistry, DEFAULT_VOCABULARIES, type VocabInstanceSettings } from "../kernel/vocab/registry.js";
 import { makeRegistry, DEFAULT_SCHEMES, type SchemeInstanceConfig } from "../kernel/scheme/registry.js";
 import { buildSnapshot } from "./snapshot.js";
+import { intendedRealPath, sameFile, isInside } from "./path-identity.js";
 import { runEngine, ENGINE_ID } from "./engine.js";
 import { vocabPack, schemePack, structurePack, portPack, stePack, driftPack } from "./packs/index.js";
 import { vaultConventionsFrom } from "./vault-conventions.js";
@@ -264,69 +265,6 @@ export function coverageRefusal(
  * thing. Resolved both sides, and through symlinks where they exist, so an
  * alias cannot launder the identity either.
  */
-/**
- * The path a write to `p` would actually land on, following symlinks, WITHOUT
- * silently degrading when `p` does not exist yet.
- *
- * `realpathSync` throws on a non-existent path, and the previous version caught
- * that and fell back to `resolve()`. That fallback was the bug (#144): it could
- * not tell "does not exist" from "could not resolve", so a DANGLING symlink
- * aimed at the live record resolved to its own name, compared unequal, and the
- * write was allowed — creating the live acceptance record from nothing. So:
- * resolve the deepest existing ancestor for real, then re-append the segments
- * below it. A dangling symlink is followed by hand rather than ignored.
- *
- * Returns null when identity genuinely cannot be established; every caller
- * treats null as "refuse", never as "not the live one".
- *
- * EXPORTED deliberately (#168): this technique — realpath resolution, a
- * dangling symlink followed by hand, no lexical fallback that could launder an
- * alias — is security-critical and was being reimplemented elsewhere precisely
- * because it was unexported. A second copy is a second place a bypass has to be
- * fixed, and this codebase has spent a week deleting duplicated guards. One
- * implementation, imported.
- */
-export function intendedRealPath(p: string, depth = 0): string | null {
-  if (depth > 8) return null; // symlink loop
-  const abs = resolve(p);
-  try {
-    return realpathSync(abs);
-  } catch {
-    /* does not exist (or is a dangling link) — fall through */
-  }
-  try {
-    const st = lstatSync(abs);
-    if (st.isSymbolicLink()) {
-      // Dangling symlink: follow it manually. Its TARGET is where a write lands.
-      return intendedRealPath(resolve(dirname(abs), readlinkSync(abs)), depth + 1);
-    }
-  } catch {
-    /* no lstat either — a plain non-existent path; resolve its parent */
-  }
-  const parent = dirname(abs);
-  if (parent === abs) return null;
-  const realParent = intendedRealPath(parent, depth + 1);
-  return realParent === null ? null : join(realParent, basename(abs));
-}
-
-/** Same file by the FILESYSTEM's answer (device + inode), which is what catches
- * a hardlink or a case-insensitive alias. Null when either side cannot be stat'd. */
-export function sameFile(a: string, b: string): boolean | null {
-  try {
-    const sa = statSync(a);
-    const sb = statSync(b);
-    return sa.dev === sb.dev && sa.ino === sb.ino;
-  } catch {
-    return null;
-  }
-}
-
-/** `child` is inside `parent` (or is `parent`), compared on resolved paths. */
-export function isInside(parent: string, child: string): boolean {
-  const p = resolve(parent);
-  const c = resolve(child);
-  return c === p || c.startsWith(p.endsWith(sep) ? p : p + sep);
-}
 
 /**
  * The reason `--rebaseline` may not write to `baselinePath`, or null when it may.
