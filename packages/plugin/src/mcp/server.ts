@@ -1,5 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { TFile, stringifyYaml, type App } from "obsidian";
+import { TFile, stringifyYaml, parseYaml, type App } from "obsidian";
 import { registerFsTools, ok } from "@vault-mcp/core";
 import { registerCoreTools, type ServerCtx } from "./tools-core.js";
 import { registerVaultWriteTools } from "./tools-vault-write.js";
@@ -160,6 +160,7 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
       },
       revOf: (path) => probe.rev(path),
       stringifyYaml,
+      parseYaml,
       mintUid: (createdMs) => uuidv7(createdMs),
       formatTs: formatLocalTimestamp,
     });

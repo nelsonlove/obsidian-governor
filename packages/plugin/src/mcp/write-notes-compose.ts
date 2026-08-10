@@ -40,16 +40,113 @@ export class AcceptForbiddenError extends Error {
   }
 }
 
-/** True for an acceptance-status VALUE that asserts acceptance (`accepted`, `accepted-*`). */
+/**
+ * True for a frontmatter VALUE that ASSERTS acceptance (`accepted`, `accepted-*`),
+ * across every value-TYPE it can take: a scalar string, an array of them
+ * (`[accepted]`), or a map wrapping one (`{value: accepted}`). String-only was
+ * the S3 hole — an array/map form asserted acceptance while slipping the guard.
+ */
 function isAcceptedValue(v: unknown): boolean {
-  if (typeof v !== "string") return false;
-  const s = v.trim().toLowerCase();
-  return s === "accepted" || s.startsWith("accepted-") || s.startsWith("accepted ");
+  if (typeof v === "string") {
+    const s = v.trim().toLowerCase();
+    return s === "accepted" || s.startsWith("accepted-") || s.startsWith("accepted ");
+  }
+  if (Array.isArray(v)) return v.some(isAcceptedValue);
+  if (v && typeof v === "object") return Object.values(v as Record<string, unknown>).some(isAcceptedValue);
+  return false;
 }
 
 /** A frontmatter KEY that is an acceptance-provenance field: `accepted`, `accepted-by`, `accepted-on`, `accepted_by`, … */
 function isAcceptedKey(key: string): boolean {
   return /^accepted([-_ ].*)?$/.test(key.trim().toLowerCase());
+}
+
+// ── the accept-forbidden guard, over RESULTING vs on-disk frontmatter ─────────
+//
+// The scar is "the accept verb is in no API": no MCP write may INTRODUCE or
+// CHANGE a note's acceptance to the accepted-family. It is enforced over the
+// note that WOULD LAND ON DISK (frontmatter parsed from the final markdown,
+// body-embedded fences included — S2), for every value-type (S3), at the shared
+// write primitive so every write tool inherits it (S1) — which also denies the
+// stamp-laundering path, since the introducing write is already rejected (S4).
+//
+// The one thing it must NOT break: a legitimate content edit that carries an
+// existing (human-granted) accepted value forward UNCHANGED. So the rule is a
+// TRANSITION, not a snapshot — preserve is allowed, introduce/change is not.
+
+/** Extract & parse the leading YAML frontmatter of a markdown string; null when there is none. `parseYaml` injected. */
+export function frontmatterOf(
+  markdown: string,
+  parseYaml: (yaml: string) => unknown
+): Record<string, unknown> | null {
+  // Obsidian reads a note's frontmatter only when `---` is its very first line.
+  const m = /^\uFEFF?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(markdown);
+  if (!m) return null;
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(m[1]);
+  } catch {
+    return null;
+  }
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+}
+
+/** Stable deep-equal over JSON-serializable frontmatter values (for the preserve-unchanged allowance). */
+function fmEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (!a || !b || typeof a !== "object" || typeof b !== "object") return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  const ao = a as Record<string, unknown>;
+  const bo = b as Record<string, unknown>;
+  const ak = Object.keys(ao);
+  const bk = Object.keys(bo);
+  if (ak.length !== bk.length) return false;
+  return ak.every((k) => Object.prototype.hasOwnProperty.call(bo, k) && fmEqual(ao[k], bo[k]));
+}
+
+/** Case-insensitive lookup: the presence + value of `key` in `fm`, keys matched by trimmed lowercase. */
+function lookupCI(fm: Record<string, unknown> | null | undefined, key: string): { present: boolean; value: unknown } {
+  if (fm) {
+    const want = key.trim().toLowerCase();
+    for (const k of Object.keys(fm)) if (k.trim().toLowerCase() === want) return { present: true, value: fm[k] };
+  }
+  return { present: false, value: undefined };
+}
+
+/**
+ * The reason a write is accept-forbidden given the note's RESULTING frontmatter
+ * and its BEFORE-on-disk frontmatter, or null when the write is clean.
+ *
+ * REJECTED when the result INTRODUCES or CHANGES an accepted-family assertion:
+ *   • any acceptance-provenance key (`accepted`, `accepted-by`, `accepted-on`,
+ *     `accepted_*`) present in the result that was not already present on disk
+ *     with an EQUAL value; or
+ *   • `acceptance-status` (`acceptance_status`) whose resulting value ASSERTS
+ *     accepted (string / array / map) and did not already hold that exact value.
+ * Preserving an existing (human-set) value verbatim is ALLOWED.
+ */
+export function acceptTransitionReason(
+  before: Record<string, unknown> | null | undefined,
+  after: Record<string, unknown> | null | undefined
+): string | null {
+  if (!after) return null;
+  for (const key of Object.keys(after)) {
+    const kl = key.trim().toLowerCase();
+    if (isAcceptedKey(key)) {
+      const prev = lookupCI(before, key);
+      if (!(prev.present && fmEqual(prev.value, after[key]))) {
+        return `write would ${prev.present ? "change" : "introduce"} the acceptance field '${key}'`;
+      }
+    } else if (kl === "acceptance-status" || kl === "acceptance_status") {
+      if (isAcceptedValue(after[key])) {
+        const prev = lookupCI(before, key);
+        if (!(prev.present && fmEqual(prev.value, after[key]))) {
+          return `write would set ${key} to an accepted value`;
+        }
+      }
+    }
+  }
+  return null;
 }
 
 /**
@@ -152,6 +249,15 @@ export interface ComposeArgs {
   formatTs: (ms: number) => string;
   /** Serialize a frontmatter object to YAML (trailing newline). Injected; production = obsidian.stringifyYaml. */
   stringifyYaml: (obj: Record<string, unknown>) => string;
+  /**
+   * Parse a YAML frontmatter block — production = obsidian.parseYaml. Used ONLY
+   * to read a body-embedded leading `---` fence for the accept-forbidden guard
+   * (the stamp:false injection path). Optional: when absent, a body that carries
+   * its own frontmatter is not parsed here — the shared backend write primitive
+   * re-checks the final content with a real parser regardless, so the guarantee
+   * does not rest on this seam being wired.
+   */
+  parseYaml?: (yaml: string) => unknown;
 }
 
 export interface ComposeResult {
@@ -176,55 +282,75 @@ function seedMs(created: unknown, now: number): number {
 /**
  * Compose the final note text for one write item.
  *
- * Throws AcceptForbiddenError (invariant 2) when the payload frontmatter carries
- * acceptance — stamped or not, before anything is written.
+ * Throws AcceptForbiddenError (invariant 2) when the note that WOULD LAND ON DISK
+ * introduces or changes acceptance to the accepted-family — checked over the
+ * resulting frontmatter (a body-embedded leading fence included, so the
+ * stamp:false injection path is caught) against the note's existing on-disk
+ * frontmatter, so preserving a human-granted `accepted` verbatim is allowed.
  *
  * Under `stamp`, fills uid (uuidv7, created-seeded, only when absent — an
  * existing on-disk uid always wins so it is NEVER overwritten), `created` (when
  * missing) and `modified` (always now), defaults `acceptance-status: proposed`
  * only when absent from both payload and disk, and enforces canonical field
- * order. Without `stamp`, the note is written verbatim from the payload
- * (accept-forbidden guard still applies).
+ * order. Without `stamp`, the note is written verbatim from the payload.
  */
 export function composeNote(args: ComposeArgs): ComposeResult {
   const payload: Record<string, unknown> = { ...(args.frontmatter ?? {}) };
 
-  // Invariant 2 — accept-forbidden guard, over the CALLER's payload, stamped or not.
-  const reason = acceptForbiddenReason(payload);
-  if (reason) throw new AcceptForbiddenError(reason);
+  let structuredFm: Record<string, unknown>;
+  let content: string;
+  let stamped: boolean;
 
   if (!args.stamp) {
-    const content = renderNote(payload, args.body, args.stringifyYaml);
-    return { content, frontmatter: payload, stamped: false };
+    structuredFm = payload;
+    content = renderNote(payload, args.body, args.stringifyYaml);
+    stamped = false;
+  } else {
+    const existing = args.existing ?? {};
+    const merged: Record<string, unknown> = { ...payload };
+
+    // created: keep payload's, else preserve existing, else default to now.
+    const created = merged.created ?? existing.created ?? args.formatTs(args.now);
+    merged.created = created;
+
+    // modified: always now.
+    merged.modified = args.formatTs(args.now);
+
+    // uid: never overwrite an existing uid — the on-disk uid wins, then the
+    // payload's, then a fresh created-seeded uuidv7. Minted only when truly absent.
+    const existingUid = typeof existing.uid === "string" && existing.uid ? existing.uid : undefined;
+    const payloadUid = typeof merged.uid === "string" && merged.uid ? (merged.uid as string) : undefined;
+    merged.uid = existingUid ?? payloadUid ?? args.mintUid(seedMs(created, args.now));
+
+    // acceptance-status: payload's value, else preserve the existing on-disk
+    // value VERBATIM (never changed — including a human-granted `accepted`),
+    // else default `proposed`. The accept-forbidden guard below rejects an
+    // accepted value the payload introduces; a preserved existing one is allowed.
+    if (!("acceptance-status" in merged)) {
+      if ("acceptance-status" in existing) merged["acceptance-status"] = existing["acceptance-status"];
+      else merged["acceptance-status"] = "proposed";
+    }
+
+    structuredFm = canonicalOrder(merged);
+    content = renderNote(structuredFm, args.body, args.stringifyYaml);
+    stamped = true;
   }
 
-  const existing = args.existing ?? {};
-  const merged: Record<string, unknown> = { ...payload };
+  // Invariant 2 — accept-forbidden guard over the note that WOULD LAND ON DISK.
+  // The resulting frontmatter is the structured block when there is one; when
+  // there is none, the body's own leading `---` fence becomes the note's real
+  // frontmatter (the stamp:false body-injection path), so it is parsed and
+  // checked too. Rejection is a TRANSITION: introducing or changing acceptance
+  // to the accepted-family is blocked, preserving an existing value verbatim
+  // (compared against args.existing) is allowed.
+  const resultingFm =
+    Object.keys(structuredFm).length > 0
+      ? structuredFm
+      : frontmatterOf(args.body, args.parseYaml ?? (() => null)) ?? {};
+  const reason = acceptTransitionReason(args.existing ?? null, resultingFm);
+  if (reason) throw new AcceptForbiddenError(reason);
 
-  // created: keep payload's, else preserve existing, else default to now.
-  const created = merged.created ?? existing.created ?? args.formatTs(args.now);
-  merged.created = created;
-
-  // modified: always now.
-  merged.modified = args.formatTs(args.now);
-
-  // uid: never overwrite an existing uid — the on-disk uid wins, then the
-  // payload's, then a fresh created-seeded uuidv7. Minted only when truly absent.
-  const existingUid = typeof existing.uid === "string" && existing.uid ? existing.uid : undefined;
-  const payloadUid = typeof merged.uid === "string" && merged.uid ? (merged.uid as string) : undefined;
-  merged.uid = existingUid ?? payloadUid ?? args.mintUid(seedMs(created, args.now));
-
-  // acceptance-status: payload's non-accepted value (accepted was already
-  // rejected above), else preserve the existing on-disk value VERBATIM (never
-  // changed — including a human-granted `accepted`), else default `proposed`.
-  if (!("acceptance-status" in merged)) {
-    if ("acceptance-status" in existing) merged["acceptance-status"] = existing["acceptance-status"];
-    else merged["acceptance-status"] = "proposed";
-  }
-
-  const ordered = canonicalOrder(merged);
-  const content = renderNote(ordered, args.body, args.stringifyYaml);
-  return { content, frontmatter: ordered, stamped: true };
+  return { content, frontmatter: structuredFm, stamped };
 }
 
 /** `---\n<yaml>---\n<body>`, or just the body when there is no frontmatter. */
