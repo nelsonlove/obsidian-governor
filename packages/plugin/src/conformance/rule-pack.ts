@@ -28,13 +28,14 @@ export interface VaultSnapshot {
   notes: VocabNote[];
   /** Every in-scope note path (the scheme pack's listing). */
   paths: string[];
-  /** Every in-scope `.md` note's raw text (structure/port/ste packs). Optional
-   * so a hand-built `{notes, paths}` snapshot (tests) still satisfies the type;
-   * the legacy packs treat an absent listing as empty. */
+  /** Every in-scope `.md` note's raw text (structure/port/ste/drift packs).
+   * Optional so a hand-built `{notes, paths}` snapshot (tests, other packs)
+   * still satisfies the type. A pack that NEEDS it must reach it through
+   * `requireSources` — see the absent-vs-empty note there. */
   sources?: SourceFile[];
   /** Every `.blueprint` file's raw text (the structure pack's blueprint
    * sources — emitted-H2 derivation + `{% include %}` resolution). Optional
-   * for the same reason. */
+   * for the same reason; reach it through `requireBlueprints`. */
   blueprints?: SourceFile[];
   /** Every FILE path under root (all extensions, not just note types), for the
    * drift pack's `.exists()` checks (`user-script` / `module` / `template`
@@ -67,4 +68,49 @@ export interface RulePack {
    * and the ratchet key prefix. */
   readonly id: string;
   run(snapshot: VaultSnapshot): Finding[];
+}
+
+// ── absent vs empty ──────────────────────────────────────────────────────────
+//
+// `sources` and `blueprints` are optional on the snapshot so a hand-built
+// `{notes, paths}` still typechecks. A pack that needs one of them must not
+// write `snapshot.sources ?? []`: that silently converts "nobody supplied this
+// listing" into "this vault contains no source files", so the pack reports zero
+// findings and the ratchet then reports every one of its accepted keys as
+// CLEARED — a clean bill of health produced by a missing input (#125).
+//
+// `[]` is a real answer and keeps working. `undefined` is the ABSENCE of an
+// answer and throws, which the engine surfaces as a `conformance_engine /
+// pack_error` finding naming the pack — visible and non-zero, the same
+// discipline the engine already applies to a pack that crashes.
+//
+// This is the fourth site of this class in this codebase: a missing baseline
+// read as an empty baseline (#133), an absent quickadd `data.json` reported as
+// CONFORMING (#136), an unparseable frontmatter block read as no frontmatter
+// (#104's residual), and this. Absence and emptiness are never the same answer.
+
+function requireListing(
+  listing: SourceFile[] | undefined,
+  packId: string,
+  which: "sources" | "blueprints",
+): SourceFile[] {
+  if (listing === undefined) {
+    throw new Error(
+      `rule pack '${packId}' needs the snapshot's '${which}' listing, which is absent. ` +
+        `Refusing to treat a missing listing as an empty one: this pack would report zero findings ` +
+        `and every accepted key it owns would then read as CLEARED. Build the snapshot with '${which}' ` +
+        `(buildSnapshot supplies it), or pass an explicit [] if the vault genuinely has none.`,
+    );
+  }
+  return listing;
+}
+
+/** The snapshot's raw `.md` sources, refusing when the listing is ABSENT (not merely empty). */
+export function requireSources(snapshot: VaultSnapshot, packId: string): SourceFile[] {
+  return requireListing(snapshot.sources, packId, "sources");
+}
+
+/** The snapshot's `.blueprint` sources, refusing when the listing is ABSENT (not merely empty). */
+export function requireBlueprints(snapshot: VaultSnapshot, packId: string): SourceFile[] {
+  return requireListing(snapshot.blueprints, packId, "blueprints");
 }
