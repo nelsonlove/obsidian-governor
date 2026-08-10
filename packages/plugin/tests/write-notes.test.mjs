@@ -14,8 +14,9 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { ok } from "../src/mcp/helpers.ts";
-import { makeGuarded } from "../src/mcp/guarded.ts";
-import { Kernel, WriteQueue, WriteJournal, IdempotencyStore, LockStore } from "../src/kernel/index.ts";
+import { makeGuarded, resolveGuardedPath } from "../src/mcp/guarded.ts";
+import { Kernel, WriteQueue, WriteJournal, IdempotencyStore, LockStore, UidIndex } from "../src/kernel/index.ts";
+import { makeRegistry, DEFAULT_SCHEMES } from "../src/kernel/scheme/registry.ts";
 import { registerWriteNotesTool } from "../src/mcp/tools-write-notes.ts";
 import { parseYaml } from "./obsidian-stub.mjs";
 
@@ -41,8 +42,15 @@ function fakeAdapter() {
  * A harness: a real Kernel over a fake vault (path → {content, rev}) whose rev
  * is a monotonic clock bumped on each write, plus the guarded single-writer and
  * the registered obsidian_write_notes handler.
+ *
+ * `settings` (readOnly/allowlist), `uidSource` ({paths, uidOf}) and
+ * `schemes`/`schemeNotes` are all optional so the SAME harness can pin the
+ * plain-path behavior (nothing passed — byte-identical to before) and the
+ * uid:/jd: address-form-independence + allowlist-ordering fixes (Findings 3
+ * and 5), by wiring the identical resolveGuardedPath/guardedOpts server.ts
+ * wires — not a reimplementation of resolution for the test's own sake.
  */
-function harness({ existing = new Map() } = {}) {
+function harness({ existing = new Map(), settings = OPEN_SETTINGS, uidSource, schemes, schemeNotes } = {}) {
   const vault = new Map();        // path -> { content, rev }
   const existingFm = new Map();   // path -> parsed frontmatter (metadata cache stand-in)
   let clock = 100;
@@ -66,7 +74,25 @@ function harness({ existing = new Map() } = {}) {
   const adapter = fakeAdapter();
   const journal = new WriteJournal(adapter, "dir/journal", () => new Date("2026-08-08T12:00:00Z"));
   const kernel = new Kernel(new WriteQueue(1000), journal, probe, new IdempotencyStore(), new LockStore());
-  const guarded = makeGuarded({ getSettings: () => OPEN_SETTINGS, kernel, actor: () => ACTOR });
+  const uids = uidSource
+    ? (() => {
+        const index = new UidIndex(uidSource);
+        index.rebuild();
+        return index;
+      })()
+    : undefined;
+  // The SAME opts object backs both `guarded` (guardedWrite's own dispatch)
+  // and `resolveTarget` (tools-write-notes.ts's pre-compose resolve) — exactly
+  // how server.ts wires guardedOpts, so a test that wires uid/scheme
+  // addressing here is testing the real interception, not a stand-in for it.
+  const guardedOpts = {
+    getSettings: () => settings,
+    kernel,
+    actor: () => ACTOR,
+    ...(uids ? { uids } : {}),
+    ...(schemes ? { schemes: () => schemes, schemeNotes: () => schemeNotes ?? [] } : {}),
+  };
+  const guarded = makeGuarded(guardedOpts);
   const guardedWrite = guarded(
     { annotations: RW, inputSchema: {} },
     async ({ path, content, overwrite }) => ok(writeNote(path, content, overwrite ?? true)),
@@ -75,6 +101,7 @@ function harness({ existing = new Map() } = {}) {
 
   let handler;
   registerWriteNotesTool((_name, _def, h) => { handler = h; }, guardedWrite, {
+    resolveTarget: (path) => resolveGuardedPath(path, guardedOpts),
     readExistingFrontmatter: (path) => existingFm.get(path),
     revOf: (path) => vault.get(path)?.rev,
     stringifyYaml: fakeYaml,
@@ -207,6 +234,138 @@ describe("obsidian_write_notes — stamp end-to-end", () => {
     assert.match(content, /created: "2019-01-01T00:00:00"/, "existing created preserved");
     assert.match(content, /acceptance-status: "accepted"/, "existing acceptance-status preserved, not reset to proposed");
     assert.match(content, /modified: "TS\(42\)"/, "modified is refreshed to now");
+  });
+
+  // Finding 3 — before the fix, readExistingFrontmatter was keyed on the
+  // caller's RAW `path` argument. For a uid:/jd:-addressed item that key is
+  // never in the metadata cache (it is indexed by real path), so the lookup
+  // silently missed: the stamped write treated an EXISTING note as new,
+  // minted a fresh uid, reset `created`, and demoted `acceptance-status:
+  // accepted` to `proposed`. tools-write-notes.ts now resolves the item's
+  // path FIRST (WriteNotesDeps.resolveTarget, guarded.ts's
+  // resolveGuardedPath) and keys the existing-frontmatter read — and the
+  // guarded dispatch itself — on the RESOLVED path, so address form cannot
+  // change what a stamped write preserves.
+  test("uid:-addressed stamp preserves uid/created/acceptance — byte-identical to the same write by plain path", async () => {
+    const path = "Keep/ByUid.md";
+    const existing = new Map([
+      [path, { rev: 100, content: "old", frontmatter: { uid: "KEEP-UID", created: "2019-01-01T00:00:00", "acceptance-status": "accepted" } }],
+    ]);
+    const uidSource = { paths: () => [path], uidOf: (p) => (p === path ? "KEEP-UID" : undefined) };
+
+    const plain = harness({ existing, uidSource });
+    await plain.call({ notes: [{ path, frontmatter: { name: "K" }, body: "rewritten" }], stamp: true });
+    const plainContent = plain.vault.get(path).content;
+
+    const byUid = harness({ existing, uidSource });
+    const res = await byUid.call({ notes: [{ path: "uid:KEEP-UID", frontmatter: { name: "K" }, body: "rewritten" }], stamp: true });
+    const byUidContent = byUid.vault.get(path).content;
+
+    assert.equal(structured(res).error_count, 0);
+    assert.equal(byUidContent, plainContent, "uid:-addressed stamped write is byte-identical to the plain-path write");
+    assert.match(byUidContent, /uid: "KEEP-UID"/, "existing uid preserved, not re-minted");
+    assert.match(byUidContent, /created: "2019-01-01T00:00:00"/, "existing created preserved, not reset");
+    assert.match(byUidContent, /acceptance-status: "accepted"/, "existing acceptance-status preserved — no silent demotion to proposed");
+    assert.equal(typeof structured(res).written[0].rev, "number", "rev is reported off the RESOLVED path too");
+  });
+
+  test("jd:-addressed stamp preserves uid/created/acceptance the same way", async () => {
+    const path = "00-09 System/06 Agent tooling/06.11 Vault MCP.md";
+    const existing = new Map([
+      [path, { rev: 100, content: "old", frontmatter: { uid: "JD-UID", created: "2019-02-02T00:00:00", "acceptance-status": "accepted" } }],
+    ]);
+    const schemes = makeRegistry(DEFAULT_SCHEMES);
+    const { call, vault } = harness({ existing, schemes, schemeNotes: [path] });
+    const res = await call({ notes: [{ path: "jd:06.11", frontmatter: { name: "V" }, body: "rewritten" }], stamp: true });
+    const content = vault.get(path).content;
+    assert.equal(structured(res).error_count, 0);
+    assert.match(content, /uid: "JD-UID"/, "existing uid preserved");
+    assert.match(content, /created: "2019-02-02T00:00:00"/, "existing created preserved");
+    assert.match(content, /acceptance-status: "accepted"/, "existing acceptance-status preserved — no silent demotion");
+  });
+
+  // Demotion rule (matches the shared accept-guard convention —
+  // acceptTransitionReason, see write-notes-compose.ts): stamping's SILENT
+  // default (payload omits acceptance-status) must PRESERVE an existing
+  // accepted-family value — pinned above via uid:/jd: addressing, the exact
+  // case the bug broke. An EXPLICIT, TYPED non-accepted value in the payload
+  // is a different case — a caller's own content edit — and the shared rule
+  // does not refuse it (only introducing/changing INTO the accepted family is
+  // blocked); stamping honors it exactly like any other payload value.
+  test("an EXPLICIT typed demotion in the payload is honored (matches the shared rule; not itself refused)", async () => {
+    const existing = new Map([
+      ["Keep/Typed.md", { rev: 100, content: "old", frontmatter: { uid: "T-UID", "acceptance-status": "accepted" } }],
+    ]);
+    const { call, vault } = harness({ existing });
+    const res = await call({
+      notes: [{ path: "Keep/Typed.md", frontmatter: { name: "T", "acceptance-status": "proposed" }, body: "edited" }],
+      stamp: true,
+    });
+    assert.equal(structured(res).error_count, 0, "a typed, explicit non-accepted value is never refused");
+    assert.match(vault.get("Keep/Typed.md").content, /acceptance-status: "proposed"/);
+  });
+});
+
+describe("obsidian_write_notes — allowlist refusal runs before the accept-transition check (Finding 5)", () => {
+  test("a hidden note's refusal is IDENTICAL whether or not the payload carries an acceptance-family field", async () => {
+    const settings = { readOnly: false, allowlist: ["Visible"] };
+    const clean = harness({ settings });
+    const withAccept = harness({ settings });
+
+    const resClean = await clean.call({
+      notes: [{ path: "Hidden/Note.md", frontmatter: { name: "N" }, body: "x" }],
+      stamp: true,
+    });
+    const resAccept = await withAccept.call({
+      notes: [{ path: "Hidden/Note.md", frontmatter: { name: "N", "acceptance-status": "accepted" }, body: "x" }],
+      stamp: true,
+    });
+
+    const bodyClean = structured(resClean);
+    const bodyAccept = structured(resAccept);
+
+    assert.equal(bodyClean.errors[0].code, "out_of_allowlist");
+    assert.equal(
+      bodyAccept.errors[0].code,
+      "out_of_allowlist",
+      "the allowlist refusal fires FIRST — never accept_forbidden for a note this session cannot see"
+    );
+    assert.equal(
+      bodyAccept.errors[0].error,
+      bodyClean.errors[0].error,
+      "identical refusal text regardless of the payload's acceptance-family content — no error differential to probe with"
+    );
+    assert.doesNotMatch(bodyAccept.errors[0].error, /accept/i, "no accept-specific marker text leaks for a hidden note");
+
+    // Neither item ever dispatched: no queue slot taken, no journal record.
+    await tick();
+    assert.equal(clean.writeCalls.length, 0);
+    assert.equal(withAccept.writeCalls.length, 0);
+    assert.equal(clean.records().length, 0);
+    assert.equal(withAccept.records().length, 0);
+  });
+
+  test("read-only mode refuses before the accept-transition check too", async () => {
+    const settings = { readOnly: true, allowlist: [] };
+    const { call } = harness({ settings });
+    const res = await call({
+      notes: [{ path: "Anything.md", frontmatter: { "accepted-by": "nelson" }, body: "x" }],
+      stamp: false,
+    });
+    const body = structured(res);
+    assert.equal(body.errors[0].code, "read_only");
+    assert.doesNotMatch(body.errors[0].error, /accept/i);
+  });
+
+  test("a VISIBLE note with an acceptance-family field still gets accept_forbidden, unaffected by the reordering", async () => {
+    const settings = { readOnly: false, allowlist: ["Visible"] };
+    const { call } = harness({ settings });
+    const res = await call({
+      notes: [{ path: "Visible/Bad.md", frontmatter: { "acceptance-status": "accepted" }, body: "x" }],
+      stamp: false,
+    });
+    const body = structured(res);
+    assert.equal(body.errors[0].code, "accept_forbidden");
   });
 });
 

@@ -42,6 +42,24 @@ export type GuardedWrite = (
 ) => Promise<{ isError?: boolean; content?: Array<{ text?: string }>; structuredContent?: Record<string, unknown> }>;
 
 export interface WriteNotesDeps {
+  /**
+   * Resolve `uid:<value>` / `<scheme>:<address>` addressing for one item's
+   * `path` AND check read-only + allowlist for it — the SAME resolution and
+   * refusal `guardedWrite`'s own dispatch applies (guarded.ts's
+   * `resolveGuardedPath`), run here FIRST, before compose. Two reasons it has
+   * to happen here rather than only inside `guardedWrite`:
+   *
+   *   1. `readExistingFrontmatter` below is keyed on a real vault path — the
+   *      metadata cache has no entry under a `uid:`/`jd:` reference — so stamp
+   *      preservation (existing uid/created/acceptance-status) needs the
+   *      RESOLVED path, not the caller's raw argument.
+   *   2. The allowlist/read-only refusal must be the FIRST thing a hidden or
+   *      blocked item produces — before compose's accept-transition check ever
+   *      inspects the note's frontmatter — or the error a caller sees would
+   *      differ by whether the payload happens to carry an acceptance-family
+   *      field, leaking information about a note this session cannot see.
+   */
+  resolveTarget: (path: string) => { path: string } | { blocked: { code: string; message: string } };
   /** Existing on-disk frontmatter for a path (metadata cache), or undefined. For stamp preservation. */
   readExistingFrontmatter: (path: string) => Record<string, unknown> | undefined;
   /** The revision (mtime ms) of a path after a write, for the per-item report. */
@@ -153,15 +171,34 @@ export function registerWriteNotesTool(
       const results: PerItemResult[] = [];
 
       for (const item of notes) {
+        // Resolve uid:/jd: addressing AND check read-only/allowlist FIRST —
+        // the SAME resolution + refusal guardedWrite's own dispatch applies
+        // below, run here BEFORE compose (see WriteNotesDeps.resolveTarget).
+        // A blocked item never reaches compose: the allowlist refusal is the
+        // only thing it produces, regardless of what its frontmatter carries
+        // (Finding 5), and it takes no queue slot / journal record, exactly
+        // like the accept-forbidden rejection below (Finding 3's fix keeps
+        // that property — nothing here dispatches early).
+        const resolved = deps.resolveTarget(item.path);
+        if ("blocked" in resolved) {
+          results.push({ ok: false, path: item.path, code: resolved.blocked.code, error: resolved.blocked.message });
+          continue;
+        }
+        const resolvedPath = resolved.path;
+
         // Compose + accept-forbidden guard run OUTSIDE the queue: a rejected item
         // never dispatches, so it takes no slot and writes no journal record.
+        // `existing` is keyed on the RESOLVED path — the metadata cache has no
+        // entry under a `uid:`/`jd:` reference, so a stamped write addressed
+        // that way now preserves uid/created/acceptance-status exactly like the
+        // same write addressed by its plain path (Finding 3).
         let composed: ComposeResult;
         try {
           composed = composeNote({
             frontmatter: item.frontmatter,
             body: item.body ?? "",
             stamp: doStamp,
-            existing: deps.readExistingFrontmatter(item.path),
+            existing: deps.readExistingFrontmatter(resolvedPath),
             now: now(),
             mintUid: deps.mintUid,
             formatTs: deps.formatTs,
@@ -179,11 +216,14 @@ export function registerWriteNotesTool(
         }
 
         // Dispatch through the guarded single-writer: uid addressing, read-only,
-        // allowlist, if_rev, idempotency, queue and journal all bind here, per item.
+        // allowlist, if_rev, idempotency, queue and journal all bind here, per
+        // item. The path handed over is already RESOLVED (a no-op re-resolution
+        // inside guardedWrite, since it is no longer `uid:`/`jd:`-shaped) — the
+        // second allowlist check is defense-in-depth, not a second decision.
         try {
           const envelope = await guardedWrite(
             {
-              path: item.path,
+              path: resolvedPath,
               content: composed.content,
               overwrite: true,
               ...(item.if_rev !== undefined ? { if_rev: item.if_rev } : {}),
@@ -205,7 +245,7 @@ export function registerWriteNotesTool(
               path: item.path,
               created,
               stamped: composed.stamped,
-              ...(deps.revOf ? { rev: deps.revOf(item.path) } : {}),
+              ...(deps.revOf ? { rev: deps.revOf(resolvedPath) } : {}),
             });
           }
         } catch (e) {
