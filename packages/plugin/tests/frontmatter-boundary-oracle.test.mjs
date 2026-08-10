@@ -21,7 +21,7 @@
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { leadingFrontmatterBlock } from "../src/mcp/write-notes-compose.ts";
+import { leadingFrontmatterBlock } from "@vault-mcp/core";
 
 const BOM = "\uFEFF";
 

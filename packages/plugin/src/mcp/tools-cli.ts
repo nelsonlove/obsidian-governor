@@ -36,7 +36,8 @@ import { spawnEnv, findBinary } from "../claude-cli.js";
 import type { ServerCtx } from "./tools-core.js";
 // Reuse the SAME accepted-family rule the MCP note-write primitive uses — no
 // second definition of "accepted" on the CLI path (see cliAcceptRefusal below).
-import { acceptForbiddenReason, leadingFrontmatterBlock, stripLeadingBom } from "./write-notes-compose.js";
+import { acceptForbiddenReason } from "./write-notes-compose.js";
+import { leadingFrontmatterBlock, stripLeadingBom } from "@vault-mcp/core";
 import { cliCommandRefusal, configPathRefusal, OPAQUE_ACCEPT_CLI_COMMANDS } from "./cli-policy.js";
 
 // Mutating + can reach outside the vault (plugin installs fetch the network).
