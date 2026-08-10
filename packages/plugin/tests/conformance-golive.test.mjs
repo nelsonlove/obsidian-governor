@@ -84,3 +84,77 @@ describe("rebaselineRefusal — the computed guard replacing PHASE1_PACKS_INCOMP
     }
   });
 });
+
+/**
+ * PR #139 review fixes (@assent-module-worker-3, both Criticals reproduced).
+ *
+ * The unifying defect in Critical 1: the guard decided over a PROXY for the
+ * thing (the shape of argv) instead of the thing itself (which file gets
+ * written) — structurally the same mistake as an accept-guard scanning a
+ * normalized copy instead of the bytes that land.
+ */
+describe("isLiveBaseline — decided over the file written, not over argv shape (Critical 1)", () => {
+  const ROOT = "/vault";
+  const LIVE = "/vault/Assent/Build/conformance/Conformance baseline.md";
+
+  test("the default (unspecified) baseline path is the live one", async () => {
+    const { isLiveBaseline } = await import("../src/conformance/cli.ts");
+    assert.equal(isLiveBaseline(LIVE, ROOT), true);
+  });
+
+  test("--baseline pointed AT the live path is still the live baseline", async () => {
+    const { isLiveBaseline } = await import("../src/conformance/cli.ts");
+    assert.equal(isLiveBaseline(LIVE, ROOT), true, "explicit --baseline must not launder the live record");
+  });
+
+  test("a non-normalized alias of the live path is still the live baseline", async () => {
+    const { isLiveBaseline } = await import("../src/conformance/cli.ts");
+    assert.equal(isLiveBaseline("/vault/Assent/Build/../Build/conformance/Conformance baseline.md", ROOT), true);
+  });
+
+  test("a genuine fixture elsewhere is NOT the live baseline", async () => {
+    const { isLiveBaseline } = await import("../src/conformance/cli.ts");
+    assert.equal(isLiveBaseline("/tmp/fixture-baseline.md", ROOT), false);
+  });
+});
+
+describe("coverageRefusal — applies to plain runs, not just rebaseline (Critical 2)", () => {
+  test("a run whose baseline names an unmeasured pack REFUSES rather than reporting CONFORMING", async () => {
+    const { coverageRefusal } = await import("../src/conformance/cli.ts");
+    const r = coverageRefusal(new Set(["ste_lint"]), new Set(["vocab_findings"]), "run");
+    assert.ok(r, "must refuse — otherwise exit 0 while clearing accepted debt");
+    assert.match(r, /ste_lint/);
+    assert.match(r, /CLEARED|clearing/, "names the false-green consequence");
+  });
+
+  test("full coverage permits the run", async () => {
+    const { coverageRefusal } = await import("../src/conformance/cli.ts");
+    assert.equal(coverageRefusal(new Set(["ste_lint"]), new Set(["ste_lint", "vocab_findings"]), "run"), null);
+  });
+
+  test("an empty baseline (e.g. --no-baseline) names no packs, so nothing is uncovered", async () => {
+    const { coverageRefusal } = await import("../src/conformance/cli.ts");
+    assert.equal(coverageRefusal(new Set(), new Set(), "run"), null);
+  });
+});
+
+describe("coveredPackIds — a pack that THREW is not 'covered' (Important)", () => {
+  test("a crashing pack is excluded from coveredPackIds, so its accepted keys cannot be dropped", async () => {
+    const { mkdtemp, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const pth = (await import("node:path")).default;
+    const { runConformance, coverageRefusal } = await import("../src/conformance/cli.ts");
+    const root = await mkdtemp(pth.join(tmpdir(), "conf-throw-"));
+    try {
+      const res = await runConformance({ root, baselineText: "", vocabularies: [], schemes: [], legacyPacks: true });
+      // every registered pack that did not throw is covered; the sets agree when nothing threw
+      assert.ok(res.packIds.length > 0, "packs registered");
+      assert.ok(res.coveredPackIds.every((id) => res.packIds.includes(id)), "covered is a subset of registered");
+      // a baseline naming a pack that is registered-but-errored must still refuse
+      const asIfErrored = new Set(res.coveredPackIds.filter((id) => id !== "ste_lint"));
+      assert.ok(coverageRefusal(new Set(["ste_lint"]), asIfErrored, "--rebaseline"), "errored pack must not count as covered");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

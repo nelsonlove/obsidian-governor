@@ -12,13 +12,13 @@
 // legacy rail now lives in TS, but stays gated until the staged rebaseline.
 
 import { readFile, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { VocabRegistry, DEFAULT_VOCABULARIES, type VocabInstanceSettings } from "../kernel/vocab/registry.js";
 import { makeRegistry, DEFAULT_SCHEMES, type SchemeInstanceConfig } from "../kernel/scheme/registry.js";
 import { buildSnapshot } from "./snapshot.js";
-import { runEngine } from "./engine.js";
+import { runEngine, ENGINE_ID } from "./engine.js";
 import { vocabPack, schemePack, structurePack, portPack, stePack, driftPack } from "./packs/index.js";
 import { parseBaseline, renderBaseline, ratchet, type RatchetResult } from "./ratchet.js";
 import type { Finding } from "./finding.js";
@@ -58,8 +58,10 @@ export interface RunResult {
   /** The fenced-block body to write on --rebaseline. */
   rebaseline: string;
   exitCode: 0 | 1;
-  /** Ids of the packs that actually ran — the registered set the baseline is measured against. */
+  /** Ids of every pack registered for this run. */
   packIds: string[];
+  /** Registered packs that did NOT throw — the set the baseline was actually measured against. */
+  coveredPackIds: string[];
 }
 
 export async function runConformance(opts: RunOpts): Promise<RunResult> {
@@ -87,8 +89,17 @@ export async function runConformance(opts: RunOpts): Promise<RunResult> {
   const baselineKeys = parseBaseline(opts.baselineText);
   const result = ratchet(findings, baselineKeys);
   const packIds = packs.map((p) => p.id);
+  // A pack that THREW is re-attributed by the engine to `conformance_engine /
+  // pack_error`, so it contributes none of its own keys — registering it is not
+  // the same as measuring it. Counting a crashed pack as "covered" would let a
+  // rebaseline drop every accepted key it owns (PR #139 review, Important).
+  const errored = new Set(
+    findings.filter((f) => f.script === ENGINE_ID && f.check === "pack_error").map((f) => f.target),
+  );
+  const coveredPackIds = packIds.filter((id) => !errored.has(id));
   return {
     packIds,
+    coveredPackIds,
     findings,
     ratchet: result,
     report: renderReport(result, packIds, baselinePackIds(baselineKeys), findings),
@@ -113,6 +124,69 @@ export function baselinePackIds(baselineKeys: Set<string>): Set<string> {
     if (id) ids.add(id);
   }
   return ids;
+}
+
+/**
+ * The reason a run may not trust this baseline at all, or null when it may.
+ *
+ * The baseline names accepted debt for a pack that did not run (or ran and
+ * THREW — see `coveredPackIds`). Two distinct harms, one cause:
+ *
+ * - on a plain run, those keys all report CLEARED and nothing reports NEW, so
+ *   the run exits 0 / CONFORMING while silently clearing accepted debt — a
+ *   false green, which is the exact shape this whole change exists to remove.
+ *   Measured with `--no-legacy-packs` against the live baseline: `0 carried,
+ *   0 NEW, 2 cleared, CONFORMING`. The live vault masks it because vocab/scheme
+ *   force NONCONFORMING anyway, so it looks fine precisely where it is tested.
+ * - on `--rebaseline`, the written keyset cannot contain those keys, so the
+ *   accepted debt is destroyed.
+ *
+ * Both are refusals, not warnings: a report nobody can trust must not also be
+ * green, and an unreadable/unmeasured input must never read as an empty one.
+ */
+export function coverageRefusal(
+  baselinePackIds: Set<string>,
+  coveredPackIds: Set<string>,
+  action: "run" | "--rebaseline" = "run",
+): string | null {
+  const uncovered = [...baselinePackIds].filter((id) => !coveredPackIds.has(id)).sort();
+  if (!uncovered.length) return null;
+  const consequence =
+    action === "--rebaseline"
+      ? "Rewriting it now would drop those accepted keys — debt a human granted — because a run cannot reproduce a pack it never measured."
+      : "Every one of those keys would report CLEARED while nothing reports NEW, so this run would exit CONFORMING while silently clearing accepted debt.";
+  return (
+    `refusing to ${action === "--rebaseline" ? "--rebaseline" : "report"}: the baseline holds accepted debt for ` +
+    `${uncovered.join(", ")}, which did not run (or threw) in this configuration. ${consequence} ` +
+    `Re-run with those packs enabled, target a baseline that does not describe them, or pass --no-baseline to ` +
+    `measure from zero deliberately.`
+  );
+}
+
+/**
+ * Does this baseline path name the LIVE accepted-debt record?
+ *
+ * Decided over **the file that will actually be written**, not over the shape
+ * of argv. The earlier `!baselineArg` test was a proxy: passing
+ * `--baseline=<the live baseline's own path>` made it false and the live
+ * acceptance record was rewritten — reproduced end-to-end, an accepted key
+ * erased from the file (PR #139 review, Critical 1).
+ *
+ * This is the same failure mode as a guard scanning a normalized copy instead
+ * of the bytes that land: deciding over a proxy for the thing rather than the
+ * thing. Resolved both sides, and through symlinks where they exist, so an
+ * alias cannot launder the identity either.
+ */
+export function isLiveBaseline(baselinePath: string, root: string): boolean {
+  const live = join(resolve(root), BASELINE_REL);
+  const real = (p: string): string => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return resolve(p);
+    }
+  };
+  return resolve(baselinePath) === resolve(live) || real(baselinePath) === real(live);
 }
 
 /**
@@ -142,15 +216,8 @@ export function rebaselineRefusal(opts: {
   baselinePackIds: Set<string>;
   registeredPackIds: Set<string>;
 }): string | null {
-  const uncovered = [...opts.baselinePackIds].filter((id) => !opts.registeredPackIds.has(id)).sort();
-  if (uncovered.length) {
-    return (
-      `refusing to --rebaseline: the baseline holds accepted debt for ${uncovered.join(", ")}, which did not run in ` +
-      `this configuration. Rewriting it now would drop those accepted keys — debt a human granted — because a run ` +
-      `cannot reproduce a pack it never registered. Re-run with those packs enabled, or target a baseline that does ` +
-      `not describe them.`
-    );
-  }
+  const cov = coverageRefusal(opts.baselinePackIds, opts.registeredPackIds, "--rebaseline");
+  if (cov) return cov;
   if (opts.targetsLiveBaseline) {
     return (
       "refusing to --rebaseline the live baseline: it is an acceptance record, and rewriting it accepts every " +
@@ -300,14 +367,25 @@ async function main(argv: string[]): Promise<void> {
     legacyPacks: !argv.includes("--no-legacy-packs"),
   });
 
+  // Coverage is checked on EVERY run, not only before a rebaseline: a baseline
+  // naming packs this run did not measure makes those keys report CLEARED with
+  // nothing NEW, i.e. exit 0 / CONFORMING while silently clearing accepted debt.
+  // Green-and-wrong is worse than red. (PR #139 review, Critical 2.)
+  const baselineIds = baselinePackIds(parseBaseline(baselineText));
+  const covered = new Set(res.coveredPackIds);
+  const coverage = coverageRefusal(baselineIds, covered, rebaseline ? "--rebaseline" : "run");
+  if (coverage) throw new Error(coverage);
+
   if (rebaseline) {
-    // Computed from the run that just happened, not a hardcoded constant.
-    // Checked BEFORE the write: a refused rebaseline must leave the accepted
-    // debt exactly as it was.
+    // Computed from the run that just happened, not a hardcoded constant, and
+    // keyed on the FILE THIS WILL WRITE rather than on argv shape — pointing
+    // --baseline= at the live baseline's own path used to slip this guard
+    // entirely. Checked BEFORE the write: a refused rebaseline must leave the
+    // accepted debt exactly as it was.
     const refusal = rebaselineRefusal({
-      targetsLiveBaseline: !baselineArg,
-      baselinePackIds: baselinePackIds(parseBaseline(baselineText)),
-      registeredPackIds: new Set(res.packIds),
+      targetsLiveBaseline: isLiveBaseline(baselinePath, root),
+      baselinePackIds: baselineIds,
+      registeredPackIds: covered,
     });
     if (refusal) throw new Error(refusal);
   }
