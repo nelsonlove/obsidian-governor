@@ -109,6 +109,27 @@ function requireListing(
   return listing;
 }
 
+/**
+ * A snapshot listing of ANY element type, refusing when ABSENT (not merely
+ * empty). Generic because the class has five recorded members: a missing
+ * baseline read as empty (#133), an absent quickadd config reported as
+ * CONFORMING (#136), unparseable frontmatter read as no frontmatter (#104's
+ * residual), absent `sources` (#125), and the `files`/`dirs`/`obsidianConfig`/
+ * `walkOrder` fields closed here. Each cost an investigation; a shared helper
+ * is what stops a sixth being written by copying the old idiom.
+ */
+export function requireListing_<T>(listing: T[] | undefined, packId: string, which: string): T[] {
+  if (listing === undefined) {
+    throw new Error(
+      `rule pack '${packId}' needs the snapshot's '${which}' listing, which is absent. ` +
+        `Refusing to treat a missing listing as an empty one: this pack would report zero findings ` +
+        `and every accepted key it owns would then read as CLEARED. Build the snapshot with '${which}' ` +
+        `(buildSnapshot supplies it), or pass an explicit [] if the vault genuinely has none.`,
+    );
+  }
+  return listing;
+}
+
 /** The snapshot's raw `.md` sources, refusing when the listing is ABSENT (not merely empty). */
 export function requireSources(snapshot: VaultSnapshot, packId: string): SourceFile[] {
   return requireListing(snapshot.sources, packId, "sources");
