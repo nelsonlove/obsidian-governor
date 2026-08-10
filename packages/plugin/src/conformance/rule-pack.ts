@@ -50,9 +50,13 @@ export interface VaultSnapshot {
    * directory order, a directory's files before its subdirectories, pre-order
    * DFS) — NOT sorted. The drift pack's uid checks (E duplicate-uid, F
    * uid-coverage) embed a traversal-ordered sample of paths in their finding
-   * KEY, so they must iterate the exact order `drift_audit.py`'s `iter_notes`
-   * did. Every other pack (and drift's other checks) is order-independent and
-   * reads the sorted listings above. Optional. */
+   * MESSAGE (`detail`), so they must iterate the exact order
+   * `drift_audit.py`'s `iter_notes` did to stay message-parity with the
+   * Python rail. The traversal order does NOT feed the finding KEY for E/F —
+   * that key is deliberately count/order-independent (issue #136) — but it
+   * still governs `detail` and must match. Every other pack (and drift's
+   * other checks) is order-independent and reads the sorted listings above.
+   * Optional. */
   walkOrder?: string[];
   /** Raw text of the specific `.obsidian` config files the drift pack reads —
    * `.obsidian/community-plugins.json`, `.obsidian/plugins/quickadd/data.json`,
