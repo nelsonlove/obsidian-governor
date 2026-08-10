@@ -88,18 +88,35 @@ export function stripLeadingBom(text: string): string {
  */
 export const LEADING_FRONTMATTER_RE = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/;
 
+/**
+ * The raw YAML text of `markdown`'s leading frontmatter, or null when it has
+ * none — the ONE recognition step, factored out so the parsers below and every
+ * guard outside this package share it rather than each writing
+ * `LEADING_FRONTMATTER_RE.exec(stripLeadingBom(…))` again. Three copies of one
+ * expression is how the shape drifts.
+ *
+ * Callers must pass the bytes that will actually be honored, never a
+ * normalized copy. That clause is #126's second lesson, learned after the
+ * first fix: the guard had closed a BOM mismatch while the identical class
+ * stayed open on `\r`, because it scanned a line-ending-folded copy while the
+ * write path decided over raw bytes. Recognizing the right shape is only half
+ * of it — both sides must be looking at the same document.
+ */
+export function leadingFrontmatterBlock(markdown: string): string | null {
+  const m = LEADING_FRONTMATTER_RE.exec(stripLeadingBom(markdown));
+  return m ? m[1] : null;
+}
+
 /** Extract & parse the leading YAML frontmatter of a markdown string; null when there is none. `parseYaml` injected. */
 export function frontmatterOf(
   markdown: string,
   parseYaml: (yaml: string) => unknown
 ): Record<string, unknown> | null {
-  // Obsidian reads a note's frontmatter only when `---` is its very first
-  // line (a BOM before it is transparent — stripLeadingBom).
-  const m = LEADING_FRONTMATTER_RE.exec(stripLeadingBom(markdown));
-  if (!m) return null;
+  const block = leadingFrontmatterBlock(markdown);
+  if (block === null) return null;
   let parsed: unknown;
   try {
-    parsed = parseYaml(m[1]);
+    parsed = parseYaml(block);
   } catch {
     return null;
   }
@@ -708,9 +725,13 @@ class BlockReader {
  * comment above for exactly what is parsed and what is refused.
  */
 export function parseGuardFrontmatter(markdown: string): Record<string, unknown> | null {
-  const m = LEADING_FRONTMATTER_RE.exec(stripLeadingBom(markdown));
-  if (!m) return null;
-  const reader = new BlockReader(m[1].split(/\r?\n/));
+  // main's #146 factored the ONE fence recognizer out as leadingFrontmatterBlock
+  // ("callers must pass the bytes that will actually be honored, never a
+  // normalized copy"). Bind to it rather than re-deriving the fence here — the
+  // whole point of that factoring is that a third copy cannot drift.
+  const block = leadingFrontmatterBlock(markdown);
+  if (block === null) return null;
+  const reader = new BlockReader(block.split(/\r?\n/));
 
   // A FLOW collection at the document root -- `{}` is the real-world instance
   // (an Apple Notes import writes notes whose entire frontmatter is `{}`). It

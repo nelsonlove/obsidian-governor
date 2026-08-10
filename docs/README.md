@@ -26,6 +26,7 @@ surface, the socket/bridge architecture, the path allowlist). These docs go deep
 | [scope-provider.md](scope-provider.md) | The scope provider module: Johnny Decimal `jd:` addressing and read-only allocation (compute, not reserve). |
 | [vocabulary.md](vocabulary.md) | The vocabulary provider module: read-only validation of tags, properties, types, and glossary terms. |
 | [conformance.md](conformance.md) | The TS conformance engine: rule packs, the ratchet (baseline-diffed findings), the ported legacy checks, and the headless CLI. |
+| [reference.md](reference.md) | The precise operational contracts: addressing (`uid:`/schemes), write queue & journal semantics, `if_rev`/idempotency, advisory claims, the path allowlist and its oracles, external-tool trust, Code Mode. |
 
 ## How the pieces fit — the Assent review channel
 
@@ -104,8 +105,22 @@ accept verb to an agent.
   installed); the review plugin's pending-index publisher is live. Live-verification passes
   are recorded per-PR in the project's build records rather than restated here.
 - **Known-open perimeter issues** (tracked publicly, milestone `0.8.1 — perimeter`): the
-  standalone `packages/server` fs-failover surface has no accept-guard (#104), and several
-  plugin-gated tools (`create_note_from_template`, `obsidian_run_command`,
-  `fileclass_insert_fields`) are not yet gated (#105). The acceptance model's guarantees
-  below are stated for the **plugin's guarded write surfaces**; these issues are the honest
-  boundary of that claim until closed.
+  standalone `packages/server` fs-failover surface now **does** enforce the accept-forbidden
+  guard — it is applied in `VaultImpl`, the shared primitive both that surface and the
+  `FilesystemBackend` delegate to — but **#104 remains open**: the guard decides frontmatter
+  values over a hand-rolled YAML subset, so constructs the vault's real YAML honors but the
+  subset does not model are still a gap; `moveNote`'s backlink rewrite is an unguarded
+  content write; and a live-vault read-back confirming the guard recognizes everything
+  Obsidian honors is still owed. Of the tools tracked by **#105**, only `obsidian_run_command`
+  is gated. `obsidian_create_note_from_template` is **not**: #79 gated the `obsidian_cli`
+  twin (`create template=`) in `tools-cli.ts`, while the MCP tool lives in
+  `tools-integrations.ts` and calls Templater directly, reaching neither that guard nor
+  `obsidian-backend`'s. `fileclass_insert_fields` is not gated either. The acceptance model's guarantees below are stated for the **plugin's guarded write
+  surfaces**; these issues are the honest boundary of that claim until closed. **Separately** (#92): that same `packages/server`
+  fs-failover surface has no write journal and no serialized write queue either — those
+  live in the plugin's kernel, which `packages/server` does not and must not depend on. FS-mode
+  writes are refused by default (`Error [fs_writes_disabled]`) and require an explicit,
+  documented opt-in (`VAULT_MCP_FS_ALLOW_WRITES=true`); when enabled, writes made in FS mode
+  are **not** journaled or serialized against concurrent connections until Obsidian
+  reconnects. "Every write is journaled" is true of the **plugin's kernel-guarded path**
+  only, never of this fallback.

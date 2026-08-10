@@ -5,7 +5,7 @@ A path is not an identity. Rename a note, move it into a folder, let a template 
 longer exists reads as "create a new note here"). The identity substrate gives an agent a
 **stable** way to name a note, and a **read-only** way to see what has drifted.
 
-The top-level [README](../README.md#addressing-notes-by-uid) carries the full prose; this is
+The [reference](reference.md#addressing-notes-by-uid) carries the full prose; this is
 the reference for the tools and where they live.
 
 ## The uid index and `uid:` addressing
@@ -112,7 +112,7 @@ including inside batches and behind `uid:`/`jd:` addressing, which resolve *befo
 so they can't be a way around it — and every enumerating tool bounds its own iteration by the
 same rule, **filtering before it reads rather than after**. The full per-surface table
 (search, listings, backlinks, resolve, tags, bookmarks, Dataview/CLI refusal, and the four
-documented "known oracles") is in the [README](../README.md#the-path-allowlist).
+documented "known oracles") is in the [reference](reference.md#the-path-allowlist).
 
 For the identity tools specifically: `obsidian_resolve_uid`, `obsidian_check_links`, and
 `obsidian_repoint_link` are all filtered as above — a uid carried only outside your allowlist
