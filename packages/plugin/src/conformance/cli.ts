@@ -249,13 +249,46 @@ export function writeFence(noteText: string, body: string): string {
   return noteText.replace(re, () => block);
 }
 
+/**
+ * Refusal text when the baseline is missing, or null when the run may proceed.
+ *
+ * A MISSING baseline must not silently read as empty: an empty baseline makes
+ * every finding NEW and every accepted-debt key CLEARED — a report that looks
+ * like catastrophic regression but is really a missing file, and the shape most
+ * likely to be mistaken for a real result. This is the same silent-zero class
+ * the engine's pack sentinels already refuse (`conformance_engine/pack_error`);
+ * the baseline gets the same treatment.
+ *
+ * `--no-baseline` is the explicit opt-in for a genuine from-zero run (a first
+ * run, or a deliberate reset) — the refusal is about the SILENT case, not about
+ * forbidding zero baselines.
+ */
+export function baselineMissingRefusal(baselinePath: string, exists: boolean, noBaseline: boolean): string | null {
+  if (noBaseline || exists) return null;
+  return (
+    `baseline not found at ${baselinePath} — refusing to run against an empty baseline, which would report every ` +
+    `finding as NEW and every accepted key as CLEARED. Point at it with --baseline=<path>, or pass --no-baseline ` +
+    `to run from zero deliberately.`
+  );
+}
+
 async function main(argv: string[]): Promise<void> {
   const rebaseline = argv.includes("--rebaseline");
   const rootArg = argv.find((a) => a.startsWith("--root="))?.slice("--root=".length);
   const root = rootArg ? resolve(rootArg) : discoverRoot(process.cwd());
   const baselineArg = argv.find((a) => a.startsWith("--baseline="))?.slice("--baseline=".length);
   const baselinePath = baselineArg ? resolve(baselineArg) : join(root, BASELINE_REL);
-  const baselineText = existsSync(baselinePath) ? await readFile(baselinePath, "utf8") : "";
+  // A MISSING baseline is refused, not silently treated as empty. An empty
+  // baseline makes every finding read NEW and every accepted-debt key read
+  // CLEARED — a report that looks like catastrophic regression but is really a
+  // missing file, and the shape most likely to be mistaken for a real result.
+  // This is the silent-zero class the engine's pack sentinels already refuse;
+  // the baseline deserves the same treatment. `--no-baseline` is the explicit
+  // opt-in for a genuine from-zero run (a first run, or a deliberate reset).
+  const noBaseline = argv.includes("--no-baseline");
+  const refusal = baselineMissingRefusal(baselinePath, existsSync(baselinePath), noBaseline);
+  if (refusal) throw new Error(refusal);
+  const baselineText = !noBaseline && existsSync(baselinePath) ? await readFile(baselinePath, "utf8") : "";
 
   const res = await runConformance({
     root,

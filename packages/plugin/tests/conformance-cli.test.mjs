@@ -119,3 +119,32 @@ describe("legacyPacks gate — default ON since #116, opt-out with legacyPacks:f
     }
   });
 });
+
+describe("baselineMissingRefusal (#116 — a missing baseline must fail loudly)", () => {
+  test("missing baseline refuses, naming the path and both escapes", async () => {
+    const { baselineMissingRefusal } = await import("../src/conformance/cli.ts");
+    const r = baselineMissingRefusal("/vault/Assent/Build/conformance/Conformance baseline.md", false, false);
+    assert.ok(r, "expected a refusal");
+    assert.match(r, /baseline not found/);
+    assert.match(r, /Conformance baseline\.md/);
+    assert.match(r, /--baseline=/);
+    assert.match(r, /--no-baseline/);
+  });
+
+  test("an existing baseline proceeds", async () => {
+    const { baselineMissingRefusal } = await import("../src/conformance/cli.ts");
+    assert.equal(baselineMissingRefusal("/x", true, false), null);
+  });
+
+  test("--no-baseline is the explicit from-zero opt-in, even when missing", async () => {
+    const { baselineMissingRefusal } = await import("../src/conformance/cli.ts");
+    assert.equal(baselineMissingRefusal("/x", false, true), null);
+  });
+
+  test("the refusal is about SILENCE, not about forbidding zero baselines", async () => {
+    const { baselineMissingRefusal } = await import("../src/conformance/cli.ts");
+    // missing + explicit opt-in => allowed; missing + no opt-in => refused.
+    assert.equal(baselineMissingRefusal("/x", false, true), null);
+    assert.ok(baselineMissingRefusal("/x", false, false));
+  });
+});
