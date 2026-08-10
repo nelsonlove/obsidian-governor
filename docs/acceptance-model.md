@@ -50,13 +50,27 @@ acceptance fence behind one invisible byte was therefore *scanned clean and hono
 landing* — the guard was stricter than reality, which reads as caution and behaves as a hole.
 
 The rule this leaves behind: **anything deciding "would this content assert acceptance?" must
-recognize at least what the vault will honor.** Both sides now share `stripLeadingBom` and
-`LEADING_FRONTMATTER_RE` from `write-notes-compose.ts` rather than re-deriving the shape, and
-the property is pinned by `tests/accept-fence-parity.test.mjs` — a corpus crossing every
-tolerated fence variation with accepting and clean payloads, asserting *write path would honor
-⟹ guard refuses*. Loosening one side without the other fails that suite. The scanner is still
-permitted to be **broader** (it also scans embedded fences, conservatively); it is never
-permitted to be narrower.
+recognize at least what the vault will honor — and must decide over the same bytes the vault
+will honor.** The second clause is not a flourish. A guard that normalizes a *copy* (folding
+line endings, expanding escapes, stripping marks) and scans that has stopped looking at the
+document that lands; review of the first fix found the identical bug already re-opened on a
+different byte, because a lone `\r` is content to the write path and a line break to a folded
+scan.
+
+So the boundary is defined once, in `@vault-mcp/core`
+(`frontmatter-boundary.ts`: `stripLeadingBom`, `LEADING_FRONTMATTER_RE`,
+`leadingFrontmatterBlock`) — in **core** specifically, so both the Obsidian backend and the
+filesystem backend can bind to it rather than each re-deriving a boundary. `frontmatterOf` and
+the accept scanner's leading-fence check are two callers of that one recognizer, run against
+the raw honored bytes.
+
+The scanner then adds a deliberately **broader** second pass — embedded fences over a
+line-ending-folded copy — because appended content the note will carry cannot be read back
+pre-exec. Broader is fine; **narrower is the bypass.** The property is pinned by
+`tests/accept-fence-parity.test.mjs`, which asserts *write path would honor ⟹ guard refuses*
+across every tolerated fence variation, plus the normalization cases that motivated the second
+pass, plus the cost of the conservatism (prose between thematic breaks is refused — a chosen
+trade, pinned so it reads as a choice).
 
 ### What counts as "accepted" (every value-type, every key spelling)
 
@@ -172,16 +186,29 @@ non-`.md` paths, the opaque surfaces that could write settings from inside are w
 denies, and the CLI proxy bars its own param values from `.obsidian` territory
 (`configPathRefusal`), so no agent-reachable path rewrites the policy.
 
-The former lesser residual — `create template=<t>` drawing frontmatter from a template note —
-is CLOSED by the **template guard**: the template is a vault file, so it is resolved (in the
-core Templates folder, exactly where the CLI resolves it) and scanned with the same rule
-pre-exec; unresolvable fails closed. A re-enabled `quickadd:run-template path=<p>` gets the
-same static scan as belt (its runtime-computed frontmatter stays opaque, so it remains in the
-default-denied set).
+`create template=<t>` draws frontmatter from a template note the call only *names*. The
+**template guard** resolves it (in the core Templates folder, exactly where the CLI resolves
+it) and scans it with the same rule pre-exec; unresolvable fails closed. That closes the
+**static** case: a template carrying a literal accepted fence is refused.
 
-What remains open, honestly named: a periodic create with no `content=` draws its body from
-the Daily/Periodic Notes plugin config's template — no param names it; the same class as the
-documented `obsidian_periodic_note` write residual.
+It does **not** close the path, and saying otherwise would be worse than the gap itself. The
+vault expands Templates variables *after* the guard has scanned — so the bytes inspected are
+not the bytes that land, which is the #126 defect shape one level up: an expansion can emit
+both an acceptance assertion and the fence characters around it from a template that literally
+contains neither. **The scan is a floor, not a proof.** The same limit applies to a re-enabled
+`quickadd:run-template path=<p>` (which is why it stays in the default-denied set).
+
+What remains open, honestly named:
+
+- **post-scan expansion** on the template path, above — the honest statement is "closed
+  against static accepted fences", never "closed";
+- a **periodic create with no `content=`** draws its body from the Daily/Periodic Notes plugin
+  config's template — no param names it; the same class as the documented
+  `obsidian_periodic_note` write residual.
+
+The pattern connecting every one of these: **the guard must inspect the bytes that will be
+honored.** Each residual is a place where something else — an escape expansion, a template
+processor, another plugin's config — produces the honored bytes after the guard has looked.
 
 ## Why this is structural, not procedural
 
