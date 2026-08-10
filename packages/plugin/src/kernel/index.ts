@@ -111,7 +111,8 @@ export {
   mergeModuleConfig,
   toolDocDrift,
   toolDocReadOnlyDrift,
-  collect as collectModuleConfig,
+  safeValidate,
+  collect,
 } from "./modules/index.js";
 export type {
   ModuleDescription,

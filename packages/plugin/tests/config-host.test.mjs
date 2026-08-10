@@ -20,7 +20,7 @@
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { collect, toolDocDrift, toolDocReadOnlyDrift, ModuleRegistry } from "../src/kernel/modules/index.ts";
+import { collect, toolDocDrift, toolDocReadOnlyDrift, safeValidate, ModuleRegistry } from "../src/kernel/modules/index.ts";
 
 const RO = { readOnlyHint: true };
 
@@ -215,6 +215,41 @@ describe("collect: ConfigBinding — a module whose config predates the module h
     const settings0 = { legacy: { config: { root: "A", depth: 1 } } };
     const settings1 = mod.configBinding.write(settings0, { root: undefined });
     assert.deepEqual(mod.configBinding.read(settings1), { depth: 1 });
+  });
+});
+
+describe("safeValidate — the shared throw-containment collect() and the settings tab both use", () => {
+  test("no validate() ⇒ []", () => {
+    assert.deepEqual(safeValidate(undefined, {}), []);
+  });
+
+  test("a passing validate()'s problems pass through unchanged", () => {
+    assert.deepEqual(safeValidate(() => ["bad x"], {}), ["bad x"]);
+  });
+
+  test("a valid config's empty problems list passes through unchanged", () => {
+    assert.deepEqual(safeValidate(() => [], {}), []);
+  });
+
+  test("a throwing validate() is contained as one problem string, using the default wording", () => {
+    const problems = safeValidate(() => { throw new Error("kaboom"); }, {});
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /config validate\(\) threw/);
+    assert.match(problems[0], /kaboom/);
+  });
+
+  test("a custom describeThrow formats the contained throw differently, for a caller with its own wording", () => {
+    const problems = safeValidate(
+      () => { throw new Error("kaboom"); },
+      {},
+      (msg) => `module 'x' config validate() threw: ${msg}`,
+    );
+    assert.deepEqual(problems, ["module 'x' config validate() threw: kaboom"]);
+  });
+
+  test("a non-Error throw still produces a readable message", () => {
+    const problems = safeValidate(() => { throw "a string throw"; }, {});
+    assert.match(problems[0], /a string throw/);
   });
 });
 

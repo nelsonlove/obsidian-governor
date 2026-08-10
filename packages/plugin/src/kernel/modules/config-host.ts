@@ -24,7 +24,7 @@
 // Kernel-module rules: pure, no `obsidian` imports, headlessly testable.
 
 import type { ModulePosture, VaultModule } from "./module.js";
-import type { ConfigField, SurfaceDoc, ToolDoc } from "./manifest.js";
+import { safeValidate, type ConfigField, type SurfaceDoc, type ToolDoc } from "./manifest.js";
 import { mergeModuleConfig, type ModuleSettings } from "./settings.js";
 
 // ConfigBinding itself lives in manifest.ts (re-exported from the barrel
@@ -79,12 +79,7 @@ export function collect(modules: VaultModule[], moduleSettings: ModuleSettings, 
       ? mergeModuleConfig(manifest?.config?.defaults, m.configBinding.read(settings))
       : mergeModuleConfig(manifest?.config?.defaults, moduleSettings[m.id]?.config);
     const fields: HostedField[] = declaredFields.map((f) => ({ ...f, value: merged[f.key] }));
-    let problems: string[] = [];
-    try {
-      problems = manifest?.config?.validate?.(merged) ?? [];
-    } catch (e) {
-      problems = [`config validate() threw: ${e instanceof Error ? e.message : String(e)}`];
-    }
+    const problems = safeValidate(manifest?.config?.validate, merged);
     return {
       id: m.id,
       posture: m.posture,

@@ -28,6 +28,7 @@ export {
 export {
   toolDocDrift,
   toolDocReadOnlyDrift,
+  safeValidate,
   type ConfigBinding,
   type ConfigField,
   type ConfigFieldType,

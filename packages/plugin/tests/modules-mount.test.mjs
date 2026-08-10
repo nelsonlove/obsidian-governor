@@ -260,6 +260,30 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
     assert.equal(settings0.schemes[0].excludedRoots, undefined);
   });
 
+  test("scheme's ConfigBinding self-heals an explicitly empty schemes: [] instead of silently no-opping the write", () => {
+    // The generic renderer always shows the scheme fields (unlike the old
+    // hand-built section, which hid itself when no JD instance existed) —
+    // an empty schemes array must not turn a field edit into a silent no-op.
+    const scheme = builtinModules(deps()).find((m) => m.id === "scheme");
+    const settings0 = { schemes: [] };
+    const settings1 = scheme.configBinding.write(settings0, { contentDecimalFloor: 5 });
+    assert.equal(settings1.schemes.length, 1);
+    assert.equal(settings1.schemes[0].provider, "johnny-decimal");
+    assert.deepEqual(scheme.configBinding.read(settings1), { contentDecimalFloor: 5 });
+    // The original (empty) array is untouched.
+    assert.deepEqual(settings0.schemes, []);
+  });
+
+  test("scheme's ConfigBinding refuses to write JD-shaped keys into a schemes[0] of a foreign provider", () => {
+    const scheme = builtinModules(deps()).find((m) => m.id === "scheme");
+    const settings0 = { schemes: [{ id: "other", provider: "some-other-provider", config: { anything: true } }] };
+    assert.deepEqual(scheme.configBinding.read(settings0), {});
+    const settings1 = scheme.configBinding.write(settings0, { contentDecimalFloor: 5 });
+    // No-op: the foreign instance's config is untouched, not corrupted with
+    // a JD-shaped key it doesn't understand.
+    assert.deepEqual(settings1, settings0);
+  });
+
   test("scheme's manifest validate rejects an invalid expandedAreas token loudly (subsumes validateJdConfig)", () => {
     const scheme = builtinModules(deps()).find((m) => m.id === "scheme");
     const problems = scheme.manifest.config.validate({ expandedAreas: ["not-an-area"] });

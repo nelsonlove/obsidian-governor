@@ -214,26 +214,52 @@ const SCHEME_MANIFEST: ModuleManifest = {
   },
 };
 
+/** The live `schemes[0]` instance the binding operates on, falling back to
+ * `DEFAULT_SCHEMES` (which always has exactly one entry) when `schemes` is
+ * missing OR explicitly empty — an empty `schemes: []` must not turn the
+ * ALWAYS-RENDERED scheme section's fields into a silent no-op the way an
+ * absent instance would have (the old hand-built section simply hid itself
+ * when `jdInstance` was falsy; the generic renderer has no such per-instance
+ * visibility, so the binding self-heals instead of failing quietly). */
+function currentSchemes(settings: unknown): SchemeInstanceConfig[] {
+  const s = (settings as { schemes?: SchemeInstanceConfig[] }).schemes;
+  return s && s.length > 0 ? s : DEFAULT_SCHEMES;
+}
+
 /** Resolves the scheme manifest's flat field keys against the EXISTING
  * settings shape (`settings.schemes[0].config` / `.excludedRoots`) — no new
  * storage, no migration. Non-mutating: `write` always returns a fresh
  * settings object, never touching the one it was handed (the discipline
  * connection-ui's pre-existing `updateJdConfig`/`updateExcludedRoots`
- * already followed for this exact data). */
+ * already followed for this exact data).
+ *
+ * Guarded on `provider === "johnny-decimal"`, mirroring the pre-existing
+ * hand-built section's own `jdInstance.provider === "johnny-decimal"` check
+ * (deleted from connection-ui.ts, re-homed here): today `SchemeInstanceConfig.provider`
+ * is a single-value literal type, so a mismatch is unreachable via anything
+ * TypeScript lets you construct — but a hand-edited data.json could still
+ * carry a foreign provider name, and this manifest's fields are JD-shaped.
+ * `read()` reports blank (nothing to show) and `write()` REFUSES (no-op,
+ * settings returned unchanged) rather than splicing JD keys into a config
+ * namespace a different provider owns — protecting the other provider's
+ * config is worth more here than loud-refusal UI plumbing for a case no
+ * shipped config can reach; the alternative (silently "fixing" it into a JD
+ * instance) would be the exact silent-coercion this PR's own constraint
+ * forbids.
+ */
 const schemeBinding: ConfigBinding = {
   read(settings) {
-    const jd = ((settings as { schemes?: SchemeInstanceConfig[] }).schemes ?? DEFAULT_SCHEMES)[0];
-    if (!jd) return {};
+    const jd = currentSchemes(settings)[0];
+    if (!jd || jd.provider !== "johnny-decimal") return {};
     return {
       ...(jd.config ?? {}),
       ...(jd.excludedRoots !== undefined ? { excludedRoots: jd.excludedRoots } : {}),
     };
   },
   write(settings, patch) {
-    const s = settings as { schemes?: SchemeInstanceConfig[] };
-    const schemes = s.schemes ?? DEFAULT_SCHEMES;
+    const schemes = currentSchemes(settings);
     const jd = schemes[0];
-    if (!jd) return settings;
+    if (!jd || jd.provider !== "johnny-decimal") return settings;
     const { excludedRoots, ...configPatch } = patch;
     const nextConfig: Record<string, unknown> = { ...(jd.config ?? {}) };
     for (const [k, v] of Object.entries(configPatch)) {
@@ -245,7 +271,7 @@ const schemeBinding: ConfigBinding = {
       if (excludedRoots === undefined) delete nextInstance.excludedRoots;
       else nextInstance.excludedRoots = excludedRoots as string[];
     }
-    return { ...s, schemes: [nextInstance, ...schemes.slice(1)] };
+    return { ...(settings as object), schemes: [nextInstance, ...schemes.slice(1)] };
   },
 };
 

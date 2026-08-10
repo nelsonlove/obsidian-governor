@@ -178,3 +178,31 @@ export function toolDocReadOnlyDrift(
   }
   return problems;
 }
+
+/**
+ * Run a (possibly absent, possibly throwing) `config.validate` over
+ * `config`, containing a throw as one problem string instead of letting it
+ * propagate — the exact discipline `ConfigHost.collect` and the settings
+ * tab's own re-derivation of the current problems both need identically, so
+ * this is the one place that logic lives rather than two copies drifting.
+ * (`ModuleRegistry.registerAll` deliberately does NOT use this: its two-tier
+ * message shape — a per-problem `module '<id>' config: <p>` prefix for real
+ * findings, a differently-worded `module '<id>' config validate() threw:
+ * <msg>` for a throw, no double-wrapping either way — doesn't reduce to one
+ * `describeThrow` callback without re-introducing the double-wrap this
+ * helper exists to avoid; it keeps its own equivalent try/catch instead.)
+ * `describeThrow` defaults to the config-host/settings-tab wording; absent
+ * `validate` always yields `[]`, matching every caller's prior behavior.
+ */
+export function safeValidate(
+  validate: ((config: Record<string, unknown>) => string[]) | undefined,
+  config: Record<string, unknown>,
+  describeThrow: (message: string) => string = (m) => `config validate() threw: ${m}`,
+): string[] {
+  if (!validate) return [];
+  try {
+    return validate(config);
+  } catch (e) {
+    return [describeThrow(e instanceof Error ? e.message : String(e))];
+  }
+}

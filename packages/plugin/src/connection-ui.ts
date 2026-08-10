@@ -10,6 +10,7 @@ import {
   ModuleRegistry,
   collect,
   mergeModuleConfig,
+  safeValidate,
   type HostedField,
   type HostedModule,
   type VaultModule,
@@ -411,7 +412,15 @@ export class VaultMcpSettingTab extends PluginSettingTab {
       case "select":
         setting.addDropdown((d) => {
           for (const opt of field.options ?? []) d.addOption(opt, opt);
-          d.setValue(typeof field.value === "string" ? field.value : (field.options?.[0] ?? ""));
+          // Only call setValue for a value that's actually one of the
+          // options — never fabricate a "selected" first option for an
+          // unset/unrecognized value. A no-op setValue would visually
+          // suggest that option is the saved value when nothing was ever
+          // committed; leaving the dropdown at its native default (the
+          // browser's own "first option" rendering) doesn't claim that.
+          if (typeof field.value === "string" && field.options?.includes(field.value)) {
+            d.setValue(field.value);
+          }
           d.onChange((value) => commit({ [field.key]: value }));
         });
         break;
@@ -501,11 +510,6 @@ export class VaultMcpSettingTab extends PluginSettingTab {
   }
 
   private moduleProblems(mod: VaultModule): string[] {
-    const config = this.currentModuleConfig(mod);
-    try {
-      return mod.manifest?.config?.validate?.(config) ?? [];
-    } catch (e) {
-      return [`config validate() threw: ${e instanceof Error ? e.message : String(e)}`];
-    }
+    return safeValidate(mod.manifest?.config?.validate, this.currentModuleConfig(mod));
   }
 }
