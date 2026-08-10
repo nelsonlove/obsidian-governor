@@ -7,11 +7,9 @@
 // ready-to-write rebaseline body come out. `main` is the thin wrapper that
 // reads argv/env, loads the baseline note, prints, and sets the exit code.
 //
-// Phase 1 wired the two module packs (vocab + scheme). Three of the four
-// legacy checks (structure+legacy-scope from conformance_check, port, ste) are
-// ported and join the list behind the opt-in `legacyPacks` flag
-// (`--legacy-packs`), default off until the Phase-3 scope ruling + staged
-// rebaseline; drift_audit remains Python-only.
+// The two module packs (vocab + scheme) always run. All four ported legacy
+// checks (structure/port/ste/drift) are opt-in behind `legacyPacks` — the full
+// legacy rail now lives in TS, but stays gated until the staged rebaseline.
 
 import { readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -33,14 +31,15 @@ export interface RunOpts {
   schemes: SchemeInstanceConfig[];
   excludedRoots?: string[];
   /**
-   * Register the ported legacy checks (structure/port/ste). Default OFF: they
-   * reproduce the Python scripts over the governed tree, but the accepted
-   * baseline predates the vault consolidation (its non-drift keys are
-   * pre-consolidation paths), so a live run would gate NONCONFORMING on ~the
-   * full keyset with no sanctioned exit — and the Phase-1 guard correctly
-   * refuses rebaselining the live baseline. The packs stay opt-in until the
-   * scope ruling + staged baseline migration. The packs are built, tested, and
-   * parity-verified regardless; this only controls their inclusion in a run.
+   * Register the four ported legacy checks (structure/port/ste/drift — the
+   * whole Python rail, now in TS). Default OFF: they reproduce the Python
+   * scripts over the governed tree, but the accepted baseline predates the
+   * vault consolidation (its non-drift keys are pre-consolidation paths), so a
+   * live run would gate NONCONFORMING on ~the full keyset with no sanctioned
+   * exit — and the live-baseline rebaseline guard correctly refuses. The packs
+   * stay opt-in until the scope ruling + staged baseline migration. Every pack
+   * is built, tested, and parity-verified regardless; this only controls their
+   * inclusion in a run.
    */
   legacyPacks?: boolean;
 }
@@ -65,9 +64,10 @@ export async function runConformance(opts: RunOpts): Promise<RunResult> {
   packs.push(vocabPack(vocabInstances.map((i) => i.provider)));
   // scheme instances: from settings, independent of the listing.
   packs.push(schemePack(makeRegistry(opts.schemes).instances()));
-  // ported legacy checks: native packs over the snapshot's raw sources +
-  // blueprint listing (conformance_check / port_lint / ste_lint).
-  // Legacy check ports — opt-in until the scope ruling + staged rebaseline.
+  // ported legacy checks: native packs over the snapshot's raw sources,
+  // blueprint listing, and config/existence inputs (conformance_check /
+  // port_lint / ste_lint / drift_audit — the full legacy rail, all in TS).
+  // Opt-in until the scope ruling + staged rebaseline.
   if (opts.legacyPacks) {
     packs.push(structurePack());
     packs.push(portPack());
@@ -138,14 +138,16 @@ export function writeFence(noteText: string, body: string): string {
   return noteText.replace(re, () => block);
 }
 
-// Three of the four legacy checks are now ported (structure ← conformance_check,
-// port ← port_lint, ste ← ste_lint); drift_audit is still Python-only. Until it
-// is ported too, a `--rebaseline` against the LIVE baseline would overwrite its
-// 56 accepted drift_audit findings (they no longer appear in a live TS run) —
-// destroying accepted debt. So rebaselining the default (live) baseline is
-// refused while the pack set is incomplete; a fixture baseline (explicit
-// --baseline=) is always allowed.
-const PHASE1_PACKS_INCOMPLETE = true;
+// All four legacy checks are now ported (structure ← conformance_check, port ←
+// port_lint, ste ← ste_lint, drift ← drift_audit) — the Python rail is retired.
+// The live baseline still predates the vault consolidation (its non-drift keys
+// are pre-consolidation paths) and the legacy packs are opt-in, so a
+// `--rebaseline` against the LIVE baseline would strand the accepted debt (a
+// default run without `--legacy-packs` drops every legacy key; even with them
+// on, the pre-consolidation paths churn). Rebaselining the default (live)
+// baseline stays refused until the staged migration; a fixture baseline
+// (explicit --baseline=) is always allowed.
+const GUARD_LIVE_REBASELINE = true;
 
 async function main(argv: string[]): Promise<void> {
   const rebaseline = argv.includes("--rebaseline");
@@ -153,11 +155,11 @@ async function main(argv: string[]): Promise<void> {
   const root = rootArg ? resolve(rootArg) : discoverRoot(process.cwd());
   const baselineArg = argv.find((a) => a.startsWith("--baseline="))?.slice("--baseline=".length);
   const baselinePath = baselineArg ? resolve(baselineArg) : join(root, BASELINE_REL);
-  if (rebaseline && !baselineArg && PHASE1_PACKS_INCOMPLETE) {
+  if (rebaseline && !baselineArg && GUARD_LIVE_REBASELINE) {
     throw new Error(
-      "refusing to --rebaseline the live baseline while drift_audit is unported — " +
-        "it would overwrite the accepted drift_audit debt (absent from a live TS run). Target a fixture with --baseline=<path>, " +
-        "or wait for the drift_audit port.",
+      "refusing to --rebaseline the live baseline — it predates the vault consolidation and the legacy " +
+        "packs are opt-in, so it would strand the accepted debt. Target a fixture with --baseline=<path>, " +
+        "or wait for the staged baseline migration.",
     );
   }
   const baselineText = existsSync(baselinePath) ? await readFile(baselinePath, "utf8") : "";

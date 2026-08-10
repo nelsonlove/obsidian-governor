@@ -36,6 +36,30 @@ export interface VaultSnapshot {
    * sources — emitted-H2 derivation + `{% include %}` resolution). Optional
    * for the same reason. */
   blueprints?: SourceFile[];
+  /** Every FILE path under root (all extensions, not just note types), for the
+   * drift pack's `.exists()` checks (`user-script` / `module` / `template`
+   * surfaces resolve to arbitrary files — `.js` library scripts, `.md`
+   * templates). Skip-dirs and `excludedRoots` are pruned, matching the walk.
+   * Optional so a hand-built snapshot (tests, other packs) is unaffected. */
+  files?: string[];
+  /** Every DIRECTORY path under root (skip-dirs/`excludedRoots` pruned), for
+   * the drift pack's `.exists()` checks and its category-collision scan (J,
+   * which enumerates the `00-09 System` spine's direct children). Optional. */
+  dirs?: string[];
+  /** Every collected `.md` note path in Python-`rglob` TRAVERSAL ORDER (raw
+   * directory order, a directory's files before its subdirectories, pre-order
+   * DFS) — NOT sorted. The drift pack's uid checks (E duplicate-uid, F
+   * uid-coverage) embed a traversal-ordered sample of paths in their finding
+   * KEY, so they must iterate the exact order `drift_audit.py`'s `iter_notes`
+   * did. Every other pack (and drift's other checks) is order-independent and
+   * reads the sorted listings above. Optional. */
+  walkOrder?: string[];
+  /** Raw text of the specific `.obsidian` config files the drift pack reads —
+   * `.obsidian/community-plugins.json`, `.obsidian/plugins/quickadd/data.json`,
+   * and each `.obsidian/plugins/<id>/manifest.json` — keyed by their
+   * vault-relative path. These live under a skip-dir, so the walk never
+   * collects them; the snapshot reads this fixed set explicitly. Optional. */
+  obsidianConfig?: SourceFile[];
 }
 
 export interface RulePack {

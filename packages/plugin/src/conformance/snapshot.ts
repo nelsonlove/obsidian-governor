@@ -16,7 +16,7 @@
 // excludedRoots drops whole subtrees BEFORE any read (the seam that keeps the
 // archaeology tree out of the rail, aligned with worker-3's schemes[].excludedRoots).
 
-import { readdir, readFile } from "node:fs/promises";
+import { opendir, readFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { parseAllFrontmatter } from "@vault-mcp/core";
 import type { VocabNote } from "../kernel/vocab/blueprint.js";
@@ -54,6 +54,28 @@ function splitNote(raw: string): { frontmatter: Record<string, unknown>; body: s
   return { frontmatter, body };
 }
 
+/** One directory's entries in RAW order (the OS `readdir`/`scandir` order), via
+ * `opendir` iteration. This is deliberate, not `readdir`: libuv SORTS
+ * `fs.readdir` results, whereas Python's `Path.rglob`/`os.scandir` (which the
+ * drift pack's traversal-ordered uid checks must match byte-for-byte) yields
+ * raw directory order. `opendir` iteration preserves that raw order, verified
+ * identical to CPython `rglob` over the live vault. */
+async function rawEntries(absDir: string) {
+  const out: import("node:fs").Dirent[] = [];
+  let dir;
+  try {
+    dir = await opendir(absDir);
+  } catch {
+    return out; // unreadable dir — skip, never crash the run
+  }
+  try {
+    for await (const entry of dir) out.push(entry);
+  } catch {
+    return out;
+  }
+  return out;
+}
+
 export async function buildSnapshot(opts: SnapshotOpts): Promise<VaultSnapshot> {
   const excluded = opts.excludedRoots ?? [];
   const skip = new Set([...DEFAULT_SKIP, ...(opts.skipDirs ?? [])]);
@@ -66,23 +88,27 @@ export async function buildSnapshot(opts: SnapshotOpts): Promise<VaultSnapshot> 
   // files, matching Python's `Path.read_text`.
   const sources: SourceFile[] = [];
   const blueprints: SourceFile[] = [];
+  // Drift-pack inputs. `files`/`dirs` are the `.exists()` universe; `walkOrder`
+  // is the `.md` paths in raw traversal order (drift's E/F embed a
+  // traversal-ordered sample in their finding key). See rule-pack.ts.
+  const files: string[] = [];
+  const dirs: string[] = [];
+  const walkOrder: string[] = [];
 
+  // pathlib `rglob("*.md")` traversal: for each directory in pre-order DFS
+  // (siblings in raw scandir order), yield that directory's matching files
+  // BEFORE descending into its subdirectories. Reproduced as two passes per
+  // directory (files first, then subdirs), both in raw `opendir` order, so
+  // `walkOrder` matches CPython's order exactly.
   async function walk(absDir: string): Promise<void> {
-    let entries;
-    try {
-      entries = await readdir(absDir, { withFileTypes: true });
-    } catch {
-      return; // unreadable dir — skip, never crash the run
-    }
+    const entries = await rawEntries(absDir);
+    // Pass 1 — files (raw order).
     for (const entry of entries) {
+      if (entry.isDirectory()) continue;
       const abs = join(absDir, entry.name);
       const vaultPath = toVaultPath(opts.root, abs);
       if (isExcluded(vaultPath, excluded)) continue;
-      if (entry.isDirectory()) {
-        if (skip.has(entry.name)) continue;
-        await walk(abs);
-        continue;
-      }
+      files.push(vaultPath);
       const isMd = entry.name.endsWith(".md");
       const isFileclass = entry.name.endsWith(".fileclass");
       const isBlueprint = entry.name.endsWith(".blueprint");
@@ -105,15 +131,59 @@ export async function buildSnapshot(opts: SnapshotOpts): Promise<VaultSnapshot> 
       if (isMd) {
         paths.push(vaultPath);
         sources.push({ path: vaultPath, text: raw });
+        walkOrder.push(vaultPath); // raw traversal order (drift E/F)
       }
+    }
+    // Pass 2 — subdirectories (raw order).
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const abs = join(absDir, entry.name);
+      const vaultPath = toVaultPath(opts.root, abs);
+      if (isExcluded(vaultPath, excluded)) continue;
+      if (skip.has(entry.name)) continue;
+      dirs.push(vaultPath);
+      await walk(abs);
     }
   }
 
   await walk(opts.root);
+  const obsidianConfig = await readObsidianConfig(opts.root);
   notes.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   paths.sort();
   const byPath = (a: SourceFile, b: SourceFile) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
   sources.sort(byPath);
   blueprints.sort(byPath);
-  return { notes, paths, sources, blueprints };
+  // notes/paths/sources/blueprints are SORTED (order-independent consumers);
+  // files/dirs/walkOrder keep TRAVERSAL order (drift's `.exists()` set is a
+  // Set, but walkOrder's order is load-bearing — leave it unsorted).
+  return { notes, paths, sources, blueprints, files, dirs, walkOrder, obsidianConfig };
+}
+
+/** The fixed set of `.obsidian` config files the drift pack reads. These live
+ * under a skip-dir (`.obsidian`), so the walk never sees them; we read exactly
+ * this set. The plugins directory is enumerated in raw `opendir` order to match
+ * Python's per-subdirectory manifest glob scandir order (matters only for the
+ * last-wins tiebreak when two plugins share a display name). Missing files are
+ * silently omitted — the pack degrades per Python (B guards on the note; A on
+ * the quickadd config being present). */
+async function readObsidianConfig(root: string): Promise<SourceFile[]> {
+  const out: SourceFile[] = [];
+  const single = [".obsidian/community-plugins.json", ".obsidian/plugins/quickadd/data.json"];
+  for (const rel of single) {
+    try {
+      out.push({ path: rel, text: await readFile(join(root, rel), "utf8") });
+    } catch {
+      /* absent — omit */
+    }
+  }
+  for (const entry of await rawEntries(join(root, ".obsidian/plugins"))) {
+    if (!entry.isDirectory()) continue;
+    const rel = `.obsidian/plugins/${entry.name}/manifest.json`;
+    try {
+      out.push({ path: rel, text: await readFile(join(root, rel), "utf8") });
+    } catch {
+      /* no manifest — omit */
+    }
+  }
+  return out;
 }
