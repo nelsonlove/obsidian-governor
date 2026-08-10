@@ -109,11 +109,36 @@ export interface ScopeProvider {
 
   /** The folder a note with address `addr` should live in, given the current
    * vault listing `notes` (so a provider can resolve folder-note names that
-   * only exist as vault state). Null when it cannot be derived. */
+   * only exist as vault state). Null when it cannot be derived.
+   *
+   * Contract note for callers (added post-merge — findings.ts's
+   * schemeFindings relies on this): the result depends ONLY on `addr`'s
+   * container token (`addr.levels[addr.levels.length - 2]`, the folder-name
+   * token one level up from `addr` itself) — never on the rest of `addr`, on
+   * `notes` beyond locating that one token, or on which note is asking. That
+   * lets a caller safely memoize per call keyed on the container token alone
+   * (see `makeExpectedFolderCache` in findings.ts), turning an O(n) scan per
+   * addressed note into one scan per distinct container. A future provider
+   * whose `expectedFolder` legitimately varies WITHIN one container (i.e. two
+   * addresses sharing a container token but resolving to different expected
+   * folders) must not be naively memoized this way — that provider would need
+   * its own cache key, or no caching at the call site at all. */
   expectedFolder(addr: Address, notes: string[]): string | null;
 
   /** The next unused address within `scope`, given `notes`. Null when the
    * capability is absent (`capabilities.allocate === false`) or the scope is
    * full. */
   nextFree(scope: Scope, notes: string[]): Address | null;
+
+  /**
+   * Whether `scope` is EVER capable of allocation, independent of vault
+   * content — a purely structural judgment (no `notes` argument), distinct
+   * from `nextFree` returning null for "this allocatable scope happens to be
+   * full right now". `allocatable: false` may carry a `hint` pointing the
+   * caller at where allocation is possible instead (e.g. a category folded
+   * into an expanded area's band names that area's own scope). Callers still
+   * check `capabilities.allocate` first — this only distinguishes, within an
+   * allocate-capable provider, which scope KINDS the capability applies to.
+   */
+  allocatable(scope: Scope): { allocatable: boolean; hint?: string };
 }

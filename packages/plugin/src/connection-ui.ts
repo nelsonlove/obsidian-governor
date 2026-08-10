@@ -4,7 +4,7 @@ import { buildRegisterCommand } from "./register-command.js";
 import { bridgeDestPath } from "./paths.js";
 import { findClaudeBinary, claudeIsRegistered } from "./claude-cli.js";
 import { DANGEROUS_LIST_DESC } from "./mcp/tools-cli.js";
-import type { JdConfig } from "./kernel/scheme/jd.js";
+import { validateJdConfig, type JdConfig } from "./kernel/scheme/jd.js";
 
 /** Parse a comma-separated text field into a trimmed, non-empty string list.
  * An all-blank input (or one that trims to nothing) yields `undefined` rather
@@ -28,6 +28,25 @@ export function parseFloorField(value: string): number | undefined {
   if (trimmed === "") return undefined;
   const n = Number(trimmed);
   return Number.isNaN(n) ? undefined : n;
+}
+
+/**
+ * Item 4: what `parseFloorField` silently drops. A non-numeric floor entry
+ * (e.g. "abc") parses to `undefined`, which is indistinguishable from a
+ * deliberately blank field — the feature "mysteriously dies" (config saved,
+ * but not what the user typed, with no on-screen sign anything happened).
+ * This surfaces that one case as a human-readable problem string; blank and
+ * genuinely-numeric input (whatever its value — RANGE checking is
+ * `validateJdConfig`'s job, applied separately to the built config) are
+ * never a problem here. Pure, so it's testable without a Setting tab, same
+ * as `parseCommaList`/`parseFloorField` above. */
+export function floorFieldProblem(value: string): string | null {
+  const trimmed = value.trim();
+  if (trimmed === "") return null;
+  if (Number.isNaN(Number(trimmed))) {
+    return `Content-decimal floor: "${trimmed}" is not a number — ignored, the provider default applies.`;
+  }
+  return null;
 }
 
 export function registerCommandFor(app: App): string {
@@ -72,6 +91,10 @@ export class ConnectionSetupModal extends Modal {
 
 export class VaultMcpSettingTab extends PluginSettingTab {
   constructor(app: App, private plugin: VaultMcpPlugin) { super(app, plugin); }
+  /** The Schemes section's inline validation-problem element (item 4) —
+   * undefined when no JD instance is configured (nothing to validate),
+   * rebuilt fresh every `display()` call like the rest of the tab. */
+  private jdWarningEl?: HTMLElement;
   display() {
     const { containerEl } = this;
     containerEl.empty();
@@ -212,9 +235,23 @@ export class VaultMcpSettingTab extends PluginSettingTab {
         .addText((t) => {
           t.setValue(jdConfig.contentDecimalFloor === undefined ? "" : String(jdConfig.contentDecimalFloor));
           t.onChange(async (value) => {
-            await this.updateJdConfig({ contentDecimalFloor: parseFloorField(value) });
+            await this.updateJdConfig({ contentDecimalFloor: parseFloorField(value) }, floorFieldProblem(value));
           });
         });
+
+      // Item 4: an invalid field value used to write config silently — a
+      // typo'd area token or an out-of-range floor made makeRegistry skip
+      // the whole instance with only a console.error, and the feature
+      // "mysteriously died" with no on-screen sign why. This element is the
+      // surfaced consequence: cleared when the current config is valid,
+      // listing every problem (including a non-numeric floor entry, which
+      // parseFloorField itself silently drops to "use the default")
+      // otherwise. Saving is unchanged either way — config-not-hardwired
+      // means the user rules, but they must SEE what they just did.
+      this.jdWarningEl = containerEl.createEl("p", { cls: "mod-warning" });
+      this.renderJdProblems(validateJdConfig(jdInstance.config));
+    } else {
+      this.jdWarningEl = undefined;
     }
 
     new Setting(containerEl)
@@ -238,16 +275,28 @@ export class VaultMcpSettingTab extends PluginSettingTab {
   /**
    * Merge `partial` into schemes[0].config and save. Deliberately
    * non-mutating at every level it touches: `this.plugin.settings.schemes`
-   * defaults to the module-level DEFAULT_SCHEMES constant (main.ts
-   * DEFAULT_SETTINGS.schemes = DEFAULT_SCHEMES) until the first save writes
-   * data.json, so an in-place `schemes[0].config = …` or `schemes[0] = …`
-   * would mutate that shared array/object and silently contaminate every
-   * OTHER instance (and test) that still expects the untouched default.
-   * Building fresh objects and a fresh array here, rather than mutating in
-   * place, keeps DEFAULT_SCHEMES byte-identical no matter how many times a
-   * user edits these fields.
+   * defaults to a structuredClone of the module-level DEFAULT_SCHEMES
+   * constant (main.ts `DEFAULT_SETTINGS.schemes = structuredClone(DEFAULT_SCHEMES)`)
+   * until the first save writes data.json — the clone means an in-place
+   * `schemes[0].config = …` would no longer contaminate DEFAULT_SCHEMES
+   * itself, but it would still mutate the shared array/object THIS plugin
+   * instance's settings holds, silently affecting every other read of
+   * `this.plugin.settings.schemes` taken before this call returns. Building
+   * fresh objects and a fresh array here, rather than mutating in place,
+   * avoids that regardless of how settings.schemes was constructed.
+   *
+   * `fieldProblem` (item 4) is an extra problem string the CALLING field
+   * already knows about but that wouldn't otherwise show up in
+   * `validateJdConfig(nextConfig)` — today that's only the content-decimal
+   * floor field's non-numeric case (parseFloorField silently turns "abc"
+   * into `undefined`, so by the time `nextConfig` exists there is no trace
+   * of what the user actually typed). Every field's change still runs
+   * `validateJdConfig` on the resulting config regardless, so a bad area or
+   * category token surfaces too. Saving proceeds unconditionally either way
+   * — the warning is feedback, not a gate (config-not-hardwired: the user
+   * rules, but must SEE the consequence).
    */
-  private async updateJdConfig(partial: Partial<JdConfig>): Promise<void> {
+  private async updateJdConfig(partial: Partial<JdConfig>, fieldProblem: string | null = null): Promise<void> {
     const schemes = this.plugin.settings.schemes;
     const jd = schemes[0];
     if (!jd) return;
@@ -257,6 +306,16 @@ export class VaultMcpSettingTab extends PluginSettingTab {
       else nextConfig[key] = value;
     }
     this.plugin.settings.schemes = [{ ...jd, config: nextConfig as Partial<JdConfig> }, ...schemes.slice(1)];
+    this.renderJdProblems([...(fieldProblem ? [fieldProblem] : []), ...validateJdConfig(nextConfig)]);
     await this.plugin.saveSettings();
+  }
+
+  /** Show (or clear) the Schemes section's inline warning. Empty `problems`
+   * clears it — the element stays in the DOM (so re-invalidating doesn't
+   * need to recreate it) but renders nothing and carries no text a screen
+   * reader would announce. */
+  private renderJdProblems(problems: string[]): void {
+    if (!this.jdWarningEl) return;
+    this.jdWarningEl.setText(problems.length === 0 ? "" : problems.join(" "));
   }
 }
