@@ -157,8 +157,16 @@ function folderOf(path: string): string {
  * still answers "what would the next 20 calls return". `next` is `gaps[0]`
  * when non-empty — the same answer `obsidian_next_address` gives for the
  * same scope and notes.
+ *
+ * `truncated` mirrors tools-links.ts's convention (`MAX_ITEMS` + a boolean
+ * flag on every capped list): the 20-item cap is a summary bound, not a
+ * claim about how many slots are actually open, and a caller must be able to
+ * tell "exactly 20 free" from "capped, more exist" — most visibly for an
+ * expanded scope, where every entry past the cap is a synthetic sequential
+ * id rather than a genuinely scarce gap. Costs one extra `nextFree` probe,
+ * and only when the loop actually ran all 20 iterations.
  */
-function computeFree(provider: ScopeProvider, scope: Scope, notes: string[]): { next: string | null; gaps: string[] } {
+function computeFree(provider: ScopeProvider, scope: Scope, notes: string[]): { next: string | null; gaps: string[]; truncated: boolean } {
   const gaps: string[] = [];
   let working = notes;
   for (let i = 0; i < 20; i++) {
@@ -168,7 +176,8 @@ function computeFree(provider: ScopeProvider, scope: Scope, notes: string[]): { 
     gaps.push(formatted);
     working = [...working, `${formatted} .gap-probe.md`];
   }
-  return { next: gaps[0] ?? null, gaps };
+  const truncated = gaps.length === 20 && provider.nextFree(scope, working) !== null;
+  return { next: gaps[0] ?? null, gaps, truncated };
 }
 
 export function registerSchemeTools(server: McpServer, ctx: SchemeToolsCtx): void {
@@ -275,7 +284,8 @@ export function registerSchemeTools(server: McpServer, ctx: SchemeToolsCtx): voi
         "Compute the next unused address within a scope (e.g. category \"06\", area \"90-99\", expanded category " +
         "\"27\"). This COMPUTES ONLY — it reserves nothing, so a second call, or a competing session, can compute the " +
         "identical answer right up until a note actually lands there. Pair this with `obsidian_claim_scope` to hold " +
-        "the slot exclusively while you create the note. Read-only.",
+        "the slot exclusively while you create the note. Under a path allowlist, the address returned may already be " +
+        "held by a note outside your allowlist, since a hidden note's slot cannot read as taken. Read-only.",
       inputSchema: {
         scope: z.string().min(1).describe('A scope token in the scheme\'s own grammar, e.g. "06", "90-99", "27".'),
         scheme: z
@@ -312,8 +322,10 @@ export function registerSchemeTools(server: McpServer, ctx: SchemeToolsCtx): voi
       title: "List a scope's members and open slots",
       description:
         "List the visible notes that belong to a scope (e.g. category \"06\"), address-ordered, plus the next free " +
-        "address and up to 20 currently-open slots. Read-only; pair `free.next` with `obsidian_claim_scope` the same " +
-        "way `obsidian_next_address` does — this tool computes, it does not reserve.",
+        "address and up to 20 currently-open slots (`free.truncated: true` when more exist beyond the cap). " +
+        "Read-only; pair `free.next` with `obsidian_claim_scope` the same way `obsidian_next_address` does — this " +
+        "tool computes, it does not reserve. Under a path allowlist, `members` omits notes you cannot see, so a slot " +
+        "listed as free may already be held by one of them.",
       inputSchema: {
         scope: z.string().min(1).describe('A scope token in the scheme\'s own grammar, e.g. "06", "90-99", "27".'),
         scheme: z

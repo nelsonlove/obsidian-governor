@@ -70,6 +70,19 @@ describe("registration", () => {
     assert.match(desc, /reserves nothing/);
     assert.match(desc, /obsidian_claim_scope/);
   });
+
+  test("obsidian_next_address's description warns that a proposed address may be held outside the allowlist", () => {
+    const { server } = toolServer();
+    const desc = server.tools.get("obsidian_next_address").def.description.toLowerCase();
+    assert.match(desc, /allowlist/);
+  });
+
+  test("obsidian_list_scope's description warns that a free slot may be held outside the allowlist, and mentions truncated", () => {
+    const { server } = toolServer();
+    const desc = server.tools.get("obsidian_list_scope").def.description.toLowerCase();
+    assert.match(desc, /allowlist/);
+    assert.match(desc, /truncated/);
+  });
 });
 
 // ── obsidian_schemes ──────────────────────────────────────────────────────────
@@ -297,7 +310,16 @@ describe("obsidian_list_scope", () => {
     assert.equal(res.structuredContent.free.gaps.length, 20, "gaps are capped at 20");
   });
 
-  test("gaps are capped below 20 when fewer than 20 slots remain", async () => {
+  test("a scope with more than 20 free slots reports gaps.length === 20 and truncated: true", async () => {
+    // Category "06" here has 96 open decimals (10..99 minus 11,12) — far more
+    // than the cap, so the flag must say so.
+    const { call } = toolServer();
+    const res = await call("obsidian_list_scope", { scope: "06" });
+    assert.equal(res.structuredContent.free.gaps.length, 20);
+    assert.equal(res.structuredContent.free.truncated, true);
+  });
+
+  test("a scope with at most 20 free slots reports truncated: false", async () => {
     const filler = [];
     for (let n = 10; n <= 99; n++) {
       if (n === 50 || n === 70 || n === 90) continue;
@@ -307,6 +329,27 @@ describe("obsidian_list_scope", () => {
     const res = await call("obsidian_list_scope", { scope: "06" });
     assert.deepEqual(res.structuredContent.free.gaps, ["06.50", "06.70", "06.90"]);
     assert.equal(res.structuredContent.free.next, "06.50");
+    assert.equal(res.structuredContent.free.truncated, false);
+  });
+
+  test("a fully-exhausted scope (0 free slots) also reports truncated: false", async () => {
+    const filler = [];
+    for (let n = 10; n <= 99; n++) filler.push(`00-09 System/06 Agent tooling/06.${n} Filler.md`);
+    const { call } = toolServer({ notes: filler });
+    const res = await call("obsidian_list_scope", { scope: "06" });
+    assert.deepEqual(res.structuredContent.free, { next: null, gaps: [], truncated: false });
+  });
+
+  test("an expanded scope's synthetic sequential ids are truncated too, past the cap", async () => {
+    // Expanded area "90-99": nextFree allocates strictly max(used)+1, so the
+    // "gaps" here are 20 sequential ids, not genuine skipped numbers — the
+    // flag still applies, since there is no upper bound on how many more the
+    // scheme could allocate.
+    const { call } = toolServer();
+    const res = await call("obsidian_list_scope", { scope: "90-99" });
+    assert.equal(res.structuredContent.free.gaps.length, 20);
+    assert.equal(res.structuredContent.free.gaps[0], "92022");
+    assert.equal(res.structuredContent.free.truncated, true);
   });
 
   test("an empty scope has no members but a computable free slot", async () => {
