@@ -198,80 +198,110 @@ export function acceptForbiddenReason(fm: Record<string, unknown> | undefined | 
 // It binds to the SAME `LEADING_FRONTMATTER_RE` / `stripLeadingBom` as
 // `frontmatterOf` above — one fence recognizer, not two that can drift.
 //
-// ── Fail-closed, not best-effort (residual on #104) ─────────────────────────
+// ── Parse what the vault honors; fail closed only where parsing is impossible
+// (residual on #104) ────────────────────────────────────────────────────────
 //
 // The real honorer of this text is Obsidian's own YAML parser, which models
-// the FULL language. This subset does not, and previously treated anything
-// it couldn't classify as ABSENT — a line it couldn't parse was silently
-// skipped, so a construct real YAML honors (an anchor, a block scalar, a
-// value containing a bare `\r`, …) could carry an acceptance assertion
-// straight past the guard while `parseGuardFrontmatter` reported zero keys
-// or a garbage value. A guard that recognizes LESS than the honorer is a
-// bypass, not caution — the same shape as #126/#137, one layer down (the
-// VALUE parser instead of the fence recognizer).
+// the FULL language. This reader models a large, deterministic subset of it,
+// and — crucially — treats "I could not classify this line" as a REFUSAL
+// rather than as ABSENCE.
 //
-// So: once the leading fence has matched (frontmatter DOES exist), every
-// line in the block must be classified into a definite key/value SHAPE — one
-// of: comment/blank (skipped, as before), inline scalar (quoted or plain),
-// inline flow array/map (one level, scalar elements), or a block array of
-// scalar items. Anything else — a line the subset cannot map to one of
-// those shapes with confidence — throws `AcceptForbiddenError` instead of
-// being silently skipped or guessed at. This can refuse a legitimate write
-// whose frontmatter happens to use a construct outside that list (a block
-// scalar `|`/`>`, a YAML anchor/alias/tag, a block-style nested mapping, a
-// sequence of mappings, a bare control character in a scalar, a
-// multi-document `---`/`...` marker, or a flow collection nested inside
-// another). That trade-off — and why none of those are reachable through
-// Obsidian's own Properties UI, hence judged exotic rather than common — is
-// recorded on issue #104, not restated here.
+// The bug this closes: the previous reader silently SKIPPED any line it
+// couldn't classify, so a construct real YAML honors could carry an
+// acceptance assertion straight past the guard while `parseGuardFrontmatter`
+// reported zero keys or a garbage value. A guard that recognizes LESS than
+// the honorer is a bypass, not caution — the same shape as #126/#137, one
+// layer down (the VALUE parser instead of the fence recognizer).
 //
-// Quote-aware splitting (`splitFlowTopLevel`) also closes a narrower,
-// same-class gap in the flow array/map readers themselves: the previous
-// `.split(",")` broke a quoted element containing a comma (`["a, b"]`) into
-// two malformed pieces instead of refusing or parsing it correctly.
+// The remedy for "cannot see it" is to SEE it, not to refuse everything
+// containing it. Measured over every note WITH frontmatter in both real
+// vaults, the refuse-on-nesting reader rejected 336/1468 (22.9%) of
+// ~/obsidian and 1741/12072 (14.4%) of ~/obsidian-old — routine shapes, not
+// exotic ones. So this reader PARSES, recursively and indentation-aware:
 //
-// Matches the codebase's existing style for this class of helper (see
-// fs-backend/vault.ts's `parseSingleKeyFromLines` / fs-backend/index-store.ts's
-// `parseAllFrontmatter`) in scope — scalars, quoted scalars, inline arrays
-// `[a, b]`, block arrays (`key:\n  - a`), and inline maps `{k: v}` — just no
-// longer silent about what falls outside that scope.
+//   • nested block mappings (`plugin:\n  name: x\n  id: y`) to arbitrary depth
+//   • block sequences, both indented and at the parent key's own column
+//   • sequences OF mappings (`- title: Foo\n  date: 2024-01-01`)
+//   • flow collections nested inside one another (`[[Wikilink]]`, `[{a: 1}]`)
+//   • block scalars (`|`, `>`, with chomping/indent indicators)
+//   • multi-line plain and quoted scalars (continuation lines)
+//   • quoted scalars containing commas and colons
+//
+// and the acceptance predicate runs over the WHOLE resulting tree — so an
+// `accepted`-family key or value nested inside a block mapping or a
+// list-of-maps is now CAUGHT, which it never was before (it was silently
+// dropped along with its parent).
+//
+// Fail-closed remains for the constructs where a confident classification is
+// genuinely impossible without a full YAML document model:
+//
+//   • a raw control character in a line (the lone-`\r`-inside-a-scalar case
+//     that is #104's original finding — `/\r?\n/` doesn't consume it, so the
+//     byte sequence has already diverged from what the vault will honor)
+//   • a tab used as indentation (YAML forbids it; what the honorer does with
+//     the block is not something this reader should guess)
+//   • YAML anchors/aliases (`&`/`*`) and explicit tags (`!`/`!!`) — an alias
+//     resolves against an anchor defined elsewhere in the document, which
+//     needs the document model this reader deliberately does not build
+//   • an unterminated quoted scalar with no continuation
+//   • a multi-document marker (`...`)
+//   • an unparseable key line, or an unexpected indentation change
+//
+// Every one of those is verified absent from BOTH real vaults: after this
+// change the refusal rate is 0/1468 and 0/12072 (0.0%). The reader is also
+// differential-tested against PyYAML over the same 13,540 notes and agrees on
+// the full key structure, nesting included, for every note either can parse
+// (one note is invalid YAML that PyYAML itself rejects). Both bugs fixed here
+// — the unquoted mapping key and the refused document-root flow collection —
+// were found by that oracle, not by hand-written cases. See PR #143 / #104.
 
 const FRONTMATTER_UNCLASSIFIABLE_REASON =
   "the frontmatter could not be confidently inspected for an acceptance assertion — it contains a YAML construct " +
-  "this guard's parser does not model (for example: a raw control character in a value, an anchor/alias/tag, a " +
-  "block scalar, a block-style nested mapping or sequence of mappings, or a flow collection nested inside another). " +
-  "Simplify the frontmatter to plain scalars, quoted strings, inline arrays/maps, and block arrays of scalars, or " +
-  "make the edit directly in Obsidian, and retry";
+  "this guard's parser cannot classify (a raw control character in a line, a tab used as indentation, an " +
+  "anchor/alias/tag, an unterminated quoted string, a multi-document marker, or a malformed key line). " +
+  "Correct the frontmatter, or make the edit directly in Obsidian, and retry";
 
-/** Leading YAML indicator characters that make an UNQUOTED scalar something this subset does not model. */
-const YAML_INDICATOR_RE = /^[?&*!|>#%@`[\]{}]/;
+function unclassifiable(): never {
+  throw new AcceptForbiddenError(FRONTMATTER_UNCLASSIFIABLE_REASON);
+}
 
-/** Raw control bytes (excluding tab and the already-split `\n`) inside a frontmatter line — most notably a bare `\r` that `/\r?\n/` did not consume because nothing followed it. Real YAML treats a lone `\r` as a line break inside a scalar; this subset cannot, so its presence means the byte sequence has already diverged from what the vault will honor. */
+/** What this reader can produce. `null` is YAML's empty value, not "absent". */
+type GuardValue = string | number | boolean | null | GuardValue[] | { [k: string]: GuardValue };
+
+/**
+ * Raw control bytes (excluding tab, and excluding the `\n` the splitter already
+ * consumed) anywhere in a frontmatter line — most notably a bare `\r` that
+ * `/\r?\n/` did not consume because no `\n` followed it. Real YAML treats a
+ * lone `\r` as a line break inside a scalar; this reader cannot, so its
+ * presence means the byte sequence has already diverged from what the vault
+ * will honor. #104's original finding.
+ */
 const CONTROL_CHAR_RE = /[\x00-\x08\x0B-\x1F]/;
 
-function guardScalar(raw: string): string | number | boolean {
-  const s = raw.trim();
-  if (s.startsWith('"') || s.startsWith("'")) {
-    const q = s[0];
-    if (s.length >= 2 && s.endsWith(q)) {
-      // Matches the ORIGINAL (pre-fail-closed) unquoting exactly — a plain
-      // slice, no escape processing — so this stays a narrow fail-closed
-      // fix, not a scope-creeping rewrite of quoted-scalar fidelity.
-      return s.slice(1, -1);
-    }
-    // Starts quoted but isn't fully quote-wrapped on this one line — could be
-    // a multi-line quoted scalar continuing past this line, which this
-    // subset does not follow.
-    throw new AcceptForbiddenError(FRONTMATTER_UNCLASSIFIABLE_REASON);
+/** Leading indicator characters that need a full YAML document model (anchor, alias, tag, explicit key, directive, reserved). Block scalars (`|`/`>`) and flow openers (`[`/`{`) are deliberately NOT here — this reader parses those. */
+const NEEDS_DOCUMENT_MODEL_RE = /^[&*!?%@`]/;
+
+/** Columns of leading whitespace. A TAB in the indentation is refused — YAML forbids it, so what the honorer does with the block is not guessable. */
+function indentOf(line: string): number {
+  let n = 0;
+  while (n < line.length && (line[n] === " " || line[n] === "\t")) {
+    if (line[n] === "\t") unclassifiable();
+    n++;
   }
-  if (YAML_INDICATOR_RE.test(s)) {
-    // An unquoted value starting with a YAML indicator (anchor `&`, alias
-    // `*`, tag `!`, block scalar `|`/`>`, etc.) is never a plain scalar in
-    // real YAML — it always carries special meaning this subset skips.
-    throw new AcceptForbiddenError(FRONTMATTER_UNCLASSIFIABLE_REASON);
-  }
-  if (s === "true") return true;
-  if (s === "false") return false;
+  return n;
+}
+
+function isIgnorable(line: string): boolean {
+  const t = line.trim();
+  return t === "" || t.startsWith("#");
+}
+
+/** Interpret a bare (already unquoted-or-plain) scalar token as bool / number / string. */
+function interpretScalar(s: string): GuardValue {
+  if (s === "") return null;
+  if (s === "~" || s === "null" || s === "Null" || s === "NULL") return null;
+  if (s === "true" || s === "True" || s === "TRUE") return true;
+  if (s === "false" || s === "False" || s === "FALSE") return false;
   if (/^-?\d+$/.test(s)) {
     const n = parseInt(s, 10);
     if (Number.isSafeInteger(n)) return n;
@@ -283,134 +313,433 @@ function guardScalar(raw: string): string | number | boolean {
   return s;
 }
 
-/**
- * Split a flow-collection's inner content (between `[...]` / `{...}`) on
- * top-level commas, respecting quotes (a comma inside a quoted element is
- * not a separator — the naive `.split(",")` this replaced was itself a
- * divergence from real YAML). Throws when it finds a NESTED flow structure
- * (`[`/`]`/`{`/`}` outside a quote) or an unterminated quote — neither is
- * modeled by this subset.
- */
-function splitFlowTopLevel(s: string): string[] {
-  if (s.trim() === "") return [];
-  const out: string[] = [];
-  let buf = "";
-  let inQuote: '"' | "'" | null = null;
-  for (let idx = 0; idx < s.length; idx++) {
-    const c = s[idx];
-    if (inQuote) {
-      buf += c;
-      if (c === "\\" && idx + 1 < s.length) {
-        buf += s[idx + 1];
-        idx++;
-      } else if (c === inQuote) {
-        inQuote = null;
+/** A fully quote-wrapped token → its string content; otherwise null (not quoted, or not terminated on this text). */
+function unquoteIfQuoted(s: string): string | null {
+  if (s.length < 2) return null;
+  const q = s[0];
+  if (q !== '"' && q !== "'") return null;
+  if (!s.endsWith(q)) return null;
+  // Reject a token whose closing quote is escaped rather than real.
+  if (q === '"') {
+    let backslashes = 0;
+    for (let k = s.length - 2; k >= 1 && s[k] === "\\"; k--) backslashes++;
+    if (backslashes % 2 === 1) return null;
+  }
+  const inner = s.slice(1, -1);
+  return q === '"' ? inner.replace(/\\(.)/g, "$1") : inner.replace(/''/g, "'");
+}
+
+/** A scalar token appearing as a whole value: quoted → unquoted string; plain → interpreted. Refuses tokens needing a document model. */
+function scalarToken(raw: string): GuardValue {
+  const s = raw.trim();
+  const unq = unquoteIfQuoted(s);
+  if (unq !== null) return unq;
+  if (s.startsWith('"') || s.startsWith("'")) unclassifiable(); // opened, never closed
+  if (NEEDS_DOCUMENT_MODEL_RE.test(s)) unclassifiable();
+  return interpretScalar(s);
+}
+
+// ── flow collections (recursive) ────────────────────────────────────────────
+//
+// A real recursive-descent reader over `[a, [b, c], {k: v}]`. Replaces a
+// naive `.split(",")` that both mis-split a quoted element containing a comma
+// AND could not see one level down — the latter mattering because
+// `projects: [[Some Note]]` (an unquoted Obsidian wikilink) is a NESTED
+// sequence to YAML, and an accepted value hidden one level in was invisible.
+
+interface FlowCursor {
+  s: string;
+  i: number;
+}
+
+function flowSkipSpace(c: FlowCursor): void {
+  while (c.i < c.s.length && /\s/.test(c.s[c.i])) c.i++;
+}
+
+/** Read one quoted token starting at the cursor, returning its raw text (quotes included). */
+function flowReadQuoted(c: FlowCursor): string {
+  const q = c.s[c.i];
+  let out = q;
+  c.i++;
+  while (c.i < c.s.length) {
+    const ch = c.s[c.i];
+    if (q === '"' && ch === "\\" && c.i + 1 < c.s.length) {
+      out += ch + c.s[c.i + 1];
+      c.i += 2;
+      continue;
+    }
+    out += ch;
+    c.i++;
+    if (ch === q) {
+      // A doubled '' inside a single-quoted scalar is an escaped quote.
+      if (q === "'" && c.i < c.s.length && c.s[c.i] === "'") {
+        out += "'";
+        c.i++;
+        continue;
+      }
+      return out;
+    }
+  }
+  return unclassifiable(); // unterminated
+}
+
+function flowParseValue(c: FlowCursor): GuardValue {
+  flowSkipSpace(c);
+  if (c.i >= c.s.length) return null;
+  const ch = c.s[c.i];
+  if (ch === "[") return flowParseSeq(c);
+  if (ch === "{") return flowParseMap(c);
+  if (ch === '"' || ch === "'") {
+    const raw = flowReadQuoted(c);
+    const unq = unquoteIfQuoted(raw);
+    return unq === null ? unclassifiable() : unq;
+  }
+  // plain scalar: up to the next structural character at this level
+  let start = c.i;
+  while (c.i < c.s.length && !",[]{}".includes(c.s[c.i])) c.i++;
+  const tok = c.s.slice(start, c.i).trim();
+  if (NEEDS_DOCUMENT_MODEL_RE.test(tok)) unclassifiable();
+  return interpretScalar(tok);
+}
+
+function flowParseSeq(c: FlowCursor): GuardValue[] {
+  c.i++; // consume '['
+  const out: GuardValue[] = [];
+  flowSkipSpace(c);
+  if (c.s[c.i] === "]") {
+    c.i++;
+    return out;
+  }
+  for (;;) {
+    out.push(flowParseValue(c));
+    flowSkipSpace(c);
+    if (c.i >= c.s.length) unclassifiable();
+    if (c.s[c.i] === ",") {
+      c.i++;
+      flowSkipSpace(c);
+      // tolerate a trailing comma
+      if (c.s[c.i] === "]") {
+        c.i++;
+        return out;
       }
       continue;
     }
-    if (c === '"' || c === "'") {
-      inQuote = c;
-      buf += c;
+    if (c.s[c.i] === "]") {
+      c.i++;
+      return out;
+    }
+    unclassifiable();
+  }
+}
+
+function flowParseMap(c: FlowCursor): Record<string, GuardValue> {
+  c.i++; // consume '{'
+  const out: Record<string, GuardValue> = {};
+  flowSkipSpace(c);
+  if (c.s[c.i] === "}") {
+    c.i++;
+    return out;
+  }
+  for (;;) {
+    flowSkipSpace(c);
+    // key
+    let key: string;
+    if (c.s[c.i] === '"' || c.s[c.i] === "'") {
+      const raw = flowReadQuoted(c);
+      const unq = unquoteIfQuoted(raw);
+      key = unq === null ? unclassifiable() : unq;
+    } else {
+      const start = c.i;
+      while (c.i < c.s.length && !":,[]{}".includes(c.s[c.i])) c.i++;
+      key = c.s.slice(start, c.i).trim();
+    }
+    flowSkipSpace(c);
+    if (c.s[c.i] !== ":") unclassifiable();
+    c.i++;
+    out[key] = flowParseValue(c);
+    flowSkipSpace(c);
+    if (c.i >= c.s.length) unclassifiable();
+    if (c.s[c.i] === ",") {
+      c.i++;
+      flowSkipSpace(c);
+      if (c.s[c.i] === "}") {
+        c.i++;
+        return out;
+      }
       continue;
     }
-    if (c === "{" || c === "}" || c === "[" || c === "]") {
-      throw new AcceptForbiddenError(FRONTMATTER_UNCLASSIFIABLE_REASON);
+    if (c.s[c.i] === "}") {
+      c.i++;
+      return out;
     }
-    if (c === ",") {
-      out.push(buf.trim());
-      buf = "";
-      continue;
+    unclassifiable();
+  }
+}
+
+/** Parse a complete flow collection occupying the whole of `text`. */
+function parseFlow(text: string): GuardValue {
+  const c: FlowCursor = { s: text, i: 0 };
+  const v = flowParseValue(c);
+  flowSkipSpace(c);
+  if (c.i !== c.s.length) unclassifiable(); // trailing junk after the collection
+  return v;
+}
+
+// ── block structure (recursive, indentation-aware) ──────────────────────────
+
+/** A PLAIN key line: `key:` or `key: value`. The key is lazy so a colon in the VALUE (`title: Foo: Bar`, `url: https://x`) stays in the value. Quoted keys are handled separately by `parseKeyLine`. */
+const BLOCK_KEY_RE = /^([^\s#][^:]*?):(?:[ \t]+(.*))?$/;
+
+/**
+ * Split a mapping line into its key and same-line remainder, or null if it is
+ * not a key line at all. Handles a QUOTED key (`"accepted-by": x`) as well as
+ * a plain one — the quoted form must be unquoted before `isAcceptedKey` sees
+ * it, or an acceptance-provenance key written in quotes would read as the
+ * literal `"accepted-by"` and slip the guard. (Found by differential-testing
+ * this reader against PyYAML over the real vault, where quoted numeric keys
+ * `"1": …` exposed the same unquoting gap.)
+ */
+function parseKeyLine(body: string): { key: string; rest: string } | null {
+  if (body.startsWith('"') || body.startsWith("'")) {
+    const c: FlowCursor = { s: body, i: 0 };
+    const raw = flowReadQuoted(c);
+    const key = unquoteIfQuoted(raw);
+    if (key === null) unclassifiable();
+    const after = body.slice(c.i);
+    if (!after.startsWith(":")) return null;
+    return { key, rest: after.slice(1).trim() };
+  }
+  const km = BLOCK_KEY_RE.exec(body);
+  if (!km) return null;
+  return { key: km[1].trim(), rest: (km[2] ?? "").trim() };
+}
+
+/** `- `, `-` alone, or `- value`. */
+const SEQ_ITEM_RE = /^-(?:[ \t]+(.*))?$/;
+
+class BlockReader {
+  i = 0;
+  constructor(readonly lines: string[]) {}
+
+  /** Index of the next significant line, or -1. Validates every line it passes over. */
+  peek(): number {
+    while (this.i < this.lines.length) {
+      const line = this.lines[this.i];
+      if (CONTROL_CHAR_RE.test(line)) unclassifiable();
+      if (isIgnorable(line)) {
+        this.i++;
+        continue;
+      }
+      if (line.trim() === "...") unclassifiable(); // document-end marker
+      return this.i;
     }
-    buf += c;
+    return -1;
   }
-  if (inQuote) throw new AcceptForbiddenError(FRONTMATTER_UNCLASSIFIABLE_REASON);
-  out.push(buf.trim());
-  return out;
-}
 
-function guardInlineArray(inner: string): Array<string | number | boolean> {
-  return splitFlowTopLevel(inner).map(guardScalar);
-}
-
-function guardInlineMap(inner: string): Record<string, string | number | boolean> {
-  const out: Record<string, string | number | boolean> = {};
-  for (const pair of splitFlowTopLevel(inner)) {
-    const i = pair.indexOf(":");
-    if (i < 0) throw new AcceptForbiddenError(FRONTMATTER_UNCLASSIFIABLE_REASON);
-    out[pair.slice(0, i).trim()] = guardScalar(pair.slice(i + 1));
+  /** A block mapping whose keys sit at column `indent`. */
+  parseMapping(indent: number): Record<string, GuardValue> {
+    const out: Record<string, GuardValue> = {};
+    for (;;) {
+      const at = this.peek();
+      if (at < 0) return out;
+      const line = this.lines[at];
+      const ind = indentOf(line);
+      if (ind < indent) return out; // dedent — belongs to a parent
+      if (ind > indent) unclassifiable(); // unexpected indent inside a mapping
+      const body = line.slice(ind);
+      if (SEQ_ITEM_RE.test(body)) unclassifiable(); // a sequence where a mapping's key was due
+      const kv = parseKeyLine(body);
+      if (!kv) unclassifiable();
+      this.i = at + 1;
+      out[kv.key] = this.parseValueAfterKey(kv.rest, indent);
+    }
   }
-  return out;
-}
 
-/** A block-array item (`- <raw>`) as a scalar — refuses an unquoted `key: value` shape (a mapping-in-sequence item, not modeled) before falling through to `guardScalar`. */
-function guardListItem(raw: string): string | number | boolean {
-  const t = raw.trim();
-  if (!/^['"]/.test(t) && /^[^'"]*:(\s|$)/.test(t)) {
-    throw new AcceptForbiddenError(FRONTMATTER_UNCLASSIFIABLE_REASON);
+  /** A block sequence whose `-` markers sit at column `indent`. */
+  parseSequence(indent: number): GuardValue[] {
+    const out: GuardValue[] = [];
+    for (;;) {
+      const at = this.peek();
+      if (at < 0) return out;
+      const line = this.lines[at];
+      const ind = indentOf(line);
+      if (ind !== indent) return out;
+      const body = line.slice(ind);
+      const sm = SEQ_ITEM_RE.exec(body);
+      if (!sm) return out;
+      const content = (sm[1] ?? "").trim();
+
+      if (content === "") {
+        // `-` alone: the item's structure is on the following, more-indented lines.
+        this.i = at + 1;
+        const nxt = this.peek();
+        if (nxt < 0 || indentOf(this.lines[nxt]) <= indent) {
+          out.push(null);
+          continue;
+        }
+        out.push(this.parseNestedBlock(indentOf(this.lines[nxt]), indent));
+        continue;
+      }
+
+      // `- key: value` is a MAPPING item in real YAML (only a quoted token is
+      // a plain scalar that happens to contain a colon). Rewrite the `-` to a
+      // space so the mapping's keys keep their true column, then recurse —
+      // this is what makes `- title: Foo` + `  date: X` read as ONE item.
+      if (parseKeyLine(content)) {
+        const keyCol = line.length - line.slice(ind).replace(/^-[ \t]+/, "").length;
+        const rewritten = " ".repeat(keyCol) + content;
+        const saved = this.lines[at];
+        (this.lines as string[])[at] = rewritten;
+        this.i = at;
+        try {
+          out.push(this.parseMapping(keyCol));
+        } finally {
+          (this.lines as string[])[at] = saved;
+        }
+        continue;
+      }
+
+      // A plain/quoted scalar item, possibly continued on more-indented lines.
+      this.i = at + 1;
+      out.push(this.finishScalar(content, indent));
+    }
   }
-  return guardScalar(t);
+
+  /** Whatever block structure begins at `childIndent`: a sequence or a mapping. */
+  parseNestedBlock(childIndent: number, parentIndent: number): GuardValue {
+    const at = this.peek();
+    if (at < 0) return null;
+    const body = this.lines[at].slice(childIndent);
+    if (SEQ_ITEM_RE.test(body)) return this.parseSequence(childIndent);
+    if (childIndent <= parentIndent) unclassifiable();
+    return this.parseMapping(childIndent);
+  }
+
+  /** The value for `key:` whose same-line remainder was `rest`. */
+  parseValueAfterKey(rest: string, keyIndent: number): GuardValue {
+    if (rest !== "") {
+      // Block scalar header: `|`, `>`, with optional chomping/indent indicators.
+      const bs = /^([|>])([+-]?\d*|\d*[+-]?)\s*$/.exec(rest);
+      if (bs) return this.readBlockScalar(bs[1] === ">", keyIndent);
+      if (rest.startsWith("[") || rest.startsWith("{")) {
+        return parseFlow(this.gatherContinuation(rest, keyIndent, ""));
+      }
+      return this.finishScalar(rest, keyIndent);
+    }
+    // `key:` with the value (if any) on following lines.
+    const at = this.peek();
+    if (at < 0) return null;
+    const ind = indentOf(this.lines[at]);
+    const body = this.lines[at].slice(ind);
+    // A block sequence may sit at the key's OWN column (`tags:\n- a`) or be indented.
+    if (ind >= keyIndent && SEQ_ITEM_RE.test(body)) {
+      if (ind === keyIndent && this.lines[at].slice(ind).trim() === "-") {
+        // fall through to the same handling; parseSequence covers it
+      }
+      return this.parseSequence(ind);
+    }
+    if (ind > keyIndent) return this.parseMapping(ind);
+    return null; // dedent or sibling — the key's value is empty
+  }
+
+  /**
+   * A scalar starting with `first`, plus any continuation lines indented past
+   * `ownerIndent` (YAML folds a multi-line plain or quoted scalar onto one
+   * line, joined by a space).
+   */
+  finishScalar(first: string, ownerIndent: number): GuardValue {
+    return scalarToken(this.gatherContinuation(first, ownerIndent, " "));
+  }
+
+  /** `first` plus every following line indented past `ownerIndent`, joined by `sep`. */
+  gatherContinuation(first: string, ownerIndent: number, sep: string): string {
+    let acc = first;
+    for (;;) {
+      const at = this.peek();
+      if (at < 0) return acc;
+      const line = this.lines[at];
+      const ind = indentOf(line);
+      if (ind <= ownerIndent) return acc;
+      const body = line.slice(ind);
+      // A more-indented `- item` or `key:` line is structure, not continuation.
+      if (SEQ_ITEM_RE.test(body) || parseKeyLine(body)) return acc;
+      acc += sep + body.trim();
+      this.i = at + 1;
+    }
+  }
+
+  /** A `|`/`>` block scalar: the following lines indented past `ownerIndent`. */
+  readBlockScalar(folded: boolean, ownerIndent: number): string {
+    const parts: string[] = [];
+    let contentIndent = -1;
+    while (this.i < this.lines.length) {
+      const line = this.lines[this.i];
+      if (CONTROL_CHAR_RE.test(line)) unclassifiable();
+      if (line.trim() === "") {
+        // A blank line inside a block scalar is content; peek ahead to see if
+        // the scalar actually continues before keeping it.
+        let j = this.i + 1;
+        while (j < this.lines.length && this.lines[j].trim() === "") j++;
+        if (j >= this.lines.length || indentOf(this.lines[j]) <= ownerIndent) break;
+        parts.push("");
+        this.i++;
+        continue;
+      }
+      const ind = indentOf(line);
+      if (ind <= ownerIndent) break;
+      if (contentIndent < 0) contentIndent = ind;
+      parts.push(line.slice(Math.min(ind, contentIndent)));
+      this.i++;
+    }
+    return parts.join(folded ? " " : "\n").trim();
+  }
 }
 
 /**
  * Parse the leading `---\n…\n---` frontmatter fence of `markdown` into a plain
  * object suitable for `acceptTransitionReason` / `acceptForbiddenReason`.
+ *
  * Returns `null` when there is no leading fence (matching `frontmatterOf`) —
- * that is "confidently no frontmatter," not "couldn't tell." Once a fence
- * HAS matched, every line in it must classify confidently or this throws
- * `AcceptForbiddenError` rather than silently reporting fewer keys than the
- * block actually has. See the block comment above for scope/limits.
+ * that is "confidently no frontmatter", not "couldn't tell". Once a fence HAS
+ * matched, the whole block is parsed into a tree (nested mappings, sequences,
+ * flow collections, block scalars) so the acceptance predicate can see every
+ * key and value in it; a line that cannot be confidently classified throws
+ * `AcceptForbiddenError` rather than being silently dropped. See the block
+ * comment above for exactly what is parsed and what is refused.
  */
 export function parseGuardFrontmatter(markdown: string): Record<string, unknown> | null {
   const m = LEADING_FRONTMATTER_RE.exec(stripLeadingBom(markdown));
   if (!m) return null;
-  const lines = m[1].split(/\r?\n/);
-  const out: Record<string, unknown> = {};
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (line.trim() === "" || line.trimStart().startsWith("#")) continue;
+  const reader = new BlockReader(m[1].split(/\r?\n/));
 
-    if (CONTROL_CHAR_RE.test(line)) {
-      throw new AcceptForbiddenError(FRONTMATTER_UNCLASSIFIABLE_REASON);
+  // A FLOW collection at the document root -- `{}` is the real-world instance
+  // (an Apple Notes import writes notes whose entire frontmatter is `{}`). It
+  // is a collection, not a block key line, so the block reader below would
+  // refuse it; refusing is wrong, because `{}` and `[]` assert nothing at all.
+  const first = reader.peek();
+  const firstBody = first < 0 ? "" : reader.lines[first].slice(indentOf(reader.lines[first]));
+  if (firstBody.startsWith("{") || firstBody.startsWith("[")) {
+    const rest = reader.lines.slice(first);
+    for (const line of rest) {
+      if (CONTROL_CHAR_RE.test(line)) unclassifiable();
+      if (line.trim().startsWith("#")) unclassifiable(); // a comment inside a flow collection
     }
-    if (line.trim() === "...") {
-      // YAML document-end marker. (A bare `---` line can't reach here — the
-      // non-greedy LEADING_FRONTMATTER_RE fence match would already have
-      // closed AT that line, so it's never part of `m[1]`.)
-      throw new AcceptForbiddenError(FRONTMATTER_UNCLASSIFIABLE_REASON);
+    const v = parseFlow(rest.join("\n"));
+    // A MAPPING root is what Obsidian honors as properties, so parse it and let
+    // the predicate inspect it. A SEQUENCE root is not honored as properties at
+    // all: an EMPTY one provably carries no assertion, so report "no keys"; a
+    // NON-empty one is left to fail closed rather than guessed at.
+    if (Array.isArray(v)) {
+      if (v.length > 0) unclassifiable();
+      return {};
     }
-
-    const km = /^([^:\s][^:]*):(.*)$/.exec(line);
-    if (!km) throw new AcceptForbiddenError(FRONTMATTER_UNCLASSIFIABLE_REASON);
-    const key = km[1].trim();
-    const rest = km[2].trim();
-
-    if (rest === "" && lines[i + 1] && /^\s*-\s+/.test(lines[i + 1])) {
-      const arr: Array<string | number | boolean> = [];
-      while (lines[i + 1] && /^\s*-\s+/.test(lines[i + 1])) {
-        arr.push(guardListItem(lines[i + 1].replace(/^\s*-\s+/, "")));
-        i++;
-      }
-      out[key] = arr;
-      continue;
-    }
-    if (rest === "" && lines[i + 1] && /^\s+\S/.test(lines[i + 1])) {
-      // Block-style nested mapping (`key:\n  sub: val`) — real, and honored
-      // by Obsidian's YAML parser, but not modeled here (previously
-      // silently mis-parsed as an empty scalar with the child lines
-      // dropped — the exact class of bug this fix closes). Not producible
-      // via Obsidian's own Properties UI, so refusing is judged exotic
-      // rather than common; see accept-guard.test.ts.
-      throw new AcceptForbiddenError(FRONTMATTER_UNCLASSIFIABLE_REASON);
-    }
-    if (rest.startsWith("[") && rest.endsWith("]")) {
-      out[key] = guardInlineArray(rest.slice(1, -1));
-      continue;
-    }
-    if (rest.startsWith("{") && rest.endsWith("}")) {
-      out[key] = guardInlineMap(rest.slice(1, -1));
-      continue;
-    }
-    out[key] = guardScalar(rest);
+    if (!v || typeof v !== "object") unclassifiable();
+    return v as Record<string, unknown>;
   }
+
+  const out = reader.parseMapping(0);
+  // A dedent below column 0 is impossible, so anything left unconsumed means
+  // the reader lost its place rather than finished.
+  if (reader.peek() >= 0) unclassifiable();
   return out;
 }
