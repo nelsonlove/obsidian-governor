@@ -19,6 +19,24 @@ export interface SchemeInstanceConfig {
   id: string;
   provider: "johnny-decimal";
   config?: Partial<JdConfig>;
+  /**
+   * Vault-relative folder prefixes whose contents are invisible to THIS
+   * scheme instance — instance-level and provider-agnostic (a sibling of
+   * `config`, not a key inside it: exclusion is about which territory this
+   * instance speaks for, not about the provider's own grammar). Motivating
+   * case: an archive tree that reuses live-spine addresses (two notes both
+   * claiming `jd:02.10`) — excluding the archive root lets the instance
+   * resolve cleanly to the live one without renaming anything.
+   *
+   * Applied uniformly at the listing layer (`excludeRoots`, below) wherever a
+   * listing reaches this instance's provider: tools-scheme.ts's per-call
+   * visible listing, `resolveSchemeArgs`'s `jd:<address>` addressing, and
+   * `schemeFindings`. It bounds SCHEME resolution and scheme tool output
+   * ONLY — an excluded note's own path still works as an ordinary path
+   * argument (read, write, uid resolution, …); this is not a second
+   * allowlist.
+   */
+  excludedRoots?: string[];
 }
 
 export const DEFAULT_SCHEMES: SchemeInstanceConfig[] = [{ id: "jd", provider: "johnny-decimal" }];
@@ -27,6 +45,11 @@ export interface SchemeInstance {
   id: string;
   providerName: string;
   provider: ScopeProvider;
+  /** Validated, normalized (trailing slash stripped) excluded-root prefixes.
+   * Absent (not empty array) when the instance configured none — matches
+   * `excludeRoots`'s "absent/empty ⇒ same array back" identity convention,
+   * and keeps the JSON `obsidian_schemes` reports free of a noisy `[]`. */
+  excludedRoots?: string[];
 }
 
 /**
@@ -104,6 +127,95 @@ export class SchemeRegistry {
   }
 }
 
+/**
+ * Validate + normalize one instance's `excludedRoots`. Same skip-and-report
+ * convention as `validateJdConfig`: `problems` non-empty means the WHOLE
+ * instance is skipped by `makeRegistry`, not just the bad entries silently
+ * dropped — a typo'd root that got dropped would leave the exclusion the
+ * user asked for simply not happening, with no on-screen sign why.
+ *
+ * Per-entry rules: non-empty string; relative (no leading "/"); no ".."
+ * segment (would escape the vault root the same way `guardCall`'s traversal
+ * check exists to catch); not "." (names nothing to exclude). Three things
+ * are NORMALIZED away rather than refused — a user typo here should not
+ * silently defeat the exclusion it's a typo IN (the #74 you-must-SEE-it
+ * philosophy: a normalized entry is still reported truthfully in
+ * `roots`, never left to quietly mismatch every real path): surrounding
+ * whitespace (`" X "` -> `"X"`, interior whitespace is part of the name and
+ * untouched), a leading "./" (`"./X"` -> `"X"` — otherwise `excludeRoots`'s
+ * exact/prefix match against real vault paths, which never carry a "./",
+ * would simply never fire, a SILENT no-op rather than a validation
+ * problem), and a trailing slash (`"X/"` -> `"X"`, matching `guardCall`'s
+ * own allowlist-prefix normalization `p.replace(/\/+$/, "")`).
+ *
+ * `raw` undefined (field absent) ⇒ `{roots: undefined, problems: []}`, never
+ * `{roots: [], problems: []}` — keeps the "absent means no exclusion, same
+ * array back" identity `excludeRoots` relies on working off `undefined`
+ * rather than an incidental empty array.
+ */
+export function validateExcludedRoots(raw: string[] | undefined): { roots: string[] | undefined; problems: string[] } {
+  if (raw === undefined) return { roots: undefined, problems: [] };
+  const problems: string[] = [];
+  const roots: string[] = [];
+  for (const rawEntry of raw) {
+    if (typeof rawEntry !== "string" || rawEntry.length === 0) {
+      problems.push(`excludedRoots entry ${JSON.stringify(rawEntry)} must be a non-empty string`);
+      continue;
+    }
+    const trimmed = rawEntry.trim();
+    if (trimmed.length === 0) {
+      problems.push(`excludedRoots entry ${JSON.stringify(rawEntry)} must be a non-empty string`);
+      continue;
+    }
+    if (trimmed.startsWith("/")) {
+      problems.push(`excludedRoots entry "${rawEntry}" must be relative (no leading "/")`);
+      continue;
+    }
+    if (trimmed.split("/").includes("..")) {
+      problems.push(`excludedRoots entry "${rawEntry}" must not contain ".." segments`);
+      continue;
+    }
+    let normalized = trimmed;
+    while (normalized.startsWith("./")) normalized = normalized.slice(2);
+    normalized = normalized.replace(/\/+$/, "");
+    if (normalized === "." || normalized.length === 0) {
+      problems.push(`excludedRoots entry "${rawEntry}" does not name a folder`);
+      continue;
+    }
+    roots.push(normalized);
+  }
+  return { roots: roots.length > 0 ? roots : undefined, problems };
+}
+
+/**
+ * `paths` with every entry under one of `roots` removed — segment-boundary
+ * prefix matching, same style as `guard.ts`'s `visiblePaths`/`isVisible`: a
+ * root excludes its own exact path and everything one or more path segments
+ * below it ("Vault archaeology" excludes "Vault archaeology/x.md" but NOT
+ * "Vault archaeology2/x.md" — a bare string-prefix check would wrongly
+ * exclude the latter).
+ *
+ * `roots` empty/absent, or nothing in `paths` matches, returns the SAME
+ * ARRAY (`paths`, not a copy) — the identity convention every caller downstream
+ * (the visible-listing memo in `resolveSchemeArgs`, `mapPaths`'s no-op
+ * sharing) relies on to treat "unchanged" as `===`, and the byte-identical
+ * behavior `excludedRoots` absent/`[]` must have.
+ */
+export function excludeRoots(paths: string[], roots: string[] | undefined): string[] {
+  if (!roots || roots.length === 0) return paths;
+  let changed = false;
+  const out: string[] = [];
+  for (const path of paths) {
+    const excluded = roots.some((root) => path === root || path.startsWith(root + "/"));
+    if (excluded) {
+      changed = true;
+      continue;
+    }
+    out.push(path);
+  }
+  return changed ? out : paths;
+}
+
 export function makeRegistry(configs: SchemeInstanceConfig[]): SchemeRegistry {
   const instances: SchemeInstance[] = [];
   // FIRST wins on a duplicate id (item 5 fix): a later entry sharing an
@@ -144,7 +256,14 @@ export function makeRegistry(configs: SchemeInstanceConfig[]): SchemeRegistry {
       );
       continue;
     }
-    instances.push({ id: cfg.id, providerName: cfg.provider, provider: factory.make(cfg.config) });
+    const { roots: excludedRoots, problems: rootProblems } = validateExcludedRoots(cfg.excludedRoots);
+    if (rootProblems.length > 0) {
+      console.error(
+        `[scheme-registry] invalid excludedRoots for scheme id "${cfg.id}" — instance skipped: ${rootProblems.join("; ")}`,
+      );
+      continue;
+    }
+    instances.push({ id: cfg.id, providerName: cfg.provider, provider: factory.make(cfg.config), ...(excludedRoots ? { excludedRoots } : {}) });
   }
   return new SchemeRegistry(instances);
 }
@@ -260,6 +379,14 @@ export interface SchemeAddressing {
  * the whole vault K times (O(K x N) against a single mapPaths walk) — a real
  * cost on a large vault, and one a read-only sandboxed session could trigger
  * synchronously, unserialized, since reads never take the write queue.
+ *
+ * Exclusion (`SchemeInstanceConfig.excludedRoots`) is applied AFTER the
+ * shared `visible` memo, per ref, keyed on THAT ref's own instance
+ * (`excludeRoots(visible, parsed.instance.excludedRoots)`) — exclusion is
+ * per-instance while the visible listing is call-wide, so a batch mixing
+ * refs across two instances with different excluded roots still shares the
+ * one `visiblePaths` computation and only refilters (a cheap array scan) per
+ * instance actually used.
  */
 export function resolveSchemeArgs(
   args: Record<string, unknown>,
@@ -276,7 +403,8 @@ export function resolveSchemeArgs(
     const parsed = reg.parseRef(value);
     if (!parsed) return value;
     if (visible === undefined) visible = visiblePaths(notes(), settings);
-    const path = resolveParsedAddress(reg, parsed, value, visible);
+    const candidates = excludeRoots(visible, parsed.instance.excludedRoots);
+    const path = resolveParsedAddress(reg, parsed, value, candidates);
     resolved.push({ ref: value, path });
     return path;
   });

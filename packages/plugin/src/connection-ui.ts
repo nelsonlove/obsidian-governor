@@ -6,6 +6,7 @@ import { findClaudeBinary, claudeIsRegistered } from "./claude-cli.js";
 import { DANGEROUS_LIST_DESC } from "./mcp/tools-cli.js";
 import { OPAQUE_ACCEPT_CLI_COMMANDS, OPAQUE_ACCEPT_COMMAND_IDS } from "./mcp/cli-policy.js";
 import { validateJdConfig, type JdConfig } from "./kernel/scheme/jd.js";
+import { validateExcludedRoots } from "./kernel/scheme/registry.js";
 
 /** Parse a comma-separated text field into a trimmed, non-empty string list.
  * An all-blank input (or one that trims to nothing) yields `undefined` rather
@@ -16,6 +17,20 @@ import { validateJdConfig, type JdConfig } from "./kernel/scheme/jd.js";
 export function parseCommaList(value: string): string[] | undefined {
   const items = value
     .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return items.length === 0 ? undefined : items;
+}
+
+/** Parse the "Excluded roots" textarea (one folder prefix per line) into a
+ * trimmed, non-empty string list. Blank lines are dropped; an all-blank
+ * input yields `undefined` rather than `[]` — same "blank means nothing to
+ * override" convention as `parseCommaList`, so a scheme instance with no
+ * excluded territory looks identical to one the field was never touched on
+ * (the persisted config never carries a bare `excludedRoots: []`). */
+export function parseLineList(value: string): string[] | undefined {
+  const items = value
+    .split("\n")
     .map((s) => s.trim())
     .filter(Boolean);
   return items.length === 0 ? undefined : items;
@@ -321,17 +336,37 @@ export class VaultMcpSettingTab extends PluginSettingTab {
           });
         });
 
+      new Setting(containerEl)
+        .setName("Excluded roots")
+        .setDesc(
+          "Vault-relative folder prefixes (one per line) whose contents this scheme instance never resolves or " +
+            "lists addresses for — territory it does not speak for. Use this to stop an archive tree from " +
+            "colliding with the live spine on a reused address; the excluded notes themselves are unaffected — " +
+            "every other tool still reads, writes and finds them normally. Matching is case-sensitive (macOS's " +
+            "case-insensitive filesystem does not make \"vault archaeology\" match \"Vault archaeology\"). " +
+            "Leave blank for no exclusion."
+        )
+        .addTextArea((t) => {
+          t.setValue((jdInstance.excludedRoots ?? []).join("\n"));
+          t.inputEl.rows = 3;
+          t.onChange(async (value) => {
+            await this.updateExcludedRoots(value);
+          });
+        });
+
       // Item 4: an invalid field value used to write config silently — a
       // typo'd area token or an out-of-range floor made makeRegistry skip
       // the whole instance with only a console.error, and the feature
       // "mysteriously died" with no on-screen sign why. This element is the
       // surfaced consequence: cleared when the current config is valid,
       // listing every problem (including a non-numeric floor entry, which
-      // parseFloorField itself silently drops to "use the default")
-      // otherwise. Saving is unchanged either way — config-not-hardwired
-      // means the user rules, but they must SEE what they just did.
+      // parseFloorField itself silently drops to "use the default", and —
+      // this feature's extension of item 4 — an invalid excludedRoots entry,
+      // which makeRegistry skips the WHOLE instance over) otherwise. Saving
+      // is unchanged either way — config-not-hardwired means the user
+      // rules, but they must SEE what they just did.
       this.jdWarningEl = containerEl.createEl("p", { cls: "mod-warning" });
-      this.renderJdProblems(validateJdConfig(jdInstance.config));
+      this.renderJdProblems(this.jdProblems());
     } else {
       this.jdWarningEl = undefined;
     }
@@ -388,8 +423,40 @@ export class VaultMcpSettingTab extends PluginSettingTab {
       else nextConfig[key] = value;
     }
     this.plugin.settings.schemes = [{ ...jd, config: nextConfig as Partial<JdConfig> }, ...schemes.slice(1)];
-    this.renderJdProblems([...(fieldProblem ? [fieldProblem] : []), ...validateJdConfig(nextConfig)]);
+    this.renderJdProblems([...(fieldProblem ? [fieldProblem] : []), ...this.jdProblems()]);
     await this.plugin.saveSettings();
+  }
+
+  /**
+   * Merge a new `excludedRoots` into `schemes[0]` and save. Sibling of
+   * `updateJdConfig`, not a variant of it — `excludedRoots` is
+   * INSTANCE-level (design item 1: a sibling of `config`, not a key inside
+   * it), so it is never routed through `nextConfig`. `parseLineList`
+   * already folds "no non-blank lines" to `undefined`; when that happens the
+   * field is REMOVED from the persisted instance entirely rather than kept
+   * as an explicit `excludedRoots: []` — matching `updateJdConfig`'s
+   * delete-on-undefined convention for a blanked config key.
+   */
+  private async updateExcludedRoots(value: string): Promise<void> {
+    const schemes = this.plugin.settings.schemes;
+    const jd = schemes[0];
+    if (!jd) return;
+    const excludedRoots = parseLineList(value);
+    const { excludedRoots: _drop, ...rest } = jd;
+    const next = excludedRoots ? { ...rest, excludedRoots } : rest;
+    this.plugin.settings.schemes = [next, ...schemes.slice(1)];
+    this.renderJdProblems(this.jdProblems());
+    await this.plugin.saveSettings();
+  }
+
+  /** Every current validation problem for `schemes[0]` — provider config
+   * (item 4's original surfacing) plus this feature's `excludedRoots`
+   * problems, combined so a field-change in one never blanks out a problem
+   * still standing in the other. */
+  private jdProblems(): string[] {
+    const jd = this.plugin.settings.schemes[0];
+    if (!jd) return [];
+    return [...validateJdConfig(jd.config), ...validateExcludedRoots(jd.excludedRoots).problems];
   }
 
   /** Show (or clear) the Schemes section's inline warning. Empty `problems`

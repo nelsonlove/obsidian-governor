@@ -125,15 +125,17 @@ Beside `uid:`, a path argument also accepts `<scheme>:<address>` — for the def
 
 Resolution is computed against the **visible** notes only, so a session sandboxed by a [path allowlist](#the-path-allowlist) sees exactly the candidates `obsidian_resolve_address` itself would report: `Error [address_unresolved]` when no note *you can reach* carries the address (even if a hidden note does), `Error [address_ambiguous]` naming only the candidates you could have named yourself. An address whose sole claimant is hidden never confirms the address exists — it reads as unresolved, not "found but out of allowlist".
 
+A scheme instance can also be configured with `excludedRoots` — vault-relative folder prefixes (a settings-tab textarea for the default instance) whose contents that instance never resolves, lists, or claims: territory it doesn't speak for. This is *not* a second allowlist — it bounds scheme resolution only, so an excluded note's own path still works as an ordinary argument everywhere else (read, write, uid addressing, …). It exists for the case where a reused address collides across two trees you never intend to reconcile — e.g. an archive tree that happens to reuse a live-spine address — letting the instance resolve cleanly to the one you mean without renaming anything. `obsidian_resolve_address {path: <an excluded note>}` reports `address: null, reason: "excluded"` rather than the address it would otherwise carry, distinguishing "this instance won't claim it" from "no scheme recognizes it at all". Matching is case-sensitive — macOS's case-insensitive filesystem does not make `"vault archaeology"` match a configured root of `"Vault archaeology"`.
+
 Five read-only tools cover the scheme's own view of the vault — none of them mutate anything, and `obsidian_next_address`/`obsidian_list_scope`'s free-slot answers are **computed, not reserved** (pair with [advisory scope claims](#advisory-scope-claims) for exclusivity while you create the note):
 
 - **`obsidian_schemes`** — every configured scheme instance: id, provider, capabilities, the config override in effect, and a couple of example addresses in its own grammar.
-- **`obsidian_resolve_address`** — `{address}` → path (plus `duplicates` if more than one visible note claims it, never picked for you) or `{found: false}` with the parsed shape; `{path}` → its address in whichever configured scheme recognizes it.
+- **`obsidian_resolve_address`** — `{address}` → path (plus `duplicates` if more than one visible note claims it, never picked for you) or `{found: false}` with the parsed shape; `{path}` → its address in whichever configured scheme recognizes it (`{address: null, reason: "excluded"}` when the path is the instance's own excluded territory).
 - **`obsidian_next_address`** — `{scope}` (e.g. category `"06"`) → the next free address in that scope, or `{exhausted: true}`.
 - **`obsidian_list_scope`** — `{scope}` → its visible members in address order, plus up to 20 open slots (`free.truncated: true` when more exist).
-- **`obsidian_expected_location`** — `{path}` or `{address}` → where the scheme says it belongs, and whether it's there.
+- **`obsidian_expected_location`** — `{path}` or `{address}` → where the scheme says it belongs, and whether it's there; a candidate container folder under an excluded root is never considered.
 
-Under an allowlist, a hidden note can hold a slot these tools report as free — the same visibility rule that keeps addressing from being a sandbox bypass also means "next free" is only ever free among what your session can see.
+Under an allowlist, or an instance configured with `excludedRoots`, a hidden or excluded note can hold a slot these tools report as free — the same visibility rule that keeps addressing from being a sandbox bypass also means "next free" is only ever free among what your session can see and what the instance speaks for.
 
 ## Link health
 

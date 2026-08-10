@@ -8,7 +8,7 @@
 // only sequences four provider-delegated checks and sorts the result.
 
 import type { Address, SchemeFinding, ScopeProvider } from "./provider.js";
-import type { SchemeInstance } from "./registry.js";
+import { excludeRoots, type SchemeInstance } from "./registry.js";
 
 function basenameOf(path: string): string {
   const idx = path.lastIndexOf("/");
@@ -66,14 +66,24 @@ function makeExpectedFolderCache(provider: ScopeProvider, notes: string[]) {
  *     `expectedFolder(addr, notes)`, when that is derivable (non-null).
  *
  * Output is sorted by path, then by code, for a deterministic listing.
+ *
+ * `instance.excludedRoots` is applied to `notes` FIRST, before any rule runs
+ * — an excluded note is invisible to every rule class, not just the ones
+ * whose semantics happen to mention it: it cannot be the "first claimant" a
+ * later duplicate_address finding blames, cannot itself be flagged
+ * misfiled/malformed_name/unaddressed, and cannot establish an
+ * `expectedFolder` for some other address's container. `excludeRoots`
+ * returns `notes` itself (same array) when `excludedRoots` is absent/empty,
+ * so the no-exclusion path is byte-identical to before this filter existed.
  */
 export function schemeFindings(instance: SchemeInstance, notes: string[]): SchemeFinding[] {
   const provider = instance.provider;
+  const visible = excludeRoots(notes, instance.excludedRoots);
   const findings: SchemeFinding[] = [];
   const firstClaimant = new Map<string, string>(); // formatted address -> first path to claim it
-  const expectedFolderOf = makeExpectedFolderCache(provider, notes);
+  const expectedFolderOf = makeExpectedFolderCache(provider, visible);
 
-  for (const path of notes) {
+  for (const path of visible) {
     const malformed = provider.validateName(basenameOf(path)).map((f) => ({ ...f, path }));
     findings.push(...malformed);
 
