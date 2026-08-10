@@ -79,11 +79,29 @@ const PROVIDER_FACTORIES: Record<string, { make: (config: unknown) => ScopeProvi
  * instance ids; `uid:` is reserved and never a scheme ref. */
 const REF_RE = /^([a-z][a-z0-9-]*):(.+)$/;
 
+/** `parseRefDetailed`'s result: the three ways a ref can turn out, each
+ * carrying exactly what its caller needs and nothing else. */
+export type ParsedRef =
+  | { kind: "resolved"; instance: SchemeInstance; addr: Address }
+  | { kind: "skipped"; id: string; problems: string[] }
+  | { kind: "none" };
+
 export class SchemeRegistry {
   private readonly byId: Map<string, SchemeInstance>;
+  /**
+   * id -> the problem strings that skipped it (unknown provider, invalid
+   * config, invalid excludedRoots, or a duplicate-id row), as recorded by
+   * `makeRegistry`. RAW: a row skipped as a duplicate is recorded here even
+   * when an EARLIER row for the same id registered successfully (first
+   * wins) — `skipped()` below is the public, refusal-purpose view that
+   * excludes those. A registry built directly (bypassing `makeRegistry`,
+   * e.g. in tests) gets an empty map here, same as having skipped nothing.
+   */
+  private readonly rawSkipped: Map<string, string[]>;
 
-  constructor(instances: SchemeInstance[]) {
+  constructor(instances: SchemeInstance[], skipped: Map<string, string[]> = new Map()) {
     this.byId = new Map(instances.map((inst) => [inst.id, inst]));
+    this.rawSkipped = skipped;
   }
 
   instances(): SchemeInstance[] {
@@ -94,28 +112,76 @@ export class SchemeRegistry {
     return this.byId.get(id) ?? null;
   }
 
+  /**
+   * Ids that were configured but have NO live instance — every skip path in
+   * `makeRegistry` (unknown provider, invalid config, invalid
+   * excludedRoots), plus a duplicate-id row whose id ALSO has no live
+   * instance (its first row was itself skipped). This is the set a typed
+   * `scheme_unavailable` refusal (below) is meaningful for.
+   *
+   * Deliberately EXCLUDES an id that has a live instance even though some
+   * later row sharing that id was also skipped as a duplicate: the live
+   * instance already serves the id, so there is nothing to refuse — a
+   * refusal here would be reporting a problem the caller can never actually
+   * hit (every call naming that id resolves against the live instance,
+   * never the skipped duplicate).
+   */
+  skipped(): Map<string, string[]> {
+    const out = new Map<string, string[]>();
+    for (const [id, problems] of this.rawSkipped) {
+      if (this.byId.has(id)) continue;
+      out.set(id, problems);
+    }
+    return out;
+  }
+
+  /** "jd:06.11" -> resolved / skipped / none. The full-detail form of
+   * `parseRef` (below): distinguishes a ref naming a SKIPPED id (no live
+   * instance — a typed `scheme_unavailable` refusal is warranted) from every
+   * other reason a ref isn't a resolvable scheme address (not scheme-shaped
+   * at all, the reserved "uid:" prefix, an unregistered id, or an id-shaped
+   * address the provider itself can't parse) — all of those are `"none"`,
+   * meaning "not a scheme ref at all, treat it as an ordinary path". A
+   * skipped id's address portion is never parsed against a provider (there
+   * is none to parse it) — matching the id alone is enough to report
+   * `"skipped"`. */
+  parseRefDetailed(ref: string): ParsedRef {
+    const m = ref.match(REF_RE);
+    if (!m) return { kind: "none" };
+    const [, id, rest] = m;
+    if (id === "uid") return { kind: "none" };
+    const instance = this.get(id);
+    if (instance) {
+      const addr = instance.provider.parse(rest);
+      return addr ? { kind: "resolved", instance, addr } : { kind: "none" };
+    }
+    const problems = this.skipped().get(id);
+    if (problems) return { kind: "skipped", id, problems };
+    return { kind: "none" };
+  }
+
   /** "jd:06.11" -> { instance, addr } | null. Null covers every reason the
    * ref isn't a resolvable scheme address: not scheme-shaped at all, the
-   * reserved "uid:" prefix, an unregistered scheme id, or an id-shaped
-   * address the provider itself can't parse. Callers treat null uniformly as
+   * reserved "uid:" prefix, an unregistered scheme id, a SKIPPED scheme id
+   * (see `parseRefDetailed` for that distinction), or an id-shaped address
+   * the provider itself can't parse. Callers treat null uniformly as
    * "not a scheme ref — treat it as an ordinary path", so a filename that
-   * happens to contain a colon never breaks. */
+   * happens to contain a colon never breaks. A caller that must distinguish
+   * a skipped id (to issue a typed refusal instead) uses `parseRefDetailed`
+   * directly. */
   parseRef(ref: string): { instance: SchemeInstance; addr: Address } | null {
-    const m = ref.match(REF_RE);
-    if (!m) return null;
-    const [, id, rest] = m;
-    if (id === "uid") return null;
-    const instance = this.get(id);
-    if (!instance) return null;
-    const addr = instance.provider.parse(rest);
-    if (!addr) return null;
-    return { instance, addr };
+    const detailed = this.parseRefDetailed(ref);
+    return detailed.kind === "resolved" ? { instance: detailed.instance, addr: detailed.addr } : null;
   }
 
   /** Paths in `notes` whose own address canonicalizes to the same string as
    * `addr`, in listing order. Compares via provider.format on both sides —
-   * canonical-form equality, not raw-string equality (so e.g. differing
-   * decimal widths that the provider itself normalizes still match). */
+   * canonical-form equality, not raw-string equality (#93: this is
+   * architectural headroom for a FUTURE provider whose format() legitimately
+   * differs from its raw parse, e.g. normalizing decimal widths; the
+   * johnny-decimal provider's own format() is a raw pass-through — `addr.raw`,
+   * see jd.ts — it does not itself normalize anything today, so for "jd" this
+   * comparison is currently equivalent to comparing raw strings). */
   resolve(instance: SchemeInstance, addr: Address, notes: string[]): string[] {
     const target = instance.provider.format(addr);
     const matches: string[] = [];
@@ -218,6 +284,18 @@ export function excludeRoots(paths: string[], roots: string[] | undefined): stri
 
 export function makeRegistry(configs: SchemeInstanceConfig[]): SchemeRegistry {
   const instances: SchemeInstance[] = [];
+  // id -> every skip reason recorded against it, feeding SchemeRegistry's own
+  // `skipped()` (issue #88): the console.error lines below remain the
+  // settings-surface record (#74), this map is the SAME information kept
+  // in-process so a call naming a skipped id can get a typed refusal instead
+  // of reading as an ordinary, never-registered scheme id. Appended to, not
+  // overwritten — a duplicate-id row records ALONGSIDE whatever the first row
+  // for that id already recorded (see the duplicate branch below), so an id
+  // skipped twice for two different reasons keeps both.
+  const skipped = new Map<string, string[]>();
+  const recordSkip = (id: string, problems: string[]) => {
+    skipped.set(id, [...(skipped.get(id) ?? []), ...problems]);
+  };
   // FIRST wins on a duplicate id (item 5 fix): a later entry sharing an
   // already-registered id is skip-and-reported, same convention as an
   // unknown provider or an invalid config — not silently last-wins, which
@@ -230,7 +308,9 @@ export function makeRegistry(configs: SchemeInstanceConfig[]): SchemeRegistry {
   const seenIds = new Set<string>();
   for (const cfg of configs) {
     if (seenIds.has(cfg.id)) {
-      console.error(`[scheme-registry] duplicate scheme id "${cfg.id}" — first entry wins, this one is skipped`);
+      const msg = `duplicate scheme id "${cfg.id}" — first entry wins, this one is skipped`;
+      console.error(`[scheme-registry] ${msg}`);
+      recordSkip(cfg.id, [msg]);
       continue;
     }
     // Reserve the id BEFORE the provider/config checks below (worker-1's
@@ -246,7 +326,9 @@ export function makeRegistry(configs: SchemeInstanceConfig[]): SchemeRegistry {
       ? PROVIDER_FACTORIES[cfg.provider]
       : undefined;
     if (!factory) {
-      console.error(`[scheme-registry] unknown provider "${cfg.provider}" for scheme id "${cfg.id}" — instance skipped`);
+      const msg = `unknown provider "${cfg.provider}" for scheme id "${cfg.id}" — instance skipped`;
+      console.error(`[scheme-registry] ${msg}`);
+      recordSkip(cfg.id, [msg]);
       continue;
     }
     const problems = factory.validate(cfg.config);
@@ -254,6 +336,7 @@ export function makeRegistry(configs: SchemeInstanceConfig[]): SchemeRegistry {
       console.error(
         `[scheme-registry] invalid config for scheme id "${cfg.id}" (provider "${cfg.provider}") — instance skipped: ${problems.join("; ")}`,
       );
+      recordSkip(cfg.id, problems);
       continue;
     }
     const { roots: excludedRoots, problems: rootProblems } = validateExcludedRoots(cfg.excludedRoots);
@@ -261,11 +344,12 @@ export function makeRegistry(configs: SchemeInstanceConfig[]): SchemeRegistry {
       console.error(
         `[scheme-registry] invalid excludedRoots for scheme id "${cfg.id}" — instance skipped: ${rootProblems.join("; ")}`,
       );
+      recordSkip(cfg.id, rootProblems);
       continue;
     }
     instances.push({ id: cfg.id, providerName: cfg.provider, provider: factory.make(cfg.config), ...(excludedRoots ? { excludedRoots } : {}) });
   }
-  return new SchemeRegistry(instances);
+  return new SchemeRegistry(instances, skipped);
 }
 
 export class AddressUnresolvedError extends Error {
@@ -286,6 +370,31 @@ export class AddressAmbiguousError extends Error {
   ) {
     super(message);
     this.name = "AddressAmbiguousError";
+  }
+}
+
+/**
+ * A ref (or an explicit `scheme` argument) named a scheme id that IS
+ * configured but has no live instance — `SchemeRegistry.skipped()` (issue
+ * #88's typed refusal, the second half of #74's settings-tab surfacing).
+ *
+ * The message names ONLY the id — NEVER the problem strings `skipped()`
+ * carries. Those problems can themselves be (or quote) config values a user
+ * typed, which can name vault territory (a bad `excludedRoots` entry is the
+ * clearest case: the very string that failed validation is a path), so
+ * echoing them into a tool-call refusal would be a disclosure leak parallel
+ * to the one `excludedRoots`'s own under-disclosure in `obsidian_schemes`
+ * guards against — a refusal is not the settings surface, and must not do
+ * that surface's job. A caller who wants the actual reason reads it in
+ * settings (or, for a headless embed, straight off `skipped()`), not from a
+ * tool error.
+ */
+export class SchemeUnavailableError extends Error {
+  readonly code = "scheme_unavailable";
+
+  constructor(readonly id: string) {
+    super(`scheme "${id}" is configured but currently unavailable due to configuration problems — fix them in settings`);
+    this.name = "SchemeUnavailableError";
   }
 }
 
@@ -400,11 +509,18 @@ export function resolveSchemeArgs(
   let visible: string[] | undefined;
   const rewritten = mapPaths(args ?? {}, (value) => {
     if (!reg) return value;
-    const parsed = reg.parseRef(value);
-    if (!parsed) return value;
+    const detailed = reg.parseRefDetailed(value);
+    // A ref naming a SKIPPED id (#88): refuse before the handler ever runs,
+    // same as an unresolved or ambiguous address below — the id it names is
+    // configured but has no live instance, so there is nothing to resolve
+    // against, and silently falling through as "not a scheme ref" would let
+    // an ordinary-path branch of the handler run against a literal string
+    // like "jd:06.11" instead of telling the caller why addressing failed.
+    if (detailed.kind === "skipped") throw new SchemeUnavailableError(detailed.id);
+    if (detailed.kind === "none") return value;
     if (visible === undefined) visible = visiblePaths(notes(), settings);
-    const candidates = excludeRoots(visible, parsed.instance.excludedRoots);
-    const path = resolveParsedAddress(reg, parsed, value, candidates);
+    const candidates = excludeRoots(visible, detailed.instance.excludedRoots);
+    const path = resolveParsedAddress(reg, detailed, value, candidates);
     resolved.push({ ref: value, path });
     return path;
   });

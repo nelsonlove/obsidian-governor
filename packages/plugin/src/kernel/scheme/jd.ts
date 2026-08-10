@@ -3,10 +3,16 @@
 // The grammar core below (parseJdId, areaOfCategory, categoryOf,
 // isExpandedCategory, isExpandedAreaItem, isStandardZero, idTokenFromName,
 // nextContentDecimal) is ported VERBATIM from obsidian-johnny-decimal's
-// src/core/jdId.ts — same regexes, same branch order, same edge cases. Only
-// names that the ScopeProvider interface forces have changed (CoreConfig ->
-// JdConfig, DEFAULT_CONFIG -> DEFAULT_JD_CONFIG). See that file's header for
-// the full shape catalogue and the three predecessors it reconciles:
+// src/core/jdId.ts — same regexes, same branch order, same edge cases.
+// (Amendment, #93: nextContentDecimal's starting decimal is no longer
+// hardwired — it takes a `floor` parameter fed by JdConfig.contentDecimalFloor,
+// defaulting to 10 when absent. The DEFAULT behavior — and every other edge
+// case — is still the verbatim port; only that one bound became config-driven
+// rather than a literal in the function body. See nextContentDecimal's own
+// doc comment, below, for the detail.) Only names that the ScopeProvider
+// interface forces have changed (CoreConfig -> JdConfig, DEFAULT_CONFIG ->
+// DEFAULT_JD_CONFIG). See that file's header for the full shape catalogue and
+// the three predecessors it reconciles:
 //
 //   - area          XX-YY            e.g. 00-09, 90-99   (hyphen, not en-dash)
 //   - category      XX               e.g. 06, 72
@@ -539,9 +545,11 @@ export function jdProvider(cfg: JdConfig): ScopeProvider {
       return null;
     },
 
-    // category scope: lowest unused two-digit content decimal (nextContentDecimal,
-    //   ported verbatim — .00-.09 reserved, exhaustion at .99 returns null),
-    //   UNLESS the category is one of cfg.expandedCategories, in which case it
+    // category scope: lowest unused two-digit content decimal (nextContentDecimal;
+    //   .00-.09 reserved BY DEFAULT — the floor is config-driven,
+    //   JdConfig.contentDecimalFloor, verbatim only in its default of 10 — and
+    //   exhaustion at .99 always returns null), UNLESS the category is one of
+    //   cfg.expandedCategories, in which case it
     //   allocates 5-digit ids like an expanded area does (see below).
     // area scope: null, UNLESS the area is one of cfg.expandedAreas.
     // expanded area / expanded category: next 5-digit sequential id.
