@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { fakeServer } from "./fake-server.mjs";
 import { mountModules, mountHost, builtinModules } from "../src/mcp/modules-mount.ts";
-import { ModuleRegistry } from "../src/kernel/modules/index.ts";
+import { ModuleRegistry, collect, toolDocDrift, toolDocReadOnlyDrift } from "../src/kernel/modules/index.ts";
 
 const SRC = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "src");
 
@@ -199,5 +199,96 @@ describe("mount gate 3: registry-only registration (source scan)", () => {
     // call form (not just the import form the allowlisted files contain).
     assert.ok(/register(Scheme|Vocab)Tools\s*\(/.test("  registerSchemeTools(server, ctx);"));
     assert.ok(!/register(Scheme|Vocab)Tools\s*\(/.test('import { registerSchemeTools } from "./tools-scheme.js";'));
+  });
+});
+
+describe("#81 config-host: both built-in modules carry a manifest, drift-free", () => {
+  test("every module builtinModules() declares has a manifest with a summary", () => {
+    const mods = builtinModules(deps());
+    for (const m of mods) {
+      assert.ok(m.manifest, `${m.id} has no manifest`);
+      assert.equal(typeof m.manifest.summary, "string");
+      assert.ok(m.manifest.summary.length > 0, `${m.id}'s manifest summary is empty`);
+    }
+  });
+
+  test("scheme's manifest declares the four config fields the old hand-built Schemes section rendered", () => {
+    const scheme = builtinModules(deps()).find((m) => m.id === "scheme");
+    assert.deepEqual(
+      scheme.manifest.config.fields.map((f) => f.key).sort(),
+      ["contentDecimalFloor", "excludedRoots", "expandedAreas", "expandedCategories"],
+    );
+  });
+
+  test("vocab's manifest declares NO config fields — the real capability-directory-only module (not a synthetic test fixture)", () => {
+    const vocab = builtinModules(deps()).find((m) => m.id === "vocab");
+    assert.equal(vocab.manifest.config, undefined);
+    assert.ok(vocab.manifest.directory.tools.length > 0);
+  });
+
+  test("drift check: every ToolDoc names a tool the module ACTUALLY contributed on registerAll, and vice versa", () => {
+    const { registry } = mount();
+    const described = registry.describe();
+    for (const d of described) {
+      const mod = builtinModules(deps()).find((m) => m.id === d.id);
+      const problems = toolDocDrift(mod.manifest.directory.tools ?? [], d.tools);
+      assert.deepEqual(problems, [], `${d.id}: ${problems.join("; ")}`);
+    }
+  });
+
+  test("readOnly drift: every ToolDoc's readOnly matches the tool's real registered annotation", () => {
+    const { server } = mount();
+    const mods = builtinModules(deps());
+    const annotationsByName = Object.fromEntries([...server.tools].map(([name, { def }]) => [name, def.annotations]));
+    for (const mod of mods) {
+      const problems = toolDocReadOnlyDrift(mod.manifest.directory.tools ?? [], annotationsByName);
+      assert.deepEqual(problems, [], `${mod.id}: ${problems.join("; ")}`);
+    }
+  });
+
+  test("scheme's ConfigBinding round-trips against the REAL settings shape (settings.schemes[0])", () => {
+    const scheme = builtinModules(deps()).find((m) => m.id === "scheme");
+    const settings0 = { schemes: [{ id: "jd", provider: "johnny-decimal", config: { expandedAreas: ["90-99"] } }] };
+    const settings1 = scheme.configBinding.write(settings0, { contentDecimalFloor: 15, excludedRoots: ["Archive"] });
+    assert.deepEqual(scheme.configBinding.read(settings1), {
+      expandedAreas: ["90-99"],
+      contentDecimalFloor: 15,
+      excludedRoots: ["Archive"],
+    });
+    // Non-mutating: the original settings object is untouched.
+    assert.deepEqual(settings0.schemes[0].config, { expandedAreas: ["90-99"] });
+    assert.equal(settings0.schemes[0].excludedRoots, undefined);
+  });
+
+  test("scheme's manifest validate rejects an invalid expandedAreas token loudly (subsumes validateJdConfig)", () => {
+    const scheme = builtinModules(deps()).find((m) => m.id === "scheme");
+    const problems = scheme.manifest.config.validate({ expandedAreas: ["not-an-area"] });
+    assert.ok(problems.some((p) => p.includes("expandedAreas")));
+  });
+
+  test("scheme's manifest validate rejects an invalid excludedRoots entry loudly (the instance-level sibling field)", () => {
+    const scheme = builtinModules(deps()).find((m) => m.id === "scheme");
+    const problems = scheme.manifest.config.validate({ excludedRoots: ["/absolute/not/allowed"] });
+    assert.ok(problems.some((p) => p.includes("excludedRoots") && p.includes("relative")));
+  });
+
+  test("scheme's manifest validate accepts a fully valid config with no problems", () => {
+    const scheme = builtinModules(deps()).find((m) => m.id === "scheme");
+    assert.deepEqual(
+      scheme.manifest.config.validate({ expandedAreas: ["90-99"], expandedCategories: ["27"], contentDecimalFloor: 10, excludedRoots: ["Archive"] }),
+      [],
+    );
+  });
+
+  test("collect() over the real mounted modules renders a section for each, scheme with fields, vocab without", () => {
+    const settings = { schemes: [{ id: "jd", provider: "johnny-decimal", config: { contentDecimalFloor: 20 } }], modules: {} };
+    const mods = builtinModules(deps({ settings }));
+    const hosted = collect(mods, settings.modules, settings);
+    assert.deepEqual(hosted.map((h) => h.id), ["scheme", "vocab"]);
+    const scheme = hosted.find((h) => h.id === "scheme");
+    assert.equal(scheme.fields.find((f) => f.key === "contentDecimalFloor").value, 20);
+    const vocab = hosted.find((h) => h.id === "vocab");
+    assert.deepEqual(vocab.fields, []);
+    assert.ok(vocab.directory.tools.length > 0);
   });
 });
