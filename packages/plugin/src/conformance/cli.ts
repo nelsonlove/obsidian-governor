@@ -18,7 +18,7 @@ import { VocabRegistry, DEFAULT_VOCABULARIES, type VocabInstanceSettings } from 
 import { makeRegistry, DEFAULT_SCHEMES, type SchemeInstanceConfig } from "../kernel/scheme/registry.js";
 import { buildSnapshot } from "./snapshot.js";
 import { runEngine } from "./engine.js";
-import { vocabPack, schemePack } from "./packs/index.js";
+import { vocabPack, schemePack, portPack } from "./packs/index.js";
 import { parseBaseline, renderBaseline, ratchet, type RatchetResult } from "./ratchet.js";
 import type { Finding } from "./finding.js";
 import type { RulePack } from "./rule-pack.js";
@@ -51,6 +51,9 @@ export async function runConformance(opts: RunOpts): Promise<RunResult> {
   packs.push(vocabPack(vocabInstances.map((i) => i.provider)));
   // scheme instances: from settings, independent of the listing.
   packs.push(schemePack(makeRegistry(opts.schemes).instances()));
+  // Legacy check ports (Phase 2). port_lint: line-oriented over each note's
+  // raw text, so it needs the snapshot's `text` field.
+  packs.push(portPack());
 
   const findings = runEngine(packs, snapshot);
   const result = ratchet(findings, parseBaseline(opts.baselineText));

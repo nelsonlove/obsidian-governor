@@ -19,8 +19,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { parseAllFrontmatter } from "@vault-mcp/core";
-import type { VocabNote } from "../kernel/vocab/blueprint.js";
-import type { VaultSnapshot } from "./rule-pack.js";
+import type { VaultSnapshot, SnapshotNote } from "./rule-pack.js";
 
 export interface SnapshotOpts {
   /** Absolute content root to walk. */
@@ -46,18 +45,20 @@ function isExcluded(vaultPath: string, excluded: string[]): boolean {
  * `parseAllFrontmatter` anchor on `---\n`, so a CRLF-authored note (`---\r\n`)
  * would otherwise parse to empty frontmatter and silently skip every vocab
  * check — exactly the silent zero the engine's sentinels exist to prevent. */
-function splitNote(raw: string): { frontmatter: Record<string, unknown>; body: string } {
+function splitNote(raw: string): { frontmatter: Record<string, unknown>; body: string; text: string } {
   const text = raw.replace(/\r\n/g, "\n");
   const m = text.match(/^---\n[\s\S]*?\n---\n?/);
   const frontmatter = parseAllFrontmatter(text) as Record<string, unknown>;
   const body = m ? text.slice(m[0].length) : text;
-  return { frontmatter, body };
+  // `text` is the CRLF-normalized FULL content (frontmatter included) — the
+  // line-oriented packs (port_lint/ste_lint) scan it; line numbers match disk.
+  return { frontmatter, body, text };
 }
 
 export async function buildSnapshot(opts: SnapshotOpts): Promise<VaultSnapshot> {
   const excluded = opts.excludedRoots ?? [];
   const skip = new Set([...DEFAULT_SKIP, ...(opts.skipDirs ?? [])]);
-  const notes: VocabNote[] = [];
+  const notes: SnapshotNote[] = [];
   const paths: string[] = [];
 
   async function walk(absDir: string): Promise<void> {
@@ -85,8 +86,8 @@ export async function buildSnapshot(opts: SnapshotOpts): Promise<VaultSnapshot> 
       } catch {
         continue; // unreadable file — skip
       }
-      const { frontmatter, body } = splitNote(text);
-      notes.push({ path: vaultPath, frontmatter, body });
+      const { frontmatter, body, text: normalized } = splitNote(text);
+      notes.push({ path: vaultPath, frontmatter, body, text: normalized });
       if (isMd) paths.push(vaultPath);
     }
   }
