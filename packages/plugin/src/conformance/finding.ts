@@ -32,8 +32,21 @@ export interface Finding {
 
 const SEP = "|";
 
-/** The stable key line for a finding: `script|check|target|kind`. */
+/**
+ * The stable key line for a finding: `script|check|target|kind`.
+ *
+ * `script`, `check`, and `target` must not contain the separator — a pipe in
+ * one of the first three fields would mis-field the key on parse (only `kind`,
+ * the last field, may contain a pipe since `parseKey` rejoins the remainder).
+ * Vault paths and the packs' codes never contain a pipe; we throw rather than
+ * emit a silently-mis-fielded key, mirroring the Python ratchet's RailError.
+ */
 export function findingKey(f: Pick<Finding, "script" | "check" | "target" | "kind">): string {
+  for (const [name, val] of [["script", f.script], ["check", f.check], ["target", f.target]] as const) {
+    if (val.includes(SEP)) {
+      throw new Error(`conformance finding ${name} contains the reserved '|' separator: ${JSON.stringify(val)}`);
+    }
+  }
   return [f.script, f.check, f.target, f.kind].join(SEP);
 }
 

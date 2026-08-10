@@ -32,7 +32,7 @@ function snapshot(notes) {
 }
 
 describe("vocabPack", () => {
-  test("maps a VocabFinding to the vocab_findings 4-tuple (target=path, kind=lowercased token)", () => {
+  test("maps a VocabFinding to the vocab_findings 4-tuple (target=path, kind=token, case preserved)", () => {
     const pack = vocabPack(vocabProviders());
     const snap = snapshot([{ path: "Notes/N.md", frontmatter: { title: "N", tags: ["Rogue"] } }]);
     const findings = pack.run(snap);
@@ -40,8 +40,15 @@ describe("vocabPack", () => {
     assert.ok(tag, "expected an unregistered_tag finding");
     assert.equal(tag.script, "vocab_findings");
     assert.equal(tag.target, "Notes/N.md");
-    assert.equal(tag.kind, "rogue"); // lower-cased
+    assert.equal(tag.kind, "Rogue"); // case preserved — distinct-case tokens stay distinct keys
     assert.ok(tag.detail.length > 0);
+  });
+
+  test("distinct-case tokens produce distinct keys (a ratchet must not mask a regression)", () => {
+    const pack = vocabPack(vocabProviders());
+    const snap = snapshot([{ path: "Notes/N.md", frontmatter: { title: "N", tags: ["Rogue", "rogue"] } }]);
+    const kinds = pack.run(snap).filter((f) => f.check === "unregistered_tag").map((f) => f.kind);
+    assert.deepEqual(kinds.sort(), ["Rogue", "rogue"]);
   });
 
   test("a fully registered note yields no vocab findings", () => {

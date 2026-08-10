@@ -97,20 +97,45 @@ function discoverRoot(start: string): string {
   }
 }
 
-/** Replace (or append) the ratchet-baseline fence body in a baseline note. */
-function writeFence(noteText: string, body: string): string {
+/** Replace (or append) the ratchet-baseline fence body in a baseline note.
+ * Throws if the note has an opening fence marker but no complete fence block
+ * (truncated/corrupt) — a silent no-op there would report "rebaselined" while
+ * leaving the accepted debt untouched. The replacement uses a FUNCTION replacer
+ * so `$`-sequences in `body` (vault paths can contain `$&` etc.) are inserted
+ * literally, never interpreted as `String.replace` substitution patterns. */
+export function writeFence(noteText: string, body: string): string {
   const block = `${FENCE}\n${body}\n\`\`\``;
-  if (noteText.includes(FENCE)) {
-    return noteText.replace(/```ratchet-baseline\n[\s\S]*?\n```/, block);
+  if (!noteText.includes(FENCE)) {
+    return `${noteText.trimEnd()}\n\n${block}\n`;
   }
-  return `${noteText.trimEnd()}\n\n${block}\n`;
+  const re = /```ratchet-baseline\n[\s\S]*?\n```/;
+  if (!re.test(noteText)) {
+    throw new Error("baseline note has an opening ```ratchet-baseline marker but no complete fence block — refusing to rebaseline a corrupt baseline");
+  }
+  return noteText.replace(re, () => block);
 }
+
+// Phase 1 ships only the vocab + scheme packs; the four legacy checks
+// (drift/blueprint/ste/port) are not yet ported. Until they are, a
+// `--rebaseline` against the LIVE baseline would overwrite its 124 accepted
+// legacy findings with only vocab/scheme keys — destroying accepted debt. So
+// rebaselining the default (live) baseline is refused while the pack set is
+// incomplete; a fixture baseline (explicit --baseline=) is always allowed.
+const PHASE1_PACKS_INCOMPLETE = true;
 
 async function main(argv: string[]): Promise<void> {
   const rebaseline = argv.includes("--rebaseline");
   const rootArg = argv.find((a) => a.startsWith("--root="))?.slice("--root=".length);
   const root = rootArg ? resolve(rootArg) : discoverRoot(process.cwd());
-  const baselinePath = argv.find((a) => a.startsWith("--baseline="))?.slice("--baseline=".length) ?? join(root, BASELINE_REL);
+  const baselineArg = argv.find((a) => a.startsWith("--baseline="))?.slice("--baseline=".length);
+  const baselinePath = baselineArg ? resolve(baselineArg) : join(root, BASELINE_REL);
+  if (rebaseline && !baselineArg && PHASE1_PACKS_INCOMPLETE) {
+    throw new Error(
+      "refusing to --rebaseline the live baseline while the legacy packs (drift/blueprint/ste/port) are unported — " +
+        "it would overwrite the accepted legacy debt with only vocab/scheme keys. Target a fixture with --baseline=<path>, " +
+        "or wait for Phase 2.",
+    );
+  }
   const baselineText = existsSync(baselinePath) ? await readFile(baselinePath, "utf8") : "";
 
   const res = await runConformance({

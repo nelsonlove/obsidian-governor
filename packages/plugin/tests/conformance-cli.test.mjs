@@ -68,3 +68,24 @@ describe("runConformance", () => {
     }
   });
 });
+
+describe("writeFence", () => {
+  test("inserts a body containing $-sequences literally (no String.replace pattern expansion)", async () => {
+    const { writeFence } = await import("../src/conformance/cli.ts");
+    const note = "prose\n\n```ratchet-baseline\nold|a|b|c\n```\n\nmore\n";
+    const body = "vocab_findings|unregistered_tag|Notes/Price $& Deal.md|rogue";
+    const out = writeFence(note, body);
+    assert.ok(out.includes("Notes/Price $& Deal.md"), "literal $& preserved");
+    assert.equal(out.includes("old|a|b|c"), false, "old fence body replaced");
+    assert.equal((out.match(/```ratchet-baseline/g) || []).length, 1, "exactly one fence");
+  });
+  test("appends a fence when the note has none", async () => {
+    const { writeFence } = await import("../src/conformance/cli.ts");
+    const out = writeFence("# just prose\n", "s|c|t|k");
+    assert.ok(out.includes("```ratchet-baseline\ns|c|t|k\n```"));
+  });
+  test("throws on an opening marker with no complete fence (corrupt baseline) rather than silently no-op", async () => {
+    const { writeFence } = await import("../src/conformance/cli.ts");
+    assert.throws(() => writeFence("```ratchet-baseline\nunclosed key line\n", "s|c|t|k"), /corrupt|complete fence/);
+  });
+});

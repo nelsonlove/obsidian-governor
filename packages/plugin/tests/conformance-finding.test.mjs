@@ -50,3 +50,18 @@ describe("findingKey", () => {
     });
   });
 });
+
+describe("findingKey pipe guard", () => {
+  test("a pipe in script/check/target throws rather than emitting a mis-fielded key", async () => {
+    const assert2 = (await import("node:assert/strict")).default;
+    const { findingKey } = await import("../src/conformance/finding.ts");
+    assert2.throws(() => findingKey({ script: "s", check: "c", target: "a|b", kind: "k" }), /separator/);
+    assert2.throws(() => findingKey({ script: "s|x", check: "c", target: "t", kind: "k" }), /separator/);
+  });
+  test("a pipe in kind (last field) is allowed and round-trips", async () => {
+    const assert2 = (await import("node:assert/strict")).default;
+    const { findingKey, parseKey } = await import("../src/conformance/finding.ts");
+    const line = findingKey({ script: "s", check: "c", target: "t", kind: "a|b" });
+    assert2.equal(parseKey(line).kind, "a|b");
+  });
+});

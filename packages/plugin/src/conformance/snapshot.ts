@@ -41,8 +41,13 @@ function isExcluded(vaultPath: string, excluded: string[]): boolean {
   return excluded.some((e) => vaultPath === e || vaultPath.startsWith(e.replace(/\/$/, "") + "/"));
 }
 
-/** The `---\n…\n---` block's parsed frontmatter (via core) and the body after it. */
-function splitNote(text: string): { frontmatter: Record<string, unknown>; body: string } {
+/** The `---\n…\n---` block's parsed frontmatter (via core) and the body after
+ * it. CRLF is normalized to LF FIRST: both the body regex and core's
+ * `parseAllFrontmatter` anchor on `---\n`, so a CRLF-authored note (`---\r\n`)
+ * would otherwise parse to empty frontmatter and silently skip every vocab
+ * check — exactly the silent zero the engine's sentinels exist to prevent. */
+function splitNote(raw: string): { frontmatter: Record<string, unknown>; body: string } {
+  const text = raw.replace(/\r\n/g, "\n");
   const m = text.match(/^---\n[\s\S]*?\n---\n?/);
   const frontmatter = parseAllFrontmatter(text) as Record<string, unknown>;
   const body = m ? text.slice(m[0].length) : text;

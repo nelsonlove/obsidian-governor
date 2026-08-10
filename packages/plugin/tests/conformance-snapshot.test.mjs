@@ -65,3 +65,23 @@ describe("buildSnapshot", () => {
     }
   });
 });
+
+describe("buildSnapshot CRLF", () => {
+  test("a CRLF-authored note still parses frontmatter (not silently skipped)", async () => {
+    const { mkdtemp, mkdir, writeFile, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const p = (await import("node:path")).default;
+    const { buildSnapshot } = await import("../src/conformance/snapshot.ts");
+    const root = await mkdtemp(p.join(tmpdir(), "conf-crlf-"));
+    try {
+      await mkdir(p.join(root, "N"), { recursive: true });
+      await writeFile(p.join(root, "N", "C.md"), "---\r\ntitle: C\r\ntags:\r\n  - rogue\r\n---\r\n\r\nbody\r\n");
+      const snap = await buildSnapshot({ root });
+      const note = snap.notes.find((n) => n.path === "N/C.md");
+      assert.equal(note.frontmatter.title, "C");
+      assert.deepEqual(note.frontmatter.tags, ["rogue"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

@@ -2,11 +2,12 @@
 // pure `noteVocabFindings` to the canonical Finding shape.
 //
 // Mapping (the frozen contract): a VocabFinding {code, token, path, detail}
-// becomes { script: "vocab_findings", check: code, target: path, kind:
-// token(lower-cased) }. The token is lower-cased to match the ratchet's
-// existing token-normalization convention (ste_lint keys lower-cased tokens),
-// so case variants of the same offending token share a key. The finding logic
-// is NOT re-implemented here — this only re-homes the module's output.
+// becomes { script: "vocab_findings", check: code, target: path, kind: token }.
+// The token's CASE IS PRESERVED in the key: two distinct-case tokens on one
+// note are distinct findings, so lower-casing them would collapse them to one
+// ratchet key and could mask a genuinely-new violation (a ratchet must never
+// silently drop a regression — false-NEW churn is safer than false-CARRIED).
+// The finding logic is NOT re-implemented here — this only re-homes the output.
 
 import { noteVocabFindings } from "../../kernel/vocab/findings.js";
 import type { VocabularyProvider } from "../../kernel/vocab/provider.js";
@@ -26,7 +27,7 @@ export function vocabPack(providers: VocabularyProvider[]): RulePack {
             script: VOCAB_PACK_ID,
             check: f.code,
             target: f.path ?? f.token,
-            kind: f.token.toLowerCase(),
+            kind: f.token,
             detail: f.detail,
           });
         }
