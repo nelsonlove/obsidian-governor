@@ -284,7 +284,10 @@ export function driftPack(): RulePack {
       }
 
       // ── E / F. uid identity, over drift_audit.py's `iter_notes` scope in raw
-      // TRAVERSAL ORDER (the sample/homes order is part of the finding key). ────
+      // TRAVERSAL ORDER. That order governs `detail` only — it is deliberately
+      // NOT part of the finding key for E/F (#136): keying on the message made
+      // the key move whenever an unrelated note changed the count or the order,
+      // producing permanent false-NEW churn against the accepted baseline. ────
       const governed = (snapshot.walkOrder ?? []).filter(
         (p) => !hasDotOrTrashSegment(p) && !isUnderscoreRoot(p) && firstSegment(p) !== "Assent",
       );
