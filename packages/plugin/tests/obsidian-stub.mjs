@@ -42,6 +42,38 @@ export class TAbstractFile {}
 export class MarkdownView {}
 
 /**
+ * Minimal stand-ins for the settings-tab surface (connection-ui.ts), just
+ * enough for the module to LOAD and its class declarations
+ * (`class Foo extends Modal`, `class Bar extends PluginSettingTab`) to
+ * evaluate — none of these are exercised for their real Obsidian behavior.
+ * connection-ui.ts's own pure, exported helpers (parseCommaList,
+ * parseFloorField, floorFieldProblem) are what tests actually exercise;
+ * `display()`/`onOpen()` — the DOM-heavy glue — are not.
+ */
+export class App {}
+
+export class Modal {
+  constructor(app) {
+    this.app = app;
+  }
+}
+
+export class PluginSettingTab {
+  constructor(app, plugin) {
+    this.app = app;
+    this.plugin = plugin;
+  }
+}
+
+export class Setting {
+  constructor() {}
+}
+
+export class Notice {
+  constructor() {}
+}
+
+/**
  * Obsidian's own getAllTags flattens a file cache's inline tags and its
  * frontmatter `tags` into one `#tag` list. The stub reads the same two places,
  * so a fake cache drives findByTag / obsidian_tags_list realistically; a cache
