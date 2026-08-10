@@ -10,7 +10,7 @@ An agent may *propose* a change to the vault. It may write notes, edit frontmatt
 its reasoning, and mark its own work `acceptance-status: proposed`. What it may **never** do
 is declare that a change has been **accepted**. Acceptance — the moment a human blesses a
 proposed change as canonical — is made by a person, in the
-[Stewardship](README.md#the-stewardship-plugin) review pane, and **nowhere else**.
+[Acceptance](README.md#the-acceptance-review-surface) review pane, and **nowhere else**.
 
 The design scar, stated exactly as it appears throughout the source:
 

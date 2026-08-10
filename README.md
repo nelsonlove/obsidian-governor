@@ -49,7 +49,7 @@ On the Mac, **disconnect the remote `obsidian-vault-mcp-server` connector** for 
 - **Identity:** `obsidian_resolve_uid` — look a note up by its frontmatter `uid`, or a uid up by path. See [Addressing notes by uid](#addressing-notes-by-uid).
 - **Scope providers (Johnny Decimal, read-only):** `obsidian_schemes` (list configured scheme instances, capabilities and grammar examples), `obsidian_resolve_address` (address ↔ path lookup), `obsidian_next_address` (compute — never reserve — the next free address in a scope), `obsidian_list_scope` (a scope's members and open slots), `obsidian_expected_location` (where a note or address is expected to live). See [Scheme addressing](#scheme-addressing).
 - **Controlled vocabulary (read-only module):** `obsidian_vocabularies`, `obsidian_resolve_term`, `obsidian_validate_terms`, `obsidian_list_vocabulary` — validate a note's tags, properties, types, and glossary terms against the vault's vocabulary. See [vocabulary.md](docs/vocabulary.md).
-- **Human review (read-only):** `obsidian_pending_review` — list the notes currently pending human review (as published by the Stewardship plugin), so an agent can avoid stepping on one. See [agent-writes.md](docs/agent-writes.md#b3--obsidian_pending_review).
+- **Human review (read-only):** `obsidian_pending_review` — list the notes currently pending human review (as published by the Acceptance review plugin), so an agent can avoid stepping on one. See [agent-writes.md](docs/agent-writes.md#b3--obsidian_pending_review).
 - **Link health:** `obsidian_check_links` — read-only report of dangling wikilinks, duplicated uids, and uid coverage. See [Link health](#link-health).
 - **Advisory claims:** `obsidian_claim_scope`, `obsidian_renew_scope`, `obsidian_release_scope`, `obsidian_list_scope_claims` — see [Advisory scope claims](#advisory-scope-claims).
 - **Plugin-gated:** `dataview_list_query`, `dataview_table_query` (Dataview); `create_note_from_template` (Templater); `omnisearch` (Omnisearch); `fileclass_schema`, `fileclass_insert_fields` (Metadata Menu).
@@ -70,8 +70,8 @@ There is no accept tool, no accept argument, and no way to smuggle acceptance in
 `obsidian_write_note` / `write_notes` / `manage_frontmatter` / `append` / `patch`, and through
 the `obsidian_cli` proxy — that would introduce `acceptance-status: accepted` (or
 `accepted-by` / `accepted-on`), across every value-type and including body-embedded
-frontmatter, while preserving a human's existing accepted value untouched. Acceptance stays a
-person's gesture in the [Stewardship](docs/README.md#the-stewardship-plugin) review pane.
+frontmatter, while preserving a human's existing accepted value untouched. Accepting stays a
+person's gesture in the [Acceptance](docs/README.md#the-acceptance-review-surface) review pane.
 
 This is the heart of the design. It is documented in full in
 **[docs/acceptance-model.md](docs/acceptance-model.md)**.
@@ -86,6 +86,7 @@ Deep-dive docs for the kernel and the acceptance model live in [`docs/`](docs/RE
 - [Agent write & review surface](docs/agent-writes.md) — `obsidian_write_notes` (B1), change-`intent` (B2), `obsidian_pending_review` (B3).
 - [The module system](docs/modules.md) — the registry, the mount, toggling, the accept tripwire.
 - [Scope provider](docs/scope-provider.md) — `jd:` addressing (read-only). · [Vocabulary provider](docs/vocabulary.md) — controlled-vocabulary validation (read-only).
+- [Conformance engine](docs/conformance.md) — rule packs, the ratchet, ported legacy checks, headless CLI.
 
 ## Addressing notes by uid
 

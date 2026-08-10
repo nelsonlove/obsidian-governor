@@ -39,7 +39,7 @@ A record's shape (`packages/plugin/src/kernel/journal.ts`):
 {"ts":"2026-08-08T19:04:11.427Z","op":"obsidian_write_note",
  "target":{"path":"Inbox/Idea.md","uid":"019f…"},
  "actor":{"transport":"mcp","client":"claude-code/1.0.0","connection":"m1x8g-3",
-          "server":{"vault":"Assent","install":"3f7c…","version":"0.6.0"}},
+          "server":{"vault":"Assent","install":"3f7c…","version":"0.8.0"}},
  "argsDigest":{"path":"Inbox/Idea.md","content":"<812 chars>","overwrite":true},
  "outcome":"ok","durationMs":37,"queueWaitMs":0,
  "revBefore":1754680000000,"revAfter":1754680051427,

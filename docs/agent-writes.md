@@ -12,7 +12,7 @@ A batch writer: write several notes in one call, each as `{path, frontmatter?, b
 
 The whole point of the slice is that **each item is an independent write** routed through the
 **same serialized queue + journal + `if_rev`/idempotency machinery** as a single write — so
-**each note gets its own journal record** and Stewardship sees it individually. (Contrast
+**each note gets its own journal record** and the Acceptance review pane sees it individually. (Contrast
 `obsidian_move_notes`, which is *one* operation over many paths: one record, `target.paths`.)
 
 - Items are processed **sequentially**; a failed item (out-of-allowlist, `if_rev` conflict,
@@ -94,7 +94,7 @@ Its properties are deliberately narrow:
   asserts nothing about a precondition; it just annotates the operation.
 - **Batch-aware.** `obsidian_write_notes` accepts a batch-level `intent` describing the
   change-*set*; the guarded single-writer peels it per item, so **every** item's journal
-  record carries it and Stewardship's per-note rows each show it.
+  record carries it and the Acceptance pane's per-note rows each show it.
 - **Degrades quietly** when the kernel is absent (bare embeds, tests).
 
 ## B3 — `obsidian_pending_review`
@@ -104,9 +104,10 @@ A **read-only** view of the notes currently pending human review, so a well-beha
 (`packages/plugin/src/mcp/tools-pending-review.ts`). It is registered as a plain read tool
 (after `registerUidTools` in `server.ts`), not through the module host.
 
-- **It exposes data another plugin published — nothing more.** Stewardship rewrites a read-only
-  index at `<config-dir>/plugins/stewardship/pending-index.json` on every review-queue refresh;
-  this tool reads it. It is the same data Stewardship shows in its own pane — **no new source of
+- **It exposes data another plugin published — nothing more.** The Acceptance review plugin
+  rewrites a read-only index at `<config-dir>/plugins/stewardship/pending-index.json` (the
+  path keeps the legacy plugin id until #115) on every review-queue refresh; this tool reads
+  it. It is the same data the review pane shows — **no new source of
   truth, and nothing here changes review state**. `readOnlyHint: true`, empty input schema, no
   write and no accept/baseline verb: it reports pending-ness; it cannot accept ("the accept verb
   is in no API").
@@ -114,7 +115,7 @@ A **read-only** view of the notes currently pending human review, so a well-beha
   filtered through the **same `isVisible` guard** the uid/read tools use, *before* it is
   reported — a sandboxed session that could learn about pending notes in territory it cannot
   read would have a path oracle otherwise. `count` is the filtered length.
-- **Graceful degrade by construction.** A missing file (Stewardship not installed or never
+- **Graceful degrade by construction.** A missing file (the review plugin not installed or never
   refreshed), an unparseable one, or a schema-drifted one all read as an **empty pending list,
   never an error** (`parsePendingIndex` tolerates non-JSON, a non-object root, a missing/
   non-array `pending`, non-object items, and unknown fields; an entry with no `path` can't be
@@ -129,7 +130,7 @@ A **read-only** view of the notes currently pending human review, so a well-beha
     "count": 2 }
 ```
 
-The descriptive fields (`status`, `agent`, `op`, `when`, `writeCount`) are Stewardship's own,
+The descriptive fields (`status`, `agent`, `op`, `when`, `writeCount`) are the review plugin's own,
 passed through verbatim when present and well-typed. See
 [the review channel](README.md#how-the-pieces-fit--the-assent-review-channel) for how this
 closes the loop back to the human.
