@@ -48,6 +48,7 @@
 
 import type { Finding } from "../finding.js";
 import type { RulePack, SourceFile, VaultSnapshot } from "../rule-pack.js";
+import { requireSources } from "../rule-pack.js";
 import { firstSegment, hasDotOrTrashSegment, isUnderscoreRoot } from "./legacy-scope.js";
 
 export const DRIFT_PACK_ID = "drift_audit";
@@ -157,7 +158,7 @@ export function driftPack(): RulePack {
         });
       };
 
-      const sources: SourceFile[] = snapshot.sources ?? [];
+      const sources: SourceFile[] = requireSources(snapshot, DRIFT_PACK_ID);
       const sourceText = new Map(sources.map((s) => [s.path, s.text]));
       // `.exists()` universe — files ∪ dirs (a path exists if it is either).
       const existsSet = new Set<string>([...(snapshot.files ?? []), ...(snapshot.dirs ?? [])]);
