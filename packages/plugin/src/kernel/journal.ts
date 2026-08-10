@@ -131,6 +131,15 @@ export interface JournalRecord {
    * interpreted, never an acceptance signal.
    */
   intent?: string;
+  /**
+   * The caller's ADDRESS FORM(s), when the call addressed by `uid:<value>` or
+   * a scheme ref (`jd:<address>`) rather than a raw path: each entry pairs the
+   * ref as passed with the path it resolved to at call time. Audit-of-intent
+   * beside `target`'s audit-of-effect — if the index was stale or wrong, the
+   * record shows the caller addressed something other than what was touched.
+   * Absent for plain-path calls. Capped like `target.paths`.
+   */
+  addressedAs?: Array<{ ref: string; path: string }>;
   /** On a `deduped` record: the `ts` of the record whose result was replayed. */
   dedupeOf?: string;
   /**
