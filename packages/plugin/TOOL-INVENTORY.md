@@ -4,12 +4,15 @@ Source of record for every tool the plugin's MCP server registers.  Generated
 by reading `packages/plugin/src/mcp/server.ts` and all `tools-*.ts` files.
 The fs-expressible list is locked by `tests/tool-inventory.test.mjs` (#25).
 
-**Count summary:** 17 fs-expressible + 22 always-live = **39 base** tools,
+**Count summary:** 17 fs-expressible + 32 always-live = **49 base** tools,
 plus up to 6 conditional integration tools and 1 CLI-conditional tool
-(`obsidian_cli`) = **up to 46 total**.
+(`obsidian_cli`) = **up to 56 total**.
 
 Cross-check: the observed live set with Dataview + Templater + Metadata Menu
-loaded (but NOT Omnisearch) reports 44 tools: 39 + 5 = 44. ✓
+loaded (but NOT Omnisearch) reported 44 tools: 39 + 5 = 44 ✓ — an observation
+that PREDATES the kernel-v0 tools (locks ×4, uid ×1, links ×1) and the vocab
+tools (×4); the next live observation should report 54 under the same plugin
+set.
 
 ---
 
@@ -42,7 +45,7 @@ against its `FilesystemBackend`.
 
 ---
 
-## Section 2 — live-only, always registered (22)
+## Section 2 — live-only, always registered (32)
 
 These tools depend on live Obsidian `app.*` state and cannot be expressed on the
 filesystem.  They are unconditionally registered on every `buildMcpServer` call,
@@ -89,6 +92,36 @@ regardless of which community plugins are installed.
 | `obsidian_plugin_toggle` | Enable or disable a community plugin |
 | `obsidian_save_workspace` | Save the current layout as a named workspace |
 | `obsidian_toggle_view_mode` | Switch active leaf: source / preview / live-preview |
+
+### `tools-locks.ts` — `registerLockTools` (4 tools, kernel v0)
+
+| Tool name | Description |
+|---|---|
+| `obsidian_claim_scope` | Advisory claim on a path-prefix scope (disclosed, never blocking) |
+| `obsidian_renew_scope` | Extend an existing claim's TTL by lock id |
+| `obsidian_release_scope` | Release a claim by lock id |
+| `obsidian_list_scope_claims` | Every live claim, most specific first |
+
+### `tools-uid.ts` — `registerUidTools` (1 tool, kernel v0)
+
+| Tool name | Description |
+|---|---|
+| `obsidian_resolve_uid` | uid ↔ path lookup + duplicates report (allowlist-filtered) |
+
+### `tools-links.ts` — `registerLinkTools` (1 tool, kernel v0)
+
+| Tool name | Description |
+|---|---|
+| `obsidian_check_links` | Dangling links + duplicated uids + uid coverage, report-only |
+
+### `tools-vocab.ts` — `registerVocabTools` (4 tools, vocab provider)
+
+| Tool name | Description |
+|---|---|
+| `obsidian_vocabularies` | Enumerate configured vocab sources: capabilities, counts, examples |
+| `obsidian_resolve_term` | Token → canonical entry; path → its terms; parse-only mode |
+| `obsidian_validate_terms` | One note's frontmatter → vocabulary findings, report-only |
+| `obsidian_list_vocabulary` | Entries of a kind (tag/property/type/term), optionally scoped |
 
 ---
 
@@ -163,6 +196,10 @@ The 44-tool set observed with Dataview + Templater + Metadata Menu loaded
 | `packages/plugin/src/mcp/tools-vault-write.ts` | `registerVaultWriteTools` | 2 always-live |
 | `packages/plugin/src/mcp/tools-complementary.ts` | `registerComplementaryTools` | 9 always-live |
 | `packages/plugin/src/mcp/tools-nav.ts` | `registerNavTools` | 9 always-live |
+| `packages/plugin/src/mcp/tools-locks.ts` | `registerLockTools` | 4 always-live |
+| `packages/plugin/src/mcp/tools-uid.ts` | `registerUidTools` | 1 always-live |
+| `packages/plugin/src/mcp/tools-links.ts` | `registerLinkTools` | 1 always-live |
+| `packages/plugin/src/mcp/tools-vocab.ts` | `registerVocabTools` | 4 always-live |
 | `packages/plugin/src/mcp/tools-integrations.ts` | `registerIntegrationTools` | up to 6 conditional |
 | `packages/plugin/src/mcp/tools-cli.ts` | `registerCliTools` | 1 conditional (CLI binary) |
 | `packages/plugin/src/mcp/tools-vault-read.ts` | `registerVaultReadTools` (no-op stub) | 0 (all 9 migrated) |

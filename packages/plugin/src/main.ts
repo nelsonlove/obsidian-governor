@@ -7,9 +7,68 @@ import { writeDiscovery, removeDiscovery, writeBridge, type Discovery } from "./
 import { ConnectionSetupModal, VaultMcpSettingTab } from "./connection-ui.js";
 import { findClaudeBinary, claudeIsRegistered, claudeRegister, claudeRemove, claudeEnsureConnectPlugin } from "./claude-cli.js";
 import { ExternalToolRegistry, type VaultMcpApi } from "./mcp/external-tools.js";
+import { Kernel, WriteQueue, WriteJournal, IdempotencyStore, LockStore, UidIndex, loadInstallId, DEFAULT_VOCABULARIES, type VocabInstanceSettings, type ModuleSettings } from "./kernel/index.js";
+import { obsidianProbe, obsidianServerIdentity, obsidianUidSource } from "./kernel/obsidian-probe.js";
+import { DEFAULT_SCHEMES, type SchemeInstanceConfig } from "./kernel/scheme/registry.js";
 
-interface VaultMcpSettings { setupAcknowledged: boolean; readOnly: boolean; allowlist: string[]; enabled: boolean; allowDangerousCli: boolean; }
-const DEFAULT_SETTINGS: VaultMcpSettings = { setupAcknowledged: false, readOnly: false, allowlist: [], enabled: true, allowDangerousCli: false };
+interface VaultMcpSettings {
+  setupAcknowledged: boolean;
+  readOnly: boolean;
+  allowlist: string[];
+  enabled: boolean;
+  allowDangerousCli: boolean;
+  /**
+   * Plugin ids whose tools may declare themselves read-only and be believed.
+   * Empty by default: an external tool's `readOnlyHint: true` is otherwise
+   * treated as mutating (queued, journaled, allowlist-scoped, blocked in
+   * read-only mode) — see mcp/external-tools.ts.
+   */
+  trustedReadOnlyPlugins: string[];
+  /**
+   * Controlled-vocabulary sources for the vocab tools (mcp/tools-vocab.ts):
+   * `{ id, provider, root, config }` rows, mirroring the scheme settings
+   * shape. Defaults to one registry-blueprint instance over the vault's
+   * registries slot plus one glossary instance. No settings-tab UI yet —
+   * hand-edit data.json (v1).
+   */
+  vocabularies: VocabInstanceSettings[];
+  /**
+   * Scope-provider instances (scheme id + provider name + per-provider
+   * config). Defaults to DEFAULT_SCHEMES — the single "jd" instance backed by
+   * the Johnny Decimal provider with its own default config. Scheme semantics
+   * are configuration, not hardwired (Nelson's ruling): only the default
+   * instance's JD config gets a settings-tab UI (comma-separated expanded
+   * areas/categories + content-decimal floor); additional instances or
+   * exotic overrides stay data.json-editable, no UI (YAGNI) — see
+   * kernel/scheme/registry.ts for the deep-merge-over-defaults and
+   * skip-and-report-on-invalid-config behavior this list feeds.
+   */
+  schemes: SchemeInstanceConfig[];
+  /**
+   * The module host's per-module rows (`{ enabled?, config? }` keyed by
+   * module id — "scheme", "vocab"). An absent row means the module's default
+   * (both built-ins default enabled); `enabled: false` unmounts that module's
+   * whole tool surface on the next connection. See kernel/modules/ and
+   * mcp/modules-mount.ts.
+   */
+  modules: ModuleSettings;
+}
+const DEFAULT_SETTINGS: VaultMcpSettings = {
+  setupAcknowledged: false,
+  readOnly: false,
+  allowlist: [],
+  enabled: true,
+  allowDangerousCli: false,
+  trustedReadOnlyPlugins: [],
+  // Cloned so settings edits can never mutate the module-level default rows
+  // (item 6: schemes now clones symmetrically with vocabularies — a shallow
+  // `.map((s) => ({...s}))` would miss a nested `config` object were one ever
+  // added to DEFAULT_SCHEMES's entries, so this uses structuredClone for a
+  // real deep copy rather than assuming the shape stays flat).
+  vocabularies: DEFAULT_VOCABULARIES.map((v) => ({ ...v })),
+  schemes: structuredClone(DEFAULT_SCHEMES),
+  modules: {},
+};
 
 class DiagnosticsModal extends Modal {
   constructor(app: any, private readonly lines: string[]) { super(app); }
@@ -91,6 +150,37 @@ export default class VaultMcpPlugin extends Plugin {
     new ConnectionSetupModal(this.app, async () => { this.settings.setupAcknowledged = true; await this.saveSettings(); }).open();
   }
 
+  /**
+   * Keep the uid index fresh off Obsidian's own events — no polling, no timers,
+   * no filesystem reads.
+   *
+   *   • build once when the layout is ready, because before that the metadata
+   *     cache is still warming and a build would index a fraction of the vault;
+   *   • `metadataCache.changed` covers every uid EDIT — added, changed, removed
+   *     — and every newly created note, since the cache parses it on arrival;
+   *   • `vault.rename` is the one that matters most: it is precisely the event
+   *     a path-keyed store loses to, and the whole reason the index exists;
+   *   • `vault.delete` drops the mapping.
+   *
+   * registerEvent so every handler is detached when the plugin unloads.
+   *
+   * `onLayoutReady` is the exception: it takes a plain callback and returns no
+   * EventRef, so there is nothing for registerEvent to detach. A plugin unloaded
+   * before the layout settles would otherwise still run its rebuild — indexing a
+   * vault on behalf of an instance that no longer exists — so the callback is
+   * gated on a disposed flag that `register` flips at unload. Wired only when
+   * the plugin is enabled: a disabled plugin serves no connection, so an index
+   * it maintains is upkeep nobody can read.
+   */
+  private wireUidIndex(index: UidIndex): void {
+    let disposed = false;
+    this.register(() => { disposed = true; });
+    this.app.workspace.onLayoutReady(() => { if (!disposed) index.rebuild(); });
+    this.registerEvent(this.app.metadataCache.on("changed", (file) => index.onChanged(file.path)));
+    this.registerEvent(this.app.vault.on("rename", (file, oldPath) => index.onRenamed(oldPath, file.path)));
+    this.registerEvent(this.app.vault.on("delete", (file) => index.onDeleted(file.path)));
+  }
+
   async onload() {
     // Load settings FIRST so the enabled gate and guard settings are available.
     await this.loadSettings();
@@ -106,16 +196,56 @@ export default class VaultMcpPlugin extends Plugin {
     try { writeBridge(); }
     catch (e) { console.error("[vault-mcp] writeBridge failed", e); }
 
+    // Kernel v0 — ONE queue and ONE journal per plugin instance, shared by
+    // every per-connection server built below. The journal lives beside the
+    // plugin's own data (`.obsidian/plugins/vault-mcp/journal/YYYY-MM.jsonl`),
+    // out of the note tree so it can never be mistaken for vault content.
+    const pluginDir = this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`;
+    // The identity substrate's uid index — one per plugin instance, like the
+    // queue: it is a map of the vault, not of a connection.
+    const uidIndex = new UidIndex(obsidianUidSource(this.app));
+    const kernel = new Kernel(
+      new WriteQueue(),
+      new WriteJournal(this.app.vault.adapter, `${pluginDir}/journal`),
+      obsidianProbe(this.app),
+      new IdempotencyStore(),
+      new LockStore(),
+      uidIndex,
+    );
+
+    // Server identity — the transport asserting which vault and which install.
+    // The install id is a small file beside the journal (`install-id.json`), so
+    // the identity that stamps every record lives with the records; it survives
+    // restarts, and a failure to persist degrades to an ephemeral id rather than
+    // failing the load.
+    const { install } = await loadInstallId(this.app.vault.adapter, pluginDir);
+    const serverIdentity = obsidianServerIdentity(this.app, install, this.manifest.version);
+
     const ctx = {
       pluginVersion: this.manifest.version,
       socketPath: sock,
       vaultName,
       enabledPlugins: () => Array.from((this.app as any).plugins.enabledPlugins as Set<string>),
-      getSettings: () => ({ readOnly: this.settings.readOnly, allowlist: this.settings.allowlist, allowDangerousCli: this.settings.allowDangerousCli }),
+      getSettings: () => ({
+        readOnly: this.settings.readOnly,
+        allowlist: this.settings.allowlist,
+        allowDangerousCli: this.settings.allowDangerousCli,
+        trustedReadOnlyPlugins: this.settings.trustedReadOnlyPlugins,
+        schemes: this.settings.schemes,
+        modules: this.settings.modules,
+      }),
+      serverIdentity,
       getExternalTools: () => this.externalRegistry.entries(),
+      getVocabularies: () => this.settings.vocabularies,
+      kernel,
     };
 
     if (this.settings.enabled) {
+      // The uid index is kept fresh only while the plugin actually serves: with
+      // the socket down nothing can address a uid, so an index maintained off
+      // every metadata event would be work done for no reader.
+      this.wireUidIndex(uidIndex);
+
       // One MCP server per connection → concurrent Claude Code sessions and
       // background agents share the plugin without evicting each other.
       this.listener = new UnixSocketListener(sock, (transport, connOpts) => {

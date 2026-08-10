@@ -11,8 +11,22 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type App, TFile } from "obsidian";
 import { ok, fail, okError, validateMoves } from "./helpers.js";
 import { repointLinksInText } from "./repoint.js";
+import { visiblePaths, type GuardSettings } from "../guard.js";
 
 const RW = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
+
+export interface VaultWriteToolsCtx {
+  /**
+   * The guard's settings — the allowlist `obsidian_repoint_link` scopes its
+   * VAULT-WIDE SCAN by. Absent ⇒ no allowlist ⇒ unfiltered, exactly as before.
+   *
+   * The guard checks the paths an operation NAMES IN ITS ARGUMENTS, and a
+   * repoint names only its target: the set it reads, rewrites and then reports
+   * back is derived inside the handler, where no per-argument check can reach
+   * it. So the handler applies the same rule to that set itself.
+   */
+  getSettings?: () => GuardSettings;
+}
 
 async function ensureParentFolders(app: App, filePath: string): Promise<void> {
   const parts = filePath.split("/");
@@ -53,7 +67,7 @@ async function moveOne(app: App, from: string, to: string, overwrite: boolean): 
   }
 }
 
-export function registerVaultWriteTools(server: McpServer, app: App) {
+export function registerVaultWriteTools(server: McpServer, app: App, ctx: VaultWriteToolsCtx = {}) {
   server.registerTool(
     "obsidian_move_notes",
     {
@@ -102,7 +116,7 @@ export function registerVaultWriteTools(server: McpServer, app: App) {
     {
       title: "Repoint a link",
       description:
-        "Rewrite every wikilink whose target text matches `link_name` to point at `target_path` instead, across the whole vault. Case-insensitive on the link text; aliases ([[x|alias]]) and subpaths ([[x#heading]]) are preserved. This is the tool for fixing BROKEN links: Obsidian's rename-based backlink rewrite (obsidian_move_note/obsidian_move_notes) only touches links that already resolve to a file, so a dangling [[x]] that points at no note can only be repointed by this text-level scan. Set dry_run=true to report how many links/notes would change without writing anything.",
+        "Rewrite every wikilink whose target text matches `link_name` to point at `target_path` instead, across every note you can see. Case-insensitive on the link text; aliases ([[x|alias]]) and subpaths ([[x#heading]]) are preserved. This is the tool for fixing BROKEN links: Obsidian's rename-based backlink rewrite (obsidian_move_note/obsidian_move_notes) only touches links that already resolve to a file, so a dangling [[x]] that points at no note can only be repointed by this text-level scan. While a path allowlist is configured the scan is CONTAINED BY IT — notes outside it are neither read, rewritten, nor named, so the repair is partial and `scoped_to_allowlist: true` says so. Set dry_run=true to report how many links/notes would change without writing anything.",
       inputSchema: {
         link_name: z
           .string()
@@ -137,7 +151,29 @@ export function registerVaultWriteTools(server: McpServer, app: App) {
         let linksChanged = 0;
         const files: string[] = [];
 
-        for (const file of app.vault.getMarkdownFiles()) {
+        // ── allowlist containment ────────────────────────────────────────────
+        // This is the one tool whose blast radius is not in its arguments: it
+        // scans, rewrites and then NAMES a set it discovers for itself. Handed
+        // the whole vault, it reads notes a sandboxed session cannot read,
+        // writes notes it cannot write, and hands back their paths in `files` —
+        // an allowlist bypass in all three directions at once, in the very tool
+        // the link-health docs prescribe as the repair.
+        //
+        // So the discovered set goes through `visiblePaths`, the same rule the
+        // guard applies to a named path (guard.ts — one copy, shared with uid
+        // addressing and the drift report). The consequence is honest and must
+        // be reported rather than hidden: under an allowlist the repair is
+        // PARTIAL, dangling links to the same name survive outside it, and
+        // `scoped_to_allowlist` tells the caller so.
+        //
+        // No allowlist ⇒ visiblePaths returns the same array ⇒ unchanged.
+        const settings = ctx.getSettings?.();
+        const all = app.vault.getMarkdownFiles();
+        const scoped = Boolean(settings?.allowlist?.length);
+        const allowed = scoped ? new Set(visiblePaths(all.map((f) => f.path), settings)) : null;
+
+        for (const file of all) {
+          if (allowed && !allowed.has(file.path)) continue;
           // Shortest unambiguous link text for the target, relative to this source file.
           const newTarget = app.metadataCache.fileToLinktext(target, file.path, true);
           // unresolved_only: gate each link on Obsidian's own per-file unresolved map,
@@ -169,7 +205,20 @@ export function registerVaultWriteTools(server: McpServer, app: App) {
           files.push(file.path);
         }
 
-        return ok({ link_name, target_path, dry_run, unresolved_only, drop_echo_alias, linksChanged, filesChanged, files });
+        return ok({
+          link_name,
+          target_path,
+          dry_run,
+          unresolved_only,
+          drop_echo_alias,
+          linksChanged,
+          filesChanged,
+          files,
+          // Present either way, so a caller never has to infer containment from
+          // the absence of a flag: `true` means notes outside the allowlist were
+          // skipped and this repair is partial.
+          scoped_to_allowlist: scoped,
+        });
       } catch (e) { return fail(e); }
     }
   );

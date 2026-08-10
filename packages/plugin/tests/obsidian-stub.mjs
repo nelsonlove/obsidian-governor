@@ -1,0 +1,167 @@
+/**
+ * A runtime stand-in for the `obsidian` module.
+ *
+ * The real package is TYPES ONLY (`"main": ""`), so any source file that
+ * imports a live class from it — `TFile`, `TFolder`, `getAllTags` — cannot be
+ * loaded in node at all, which is why the plugin keeps its testable logic in
+ * obsidian-free modules. The move path is the exception worth reaching: it is
+ * one `instanceof TFile` away from being pure logic, and the property under
+ * test (a move renames through `fileManager.renameFile`, never `vault.rename`)
+ * is precisely a property of the real handler, not of a re-implementation.
+ *
+ * `installObsidianStub()` registers a synchronous resolve hook mapping the
+ * "obsidian" specifier at this file, so a test can `await import()` the real
+ * module under test afterwards. It is scoped to the process that calls it — no
+ * other test file is affected, and the npm test script is unchanged.
+ */
+
+import { registerHooks } from "node:module";
+
+/** Minimal TFile: a path plus the `stat.mtime` the kernel's probe reads. */
+export class TFile {
+  constructor(path, mtime = 1) {
+    this.path = path;
+    this.stat = { mtime, ctime: mtime, size: 0 };
+    const name = path.split("/").pop() ?? path;
+    this.name = name;
+    this.basename = name.replace(/\.[^.]+$/, "");
+    this.extension = name.includes(".") ? name.split(".").pop() : "";
+  }
+}
+
+export class TFolder {
+  constructor(path, children = []) {
+    this.path = path;
+    this.children = children;
+  }
+}
+
+export class TAbstractFile {}
+
+/** Enough of a MarkdownView for `instanceof` / `getActiveViewOfType` in tools-nav. */
+export class MarkdownView {}
+
+/**
+ * Minimal stand-ins for the settings-tab surface (connection-ui.ts), just
+ * enough for the module to LOAD and its class declarations
+ * (`class Foo extends Modal`, `class Bar extends PluginSettingTab`) to
+ * evaluate — none of these are exercised for their real Obsidian behavior.
+ * connection-ui.ts's own pure, exported helpers (parseCommaList,
+ * parseFloorField, floorFieldProblem) are what tests actually exercise;
+ * `display()`/`onOpen()` — the DOM-heavy glue — are not.
+ */
+export class App {}
+
+export class Modal {
+  constructor(app) {
+    this.app = app;
+  }
+}
+
+export class PluginSettingTab {
+  constructor(app, plugin) {
+    this.app = app;
+    this.plugin = plugin;
+  }
+}
+
+export class Setting {
+  constructor() {}
+}
+
+export class Notice {
+  constructor() {}
+}
+
+/**
+ * Obsidian's own getAllTags flattens a file cache's inline tags and its
+ * frontmatter `tags` into one `#tag` list. The stub reads the same two places,
+ * so a fake cache drives findByTag / obsidian_tags_list realistically; a cache
+ * with neither yields [], which is what every pre-existing caller expects.
+ */
+export function getAllTags(cache) {
+  const out = [];
+  for (const t of cache?.tags ?? []) out.push(typeof t === "string" ? t : t.tag);
+  const fm = cache?.frontmatter?.tags;
+  for (const t of Array.isArray(fm) ? fm : fm ? [fm] : []) {
+    out.push(String(t).startsWith("#") ? String(t) : `#${t}`);
+  }
+  return out;
+}
+
+/**
+ * A deliberately small YAML reader — enough for the frontmatter the tests write:
+ * `key: scalar`, quoted scalars, inline arrays `[a, b]`, and inline maps
+ * `{k: v}`. The real Obsidian parseYaml is far richer; this only has to make the
+ * accept-forbidden guard's value-TYPE handling (string / array / map) testable
+ * headlessly, so array/map acceptance forms are read as the guard sees them.
+ */
+export function parseYaml(text) {
+  const scalar = (raw) => {
+    const s = raw.trim();
+    if (s === "") return null;
+    if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) return s.slice(1, -1);
+    if (s === "true") return true;
+    if (s === "false") return false;
+    if (s === "null" || s === "~") return null;
+    if (/^-?\d+(\.\d+)?$/.test(s)) return Number(s);
+    return s;
+  };
+  const inline = (raw) => {
+    const s = raw.trim();
+    if (s.startsWith("[") && s.endsWith("]")) {
+      const inner = s.slice(1, -1).trim();
+      return inner === "" ? [] : inner.split(",").map((x) => scalar(x));
+    }
+    if (s.startsWith("{") && s.endsWith("}")) {
+      const inner = s.slice(1, -1).trim();
+      const out = {};
+      if (inner !== "") {
+        for (const pair of inner.split(",")) {
+          const i = pair.indexOf(":");
+          if (i < 0) continue;
+          out[pair.slice(0, i).trim()] = scalar(pair.slice(i + 1));
+        }
+      }
+      return out;
+    }
+    return scalar(s);
+  };
+  const obj = {};
+  const lines = String(text).split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === "" || line.trimStart().startsWith("#")) continue;
+    const m = /^([^:\s][^:]*):(.*)$/.exec(line);
+    if (!m) continue;
+    const key = m[1].trim();
+    const rest = m[2].trim();
+    // Block sequence: `key:` then following `  - item` lines.
+    if (rest === "" && lines[i + 1] && /^\s*-\s+/.test(lines[i + 1])) {
+      const arr = [];
+      while (lines[i + 1] && /^\s*-\s+/.test(lines[i + 1])) {
+        arr.push(scalar(lines[i + 1].replace(/^\s*-\s+/, "")));
+        i++;
+      }
+      obj[key] = arr;
+    } else {
+      obj[key] = inline(rest);
+    }
+  }
+  return obj;
+}
+
+let installed = false;
+
+/** Point the "obsidian" specifier at this module for every subsequent import. */
+export function installObsidianStub() {
+  if (installed) return;
+  installed = true;
+  const url = import.meta.url;
+  registerHooks({
+    resolve(specifier, context, nextResolve) {
+      if (specifier === "obsidian") return { url, shortCircuit: true };
+      return nextResolve(specifier, context);
+    },
+  });
+}
