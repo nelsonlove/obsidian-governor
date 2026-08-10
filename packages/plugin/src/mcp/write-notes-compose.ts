@@ -74,13 +74,39 @@ function isAcceptedKey(key: string): boolean {
 // existing (human-granted) accepted value forward UNCHANGED. So the rule is a
 // TRANSITION, not a snapshot — preserve is allowed, introduce/change is not.
 
+/**
+ * A leading byte-order mark, removed. Obsidian's own parser looks past a BOM
+ * to find the opening `---`, so anything deciding what the vault WILL HONOR
+ * must look past it too.
+ *
+ * This is exported because a guard that is stricter than the write path is a
+ * BYPASS, not caution: #126 was exactly that \u2014 the fence scanner missed
+ * `\uFEFF---` while `frontmatterOf` (and Obsidian) honored it, so an
+ * acceptance fence behind one invisible byte scanned clean and landed. Every
+ * scanner that asks "would this content assert acceptance?" normalizes with
+ * this first, so the two definitions cannot drift apart again.
+ */
+export function stripLeadingBom(text: string): string {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+}
+
+/**
+ * The codebase's ONE definition of a note's leading frontmatter fence \u2014 what
+ * Obsidian reads as frontmatter, hence what any accept guard must recognize.
+ * Exported for the same reason as `stripLeadingBom`: guards bind to this
+ * shape rather than re-deriving it (see the parity test in
+ * tests/accept-fence-parity.test.mjs, which pins scanner \u2287 write path).
+ */
+export const LEADING_FRONTMATTER_RE = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/;
+
 /** Extract & parse the leading YAML frontmatter of a markdown string; null when there is none. `parseYaml` injected. */
 export function frontmatterOf(
   markdown: string,
   parseYaml: (yaml: string) => unknown
 ): Record<string, unknown> | null {
-  // Obsidian reads a note's frontmatter only when `---` is its very first line.
-  const m = /^\uFEFF?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(markdown);
+  // Obsidian reads a note's frontmatter only when `---` is its very first line
+  // (a BOM before it is transparent \u2014 stripLeadingBom, shared with the guards).
+  const m = LEADING_FRONTMATTER_RE.exec(stripLeadingBom(markdown));
   if (!m) return null;
   let parsed: unknown;
   try {
