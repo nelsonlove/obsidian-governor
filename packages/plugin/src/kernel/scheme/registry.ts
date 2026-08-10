@@ -121,6 +121,15 @@ export function makeRegistry(configs: SchemeInstanceConfig[]): SchemeRegistry {
       console.error(`[scheme-registry] duplicate scheme id "${cfg.id}" — first entry wins, this one is skipped`);
       continue;
     }
+    // Reserve the id BEFORE the provider/config checks below (worker-1's
+    // review, post-merge — mirrors kernel/vocab/registry.ts's VocabRegistry
+    // constructor, which fixed the identical gap): a row that fails those
+    // checks is still SKIPPED, not absent — the id it named is spoken for
+    // and must not be silently claimable by a later row of the same id. Add
+    // here, not after `instances.push`, or a first row skipped for an
+    // unknown provider/invalid config would leave the id unreserved and a
+    // later same-id row would register as if it were the only one.
+    seenIds.add(cfg.id);
     const factory = Object.prototype.hasOwnProperty.call(PROVIDER_FACTORIES, cfg.provider)
       ? PROVIDER_FACTORIES[cfg.provider]
       : undefined;
@@ -135,7 +144,6 @@ export function makeRegistry(configs: SchemeInstanceConfig[]): SchemeRegistry {
       );
       continue;
     }
-    seenIds.add(cfg.id);
     instances.push({ id: cfg.id, providerName: cfg.provider, provider: factory.make(cfg.config) });
   }
   return new SchemeRegistry(instances);

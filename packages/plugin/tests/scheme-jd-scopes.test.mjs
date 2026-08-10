@@ -182,6 +182,43 @@ describe("membersOf — notes whose address falls inside the scope", () => {
       ["26.11", "27001", "27002", "28.11"],
     );
   });
+
+  // ── worker-1 review follow-up: fractal-id collation regression under an
+  // expanded AREA (item 2's fix detached a fractal child from its parent
+  // item) ─────────────────────────────────────────────────────────────────
+
+  test("a fractal-id sorts immediately after its own parent item, before the next item — not detached to the end", () => {
+    // File order scrambled on purpose. With the regression (fractal-id keyed
+    // on [rawItemNumber, decimal] while its parent expanded-item was keyed
+    // on [category, rawItemNumber] — two different scales for the SAME
+    // primary slot), 92021.10 sorted after 92022 instead of between 92021
+    // and 92022.
+    const notes = [
+      "90-99 Projects/92022 Other.md",
+      "90-99 Projects/92021 Big thing/92021.10 Sub.md",
+      "90-99 Projects/92021 Big thing.md",
+    ];
+    const members = p.membersOf({ kind: "area", token: "90-99" }, notes);
+    assert.deepEqual(
+      members.map((m) => m.address),
+      ["92021", "92021.10", "92022"],
+    );
+  });
+
+  test("multiple fractal children stay grouped under their own parent, in decimal order, between neighboring items", () => {
+    const notes = [
+      "90-99 Projects/92022 Other.md",
+      "90-99 Projects/92021 Big thing/92021.11 B.md",
+      "90-99 Projects/92021 Big thing.md",
+      "90-99 Projects/92021 Big thing/92021.10 A.md",
+      "90-99 Projects/92020 Prior.md",
+    ];
+    const members = p.membersOf({ kind: "area", token: "90-99" }, notes);
+    assert.deepEqual(
+      members.map((m) => m.address),
+      ["92020", "92021", "92021.10", "92021.11", "92022"],
+    );
+  });
 });
 
 // ── expectedFolder ───────────────────────────────────────────────────────────

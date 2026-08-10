@@ -134,6 +134,54 @@ describe("makeRegistry — building instances from config", () => {
     assert.equal(messages.length, 2, "two later duplicates should each be reported");
   });
 
+  // ── worker-1 review follow-up: a row skipped for unknown-provider/invalid-config
+  // must still RESERVE its id, so a later same-id row can't silently become
+  // "the" instance as if the first row had never claimed that id ────────────
+
+  test("a first row skipped for an unknown provider still reserves its id — a later same-id row does NOT silently register", () => {
+    const originalError = console.error;
+    const messages = [];
+    console.error = (msg) => messages.push(msg);
+    let reg;
+    try {
+      reg = makeRegistry([
+        { id: "jd", provider: "bogus" },
+        { id: "jd", provider: "johnny-decimal" },
+      ]);
+    } finally {
+      console.error = originalError;
+    }
+    // Neither row produces a live "jd" instance: the first is skipped for an
+    // unknown provider, and the second is skipped as a duplicate of an id
+    // already spoken for — even though the row that spoke for it never
+    // itself registered.
+    assert.equal(reg.instances().length, 0);
+    assert.equal(reg.get("jd"), null);
+    assert.equal(messages.length, 2, "both the unknown-provider row and the duplicate row should be reported");
+    assert.match(messages[0], /unknown provider/i);
+    assert.match(messages[1], /duplicate/i);
+  });
+
+  test("a first row skipped for an invalid config still reserves its id — a later same-id row does NOT silently register", () => {
+    const originalError = console.error;
+    const messages = [];
+    console.error = (msg) => messages.push(msg);
+    let reg;
+    try {
+      reg = makeRegistry([
+        { id: "jd", provider: "johnny-decimal", config: { contentDecimalFloor: 100 } },
+        { id: "jd", provider: "johnny-decimal" },
+      ]);
+    } finally {
+      console.error = originalError;
+    }
+    assert.equal(reg.instances().length, 0);
+    assert.equal(reg.get("jd"), null);
+    assert.equal(messages.length, 2);
+    assert.match(messages[0], /invalid config/i);
+    assert.match(messages[1], /duplicate/i);
+  });
+
   test("a duplicate id does not prevent a DIFFERENT id alongside it from registering", () => {
     const originalError = console.error;
     console.error = () => {};

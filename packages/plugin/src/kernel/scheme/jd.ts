@@ -453,18 +453,29 @@ export function jdProvider(cfg: JdConfig): ScopeProvider {
             return false;
         }
       };
-      // Numeric sort key: [primary, secondary], ascending. `primary` is the
-      // category (ids) or the 5-digit item number (expanded-item/fractal-id);
-      // `secondary` is the decimal part where one exists, else -1 so a bare
-      // container sorts before its own content.
-      // expanded-item's primary key is its CATEGORY (not its raw 5-digit
-      // value) so an expanded category's members collate alongside their
-      // numeric neighbors within the enclosing area — e.g. area 20-29 with
-      // category 27 expanded: 27001/27002 must sort between 26.x and 28.x,
-      // not after 28.x/29.x the way comparing raw 27001 against a bare 28
-      // would put them (item 2 bug fix). The secondary key (p.raw itself)
-      // only has to break ties WITHIN one category, where it already sorts
-      // in allocation order — no need to subtract the category prefix out.
+      // Numeric sort key: [primary, secondary], ascending. `primary` is
+      // always the 2-digit CATEGORY — every kind here (bare category, id,
+      // expanded-item, fractal-id) sits under one, and keying on it is what
+      // lets an expanded category's members collate alongside their numeric
+      // neighbors within the enclosing area — e.g. area 20-29 with category
+      // 27 expanded: 27001/27002 must sort between 26.x and 28.x, not after
+      // 28.x/29.x the way comparing a raw 5-digit value against a bare 28
+      // would put them (item 2 bug fix).
+      //
+      // `secondary` is scaled by 1000 so an expanded-item's own fractal
+      // children (kind "fractal-id", e.g. "92021.10" under item "92021")
+      // sort immediately after their parent and before the next item, not
+      // detached from it by comparing the fractal's full 5-digit-item value
+      // against a DIFFERENT scale than its parent uses (a post-merge
+      // regression this reintroduced when item 2 first fixed the collation
+      // above: keying a fractal-id on its raw item number instead of
+      // matching its parent's [category, item] scale reordered
+      // ["92021","92021.10","92022"] to ["92021","92022","92021.10"]).
+      // A bare item's secondary is itemNumber * 1000 (no remainder); a
+      // fractal child's is itemNumber * 1000 + 1 + decimal (decimal is
+      // 0-99, so the +1..+100 range never reaches the next item's bare
+      // secondary 1000 further up) — parent, then its children in decimal
+      // order, then the next item, with plenty of headroom to spare.
       const sortKey = (p: ParsedId): [number, number] => {
         switch (p.kind) {
           case "id":
@@ -472,9 +483,12 @@ export function jdProvider(cfg: JdConfig): ScopeProvider {
           case "category":
             return [parseInt(p.category, 10), -1];
           case "expanded-item":
-            return [parseInt(p.category, 10), parseInt(p.raw, 10)];
+            return [parseInt(p.category, 10), parseInt(p.raw, 10) * 1000];
           case "fractal-id":
-            return [parseInt(p.raw.split(".")[0], 10), parseInt(p.decimal as string, 10)];
+            return [
+              parseInt(p.category, 10),
+              parseInt(p.raw.split(".")[0], 10) * 1000 + 1 + parseInt(p.decimal as string, 10),
+            ];
           default:
             return [0, -1];
         }
