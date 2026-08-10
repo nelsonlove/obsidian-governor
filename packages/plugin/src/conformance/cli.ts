@@ -65,7 +65,11 @@ export interface RunResult {
 }
 
 export async function runConformance(opts: RunOpts): Promise<RunResult> {
-  const snapshot = await buildSnapshot({ root: opts.root, excludedRoots: opts.excludedRoots });
+  // boundary: opts.root — cli.ts already resolves `root` explicitly (--root=,
+  // ASSENT_CONTENT_ROOT, or the .obsidian-ancestor walk), so it IS this run's
+  // declared boundary; buildSnapshot's own guard (#157) still refuses
+  // unconditionally into ~/obsidian-old / 80-89 / a hold regardless of this.
+  const snapshot = await buildSnapshot({ root: opts.root, excludedRoots: opts.excludedRoots, boundary: opts.root });
 
   const packs: RulePack[] = [];
   // vocab providers: built from settings over the snapshot listing (the registry
