@@ -89,3 +89,23 @@ describe("writeFence", () => {
     assert.throws(() => writeFence("```ratchet-baseline\nunclosed key line\n", "s|c|t|k"), /corrupt|complete fence/);
   });
 });
+
+describe("legacyPacks opt-in gate (#103 follow-up)", () => {
+  test("legacy packs OFF by default; ON with legacyPacks:true", async () => {
+    const { mkdtemp, mkdir, writeFile, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const pth = (await import("node:path")).default;
+    const { runConformance } = await import("../src/conformance/cli.ts");
+    const root = await mkdtemp(pth.join(tmpdir(), "conf-gate2-"));
+    try {
+      await mkdir(pth.join(root, "N"), { recursive: true });
+      await writeFile(pth.join(root, "N", "A.md"), "prose with a semicolon; here\n");
+      const off = await runConformance({ root, baselineText: "", vocabularies: [], schemes: [] });
+      assert.equal(off.findings.some((f) => f.script === "ste_lint" || f.script === "port_lint" || f.script === "conformance_check"), false, "legacy packs off by default");
+      const on = await runConformance({ root, baselineText: "", vocabularies: [], schemes: [], legacyPacks: true });
+      assert.equal(on.findings.some((f) => f.script === "ste_lint"), true, "legacy packs on with opt-in");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
