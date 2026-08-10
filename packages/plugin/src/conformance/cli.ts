@@ -20,6 +20,7 @@ import { makeRegistry, DEFAULT_SCHEMES, type SchemeInstanceConfig } from "../ker
 import { buildSnapshot } from "./snapshot.js";
 import { runEngine, ENGINE_ID } from "./engine.js";
 import { vocabPack, schemePack, structurePack, portPack, stePack, driftPack } from "./packs/index.js";
+import { vaultConventionsFrom } from "./vault-conventions.js";
 import { parseBaseline, renderBaseline, ratchet, type RatchetResult } from "./ratchet.js";
 import type { Finding } from "./finding.js";
 import type { RulePack } from "./rule-pack.js";
@@ -83,10 +84,14 @@ export async function runConformance(opts: RunOpts): Promise<RunResult> {
   // port_lint / ste_lint / drift_audit — the full legacy rail, all in TS).
   // Opt-in until the scope ruling + staged rebaseline.
   if (opts.legacyPacks ?? true) {
-    packs.push(structurePack());
+    // Conventions are resolved ONCE per run and threaded in, never read at
+    // module load — an exported constant that varies with ambient env makes
+    // the suite non-hermetic (self-review finding on this PR).
+    const conv = vaultConventionsFrom(process.env);
+    packs.push(structurePack({ conventions: conv }));
     packs.push(portPack());
     packs.push(stePack());
-    packs.push(driftPack());
+    packs.push(driftPack(conv));
   }
 
   const findings = runEngine(packs, snapshot);
@@ -106,10 +111,88 @@ export async function runConformance(opts: RunOpts): Promise<RunResult> {
     coveredPackIds,
     findings,
     ratchet: result,
-    report: renderReport(result, packIds, baselinePackIds(baselineKeys), findings),
+    report: renderReport(result, packIds, baselinePackIds(baselineKeys), findings, opts.excludedRoots ?? []),
     rebaseline: renderBaseline(findings),
     exitCode: result.exitCode,
   };
+}
+
+/**
+ * Roots the rail does not govern — **configured, never hardcoded.**
+ *
+ * The rail governs live content, not frozen archives (@assent's ruling, #112).
+ * But WHICH roots are archives is a property of a particular vault, and this is
+ * a general-purpose plugin: baking one vault's folder names into shipped source
+ * makes the rail silently wrong for every other vault, and makes a policy knob
+ * require a release to change. The first version of this shipped
+ * `["Vault archaeology"]` as a source constant — that was the mistake, and it
+ * is the same class as `BASELINE_REL` below, which is tracked separately.
+ *
+ * So the default is EMPTY (govern everything, the safe default for an unknown
+ * vault), and exclusions arrive from the invocation:
+ *   --exclude=<root>            repeatable
+ *   ASSENT_EXCLUDED_ROOTS       comma-separated
+ * A vault that wants an archive excluded says so where its own configuration
+ * lives, which is also what makes the exclusion auditable per-run rather than
+ * invisible in a binary.
+ */
+export const DEFAULT_EXCLUDED_ROOTS: string[] = [];
+
+/** Excluded roots for this invocation: `--exclude=` flags, else the env var, else none. */
+export function excludedRootsFrom(argv: string[], env: Record<string, string | undefined>): string[] {
+  const flags = argv
+    .filter((a) => a.startsWith("--exclude="))
+    .map((a) => a.slice("--exclude=".length).trim())
+    .filter(Boolean);
+  if (flags.length) return flags;
+  return (env.ASSENT_EXCLUDED_ROOTS ?? "")
+    .split(",")
+    .map((r) => r.trim())
+    .filter(Boolean);
+}
+
+/**
+ * The reason an excluded root would silently discard accepted debt, or null.
+ *
+ * Excluding a root makes every baseline key beneath it unreproducible, so the
+ * ratchet reports those keys CLEARED — indistinguishable from "a human fixed
+ * them". That is a silent debt-clear, which is what @assent's ruling
+ * explicitly forbade ("declared exclusion, not silent debt-clear"), and it is
+ * the pack-coverage refusal's failure one level down: path granularity rather
+ * than pack granularity.
+ *
+ * Measured at the time of writing: ZERO baseline keys fall under any excluded
+ * root, so this refuses nothing today. That is the argument FOR carrying it
+ * rather than against — a measurement records what was true once; a guard
+ * keeps it true. The same reasoning `PHASE1_PACKS_INCOMPLETE` failed to apply
+ * when its stated reason silently expired.
+ *
+ * Segment-boundary matching, so `Vault archaeology notes/` is a different
+ * folder; a key whose target is a message rather than a path never matches.
+ */
+export function excludedRootRefusal(baselineKeys: Set<string>, excludedRoots: string[]): string | null {
+  if (!excludedRoots.length) return null;
+  const stranded: string[] = [];
+  for (const key of baselineKeys) {
+    const target = key.split("|")[2] ?? "";
+    for (const root of excludedRoots) {
+      const r = root.replace(/\/$/, "");
+      if (target === r || target.startsWith(r + "/")) {
+        stranded.push(key);
+        break;
+      }
+    }
+  }
+  if (!stranded.length) return null;
+  const shown = stranded.slice(0, 5).map((k) => `  ${k}`).join("\n");
+  const more = stranded.length > 5 ? `\n  (+${stranded.length - 5} more)` : "";
+  return (
+    `refusing to run: the accepted-debt baseline holds ${stranded.length} key(s) under a root this run ` +
+    `does not govern (${excludedRoots.join(", ")}). Those keys cannot be reproduced, so they would ` +
+    `report CLEARED and silently discard debt a human granted. Excluding territory is a scope ` +
+    `decision and must be declared, never taken by quietly dropping its accepted findings — remove ` +
+    `the keys from the baseline deliberately (a human act), or stop excluding the root:\n${shown}${more}`
+  );
 }
 
 /**
@@ -195,8 +278,15 @@ export function coverageRefusal(
  *
  * Returns null when identity genuinely cannot be established; every caller
  * treats null as "refuse", never as "not the live one".
+ *
+ * EXPORTED deliberately (#168): this technique — realpath resolution, a
+ * dangling symlink followed by hand, no lexical fallback that could launder an
+ * alias — is security-critical and was being reimplemented elsewhere precisely
+ * because it was unexported. A second copy is a second place a bypass has to be
+ * fixed, and this codebase has spent a week deleting duplicated guards. One
+ * implementation, imported.
  */
-function intendedRealPath(p: string, depth = 0): string | null {
+export function intendedRealPath(p: string, depth = 0): string | null {
   if (depth > 8) return null; // symlink loop
   const abs = resolve(p);
   try {
@@ -221,7 +311,7 @@ function intendedRealPath(p: string, depth = 0): string | null {
 
 /** Same file by the FILESYSTEM's answer (device + inode), which is what catches
  * a hardlink or a case-insensitive alias. Null when either side cannot be stat'd. */
-function sameFile(a: string, b: string): boolean | null {
+export function sameFile(a: string, b: string): boolean | null {
   try {
     const sa = statSync(a);
     const sb = statSync(b);
@@ -232,7 +322,7 @@ function sameFile(a: string, b: string): boolean | null {
 }
 
 /** `child` is inside `parent` (or is `parent`), compared on resolved paths. */
-function isInside(parent: string, child: string): boolean {
+export function isInside(parent: string, child: string): boolean {
   const p = resolve(parent);
   const c = resolve(child);
   return c === p || c.startsWith(p.endsWith(sep) ? p : p + sep);
@@ -269,7 +359,7 @@ export function rebaselineTargetRefusal(baselinePath: string, root: string): str
     );
   }
 
-  const livePath = join(resolve(root), BASELINE_REL);
+  const livePath = join(resolve(root), baselineRelFrom(process.env));
 
   // 2. Same name.
   if (resolve(baselinePath) === livePath) return liveRefusal(baselinePath);
@@ -366,9 +456,15 @@ function renderReport(
   registeredPackIds: string[] = [],
   baselineIds: Set<string> = new Set(),
   findings: Finding[] = [],
+  excludedRoots: string[] = [],
 ): string {
   const lines: string[] = [];
   lines.push(`conformance: ${r.carried} carried, ${r.newKeys.length} NEW, ${r.clearedKeys.length} cleared`);
+  // An exclusion that is not printed is indistinguishable from a rail that
+  // simply found nothing there — declare it, per the ruling (#112).
+  if (excludedRoots.length) {
+    lines.push(`ungoverned (not scanned, no claim made): ${excludedRoots.join(", ")} — --govern-all to include`);
+  }
   // A pack with NO baseline representation reports its entire output as NEW.
   // Undistinguished, that is indistinguishable from a catastrophic regression —
   // the same silent-zero class the engine's pack sentinels and the missing
@@ -400,7 +496,22 @@ function renderReport(
 
 // ── thin process entry (not unit-tested; the wiring above is) ─────────────────
 
-const BASELINE_REL = "Assent/Build/conformance/Conformance baseline.md";
+/**
+ * Vault-relative location of the accepted-debt baseline.
+ *
+ * A CONVENTION, not a law of the plugin: it is where this fleet's vault keeps
+ * its baseline, and any other vault will keep it somewhere else. Overridable
+ * without a release via `ASSENT_BASELINE_REL` (vault-relative) or `--baseline=`
+ * (absolute), so the default is a starting point rather than a hardcoded
+ * assumption about somebody's folder layout.
+ */
+export const DEFAULT_BASELINE_REL = "Assent/Build/conformance/Conformance baseline.md";
+
+/** The baseline's vault-relative path for this invocation. */
+export function baselineRelFrom(env: Record<string, string | undefined>): string {
+  const v = (env.ASSENT_BASELINE_REL ?? "").trim();
+  return v || DEFAULT_BASELINE_REL;
+}
 const FENCE = "```ratchet-baseline";
 
 /** ASSENT_CONTENT_ROOT wins, else walk up from `start` to the `.obsidian`
@@ -463,7 +574,8 @@ export async function runCli(argv: string[]): Promise<void> {
   const rootArg = argv.find((a) => a.startsWith("--root="))?.slice("--root=".length);
   const root = rootArg ? resolve(rootArg) : discoverRoot(process.cwd());
   const baselineArg = argv.find((a) => a.startsWith("--baseline="))?.slice("--baseline=".length);
-  const baselinePath = baselineArg ? resolve(baselineArg) : join(root, BASELINE_REL);
+  const baselineRel = baselineRelFrom(process.env);
+  const baselinePath = baselineArg ? resolve(baselineArg) : join(root, baselineRel);
   // A MISSING baseline is refused, not silently treated as empty. An empty
   // baseline makes every finding read NEW and every accepted-debt key read
   // CLEARED — a report that looks like catastrophic regression but is really a
@@ -476,6 +588,14 @@ export async function runCli(argv: string[]): Promise<void> {
   if (refusal) throw new Error(refusal);
   const baselineText = !noBaseline && existsSync(baselinePath) ? await readFile(baselinePath, "utf8") : "";
 
+  // Scope (#112): excluded territory is content the rail makes no claim about.
+  // `--govern-all` opts back in to a whole-vault run. Checked BEFORE the run:
+  // an exclusion that would strand accepted debt is refused, not reported
+  // afterwards, so no CLEARED line ever appears for a key we chose not to look at.
+  const excludedRoots = argv.includes("--govern-all") ? [] : excludedRootsFrom(argv, process.env);
+  const strandRefusal = excludedRootRefusal(parseBaseline(baselineText), excludedRoots);
+  if (strandRefusal) throw new Error(strandRefusal);
+
   const res = await runConformance({
     root,
     baselineText,
@@ -484,6 +604,8 @@ export async function runCli(argv: string[]): Promise<void> {
     // Default ON — see RunOpts.legacyPacks. The baseline describes these packs
     // and nothing else, so omitting them clears it wholesale.
     legacyPacks: !argv.includes("--no-legacy-packs"),
+    // The rail governs live content, not the frozen archive (#112 ruling).
+    excludedRoots,
   });
 
   // Coverage is checked on EVERY run, not only before a rebaseline: a baseline
