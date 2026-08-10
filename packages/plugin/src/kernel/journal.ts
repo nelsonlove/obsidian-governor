@@ -124,6 +124,13 @@ export interface JournalRecord {
   ifRev?: number;
   /** The caller's `idempotency_key`, when one was supplied. */
   idempotencyKey?: string;
+  /**
+   * The caller's advisory `intent` text, when one was supplied (B2): the
+   * agent's own description of why it made this change, for review surfaces to
+   * display as "agent says". Untrusted free text — recorded verbatim, never
+   * interpreted, never an acceptance signal.
+   */
+  intent?: string;
   /** On a `deduped` record: the `ts` of the record whose result was replayed. */
   dedupeOf?: string;
   /**
