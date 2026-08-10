@@ -11,3 +11,4 @@ export { schemePack, SCHEME_PACK_ID } from "./scheme.js";
 export { structurePack, STRUCTURE_PACK_ID, DEFAULT_BLUEPRINT_ROOT } from "./structure.js";
 export { portPack, PORT_PACK_ID } from "./port.js";
 export { stePack, STE_PACK_ID } from "./ste.js";
+export { driftPack, DRIFT_PACK_ID } from "./drift.js";
