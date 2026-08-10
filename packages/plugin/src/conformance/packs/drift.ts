@@ -31,6 +31,20 @@
 // the message body is the `target`, and `kind` is EMPTY (so the serialized key
 // carries a trailing pipe, e.g. `drift_audit|A|choice 'X' ...|`). The pack id IS
 // the `script` field: "drift_audit".
+//
+// TWO CHECKS ARE SPECIAL-CASED because their message embeds volatile data —
+// this is `parse_drift`'s frozen contract (its docstring, verbatim):
+//   F (uid coverage) — one aggregate finding whose message carries a COUNT and
+//     a traversal-ordered PATH SAMPLE. Keyed count/sample-independently:
+//     target "uid-coverage", kind "uid-less".
+//   E (duplicate uid) — one finding per uid whose message carries the homes
+//     list, ORDER-DEPENDENT. Keyed on the uid itself, not the homes list:
+//     target <uid>, kind "dup-uid".
+// Every other check's message is deterministic run-to-run and IS the target
+// (kind stays ""). Keying E/F on their message text (as the message-level TS<->
+// Python parity check verified) is a DIFFERENT and weaker property than key
+// parity -- see issue #136. Do not "simplify" this back to `target: rest` for
+// E/F without re-reading that issue.
 
 import type { Finding } from "../finding.js";
 import type { RulePack, SourceFile, VaultSnapshot } from "../rule-pack.js";
@@ -127,9 +141,20 @@ export function driftPack(): RulePack {
     id: DRIFT_PACK_ID,
     run(snapshot: VaultSnapshot): Finding[] {
       const out: Finding[] = [];
-      // A drift finding is `"{LETTER}: {rest}"` → ("drift_audit", LETTER, rest, "").
-      const push = (letter: string, rest: string): void => {
-        out.push({ script: DRIFT_PACK_ID, check: letter, target: rest, kind: "", detail: `${letter}: ${rest}` });
+      // A drift finding is `"{LETTER}: {rest}"` → ("drift_audit", LETTER, rest, "")
+      // for every check EXCEPT E/F, whose message embeds volatile data (a
+      // count/sample for F, an order-dependent homes list for E) — those two
+      // pass an explicit `key` override so the FINDING KEY stays stable while
+      // `detail` still carries the full human-readable message. See the
+      // top-of-file comment and issue #136.
+      const push = (letter: string, rest: string, key?: { target: string; kind: string }): void => {
+        out.push({
+          script: DRIFT_PACK_ID,
+          check: letter,
+          target: key ? key.target : rest,
+          kind: key ? key.kind : "",
+          detail: `${letter}: ${rest}`,
+        });
       };
 
       const sources: SourceFile[] = snapshot.sources ?? [];
@@ -278,16 +303,29 @@ export function driftPack(): RulePack {
           noIdentity.push(rel);
         }
       }
-      // E — sorted by uid; homes stay in traversal order.
+      // E — sorted by uid; homes stay in traversal order. The homes list is
+      // order-dependent (and grows with every additional claimant), so the KEY
+      // is the uid alone — `parse_drift`'s frozen contract (issue #136).
       for (const uid of [...uidHomes.keys()].sort()) {
         const homes = uidHomes.get(uid)!;
-        if (homes.length > 1) push("E", `uid ${uid} is claimed by ${homes.length} notes: ` + homes.join("; "));
+        if (homes.length > 1)
+          push("E", `uid ${uid} is claimed by ${homes.length} notes: ` + homes.join("; "), {
+            target: uid,
+            kind: "dup-uid",
+          });
       }
       // F — one aggregated finding; the sample is the first 5 in traversal order.
+      // The message embeds a COUNT and a traversal-ordered PATH SAMPLE, both
+      // volatile under unrelated edits, so the KEY is count/sample-independent
+      // — `parse_drift`'s frozen contract (issue #136).
       if (noIdentity.length) {
         const sample = noIdentity.slice(0, 5).join("; ");
         const more = noIdentity.length > 5 ? ` (+${noIdentity.length - 5} more)` : "";
-        push("F", `${noIdentity.length} note(s) lack a usable uid — run 'Stamp missing UIDs': ${sample}${more}`);
+        push(
+          "F",
+          `${noIdentity.length} note(s) lack a usable uid — run 'Stamp missing UIDs': ${sample}${more}`,
+          { target: "uid-coverage", kind: "uid-less" },
+        );
       }
 
       // ── G. registry naming self-consistency (title / filename / H1) ───────────
