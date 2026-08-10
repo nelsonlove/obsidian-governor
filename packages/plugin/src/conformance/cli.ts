@@ -7,8 +7,11 @@
 // ready-to-write rebaseline body come out. `main` is the thin wrapper that
 // reads argv/env, loads the baseline note, prints, and sets the exit code.
 //
-// Phase 1 wires the two module packs (vocab + scheme). The legacy checks
-// (drift/blueprint/ste/port) become packs in phase 2 and simply join the list.
+// Phase 1 wired the two module packs (vocab + scheme). Three of the four
+// legacy checks (structure+legacy-scope from conformance_check, port, ste) are
+// ported and join the list behind the opt-in `legacyPacks` flag
+// (`--legacy-packs`), default off until the Phase-3 scope ruling + staged
+// rebaseline; drift_audit remains Python-only.
 
 import { readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -18,7 +21,7 @@ import { VocabRegistry, DEFAULT_VOCABULARIES, type VocabInstanceSettings } from 
 import { makeRegistry, DEFAULT_SCHEMES, type SchemeInstanceConfig } from "../kernel/scheme/registry.js";
 import { buildSnapshot } from "./snapshot.js";
 import { runEngine } from "./engine.js";
-import { vocabPack, schemePack, structurePack, portPack, stePack } from "./packs/index.js";
+import { vocabPack, schemePack, structurePack, portPack, stePack, driftPack } from "./packs/index.js";
 import { parseBaseline, renderBaseline, ratchet, type RatchetResult } from "./ratchet.js";
 import type { Finding } from "./finding.js";
 import type { RulePack } from "./rule-pack.js";
@@ -69,6 +72,7 @@ export async function runConformance(opts: RunOpts): Promise<RunResult> {
     packs.push(structurePack());
     packs.push(portPack());
     packs.push(stePack());
+    packs.push(driftPack());
   }
 
   const findings = runEngine(packs, snapshot);
