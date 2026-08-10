@@ -28,6 +28,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ok, fail, codedError } from "./helpers.js";
 import { visiblePaths, isVisible, type GuardSettings } from "../guard.js";
 import {
+  asStrings,
   VocabAmbiguousError,
   noteVocabFindings,
   VocabRegistry,
@@ -266,10 +267,9 @@ export function registerVocabTools(server: McpServer, source: VocabSource, ctx: 
               terms.push({ token, kind, found: true, ambiguous: true });
             }
           };
-          const tags = Array.isArray(fm?.tags) ? fm.tags.map(String) : [];
-          for (const t of tags) report(t.trim(), "tag");
+          for (const t of asStrings(fm?.tags)) report(t.trim(), "tag");
           for (const key of Object.keys(fm ?? {})) if (key !== "fileClass") report(key, "property");
-          const classes = Array.isArray(fm?.fileClass) ? fm.fileClass.map(String) : typeof fm?.fileClass === "string" ? [fm.fileClass] : [];
+          const classes = asStrings(fm?.fileClass);
           for (const c of classes) {
             const inner = c.replace(/^\[\[/, "").replace(/\]\]$/, "").split("|")[0];
             report((inner.split("/").pop() ?? inner).replace(/\.fileclass$/, ""), "type");
@@ -278,6 +278,9 @@ export function registerVocabTools(server: McpServer, source: VocabSource, ctx: 
         }
 
         if (args.parse) {
+          // No configured vocabulary serving the kind ⇒ vacuously valid, the
+          // same convention findings.ts pins ("no providers serving a kind
+          // means no findings") — never `valid: false` with zero findings.
           let findings: VocabFinding[] | null = null;
           for (const kind of kinds) {
             for (const inst of all) {
@@ -287,7 +290,7 @@ export function registerVocabTools(server: McpServer, source: VocabSource, ctx: 
               findings = findings ?? f;
             }
           }
-          return ok({ token: args.token, valid: false, findings: findings ?? [] });
+          return ok({ token: args.token, valid: findings === null, findings: findings ?? [] });
         }
 
         let senses: Resolved[];

@@ -246,3 +246,36 @@ describe("obsidian_list_vocabulary", () => {
     assert.deepEqual(res.structuredContent.entries, []);
   });
 });
+
+describe("review fixes — pinned", () => {
+  test("parse mode with no vocabulary serving the kind is vacuously valid, not silently invalid", async () => {
+    const only = [{ id: "reg", provider: "blueprint", root: REG_ROOT }];
+    const res = await vocabServer({ vocabularies: only }).call("obsidian_resolve_term", {
+      token: "drift",
+      kind: "term",
+      parse: true,
+    });
+    assert.equal(res.structuredContent.valid, true);
+    assert.deepEqual(res.structuredContent.findings, []);
+  });
+
+  test("path mode reports string-form tags frontmatter like its sibling tools", async () => {
+    const calls = new Map();
+    const files = {
+      [`${REG_ROOT}/Meta registry/meta.tag/meta.tag.md`]: { frontmatter: {} },
+      "Notes/S.md": { frontmatter: { tags: "meta" } },
+    };
+    registerVocabTools(
+      { registerTool: (name, def, handler) => calls.set(name, { def, handler }) },
+      {
+        paths: () => Object.keys(files),
+        frontmatter: (p) => files[p]?.frontmatter ?? null,
+        body: async () => null,
+      },
+      { getVocabularies: () => [{ id: "reg", provider: "blueprint", root: REG_ROOT }] }
+    );
+    const res = await calls.get("obsidian_resolve_term").handler({ path: "Notes/S.md" }, {});
+    const tagTerms = res.structuredContent.terms.filter((t) => t.kind === "tag");
+    assert.deepEqual(tagTerms.map((t) => [t.token, t.found]), [["meta", true]]);
+  });
+});

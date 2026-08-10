@@ -71,6 +71,15 @@ export interface VocabFinding {
   detail: string;
 }
 
+/** Frontmatter list-or-scalar coercion: Obsidian accepts both `tags: x` and
+ * `tags:\n  - x`, so every consumer of a list-shaped key goes through this one
+ * helper — two sibling surfaces must never disagree about the same note. */
+export function asStrings(v: unknown): string[] {
+  if (Array.isArray(v)) return v.map(String);
+  if (typeof v === "string") return [v];
+  return [];
+}
+
 /** Resolution found more than one sense and refuses to pick — the caller
  * decides, exactly like uid/address ambiguity. `candidates` names the
  * declaring paths (or, pathless, the senses) so the refusal is actionable. */

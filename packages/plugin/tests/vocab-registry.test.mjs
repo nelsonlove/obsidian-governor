@@ -84,3 +84,15 @@ describe("VocabRegistry", () => {
     assert.doesNotMatch(DEFAULT_VOCABULARIES[0].root, /gen3/);
   });
 });
+
+describe("review fixes — pinned", () => {
+  test("an unknown-provider row still reserves its id — later reuse reports as duplicate", () => {
+    const reg = new VocabRegistry([
+      { id: "reg", provider: "sparkle", root: "" },
+      { id: "reg", provider: "blueprint", root: "Reg" },
+    ]);
+    assert.equal(reg.build(LISTING).length, 0);
+    assert.equal(reg.problems.length, 2);
+    assert.match(reg.problems[1], /duplicate/);
+  });
+});

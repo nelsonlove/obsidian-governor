@@ -39,7 +39,8 @@ const DEFAULT_SETTINGS: VaultMcpSettings = {
   enabled: true,
   allowDangerousCli: false,
   trustedReadOnlyPlugins: [],
-  vocabularies: DEFAULT_VOCABULARIES,
+  // Cloned so settings edits can never mutate the module-level default rows.
+  vocabularies: DEFAULT_VOCABULARIES.map((v) => ({ ...v })),
 };
 
 class DiagnosticsModal extends Modal {

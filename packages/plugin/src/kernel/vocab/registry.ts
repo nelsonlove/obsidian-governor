@@ -61,11 +61,14 @@ export class VocabRegistry {
         this.problems.push(`duplicate vocabulary id '${row.id}' — first declaration wins`);
         continue;
       }
+      // Reserve the id BEFORE the provider check: a skipped row still claims
+      // its id, so a later reuse reports as the duplicate it is (the sibling
+      // module registry's review found exactly this gap — ef94556).
+      seen.add(row.id);
       if (row.provider !== "blueprint" && row.provider !== "glossary") {
         this.problems.push(`unknown vocabulary provider '${row.provider}' (id '${row.id}') — skipped`);
         continue;
       }
-      seen.add(row.id);
       this.rows.push(row);
     }
   }

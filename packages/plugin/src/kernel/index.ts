@@ -91,7 +91,7 @@ export {
 export type { UidSource, UidResolution, UidDuplicate, UidAddressing } from "./uid-index.js";
 export { loadInstallId, mintInstallId, INSTALL_ID_FILE } from "./install-id.js";
 export type { InstallIdAdapter, LoadedInstallId, ServerIdentity } from "./install-id.js";
-export { VocabAmbiguousError } from "./vocab/provider.js";
+export { VocabAmbiguousError, asStrings } from "./vocab/provider.js";
 export type { VocabCapabilities, VocabEntry, VocabFinding, VocabKind, VocabularyProvider } from "./vocab/provider.js";
 export { blueprintProvider, scanFrontmatter } from "./vocab/blueprint.js";
 export type { BlueprintConfig, VocabNote } from "./vocab/blueprint.js";

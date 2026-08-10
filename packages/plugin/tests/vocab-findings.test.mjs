@@ -98,3 +98,28 @@ describe("noteVocabFindings", () => {
     assert.deepEqual(noteVocabFindings({ path: "Notes/N.md", frontmatter: null }, providers()), []);
   });
 });
+
+describe("review fixes — pinned", () => {
+  test("one provider's internal ambiguity does not override another provider's clean acceptance", () => {
+    // reg1 declares meta/type twice (internal duplicate); reg2 declares it once.
+    const reg1 = blueprintProvider({ root: "" }, [
+      { path: "A/meta.tag/type.tag.md" },
+      { path: "B/meta.tag/type.tag.md" },
+    ]);
+    const reg2 = blueprintProvider({ root: "" }, [{ path: "C/meta.tag/type.tag.md" }]);
+    const f = noteVocabFindings(
+      { path: "N.md", frontmatter: { tags: ["meta/type"] } },
+      [reg1, reg2]
+    );
+    assert.deepEqual(f.filter((x) => x.token === "meta/type"), []);
+  });
+
+  test("ambiguity is still reported when no provider resolves cleanly", () => {
+    const reg1 = blueprintProvider({ root: "" }, [
+      { path: "A/meta.tag/type.tag.md" },
+      { path: "B/meta.tag/type.tag.md" },
+    ]);
+    const f = noteVocabFindings({ path: "N.md", frontmatter: { tags: ["meta/type"] } }, [reg1]);
+    assert.deepEqual(f.filter((x) => x.token === "meta/type").map((x) => x.code), ["ambiguous"]);
+  });
+});

@@ -17,7 +17,7 @@
 // additive, not intersecting. Findings carry the NOTE's path (they are about
 // the note), where a provider's own validateToken carries null.
 
-import { VocabAmbiguousError, type VocabFinding, type VocabKind, type VocabularyProvider } from "./provider.js";
+import { asStrings, VocabAmbiguousError, type VocabFinding, type VocabKind, type VocabularyProvider } from "./provider.js";
 
 export interface NoteVocabInput {
   path: string;
@@ -37,15 +37,12 @@ function typeToken(v: string): string {
  * property beside the type finding would be noise, twice, forever. */
 const TYPE_KEY = "fileClass";
 
-function asStrings(v: unknown): string[] {
-  if (Array.isArray(v)) return v.map(String);
-  if (typeof v === "string") return [v];
-  return [];
-}
-
-/** One token against every provider serving its kind: clean when any accepts,
- * the FIRST provider's findings otherwise, re-anchored to the note. Ambiguity
- * is probed separately — validateToken never throws, resolve does. */
+/** One token against every provider serving its kind: clean when any accepts
+ * AND resolves cleanly — additive holds through ambiguity too, so one
+ * provider's internal duplicate cannot override another's clean acceptance.
+ * Otherwise: an ambiguity seen anywhere outranks ordinary findings (it is the
+ * more actionable problem), else the FIRST provider's findings, re-anchored
+ * to the note. */
 function check(
   token: string,
   kind: VocabKind,
@@ -55,6 +52,7 @@ function check(
   const serving = providers.filter((p) => p.kinds.includes(kind));
   if (serving.length === 0) return [];
   let first: VocabFinding[] | null = null;
+  let ambiguous: VocabFinding | null = null;
   for (const p of serving) {
     const found = p.validateToken(token, kind);
     if (found.length === 0) {
@@ -64,18 +62,18 @@ function check(
         return [];
       } catch (e) {
         if (!(e instanceof VocabAmbiguousError)) throw e;
-        return [
-          {
-            code: "ambiguous",
-            token,
-            path: notePath,
-            detail: `'${token}' (${kind}) has ${e.candidates.length} senses: ${e.candidates.join(", ")}`,
-          },
-        ];
+        ambiguous = ambiguous ?? {
+          code: "ambiguous",
+          token,
+          path: notePath,
+          detail: `'${token}' (${kind}) has ${e.candidates.length} senses: ${e.candidates.join(", ")}`,
+        };
       }
+      continue;
     }
     first = first ?? found;
   }
+  if (ambiguous) return [ambiguous];
   return (first ?? []).map((f) => ({ ...f, path: notePath }));
 }
 
