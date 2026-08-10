@@ -142,6 +142,15 @@ test("annotated legacy contexts stay allowed (no over-blocking)", () => {
 
 const ALLOWLIST_PATH = join(REPO_ROOT, "packages", "plugin", "tests", "docs-invariant-claims-allowlist.md");
 
+// docs/vision-walkthrough.md is bannered "describes the destination, not the shipped product"
+// (#154) — it deliberately writes every feature as if complete, as roadmap acceptance criteria.
+// Scanning it for unsubstantiated claims would either force allowlisting aspiration as if it
+// were a reviewed, substantiated fact, or force rewriting a document whose entire premise is
+// "written as if done." Excluded from THIS check specifically (not from FILES / the other
+// docs-drift rules above) — a vision doc is a different genre from a shipped-behavior claim.
+const INVARIANT_CHECK_EXCLUDED_FILES = [join(DOCS_DIR, "vision-walkthrough.md")];
+const INVARIANT_CHECK_FILES = FILES.filter((f) => !INVARIANT_CHECK_EXCLUDED_FILES.includes(f));
+
 const INVARIANT_WORD_RE = /\b(never|every|always|cannot|no way|guarantee(?:s|d|ing)?|impossible)\b/i;
 const SECURITY_TERM_RE = /\b(journal(?:ed|s|ing)?|accept(?:ed|ance|s)?|guard(?:s|ed|ing)?|audit(?:s|ed|ing)?|provenance|every write)\b/i;
 
@@ -274,22 +283,55 @@ test("invariant-claim predicate requires BOTH an invariant word and a security t
 });
 
 test("pinned regression: reintroducing the unqualified #140/#149 journal claim fails the check", () => {
-  // The literal sentence #149 reintroduced into README.md after #140 had
-  // qualified it against the unjournaled FS-failover path (#92). This must
-  // never again slip past the check silently.
-  const regressionFixture = "Every mutating operation lands in an append-only journal, with no exceptions.";
-  const spans = extractSpans(regressionFixture);
-  const flagged = spans.filter((s) => isInvariantSecurityClaim(s.text));
-  assert.ok(flagged.length >= 1, "the regression sentence must be recognized as an invariant+security claim");
+  // Injects the LITERAL markdown #149 reintroduced into README.md after #140 had
+  // qualified it against the unjournaled FS-failover path (#92) — not a hand-simplified
+  // stand-in sentence. An earlier version of this test used a clean one-line fixture
+  // ("Every mutating operation lands in an append-only journal, with no exceptions.")
+  // that does not match how extractSpans actually segments this bullet: the real markdown
+  // has a **bold** lead-in directly abutting the sentence-ending period with no following
+  // whitespace ("everything.** Every"), so the split regex's `(?<=[.!?])\s+` lookbehind
+  // never fires there and the bold lead-in stays fused to the flagged sentence. A fixture
+  // that skips the bold prefix is testing a span shape that doesn't occur in production,
+  // which is weaker than it looks — this test verifies by injection (real markdown through
+  // the real pipeline, asserted against the real extracted string) instead.
+  const regressionMarkdown = [
+    "## What you get",
+    "",
+    "- **A paper trail for everything.** Every mutating operation lands in an append-only journal:",
+    "  what happened, to which note, by which agent, in which session — and, when the agent says so,",
+    '  *why*. "What did it do while I was out" becomes a file you can read.',
+    "- **Nothing gets accepted without you.** Unrelated next bullet, present to prove the block",
+    "  boundary around the fixture span is exactly where extractSpans says it is.",
+    "",
+  ].join("\n");
+
+  const spans = extractSpans(regressionMarkdown);
+
+  // Lock in the EXACT span the real pipeline produces for this real markdown — including the
+  // fused bold lead-in — so a future change to the splitter can't silently narrow the fixture
+  // back into an idealized sentence without this assertion catching it.
+  const expectedSpanText =
+    "**A paper trail for everything.** Every mutating operation lands in an append-only " +
+    "journal: what happened, to which note, by which agent, in which session — and, when the " +
+    "agent says so, *why*.";
+  const regressionSpan = spans.find((s) => s.text === expectedSpanText);
+  assert.ok(
+    regressionSpan,
+    `extractSpans did not produce the expected fused span from injected markdown; got:\n${spans.map((s) => s.text).join("\n---\n")}`
+  );
+
+  assert.equal(
+    isInvariantSecurityClaim(regressionSpan.text),
+    true,
+    "the injected regression span must be recognized as an invariant+security claim"
+  );
 
   const allowlist = loadAllowlist();
-  for (const span of flagged) {
-    assert.equal(
-      allowlist.has(normalizeClaim(span.text)),
-      false,
-      `the unqualified journal claim must never be pre-approved in the allowlist: "${span.text}"`
-    );
-  }
+  assert.equal(
+    allowlist.has(normalizeClaim(regressionSpan.text)),
+    false,
+    `the unqualified journal claim must never be pre-approved in the allowlist: "${regressionSpan.text}"`
+  );
 });
 
 test("a claim whose scope changes is a different claim and needs its own approval", () => {
@@ -308,11 +350,32 @@ test("a claim whose scope changes is a different claim and needs its own approva
 
 test("every invariant+security claim currently in README.md / docs/*.md is on the allowlist", () => {
   const allowlist = loadAllowlist();
-  const violations = findUnapprovedClaims(FILES, allowlist);
+  const violations = findUnapprovedClaims(INVARIANT_CHECK_FILES, allowlist);
   assert.deepEqual(
     violations,
     [],
     violations.length ? `unapproved invariant security claims:\n\n${violations.map(formatViolation).join("\n\n")}` : ""
+  );
+});
+
+test("docs/vision-walkthrough.md is excluded from the invariant-claims check, verified by injection", () => {
+  // Prove the exclusion is real, not just an assumed side effect of a filter that might be a
+  // no-op: (1) the file is still in FILES (the other docs-drift rules still cover it), (2) it
+  // is NOT in INVARIANT_CHECK_FILES, and (3) it actually contains flagged spans today — so the
+  // exclusion is doing real work, not excluding a file that would have passed anyway.
+  const visionPath = join(DOCS_DIR, "vision-walkthrough.md");
+  assert.ok(FILES.includes(visionPath), "vision-walkthrough.md must still be in FILES (other docs-drift rules apply to it)");
+  assert.ok(
+    !INVARIANT_CHECK_FILES.includes(visionPath),
+    "vision-walkthrough.md must be excluded from the invariant-claims file list specifically"
+  );
+
+  const text = readFileSync(visionPath, "utf8");
+  assert.ok(/\(vision\)/.test(text) || /destination, not the shipped product/.test(text), "sanity: the file is still bannered as vision/aspirational prose");
+  const flaggedInVision = extractSpans(text).filter((s) => isInvariantSecurityClaim(s.text));
+  assert.ok(
+    flaggedInVision.length > 0,
+    "sanity: vision-walkthrough.md must actually contain invariant+security spans today, or this exclusion is untested"
   );
 });
 
