@@ -1,6 +1,8 @@
 import { z } from "zod";
+import { runCommandRefusal } from "./cli-policy.js";
+import { templateContentAcceptRefusal } from "./tools-cli.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { type App, TFile } from "obsidian";
+import { type App, TFile, parseYaml} from "obsidian";
 import { ok, fail, codedError } from "./helpers.js";
 import { isVisible } from "../guard.js";
 import type { ServerCtx } from "./tools-core.js";
@@ -210,6 +212,37 @@ export function registerIntegrationTools(server: McpServer, app: App, ctx: Serve
             return fail(new Error(`template not found: ${template_path}`));
           }
 
+          // ── accept-forbidden guard, PRE-EXEC (issue #105 part 1) ──────────
+          // This tool calls Templater directly, so it reaches neither the CLI
+          // template guard (#79, obsidian_cli only) nor ObsidianBackend's. #79
+          // closed the CLI twin; the surface #105 was actually filed about —
+          // this one — stayed ungated. Same rule, applied where the write
+          // happens.
+          //
+          // An UNREADABLE template refuses rather than proceeding: the
+          // precedent `templateAcceptRefusal` already sets ("an uninspectable
+          // template must not fail open"), and the absence-is-not-emptiness
+          // rule — a guard that cannot see what it is judging must refuse.
+          let templateBody: string | null = null;
+          try {
+            templateBody = await app.vault.cachedRead(templateFile);
+          } catch {
+            templateBody = null;
+          }
+          if (templateBody === null) {
+            return fail(new Error(
+              `template '${template_path}' could not be read for pre-exec inspection — ` +
+              `an uninspectable template must not fail open`,
+            ));
+          }
+          const acceptRefusal = templateContentAcceptRefusal(templateBody, parseYaml);
+          if (acceptRefusal) {
+            return fail(new Error(
+              `refusing to create from template '${template_path}': it ${acceptRefusal}. ` +
+              `The transport never persists acceptance — acceptance is a human gesture only.`,
+            ));
+          }
+
           // Derive folder and filename from target_path
           const lastSlash = target_path.lastIndexOf("/");
           const folder = lastSlash >= 0 ? target_path.slice(0, lastSlash) : "/";
@@ -369,12 +402,28 @@ export function registerIntegrationTools(server: McpServer, app: App, ctx: Serve
           const mm = (app as any).plugins?.plugins?.["metadata-menu"];
           if (!mm) return fail(new Error("metadata-menu plugin not available"));
 
-          // Open the note first so file-scoped commands have a target.
-          await app.workspace.openLinkText(p, "", false);
-
           // Execute MM's insert-missing-fields command (id verified live 2026-06-26).
           // app.commands is internal — cast required.
           const commandId = "metadata-menu:insert_missing_fields";
+
+          // ── command policy, BEFORE anything runs (issue #105 part 3) ───────
+          // #105's own characterization: this tool is `executeCommandById` in
+          // disguise, so it inherits `obsidian_run_command`'s reachability
+          // while bypassing the gate #76 put on that surface. Same predicate,
+          // same policy object, same `cli_denied` shape — deliberately NOT a
+          // second deny list, because two lists means two things to keep in
+          // sync and only one that will be.
+          //
+          // Checked before `openLinkText` for the reason #76 records: opening
+          // the file leaks an action for a command that is about to be refused.
+          const policyReason = runCommandRefusal(commandId, ctx.getSettings().cliPolicy);
+          if (policyReason) {
+            return codedError("cli_denied", policyReason);
+          }
+
+          // Open the note only once the command is permitted, so a file-scoped
+          // command has a target.
+          await app.workspace.openLinkText(p, "", false);
           const executed = (app as any).commands?.executeCommandById(commandId) as boolean | undefined;
           // executeCommandById returns false when the command id is unknown, and
           // the whole expression is undefined if app.commands itself is absent —
