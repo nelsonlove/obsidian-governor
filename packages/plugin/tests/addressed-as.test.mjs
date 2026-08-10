@@ -5,6 +5,8 @@
  *
  * Load-bearing properties:
  *   • uid- and jd-addressed writes carry `addressedAs: [{ref, path}]`;
+ *   • a call using both carries both, uid entries first (resolution order —
+ *     the uid pass runs strictly before the scheme pass);
  *   • plain-path writes carry NO addressedAs field (byte-identical records);
  *   • a deduped terminal record keeps its own call's addressedAs (like
  *     `intent` — it documents this caller's ask, no dequeue check implied);
