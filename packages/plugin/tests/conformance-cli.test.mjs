@@ -90,8 +90,16 @@ describe("writeFence", () => {
   });
 });
 
-describe("legacyPacks opt-in gate (#103 follow-up)", () => {
-  test("legacy packs OFF by default; ON with legacyPacks:true", async () => {
+// The gate's DEFAULT was inverted here by #116, and the reason is measured, not
+// stylistic: the accepted-debt baseline's keys are exclusively legacy-pack keys,
+// so a default run without these packs reported the ENTIRE baseline (124 of 124)
+// as CLEARED on every invocation — a guaranteed false "all accepted debt is now
+// fixed" result. The opt-IN this suite originally pinned (#103 follow-up) was
+// correct while the ports were unproven and became wrong once the baseline was
+// restored and measured against them. The gate itself is unchanged and still
+// tested; only which way it points by default moved.
+describe("legacyPacks gate — default ON since #116, opt-out with legacyPacks:false", () => {
+  test("legacy packs ON by default; OFF with legacyPacks:false", async () => {
     const { mkdtemp, mkdir, writeFile, rm } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const pth = (await import("node:path")).default;
@@ -100,10 +108,12 @@ describe("legacyPacks opt-in gate (#103 follow-up)", () => {
     try {
       await mkdir(pth.join(root, "N"), { recursive: true });
       await writeFile(pth.join(root, "N", "A.md"), "prose with a semicolon; here\n");
-      const off = await runConformance({ root, baselineText: "", vocabularies: [], schemes: [] });
-      assert.equal(off.findings.some((f) => f.script === "ste_lint" || f.script === "port_lint" || f.script === "conformance_check"), false, "legacy packs off by default");
+      const byDefault = await runConformance({ root, baselineText: "", vocabularies: [], schemes: [] });
+      assert.equal(byDefault.findings.some((f) => f.script === "ste_lint"), true, "legacy packs ON by default (#116)");
+      const off = await runConformance({ root, baselineText: "", vocabularies: [], schemes: [], legacyPacks: false });
+      assert.equal(off.findings.some((f) => f.script === "ste_lint" || f.script === "port_lint" || f.script === "conformance_check"), false, "legacy packs off with explicit opt-out");
       const on = await runConformance({ root, baselineText: "", vocabularies: [], schemes: [], legacyPacks: true });
-      assert.equal(on.findings.some((f) => f.script === "ste_lint"), true, "legacy packs on with opt-in");
+      assert.equal(on.findings.some((f) => f.script === "ste_lint"), true, "legacy packs on when asked explicitly");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

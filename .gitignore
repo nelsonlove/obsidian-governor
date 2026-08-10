@@ -5,3 +5,7 @@ bridge.mjs
 .DS_Store
 data.json
 .superpowers/
+
+# node_modules may also appear as a SYMLINK in worktrees; a trailing slash
+# matches directories only, so match both forms.
+node_modules
