@@ -20,6 +20,7 @@
 
 import type { Finding } from "../finding.js";
 import type { RulePack, SourceFile, VaultSnapshot } from "../rule-pack.js";
+import { requireSources, requireBlueprints } from "../rule-pack.js";
 import { firstSegment, hasDotOrTrashSegment } from "./legacy-scope.js";
 
 export const STRUCTURE_PACK_ID = "conformance_check";
@@ -117,7 +118,7 @@ export function structurePack(opts: StructurePackOpts = {}): RulePack {
   return {
     id: STRUCTURE_PACK_ID,
     run(snapshot: VaultSnapshot): Finding[] {
-      const blueprints: SourceFile[] = snapshot.blueprints ?? [];
+      const blueprints: SourceFile[] = requireBlueprints(snapshot, STRUCTURE_PACK_ID);
       // byPath: every blueprint (include resolution). byBasename: only those
       // under the registry root (the note→blueprint lookup, Python's BP_ROOTS).
       // Sorted input → last-wins on a basename collision is deterministic.
@@ -142,7 +143,7 @@ export function structurePack(opts: StructurePackOpts = {}): RulePack {
       };
 
       const out: Finding[] = [];
-      for (const src of snapshot.sources ?? []) {
+      for (const src of requireSources(snapshot, STRUCTURE_PACK_ID)) {
         // conformance_check.targets(): no dot/.trash segments, no `_` root, no
         // ungoverned Assent / Vault archaeology roots.
         if (hasDotOrTrashSegment(src.path)) continue;
