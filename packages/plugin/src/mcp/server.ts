@@ -15,7 +15,7 @@ import { registerLinkTools, obsidianLinkSource } from "./tools-links.js";
 import { obsidianVocabSource } from "./tools-vocab.js";
 import { mountModules } from "./modules-mount.js";
 import { registerCodeModeTools, makeCaptureRegister, type CapturedRegistry } from "./tools-code-mode.js";
-import { makeGuarded, withKernelArgs } from "./guarded.js";
+import { makeGuarded, resolveGuardedPath, withKernelArgs } from "./guarded.js";
 import { visiblePaths } from "../guard.js";
 import type { JournalActor } from "../kernel/index.js";
 import { obsidianProbe } from "../kernel/obsidian-probe.js";
@@ -76,7 +76,10 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
       ...(ctx.serverIdentity ? { server: ctx.serverIdentity } : {}),
     };
   };
-  const guarded = makeGuarded({
+  // Named so obsidian_write_notes' pre-compose resolve (below) can share the
+  // IDENTICAL uid/scheme resolution + read-only/allowlist check `guarded`
+  // itself applies — not a second copy of it.
+  const guardedOpts = {
     getSettings: () => ctx.getSettings(),
     kernel: ctx.kernel,
     actor,
@@ -85,7 +88,8 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
     // config edit lands live), and the same notes() source it uses.
     schemes: () => makeRegistry(ctx.getSettings().schemes ?? DEFAULT_SCHEMES),
     schemeNotes: () => app.vault.getMarkdownFiles().map((f) => f.path),
-  });
+  };
+  const guarded = makeGuarded(guardedOpts);
   const registry: CapturedRegistry = new Map();
   const capture = makeCaptureRegister(registry, guarded);
   const register = opts.codeMode
@@ -196,6 +200,10 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
       "obsidian_write_notes"
     ) as unknown as GuardedWrite;
     registerWriteNotesTool(origRegister, guardedWrite, {
+      // Same resolution + read-only/allowlist check `guarded` applies at
+      // dispatch, shared via guardedOpts — see resolveGuardedPath's doc
+      // comment and tools-write-notes.ts for why this must run BEFORE compose.
+      resolveTarget: (path) => resolveGuardedPath(path, guardedOpts),
       readExistingFrontmatter: (path) => {
         const f = app.vault.getAbstractFileByPath(path);
         return f instanceof TFile ? app.metadataCache.getFileCache(f)?.frontmatter ?? undefined : undefined;

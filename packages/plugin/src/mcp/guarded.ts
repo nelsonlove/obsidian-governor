@@ -316,6 +316,86 @@ export function addressSafe(
 }
 
 /**
+ * Steps 1, 1b and 3 of the interception above — uid resolution, scheme
+ * resolution, then guardCall (read-only + allowlist) — pulled out of the
+ * per-call wrapper below so a caller that must run its OWN pre-dispatch logic
+ * against the RESOLVED, GUARD-CHECKED args can share the IDENTICAL resolution
+ * and refusal `makeGuarded` itself applies, rather than a second
+ * implementation that could drift from it.
+ *
+ * `obsidian_write_notes` is the reason this exists (see resolveGuardedPath
+ * below and tools-write-notes.ts): its per-item stamping reads a note's
+ * EXISTING frontmatter before dispatching through a guarded single-writer, so
+ * that read has to be keyed on the same resolved path the guarded dispatch
+ * will use, and the allowlist refusal has to run before anything about the
+ * note's content — including its acceptance fields — is inspected at all.
+ *
+ * Returns the resolved args on success, or the SAME typed refusal shape
+ * `makeGuarded` returns to the transport (`{code, message}`) — never throws
+ * for a refusal, only for a genuinely unexpected error, exactly like the
+ * inline steps this replaces.
+ */
+function resolveAndGuard(
+  args: Record<string, unknown>,
+  isMutating: boolean,
+  opts: GuardedOpts
+):
+  | { blocked: { code: string; message: string } }
+  | { args: Record<string, unknown>; uidResolved: Array<{ uid: string; path: string }>; schemeResolved: Array<{ ref: string; path: string }> } {
+  const settings = opts.getSettings();
+  // 1. uid addressing. A call using none is handed back the SAME args object,
+  //    so nothing below can behave differently for an ordinary path call.
+  //    Resolution is bounded by the session's own allowlist (see requireOne):
+  //    a uid carried by a note this session cannot see is not a candidate, so
+  //    neither refusal below can name a path the caller was never entitled to.
+  let addressed;
+  try {
+    addressed = resolveUidArgs(args ?? {}, opts.uids ?? opts.kernel?.uids ?? null, settings);
+  } catch (e) {
+    // Unknown or duplicated uid: refuse, and run nothing. Both are typed, and
+    // the ambiguous one names the candidates so the caller can disambiguate.
+    if (e instanceof UidUnresolvedError || e instanceof UidAmbiguousError) return { blocked: { code: e.code, message: e.message } };
+    throw e;
+  }
+  // 1b. scheme addressing (`jd:<address>`), over the possibly uid-rewritten
+  //     args. opts.schemes absent ⇒ skipped entirely, so callArgs stays the
+  //     SAME object resolveUidArgs handed back and behavior is unchanged.
+  let callArgs = addressed.args;
+  let schemeResolved: Array<{ ref: string; path: string }> = [];
+  if (opts.schemes) {
+    try {
+      const schemed = resolveSchemeArgs(callArgs, opts.schemes(), opts.schemeNotes ?? (() => []), settings);
+      callArgs = schemed.args;
+      schemeResolved = schemed.resolved;
+    } catch (e) {
+      // Unresolvable or ambiguous address: refuse, and run nothing — same
+      // contract as the uid case above.
+      if (e instanceof AddressUnresolvedError || e instanceof AddressAmbiguousError) return { blocked: { code: e.code, message: e.message } };
+      throw e;
+    }
+  }
+  const blocked = guardCall({ isMutating, args: callArgs, settings });
+  if (blocked) return { blocked: { code: blocked.code, message: addressSafe(blocked.message, addressed.resolved, schemeResolved) } };
+  return { args: callArgs, uidResolved: addressed.resolved, schemeResolved };
+}
+
+/**
+ * Resolve `uid:<value>` / `<scheme>:<address>` addressing for a single PATH
+ * argument and check read-only + allowlist for it — the single-path form of
+ * `resolveAndGuard`, for a caller that has only a path (not a full args
+ * object) and needs the post-resolution, post-allowlist path BEFORE it does
+ * anything else with the note. `obsidian_write_notes` uses this to key its
+ * stamped-write existing-frontmatter read on the RESOLVED path and to run the
+ * allowlist refusal before its accept-transition check ever inspects the
+ * note (see tools-write-notes.ts).
+ */
+export function resolveGuardedPath(path: string, opts: GuardedOpts): { path: string } | { blocked: { code: string; message: string } } {
+  const resolved = resolveAndGuard({ path }, true, opts);
+  if ("blocked" in resolved) return resolved;
+  return { path: (resolved.args as { path: string }).path };
+}
+
+/**
  * Build the wrapper applied to every registered tool handler.
  *
  * `def.annotations.readOnlyHint === false` is the sole mutating test — the same
@@ -326,40 +406,9 @@ export function makeGuarded(opts: GuardedOpts) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (def: any, handler: any, name?: string) => async (args: any, extra: any) => {
     const isMutating = def?.annotations?.readOnlyHint === false;
-    const settings = opts.getSettings();
-    // 1. uid addressing. A call using none is handed back the SAME args object,
-    //    so nothing below can behave differently for an ordinary path call.
-    //    Resolution is bounded by the session's own allowlist (see requireOne):
-    //    a uid carried by a note this session cannot see is not a candidate, so
-    //    neither refusal below can name a path the caller was never entitled to.
-    let addressed;
-    try {
-      addressed = resolveUidArgs(args ?? {}, opts.uids ?? opts.kernel?.uids ?? null, settings);
-    } catch (e) {
-      // Unknown or duplicated uid: refuse, and run nothing. Both are typed, and
-      // the ambiguous one names the candidates so the caller can disambiguate.
-      if (e instanceof UidUnresolvedError || e instanceof UidAmbiguousError) return codedError(e.code, e.message);
-      throw e;
-    }
-    // 1b. scheme addressing (`jd:<address>`), over the possibly uid-rewritten
-    //     args. opts.schemes absent ⇒ skipped entirely, so callArgs stays the
-    //     SAME object resolveUidArgs handed back and behavior is unchanged.
-    let callArgs = addressed.args;
-    let schemeResolved: Array<{ ref: string; path: string }> = [];
-    if (opts.schemes) {
-      try {
-        const schemed = resolveSchemeArgs(callArgs, opts.schemes(), opts.schemeNotes ?? (() => []), settings);
-        callArgs = schemed.args;
-        schemeResolved = schemed.resolved;
-      } catch (e) {
-        // Unresolvable or ambiguous address: refuse, and run nothing — same
-        // contract as the uid case above.
-        if (e instanceof AddressUnresolvedError || e instanceof AddressAmbiguousError) return codedError(e.code, e.message);
-        throw e;
-      }
-    }
-    const blocked = guardCall({ isMutating, args: callArgs, settings });
-    if (blocked) return codedError(blocked.code, addressSafe(blocked.message, addressed.resolved, schemeResolved));
+    const resolved = resolveAndGuard(args ?? {}, isMutating, opts);
+    if ("blocked" in resolved) return codedError(resolved.blocked.code, resolved.blocked.message);
+    const callArgs = resolved.args;
     // Kernel arguments are always PEELED OFF, kernel or not, so no handler ever
     // sees one. What differs without a kernel is whether they can be honored:
     //
