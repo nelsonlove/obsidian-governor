@@ -17,13 +17,22 @@
 //   - The vault is pinned to THIS vault (`vault=<name>` is always the first
 //     arg); a caller-supplied vault param is rejected, so a session can never
 //     cross into another vault through the proxy.
+//   - Accept-forbidden guard (cliAcceptRefusal): the scar "the accept verb goes
+//     in no API" is enforced at the MCP note-write primitive, and the CLI proxy
+//     would otherwise bypass it. property:set and content writes (create/append/
+//     prepend/periodic) are checked with the SAME accepted-family rule before
+//     the command runs. quickadd / eval / command run arbitrary macros/code and
+//     cannot be inspected — a documented RESIDUAL, not blocked here.
 
 import { z } from "zod";
 import { execFile } from "node:child_process";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { ok, fail, okError } from "./helpers.js";
+import { ok, fail, okError, codedError } from "./helpers.js";
 import { spawnEnv, findBinary } from "../claude-cli.js";
 import type { ServerCtx } from "./tools-core.js";
+// Reuse the SAME accepted-family rule the MCP note-write primitive uses — no
+// second definition of "accepted" on the CLI path (see cliAcceptRefusal below).
+import { acceptForbiddenReason } from "./write-notes-compose.js";
 
 // Mutating + can reach outside the vault (plugin installs fetch the network).
 const CLI_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };
@@ -66,6 +75,127 @@ export function isDangerousCliCommand(command: string): boolean {
 // Single source for every prose surface that names the gated set (tool
 // description, settings toggle) — keep in sync with DANGEROUS_EXACT + `dev:*`.
 export const DANGEROUS_LIST_DESC = [...DANGEROUS_EXACT].sort().join(", ") + ", and dev:*";
+
+// ── accept-forbidden guard on the CLI path ────────────────────────────────────
+//
+// The scar "the accept verb goes in no API" is enforced at the MCP note-write
+// primitive (write-notes-compose.ts / obsidian-backend.ts). obsidian_cli proxies
+// ~104 CLI commands straight past that primitive, so acceptance could be written
+// through the CLI: `property:set name=acceptance-status value=accepted`, or a
+// create/append/prepend whose content carries an `accepted` frontmatter fence.
+// We reuse the SAME rule (`acceptForbiddenReason`, over the same deep
+// accepted-family detector) here, BEFORE the command runs — no second definition
+// of "accepted". A CLI property set / content write is always an INTRODUCE (the
+// CLI path has no "carry an existing human-granted value forward" expression),
+// so the introduce check is exactly right.
+//
+// RESIDUAL — flagged for a policy decision, connects to the board item
+// "obsidian_cli / run_command needs an allowlist/denylist": `quickadd` /
+// `quickadd:run` run arbitrary QuickAdd macros, and `eval` / `command` run
+// arbitrary code (already behind the danger gate). A macro/script can set
+// acceptance opaquely and CANNOT be inspected pre-exec. We deliberately do NOT
+// block quickadd — that would break legitimate macro use — so the residual is
+// documented here and named in the tool description, not silently closed. A
+// `create template=<t>` also draws frontmatter from a template note we cannot
+// read pre-exec; a lesser residual, same class.
+
+// property:set family — sets one property (documented `name=<prop> value=<val>`)
+// or, in shorthand, direct key=value params. `frontmatter:` alias included
+// defensively; get/list/remove are not introduces and are not matched.
+const PROPERTY_SET_RE = /^(?:property|frontmatter):(?:set|add|update|patch)$/;
+
+// content-writing family — create/append/prepend, the periodic-note variants,
+// and base:create (a base item written with the same name=/content= params). All
+// take a caller-controlled `content=` that carries the body (and any frontmatter
+// fence), so all are inspectable pre-exec — none is an opaque residual.
+const CONTENT_WRITE_RE =
+  /^(?:create|append|prepend|base:create|(?:daily|weekly|monthly|quarterly|yearly):(?:create|append|prepend))$/;
+
+// Arbitrary-macro / code-execution commands that can set acceptance opaquely.
+// Named for the tool description + report — NOT blocked here (eval/command are
+// already behind the danger gate; quickadd is the live residual).
+export const CLI_OPAQUE_ACCEPT_RESIDUAL = ["command", "eval", "quickadd", "quickadd:run", "quickadd:run-template"];
+
+/**
+ * The reason a CLI invocation would introduce acceptance, or null when it is
+ * clean. Reuses the shared accepted-family rule (`acceptForbiddenReason`) — no
+ * fork of "accepted". Covers property sets (the property + value the call names)
+ * and content writes (any acceptance-asserting frontmatter fence in the written
+ * content). Every unrelated command is clean, so legitimate CLI use is untouched.
+ */
+export function cliAcceptRefusal(
+  command: string,
+  params: Record<string, string | number | boolean> | undefined,
+  parseYaml?: (yaml: string) => unknown
+): string | null {
+  const cmd = command.trim();
+
+  if (PROPERTY_SET_RE.test(cmd)) {
+    // Both param shapes at once: the documented `name=<prop> value=<val>` form
+    // (synthesize {prop: val}) AND a direct `acceptance-status=accepted`
+    // shorthand (every param keyed as itself). Structural keys (file/path/name/
+    // value/type/silent) are not accepted-family, so they never false-positive —
+    // e.g. `property:set name=status value=accepted` is a property literally
+    // called "status", NOT the acceptance field, and is allowed, matching the
+    // MCP write path (which keys only on acceptance-status / accepted-*).
+    const fm: Record<string, unknown> = { ...(params ?? {}) };
+    if (typeof params?.name === "string") fm[params.name] = params.value;
+    return acceptForbiddenReason(fm);
+  }
+
+  if (CONTENT_WRITE_RE.test(cmd)) {
+    const content = params?.content;
+    if (typeof content !== "string" || content.length === 0) return null;
+    const reason = contentAcceptRefusal(content, parseYaml);
+    return reason ? `content ${reason}` : null;
+  }
+
+  return null;
+}
+
+/**
+ * Scan written content for an acceptance-asserting frontmatter fence. The CLI
+ * interprets `\n`/`\t` escapes in a param value, so they are expanded first — an
+ * escaped fence must not slip the scan. Every `---`-delimited YAML block (leading
+ * or embedded) is parsed and checked with the shared rule. `append` content is
+ * not a note's leading frontmatter, but the resulting note cannot be read
+ * pre-exec, so acceptance-carrying content is blocked conservatively — nobody
+ * legitimately writes an accepted acceptance fence into a body. With no parser
+ * injected, we fail CLOSED on any fence at all (defensive; production always
+ * injects obsidian.parseYaml).
+ */
+function contentAcceptRefusal(content: string, parseYaml?: (yaml: string) => unknown): string | null {
+  const expanded = content
+    .replace(/\\r\\n|\\n/g, "\n") // literal \n (and \r\n) escapes the CLI expands
+    .replace(/\\t/g, "\t") // literal \t escapes
+    .replace(/\r\n?/g, "\n"); // real CR / CRLF
+  const fenceRe = /(?:^|\n)---[ \t]*\n([\s\S]*?)\n---[ \t]*(?:\n|$)/g;
+  let m: RegExpExecArray | null;
+  let sawFence = false;
+  while ((m = fenceRe.exec(expanded)) !== null) {
+    sawFence = true;
+    if (!parseYaml) continue;
+    let parsed: unknown;
+    try {
+      parsed = parseYaml(m[1]);
+    } catch {
+      // A fence a real parser cannot read: cannot assert acceptance structurally,
+      // but treat one that mentions the acceptance field textually as suspect
+      // rather than let it through.
+      if (/acceptance[-_]status/i.test(m[1]) && /\baccepted\b|accepted[-_]/i.test(m[1])) {
+        return "carries an accepted acceptance-status fence";
+      }
+      continue;
+    }
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const reason = acceptForbiddenReason(parsed as Record<string, unknown>);
+      if (reason) return reason;
+    }
+  }
+  return sawFence && !parseYaml
+    ? "carries a frontmatter fence that cannot be verified without a YAML parser"
+    : null;
+}
 
 // Lowercase-only ON PURPOSE: the CLI's commands are all lowercase, and a
 // case-insensitive accept here would let 'Eval' slip past the case-sensitive
@@ -136,13 +266,17 @@ const defaultExec: CliExec = (bin, args, timeoutMs) =>
 export function registerCliTools(
   server: McpServer,
   ctx: ServerCtx,
-  deps?: { binary?: string | null; exec?: CliExec }
+  deps?: { binary?: string | null; exec?: CliExec; parseYaml?: (yaml: string) => unknown }
 ) {
   // Conditional registration at build time is the dynamic-registration
   // mechanism (same as integration tools): no binary → no tool this session.
   const binary = deps?.binary !== undefined ? deps.binary : findObsidianBinary();
   if (!binary) return;
   const exec = deps?.exec ?? defaultExec;
+  // Injected so this module stays obsidian-free (obsidian is types-only in node,
+  // and the CLI handler is unit-tested). Production wires obsidian.parseYaml from
+  // server.ts; the accept guard's content-fence scan needs a real YAML parser.
+  const parseYaml = deps?.parseYaml;
 
   server.registerTool(
     "obsidian_cli",
@@ -157,6 +291,7 @@ export function registerCliTools(
         "Output is the CLI's raw stdout/stderr plus exit_code — non-zero exits return isError with the same structure. " +
         "Requires the Obsidian CLI feature (Settings → General → Command line interface). " +
         `Dangerous commands (${DANGEROUS_LIST_DESC}) are blocked unless enabled in plugin settings. ` +
+        "Acceptance is human-only: a property:set or content write that would introduce acceptance-status: accepted (or accepted-by/accepted-on) is refused with Error [accept_forbidden] — agents write only acceptance-status: proposed. " +
         "On timeout, the command may still have completed inside Obsidian (only the CLI forwarder is killed) — verify state before retrying a mutation. " +
         "Prefer a dedicated obsidian_* tool when one exists — those return structured data.",
       inputSchema: {
@@ -183,6 +318,17 @@ export function registerCliTools(
         if (isDangerousCliCommand(command) && !settings.allowDangerousCli) {
           return fail(
             `CLI command '${command}' is dangerous (code execution / app control) and is blocked. Enable "Allow dangerous CLI commands" in the vault-mcp settings to permit it.`
+          );
+        }
+        // Accept-forbidden guard — the scar "the accept verb goes in no API",
+        // enforced on the CLI path with the SAME accepted-family rule as the MCP
+        // write primitive. Refused BEFORE the command runs, so nothing executes.
+        const acceptReason = cliAcceptRefusal(command, args.params, parseYaml);
+        if (acceptReason) {
+          return codedError(
+            "accept_forbidden",
+            `${acceptReason}. Acceptance is a human gesture, in no API — the CLI proxy will not persist it. ` +
+              `Agents write only acceptance-status: proposed; never accepted / accepted-by / accepted-on.`
           );
         }
         const argv = buildCliArgs({ vaultName: ctx.vaultName, command, params: args.params, flags: args.flags });
