@@ -101,6 +101,23 @@ export { noteVocabFindings } from "./vocab/findings.js";
 export type { NoteVocabInput } from "./vocab/findings.js";
 export { VocabRegistry, DEFAULT_VOCABULARIES } from "./vocab/registry.js";
 export type { VocabInstance, VocabInstanceSettings } from "./vocab/registry.js";
+// The module host (#68) — re-exported here as part of the mount step, the
+// integration its barrel comment deferred to.
+export { ModuleRegistry, forbiddenToolName, moduleFromRegistrar, DEFAULT_MODULE_SETTINGS, mergeModuleConfig } from "./modules/index.js";
+export type {
+  ModuleDescription,
+  ModuleHostCtx,
+  ModuleInstanceSettings,
+  ModulePosture,
+  ModuleSettings,
+  ModuleSettingsSchema,
+  ToolDef,
+  ToolHandler,
+  ToolRegistrar,
+  VaultModule,
+  AdapterMeta,
+  RegistrarServer,
+} from "./modules/index.js";
 
 /**
  * Typed failure for an `if_rev` precondition that did not hold: the target's
