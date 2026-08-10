@@ -5,8 +5,15 @@ import { bridgeDestPath } from "./paths.js";
 import { findClaudeBinary, claudeIsRegistered } from "./claude-cli.js";
 import { DANGEROUS_LIST_DESC } from "./mcp/tools-cli.js";
 import { OPAQUE_ACCEPT_CLI_COMMANDS, OPAQUE_ACCEPT_COMMAND_IDS } from "./mcp/cli-policy.js";
-import { validateJdConfig, type JdConfig } from "./kernel/scheme/jd.js";
-import { validateExcludedRoots } from "./kernel/scheme/registry.js";
+import { builtinModules } from "./mcp/modules-mount.js";
+import {
+  ModuleRegistry,
+  collect,
+  mergeModuleConfig,
+  type HostedField,
+  type HostedModule,
+  type VaultModule,
+} from "./kernel/modules/index.js";
 
 /** Parse a comma-separated text field into a trimmed, non-empty string list.
  * An all-blank input (or one that trims to nothing) yields `undefined` rather
@@ -36,10 +43,13 @@ export function parseLineList(value: string): string[] | undefined {
   return items.length === 0 ? undefined : items;
 }
 
-/** Parse the content-decimal-floor text field: blank -> undefined (provider
- * default applies), otherwise the parsed number (validated server-side by
- * validateJdConfig — this just avoids writing NaN into settings). */
-export function parseFloorField(value: string): number | undefined {
+/** Parse a "number"-typed config field: blank -> undefined (removes the key
+ * — "use the provider default"), otherwise the parsed number. Generalizes
+ * the old JD-specific `parseFloorField` to any manifest number field (#81's
+ * generic renderer replaces the hand-built content-decimal-floor field this
+ * was written for, but the parsing rule — and the field-level problem it
+ * pairs with below — is the same for every number field). */
+export function parseNumberField(value: string): number | undefined {
   const trimmed = value.trim();
   if (trimmed === "") return undefined;
   const n = Number(trimmed);
@@ -47,20 +57,22 @@ export function parseFloorField(value: string): number | undefined {
 }
 
 /**
- * Item 4: what `parseFloorField` silently drops. A non-numeric floor entry
- * (e.g. "abc") parses to `undefined`, which is indistinguishable from a
- * deliberately blank field — the feature "mysteriously dies" (config saved,
- * but not what the user typed, with no on-screen sign anything happened).
- * This surfaces that one case as a human-readable problem string; blank and
- * genuinely-numeric input (whatever its value — RANGE checking is
- * `validateJdConfig`'s job, applied separately to the built config) are
- * never a problem here. Pure, so it's testable without a Setting tab, same
- * as `parseCommaList`/`parseFloorField` above. */
-export function floorFieldProblem(value: string): string | null {
+ * What `parseNumberField` cannot express on its own: a non-numeric entry
+ * (e.g. "abc") parses to `undefined`, indistinguishable from a deliberately
+ * blank field. Unlike the old `floorFieldProblem` (which surfaced this
+ * ALONGSIDE still saving the silently-emptied value), the renderer that
+ * calls this REFUSES the save outright on a non-null result — loud, not a
+ * silent coerce-to-default with a footnote (the task's own constraint: an
+ * invalid value must be reported, never dropped to a default with no
+ * visible trace). Blank and genuinely-numeric input (any value — RANGE
+ * checking is the module's `manifest.config.validate`'s job, applied
+ * separately to the built config) are never a problem here. Pure, testable
+ * without a Setting tab. */
+export function numberFieldProblem(label: string, value: string): string | null {
   const trimmed = value.trim();
   if (trimmed === "") return null;
   if (Number.isNaN(Number(trimmed))) {
-    return `Content-decimal floor: "${trimmed}" is not a number — ignored, the provider default applies.`;
+    return `${label}: "${trimmed}" is not a number — not saved; the previous value is kept.`;
   }
   return null;
 }
@@ -107,10 +119,6 @@ export class ConnectionSetupModal extends Modal {
 
 export class VaultMcpSettingTab extends PluginSettingTab {
   constructor(app: App, private plugin: VaultMcpPlugin) { super(app, plugin); }
-  /** The Schemes section's inline validation-problem element (item 4) —
-   * undefined when no JD instance is configured (nothing to validate),
-   * rebuilt fresh every `display()` call like the rest of the tab. */
-  private jdWarningEl?: HTMLElement;
   display() {
     const { containerEl } = this;
     containerEl.empty();
@@ -251,125 +259,17 @@ export class VaultMcpSettingTab extends PluginSettingTab {
         });
       });
 
-    // Modules. The capability modules mounted through the module host
-    // (kernel/modules/, mcp/modules-mount.ts): each toggle unmounts that
-    // module's whole tool surface. Registration is per-connection, so changes
-    // land on the next session connect — no reload needed.
-    containerEl.createEl("h3", { text: "Modules" });
-    const moduleRows: Array<{ id: string; name: string; desc: string }> = [
-      {
-        id: "scheme",
-        name: "Scope provider module",
-        desc:
-          "The five scheme tools (obsidian_schemes, resolve/next address, list scope, expected location). " +
-          "`jd:` addressing in path arguments is kernel-level (like `uid:`) and stays available either way. " +
-          "Takes effect on the next session connect.",
-      },
-      {
-        id: "vocab",
-        name: "Vocabulary provider module",
-        desc:
-          "The controlled-vocabulary tools (obsidian_vocabularies, resolve/validate terms, list vocabulary) over " +
-          "the configured registries and glossary. Takes effect on the next session connect.",
-      },
-    ];
-    for (const row of moduleRows) {
-      new Setting(containerEl)
-        .setName(row.name)
-        .setDesc(row.desc)
-        .addToggle((t) =>
-          t.setValue(this.plugin.settings.modules[row.id]?.enabled ?? true).onChange(async (value) => {
-            this.plugin.settings.modules = {
-              ...this.plugin.settings.modules,
-              [row.id]: { ...this.plugin.settings.modules[row.id], enabled: value },
-            };
-            await this.plugin.saveSettings();
-          })
-        );
-    }
-
-    // Schemes. Scheme semantics are configuration, not hardwired (Nelson's
-    // ruling): only the default "jd" instance's config gets a UI here —
-    // additional instances or exotic overrides stay data.json-editable, no
-    // UI (YAGNI; see kernel/scheme/registry.ts and VaultMcpSettings.schemes).
-    containerEl.createEl("h3", { text: "Schemes" });
-    const jdInstance = this.plugin.settings.schemes[0];
-    if (jdInstance && jdInstance.provider === "johnny-decimal") {
-      const jdConfig: Partial<JdConfig> = jdInstance.config ?? {};
-
-      new Setting(containerEl)
-        .setName("Expanded areas")
-        .setDesc(
-          "Comma-separated area bands (e.g. \"90-99\") that use 5-digit sequential ids instead of category/decimal ids. " +
-            "Leave blank to use the provider default (90-99)."
-        )
-        .addText((t) => {
-          t.setValue((jdConfig.expandedAreas ?? []).join(", "));
-          t.onChange(async (value) => {
-            await this.updateJdConfig({ expandedAreas: parseCommaList(value) });
-          });
-        });
-
-      new Setting(containerEl)
-        .setName("Expanded categories")
-        .setDesc(
-          "Comma-separated categories (e.g. \"27\") that use 5-digit flat ids instead of category.decimal ids. " +
-            "Leave blank to use the provider default (27)."
-        )
-        .addText((t) => {
-          t.setValue((jdConfig.expandedCategories ?? []).join(", "));
-          t.onChange(async (value) => {
-            await this.updateJdConfig({ expandedCategories: parseCommaList(value) });
-          });
-        });
-
-      new Setting(containerEl)
-        .setName("Content-decimal floor")
-        .setDesc(
-          "Lowest two-digit decimal (0-99) a category allocates as content — decimals below it are reserved. " +
-            "Leave blank for the default (10)."
-        )
-        .addText((t) => {
-          t.setValue(jdConfig.contentDecimalFloor === undefined ? "" : String(jdConfig.contentDecimalFloor));
-          t.onChange(async (value) => {
-            await this.updateJdConfig({ contentDecimalFloor: parseFloorField(value) }, floorFieldProblem(value));
-          });
-        });
-
-      new Setting(containerEl)
-        .setName("Excluded roots")
-        .setDesc(
-          "Vault-relative folder prefixes (one per line) whose contents this scheme instance never resolves or " +
-            "lists addresses for — territory it does not speak for. Use this to stop an archive tree from " +
-            "colliding with the live spine on a reused address; the excluded notes themselves are unaffected — " +
-            "every other tool still reads, writes and finds them normally. Matching is case-sensitive (macOS's " +
-            "case-insensitive filesystem does not make \"vault archaeology\" match \"Vault archaeology\"). " +
-            "Leave blank for no exclusion."
-        )
-        .addTextArea((t) => {
-          t.setValue((jdInstance.excludedRoots ?? []).join("\n"));
-          t.inputEl.rows = 3;
-          t.onChange(async (value) => {
-            await this.updateExcludedRoots(value);
-          });
-        });
-
-      // Item 4: an invalid field value used to write config silently — a
-      // typo'd area token or an out-of-range floor made makeRegistry skip
-      // the whole instance with only a console.error, and the feature
-      // "mysteriously died" with no on-screen sign why. This element is the
-      // surfaced consequence: cleared when the current config is valid,
-      // listing every problem (including a non-numeric floor entry, which
-      // parseFloorField itself silently drops to "use the default", and —
-      // this feature's extension of item 4 — an invalid excludedRoots entry,
-      // which makeRegistry skips the WHOLE instance over) otherwise. Saving
-      // is unchanged either way — config-not-hardwired means the user
-      // rules, but they must SEE what they just did.
-      this.jdWarningEl = containerEl.createEl("p", { cls: "mod-warning" });
-      this.renderJdProblems(this.jdProblems());
-    } else {
-      this.jdWarningEl = undefined;
-    }
+    // Modules (#81: config-host). One generic, data-driven section per
+    // registered module — no per-module bespoke UI code. Each module's
+    // manifest (mcp/modules-mount.ts) supplies the enabled toggle's
+    // description, its config fields (if any), and its capability
+    // directory; this REPLACES the old hand-built "Modules" toggle-only
+    // loop and the hand-built "Schemes" section (JD's expanded areas/
+    // categories/floor/excludedRoots fields) — those are now the scheme
+    // module's generated section, byte-for-byte the same fields, driven by
+    // SCHEME_MANIFEST instead of hardcoded here. Registration is
+    // per-connection, so a toggle takes effect on the next session connect.
+    this.renderModules(containerEl);
 
     new Setting(containerEl)
       .setName("Socket enabled")
@@ -389,82 +289,223 @@ export class VaultMcpSettingTab extends PluginSettingTab {
       });
   }
 
-  /**
-   * Merge `partial` into schemes[0].config and save. Deliberately
-   * non-mutating at every level it touches: `this.plugin.settings.schemes`
-   * defaults to a structuredClone of the module-level DEFAULT_SCHEMES
-   * constant (main.ts `DEFAULT_SETTINGS.schemes = structuredClone(DEFAULT_SCHEMES)`)
-   * until the first save writes data.json — the clone means an in-place
-   * `schemes[0].config = …` would no longer contaminate DEFAULT_SCHEMES
-   * itself, but it would still mutate the shared array/object THIS plugin
-   * instance's settings holds, silently affecting every other read of
-   * `this.plugin.settings.schemes` taken before this call returns. Building
-   * fresh objects and a fresh array here, rather than mutating in place,
-   * avoids that regardless of how settings.schemes was constructed.
-   *
-   * `fieldProblem` (item 4) is an extra problem string the CALLING field
-   * already knows about but that wouldn't otherwise show up in
-   * `validateJdConfig(nextConfig)` — today that's only the content-decimal
-   * floor field's non-numeric case (parseFloorField silently turns "abc"
-   * into `undefined`, so by the time `nextConfig` exists there is no trace
-   * of what the user actually typed). Every field's change still runs
-   * `validateJdConfig` on the resulting config regardless, so a bad area or
-   * category token surfaces too. Saving proceeds unconditionally either way
-   * — the warning is feedback, not a gate (config-not-hardwired: the user
-   * rules, but must SEE the consequence).
-   */
-  private async updateJdConfig(partial: Partial<JdConfig>, fieldProblem: string | null = null): Promise<void> {
-    const schemes = this.plugin.settings.schemes;
-    const jd = schemes[0];
-    if (!jd) return;
-    const nextConfig: Record<string, unknown> = { ...(jd.config ?? {}) };
-    for (const [key, value] of Object.entries(partial)) {
-      if (value === undefined) delete nextConfig[key];
-      else nextConfig[key] = value;
+  // ── #81: the generic, manifest-driven module renderer ──────────────────
+  //
+  // One `<h4>` section per registered module, built from `HostedModule`
+  // (kernel/modules/config-host.ts's `collect`) — no per-module bespoke UI
+  // code anywhere below. A module with no `manifest.config` (the vocab
+  // module today) still renders its section in full: enabled toggle,
+  // summary, capability directory — just with zero config fields, never
+  // skipped and never a crash.
+
+  /** The live module list + a throwaway registry used ONLY for `isEnabled`
+   * resolution — no `registerAll` runs here, so no live vault/server is
+   * needed to render the tab (the `schemeNotes`/`vocabSource` deps below
+   * are unused stand-ins: `builtinModules` closes over them, but nothing in
+   * THIS file ever calls a module's `register()`). */
+  private moduleList(): VaultModule[] {
+    return builtinModules({
+      getSettings: () => this.plugin.settings,
+      getVocabularies: () => this.plugin.settings.vocabularies,
+      schemeNotes: () => [],
+      vocabSource: { paths: () => [], frontmatter: () => null, body: async () => null },
+    });
+  }
+
+  private renderModules(containerEl: HTMLElement): void {
+    const modules = this.moduleList();
+    const hosted = collect(modules, this.plugin.settings.modules, this.plugin.settings);
+    containerEl.createEl("h3", { text: "Modules" });
+    containerEl.createEl("p", {
+      cls: "setting-item-description",
+      text:
+        "Each module is a settings-toggleable unit of the plugin's tool surface, with its own config and the " +
+        "directory of what it does. Toggling a module off unmounts its whole tool surface on the next session " +
+        "connect.",
+    });
+    for (const h of hosted) {
+      const mod = modules.find((m) => m.id === h.id);
+      if (mod) this.renderModuleSection(containerEl, mod, h);
     }
-    this.plugin.settings.schemes = [{ ...jd, config: nextConfig as Partial<JdConfig> }, ...schemes.slice(1)];
-    this.renderJdProblems([...(fieldProblem ? [fieldProblem] : []), ...this.jdProblems()]);
+  }
+
+  private renderModuleSection(containerEl: HTMLElement, mod: VaultModule, hosted: HostedModule): void {
+    const section = containerEl.createDiv({ cls: "vault-mcp-module" });
+    section.createEl("h4", { text: `${mod.id} (${hosted.posture})` });
+    if (hosted.summary) section.createEl("p", { cls: "setting-item-description", text: hosted.summary });
+
+    new Setting(section)
+      .setName("Enabled")
+      .setDesc("Takes effect on the next session connect.")
+      .addToggle((t) =>
+        t.setValue(hosted.enabled).onChange(async (value) => {
+          this.plugin.settings.modules = {
+            ...this.plugin.settings.modules,
+            [mod.id]: { ...this.plugin.settings.modules[mod.id], enabled: value },
+          };
+          await this.plugin.saveSettings();
+        })
+      );
+
+    // Config validation problems (generalizes the old JD-specific
+    // jdWarningEl to every module): cleared when the current merged config
+    // is valid, listing every `manifest.config.validate` finding otherwise.
+    // Saving proceeds unconditionally — config-not-hardwired means the user
+    // rules, but they must SEE the consequence.
+    const problemsEl = section.createEl("p", { cls: "mod-warning" });
+    const renderProblems = (problems: string[]) => problemsEl.setText(problems.length === 0 ? "" : problems.join(" "));
+    renderProblems(hosted.problems);
+
+    for (const field of hosted.fields) {
+      this.renderConfigField(section, mod, field, renderProblems);
+    }
+
+    const dir = hosted.directory;
+    if (dir.tools.length > 0) {
+      section.createEl("h5", { text: "Tools" });
+      const list = section.createEl("ul");
+      for (const tool of dir.tools) {
+        const li = list.createEl("li");
+        li.createEl("strong", { text: tool.name });
+        li.appendText(` — ${tool.purpose}${tool.readOnly ? " (read-only)" : ""}`);
+        for (const c of tool.caveats ?? []) {
+          const cave = li.createEl("div", { cls: "setting-item-description" });
+          cave.setText(c);
+        }
+      }
+    }
+    for (const [label, docs] of [
+      ["Address forms", dir.addressForms],
+      ["Rule packs", dir.rulePacks],
+      ["Kernel args", dir.kernelArgs],
+    ] as const) {
+      if (docs.length === 0) continue;
+      section.createEl("h5", { text: label });
+      const list = section.createEl("ul");
+      for (const d of docs) {
+        const li = list.createEl("li");
+        li.createEl("strong", { text: d.name });
+        li.appendText(` — ${d.purpose}`);
+      }
+    }
+  }
+
+  private renderConfigField(
+    section: HTMLElement,
+    mod: VaultModule,
+    field: HostedField,
+    renderProblems: (problems: string[]) => void
+  ): void {
+    const setting = new Setting(section).setName(field.label);
+    if (field.help) setting.setDesc(field.help);
+
+    const commit = async (patch: Record<string, unknown>) => {
+      await this.saveModuleField(mod, patch);
+      renderProblems(this.moduleProblems(mod));
+    };
+
+    switch (field.type) {
+      case "toggle":
+        setting.addToggle((t) => t.setValue(Boolean(field.value)).onChange((value) => commit({ [field.key]: value })));
+        break;
+      case "select":
+        setting.addDropdown((d) => {
+          for (const opt of field.options ?? []) d.addOption(opt, opt);
+          d.setValue(typeof field.value === "string" ? field.value : (field.options?.[0] ?? ""));
+          d.onChange((value) => commit({ [field.key]: value }));
+        });
+        break;
+      case "number": {
+        // Loud refusal (the task's own constraint): an unparseable entry is
+        // reported inline and NEVER saved — the previous good value (or
+        // "unset") survives untouched, rather than silently coercing to
+        // undefined the way the old parseFloorField/floorFieldProblem pair
+        // did (it saved `undefined` AND showed a footnote; this refuses the
+        // save outright).
+        const fieldProblemEl = section.createEl("p", { cls: "mod-warning" });
+        setting.addText((t) => {
+          t.setValue(field.value === undefined || field.value === null ? "" : String(field.value));
+          if (field.placeholder) t.setPlaceholder(field.placeholder);
+          t.onChange(async (value) => {
+            const problem = numberFieldProblem(field.label, value);
+            fieldProblemEl.setText(problem ?? "");
+            if (problem) return;
+            await commit({ [field.key]: parseNumberField(value) });
+          });
+        });
+        break;
+      }
+      case "csv":
+        setting.addText((t) => {
+          t.setValue(Array.isArray(field.value) ? (field.value as string[]).join(", ") : "");
+          if (field.placeholder) t.setPlaceholder(field.placeholder);
+          t.onChange((value) => commit({ [field.key]: parseCommaList(value) }));
+        });
+        break;
+      case "lines":
+        setting.addTextArea((t) => {
+          t.setValue(Array.isArray(field.value) ? (field.value as string[]).join("\n") : "");
+          t.inputEl.rows = 3;
+          t.onChange((value) => commit({ [field.key]: parseLineList(value) }));
+        });
+        break;
+      case "text":
+      default:
+        setting.addText((t) => {
+          t.setValue(typeof field.value === "string" ? field.value : "");
+          if (field.placeholder) t.setPlaceholder(field.placeholder);
+          t.onChange((value) => commit({ [field.key]: value === "" ? undefined : value }));
+        });
+        break;
+    }
+
+    if (field.caveats?.length) {
+      const ul = section.createEl("ul", { cls: "setting-item-description" });
+      for (const c of field.caveats) ul.createEl("li", { text: c });
+    }
+  }
+
+  /** Persist `patch` for `mod`: through its `configBinding` when it has one
+   * (scheme — writes into `settings.schemes[0]`, never `modules.<id>.config`),
+   * else the plain `modules.<id>.config` patch every future module gets by
+   * default. Delete-on-undefined either way, matching every textarea
+   * field's "blank means use the default" convention. */
+  private async saveModuleField(mod: VaultModule, patch: Record<string, unknown>): Promise<void> {
+    if (mod.configBinding) {
+      this.plugin.settings = mod.configBinding.write(this.plugin.settings, patch) as typeof this.plugin.settings;
+    } else {
+      const existing = this.plugin.settings.modules[mod.id]?.config ?? {};
+      const nextConfig: Record<string, unknown> = { ...existing };
+      for (const [k, v] of Object.entries(patch)) {
+        if (v === undefined) delete nextConfig[k];
+        else nextConfig[k] = v;
+      }
+      this.plugin.settings.modules = {
+        ...this.plugin.settings.modules,
+        [mod.id]: { ...this.plugin.settings.modules[mod.id], config: nextConfig },
+      };
+    }
     await this.plugin.saveSettings();
   }
 
-  /**
-   * Merge a new `excludedRoots` into `schemes[0]` and save. Sibling of
-   * `updateJdConfig`, not a variant of it — `excludedRoots` is
-   * INSTANCE-level (design item 1: a sibling of `config`, not a key inside
-   * it), so it is never routed through `nextConfig`. `parseLineList`
-   * already folds "no non-blank lines" to `undefined`; when that happens the
-   * field is REMOVED from the persisted instance entirely rather than kept
-   * as an explicit `excludedRoots: []` — matching `updateJdConfig`'s
-   * delete-on-undefined convention for a blanked config key.
-   */
-  private async updateExcludedRoots(value: string): Promise<void> {
-    const schemes = this.plugin.settings.schemes;
-    const jd = schemes[0];
-    if (!jd) return;
-    const excludedRoots = parseLineList(value);
-    const { excludedRoots: _drop, ...rest } = jd;
-    const next = excludedRoots ? { ...rest, excludedRoots } : rest;
-    this.plugin.settings.schemes = [next, ...schemes.slice(1)];
-    this.renderJdProblems(this.jdProblems());
-    await this.plugin.saveSettings();
+  /** `mod`'s CURRENT merged config (post-save), re-derived the same way
+   * `collect` does for a single module, so a field's problems element can
+   * be refreshed in place without a full `display()` re-render (which would
+   * lose focus/cursor position mid-edit). */
+  private currentModuleConfig(mod: VaultModule): Record<string, unknown> {
+    if (mod.configBinding) {
+      return mergeModuleConfig(mod.manifest?.config?.defaults, mod.configBinding.read(this.plugin.settings));
+    }
+    const registry = new ModuleRegistry([mod], this.plugin.settings.modules);
+    return registry.configFor(mod.id);
   }
 
-  /** Every current validation problem for `schemes[0]` — provider config
-   * (item 4's original surfacing) plus this feature's `excludedRoots`
-   * problems, combined so a field-change in one never blanks out a problem
-   * still standing in the other. */
-  private jdProblems(): string[] {
-    const jd = this.plugin.settings.schemes[0];
-    if (!jd) return [];
-    return [...validateJdConfig(jd.config), ...validateExcludedRoots(jd.excludedRoots).problems];
-  }
-
-  /** Show (or clear) the Schemes section's inline warning. Empty `problems`
-   * clears it — the element stays in the DOM (so re-invalidating doesn't
-   * need to recreate it) but renders nothing and carries no text a screen
-   * reader would announce. */
-  private renderJdProblems(problems: string[]): void {
-    if (!this.jdWarningEl) return;
-    this.jdWarningEl.setText(problems.length === 0 ? "" : problems.join(" "));
+  private moduleProblems(mod: VaultModule): string[] {
+    const config = this.currentModuleConfig(mod);
+    try {
+      return mod.manifest?.config?.validate?.(config) ?? [];
+    } catch (e) {
+      return [`config validate() threw: ${e instanceof Error ? e.message : String(e)}`];
+    }
   }
 }
