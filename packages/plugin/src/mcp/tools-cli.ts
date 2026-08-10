@@ -36,7 +36,7 @@ import { spawnEnv, findBinary } from "../claude-cli.js";
 import type { ServerCtx } from "./tools-core.js";
 // Reuse the SAME accepted-family rule the MCP note-write primitive uses — no
 // second definition of "accepted" on the CLI path (see cliAcceptRefusal below).
-import { acceptForbiddenReason } from "./write-notes-compose.js";
+import { acceptForbiddenReason, stripLeadingBom } from "./write-notes-compose.js";
 import { cliCommandRefusal, configPathRefusal, OPAQUE_ACCEPT_CLI_COMMANDS } from "./cli-policy.js";
 
 // Mutating + can reach outside the vault (plugin installs fetch the network).
@@ -201,7 +201,14 @@ export function templateContentAcceptRefusal(content: string, parseYaml?: (yaml:
   return scanForAcceptFence(content.replace(/\r\n?/g, "\n"), parseYaml);
 }
 
-function scanForAcceptFence(expanded: string, parseYaml?: (yaml: string) => unknown): string | null {
+function scanForAcceptFence(normalized: string, parseYaml?: (yaml: string) => unknown): string | null {
+  // A leading BOM is transparent to Obsidian's frontmatter parser (and to
+  // `frontmatterOf`, the write path's own recognizer), so it must be
+  // transparent here too — a guard stricter than the write path is a bypass,
+  // not caution. #126: `﻿---\nacceptance-status: accepted\n---` scanned
+  // clean and was honored on landing. Parity is pinned by
+  // tests/accept-fence-parity.test.mjs, not just by this comment.
+  const expanded = stripLeadingBom(normalized);
   const fenceRe = /(?:^|\n)---[ \t]*\n([\s\S]*?)\n---[ \t]*(?:\n|$)/g;
   let m: RegExpExecArray | null;
   let sawFence = false;

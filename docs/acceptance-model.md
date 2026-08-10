@@ -40,6 +40,24 @@ not tool by tool. The rule itself is defined once
 (`packages/plugin/src/mcp/write-notes-compose.ts`) and reused everywhere; there is no second
 definition of "accepted" to drift.
 
+### Recognition parity: a guard stricter than the write path is a bypass
+
+One definition of *accepted* is not sufficient on its own — the guard and the write path must
+also agree on **what counts as frontmatter in the first place**. They once did not, and that
+gap was a live bypass (#126): the write-path recognizer tolerated a leading byte-order mark
+before the opening `---` (as Obsidian itself does), while the fence scanner did not. An
+acceptance fence behind one invisible byte was therefore *scanned clean and honored on
+landing* — the guard was stricter than reality, which reads as caution and behaves as a hole.
+
+The rule this leaves behind: **anything deciding "would this content assert acceptance?" must
+recognize at least what the vault will honor.** Both sides now share `stripLeadingBom` and
+`LEADING_FRONTMATTER_RE` from `write-notes-compose.ts` rather than re-deriving the shape, and
+the property is pinned by `tests/accept-fence-parity.test.mjs` — a corpus crossing every
+tolerated fence variation with accepting and clean payloads, asserting *write path would honor
+⟹ guard refuses*. Loosening one side without the other fails that suite. The scanner is still
+permitted to be **broader** (it also scans embedded fences, conservatively); it is never
+permitted to be narrower.
+
 ### What counts as "accepted" (every value-type, every key spelling)
 
 The detector (`isAcceptedValue` / `isAcceptedKey` in `write-notes-compose.ts`) is deliberately
