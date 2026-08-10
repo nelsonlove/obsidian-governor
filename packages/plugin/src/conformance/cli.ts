@@ -102,10 +102,70 @@ export async function runConformance(opts: RunOpts): Promise<RunResult> {
     coveredPackIds,
     findings,
     ratchet: result,
-    report: renderReport(result, packIds, baselinePackIds(baselineKeys), findings),
+    report: renderReport(result, packIds, baselinePackIds(baselineKeys), findings, opts.excludedRoots ?? []),
     rebaseline: renderBaseline(findings),
     exitCode: result.exitCode,
   };
+}
+
+/**
+ * Roots the rail does not govern (@assent's ruling, 2026-08-10, issue #112).
+ *
+ * The rail governs LIVE content, not the frozen archive. `Vault archaeology/`
+ * is retained evidence from prior vault generations — its blueprints reference
+ * pre-consolidation paths that no longer exist, so it produced ~350 findings
+ * nobody intends to act on, drowning the signal from the governed tree.
+ *
+ * This is a SCOPE decision, not a severity one: excluded content is not
+ * "findings we tolerate" (that is what the accepted-debt baseline is for), it
+ * is content the rail makes no claim about at all. The distinction matters
+ * because the two have opposite failure modes — tolerated debt should stay
+ * visible and shrink; ungoverned territory should be silent and declared.
+ */
+export const DEFAULT_EXCLUDED_ROOTS = ["Vault archaeology"];
+
+/**
+ * The reason an excluded root would silently discard accepted debt, or null.
+ *
+ * Excluding a root makes every baseline key beneath it unreproducible, so the
+ * ratchet reports those keys CLEARED — indistinguishable from "a human fixed
+ * them". That is a silent debt-clear, which is what @assent's ruling
+ * explicitly forbade ("declared exclusion, not silent debt-clear"), and it is
+ * the pack-coverage refusal's failure one level down: path granularity rather
+ * than pack granularity.
+ *
+ * Measured at the time of writing: ZERO baseline keys fall under any excluded
+ * root, so this refuses nothing today. That is the argument FOR carrying it
+ * rather than against — a measurement records what was true once; a guard
+ * keeps it true. The same reasoning `PHASE1_PACKS_INCOMPLETE` failed to apply
+ * when its stated reason silently expired.
+ *
+ * Segment-boundary matching, so `Vault archaeology notes/` is a different
+ * folder; a key whose target is a message rather than a path never matches.
+ */
+export function excludedRootRefusal(baselineKeys: Set<string>, excludedRoots: string[]): string | null {
+  if (!excludedRoots.length) return null;
+  const stranded: string[] = [];
+  for (const key of baselineKeys) {
+    const target = key.split("|")[2] ?? "";
+    for (const root of excludedRoots) {
+      const r = root.replace(/\/$/, "");
+      if (target === r || target.startsWith(r + "/")) {
+        stranded.push(key);
+        break;
+      }
+    }
+  }
+  if (!stranded.length) return null;
+  const shown = stranded.slice(0, 5).map((k) => `  ${k}`).join("\n");
+  const more = stranded.length > 5 ? `\n  (+${stranded.length - 5} more)` : "";
+  return (
+    `refusing to run: the accepted-debt baseline holds ${stranded.length} key(s) under a root this run ` +
+    `does not govern (${excludedRoots.join(", ")}). Those keys cannot be reproduced, so they would ` +
+    `report CLEARED and silently discard debt a human granted. Excluding territory is a scope ` +
+    `decision and must be declared, never taken by quietly dropping its accepted findings — remove ` +
+    `the keys from the baseline deliberately (a human act), or stop excluding the root:\n${shown}${more}`
+  );
 }
 
 /**
@@ -362,9 +422,15 @@ function renderReport(
   registeredPackIds: string[] = [],
   baselineIds: Set<string> = new Set(),
   findings: Finding[] = [],
+  excludedRoots: string[] = [],
 ): string {
   const lines: string[] = [];
   lines.push(`conformance: ${r.carried} carried, ${r.newKeys.length} NEW, ${r.clearedKeys.length} cleared`);
+  // An exclusion that is not printed is indistinguishable from a rail that
+  // simply found nothing there — declare it, per the ruling (#112).
+  if (excludedRoots.length) {
+    lines.push(`ungoverned (not scanned, no claim made): ${excludedRoots.join(", ")} — --govern-all to include`);
+  }
   // A pack with NO baseline representation reports its entire output as NEW.
   // Undistinguished, that is indistinguishable from a catastrophic regression —
   // the same silent-zero class the engine's pack sentinels and the missing
@@ -472,6 +538,14 @@ export async function runCli(argv: string[]): Promise<void> {
   if (refusal) throw new Error(refusal);
   const baselineText = !noBaseline && existsSync(baselinePath) ? await readFile(baselinePath, "utf8") : "";
 
+  // Scope (#112): excluded territory is content the rail makes no claim about.
+  // `--govern-all` opts back in to a whole-vault run. Checked BEFORE the run:
+  // an exclusion that would strand accepted debt is refused, not reported
+  // afterwards, so no CLEARED line ever appears for a key we chose not to look at.
+  const excludedRoots = argv.includes("--govern-all") ? [] : DEFAULT_EXCLUDED_ROOTS;
+  const strandRefusal = excludedRootRefusal(parseBaseline(baselineText), excludedRoots);
+  if (strandRefusal) throw new Error(strandRefusal);
+
   const res = await runConformance({
     root,
     baselineText,
@@ -480,6 +554,8 @@ export async function runCli(argv: string[]): Promise<void> {
     // Default ON — see RunOpts.legacyPacks. The baseline describes these packs
     // and nothing else, so omitting them clears it wholesale.
     legacyPacks: !argv.includes("--no-legacy-packs"),
+    // The rail governs live content, not the frozen archive (#112 ruling).
+    excludedRoots,
   });
 
   // Coverage is checked on EVERY run, not only before a rebaseline: a baseline
