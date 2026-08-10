@@ -146,12 +146,18 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   // read-only-only registrar. The registrar handed over is the PATCHED
   // registerTool above, so module tools land at the same guard/queue/journal
   // interception point as every hand-registered tool, in both modes.
-  mountModules((name, def, handler) => (server as any).registerTool(name, def, handler), {
+  const moduleRegistry = mountModules((name, def, handler) => (server as any).registerTool(name, def, handler), {
     getSettings: () => ctx.getSettings(),
     getVocabularies: ctx.getVocabularies,
     schemeNotes: () => app.vault.getMarkdownFiles().map((f) => f.path),
     vocabSource: obsidianVocabSource(app),
   });
+  // Skip-and-report only reports if someone reads the report: every mount
+  // defect (unknown module id in settings, a gate-refused tool, a config
+  // finding) lands loudly in the console rather than evaporating with the
+  // discarded registry. console.error, not a throw — a degraded module
+  // surface must not cost the connection (the journal's own convention).
+  for (const p of moduleRegistry.problems) console.error("[vault-mcp] module host:", p);
   // ── link drift, reported not repaired (slice 2.2) ──────────────────────────
   // Read-only by construction: moves already heal their own links through
   // fileManager.renameFile, so this reports the drift that came from OUTSIDE.

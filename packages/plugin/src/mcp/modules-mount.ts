@@ -16,10 +16,11 @@
 //     `readOnlyHint: true` — a read-only registration cannot reach the write
 //     queue, the write primitive, or the accept-guard's territory at all (the
 //     guard routes ONLY `readOnlyHint === false` calls to the kernel's
-//     mutation path). Pinned by test: the mount refuses to expose a module
-//     tool whose annotations are not read-only (`nonReadOnlyTools` below), so
-//     a future module slipping a mutating handler in fails loudly rather than
-//     registering quietly.
+//     mutation path). Pinned by test: the mount's registerAll gate refuses a
+//     module tool whose annotations are not read-only (see `mountModules`),
+//     so a future module slipping a mutating handler in fails loudly (a
+//     `problems` entry, surfaced by server.ts) rather than registering
+//     quietly.
 //  2. The host ctx handed to modules is MINIMAL: `getSettings` + `visible`
 //     and nothing else — no kernel, no raw server, no registerTool, no
 //     baseline/accept surface. Pinned by test over `mountHost`'s keys.
@@ -48,8 +49,11 @@ import { registerVocabTools, type VocabSource, type VocabToolsCtx } from "./tool
 
 /** What the mount needs from the live plugin (server.ts supplies the Obsidian
  * adapters; tests supply fakes). The same per-call freshness discipline as
- * the direct registrations it replaces: everything is a thunk, so a settings
- * edit lands live without a reconnect. */
+ * the direct registrations it replaces: config the HANDLERS read (allowlist,
+ * scheme rows, vocabularies) is a thunk, so those edits land live — but
+ * `modules.<id>.enabled` is read once per mount, i.e. per connection, so a
+ * module toggle takes effect on the next session connect (exactly what the
+ * settings tab says). */
 export interface MountDeps {
   getSettings: () => GuardSettings & {
     schemes?: SchemeInstanceConfig[];
@@ -77,7 +81,16 @@ export function mountHost(deps: MountDeps): ModuleHostCtx {
 /** The built-in capability modules, adapted without touching their tool
  * layers (module-host adapters doc): scope-provider in its exact
  * `register(server, ctx)` shape, vocab via the documented one-line closure
- * for its injected-source middle parameter. */
+ * for its injected-source middle parameter.
+ *
+ * Both `ctxOf` closures deliberately ignore the `host`/`config` parameters
+ * and build from `deps` instead: these two modules PRE-DATE the host, so
+ * their config rows live in the top-level `schemes`/`vocabularies` settings
+ * (not `modules.<id>.config`) and their tool layers filter via their own
+ * `getSettings` + guard imports (not `host.visible`) — preserved verbatim so
+ * the mount is a pure re-wiring, zero behavior change. A NEW module should
+ * do the opposite: read `host`/`config` and use `host.visible`, per the
+ * adapters doc. */
 export function builtinModules(deps: MountDeps): VaultModule[] {
   return [
     moduleFromRegistrar(
@@ -122,16 +135,16 @@ export function builtinModules(deps: MountDeps): VaultModule[] {
  */
 export function mountModules(registerTool: ToolRegistrar, deps: MountDeps): ModuleRegistry {
   const registry = new ModuleRegistry(builtinModules(deps), deps.getSettings().modules ?? {});
-  const readOnlyOnly: ToolRegistrar = (name, def, handler) => {
-    if (def?.annotations?.readOnlyHint !== true) {
-      registry.report(
-        `module tool '${name}' is not explicitly read-only — refused: v1 capability modules are read-only by ` +
-          `design (readOnlyHint: true); a mutating module tool needs its own reachability review before mounting`,
-      );
-      return;
-    }
-    registerTool(name, def, handler);
-  };
-  registry.registerAll(readOnlyOnly, mountHost(deps));
+  registry.registerAll(registerTool, mountHost(deps), {
+    // The read-only-only rule rides registerAll's gate so a refused tool is
+    // never recorded as contributed and never reserves its name — describe()
+    // stays truthful and a later, legitimate same-name registration is not
+    // blackholed by a refusal.
+    gate: (name, def) =>
+      def?.annotations?.readOnlyHint === true
+        ? null
+        : `not explicitly read-only — v1 capability modules are read-only by design (readOnlyHint: true); ` +
+          `a mutating module tool needs its own reachability review before mounting`,
+  });
   return registry;
 }

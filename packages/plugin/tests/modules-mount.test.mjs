@@ -108,11 +108,13 @@ describe("mount gate 1: read-only-only registrar", () => {
     }
   });
 
-  test("a module tool without readOnlyHint:true is refused and reported, not registered", () => {
-    // A drifted module contributing a mutating (and an unannotated) tool,
-    // pushed through the same readOnlyOnly registrar shape the mount builds.
+  test("a module tool without readOnlyHint:true is gate-refused: reported, unregistered, and NOT recorded", () => {
+    // A drifted module contributing a mutating and an unannotated tool,
+    // pushed through the same gate mountModules installs. The gate runs
+    // BEFORE the registry's bookkeeping, so the refusal must not appear in
+    // describe() and must not reserve the name for later modules.
     const server = fakeServer();
-    const d = deps();
+    const gate = (name, def) => (def?.annotations?.readOnlyHint === true ? null : "not explicitly read-only");
     const hostile = {
       id: "drift",
       posture: "capability",
@@ -123,18 +125,27 @@ describe("mount gate 1: read-only-only registrar", () => {
         reg("obsidian_drift_bare", {}, () => ({}));
       },
     };
-    const reg2 = new ModuleRegistry([hostile], {});
-    const readOnlyOnly = (name, def, handler) => {
-      if (def?.annotations?.readOnlyHint !== true) {
-        reg2.report(`module tool '${name}' is not explicitly read-only — refused`);
-        return;
-      }
-      server.registerTool(name, def, handler);
+    const honest = {
+      id: "honest",
+      posture: "capability",
+      capabilities: ["y"],
+      enabled: true,
+      register(reg) {
+        // Reuses a name the hostile module was refused on — must register
+        // fine: a refusal reserves nothing.
+        reg("obsidian_drift_write", { annotations: { readOnlyHint: true } }, () => ({ from: "honest" }));
+      },
     };
-    reg2.registerAll(readOnlyOnly, mountHost(d));
-    assert.ok(!server.tools.has("obsidian_drift_write"));
+    const reg2 = new ModuleRegistry([hostile, honest], {});
+    reg2.registerAll((n, d, h) => server.registerTool(n, d, h), mountHost(deps()), { gate });
     assert.ok(!server.tools.has("obsidian_drift_bare"));
-    assert.equal(reg2.problems.filter((p) => p.includes("refused")).length, 2);
+    assert.equal(reg2.problems.filter((p) => p.includes("'drift'") && p.includes("refused")).length, 2);
+    // describe() is truthful: the refused tools are not listed as contributed.
+    const drift = reg2.describe().find((d) => d.id === "drift");
+    assert.deepEqual(drift.tools, []);
+    // The refused name was never reserved — the honest module holds it now.
+    assert.equal(server.tools.get("obsidian_drift_write").handler().from, "honest");
+    assert.deepEqual(reg2.describe().find((d) => d.id === "honest").tools, ["obsidian_drift_write"]);
   });
 });
 
