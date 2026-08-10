@@ -8,7 +8,7 @@ import type { App, TFile } from "obsidian";
 import { ok, fail } from "./helpers.js";
 import { isVisible, type GuardSettings } from "../guard.js";
 import type { ExternalToolEntry } from "./external-tools.js";
-import type { Kernel, ServerIdentity } from "../kernel/index.js";
+import type { Kernel, ServerIdentity, VocabInstanceSettings } from "../kernel/index.js";
 import { findObsidianBinary } from "./tools-cli.js";
 
 export interface ServerCtx {
@@ -24,6 +24,9 @@ export interface ServerCtx {
    *                                claim is distrusted; see external-tools.ts.
    */
   getSettings: () => GuardSettings & { allowDangerousCli?: boolean; trustedReadOnlyPlugins?: string[] };
+  /** The configured controlled-vocabulary sources (tools-vocab.ts). Optional:
+   * absent means the defaults; absent in tests that don't exercise it. */
+  getVocabularies?: () => VocabInstanceSettings[];
   /** Externally-published tools (other Obsidian plugins via plugin.api). Optional: absent in tests that don't exercise it. */
   getExternalTools?: () => ExternalToolEntry[];
   /**

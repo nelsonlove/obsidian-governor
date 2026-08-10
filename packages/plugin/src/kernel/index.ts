@@ -91,6 +91,16 @@ export {
 export type { UidSource, UidResolution, UidDuplicate, UidAddressing } from "./uid-index.js";
 export { loadInstallId, mintInstallId, INSTALL_ID_FILE } from "./install-id.js";
 export type { InstallIdAdapter, LoadedInstallId, ServerIdentity } from "./install-id.js";
+export { VocabAmbiguousError, asStrings } from "./vocab/provider.js";
+export type { VocabCapabilities, VocabEntry, VocabFinding, VocabKind, VocabularyProvider } from "./vocab/provider.js";
+export { blueprintProvider, scanFrontmatter } from "./vocab/blueprint.js";
+export type { BlueprintConfig, VocabNote } from "./vocab/blueprint.js";
+export { glossaryProvider, parseTermsSection, DEFAULT_GLOSSARY_CONFIG } from "./vocab/glossary.js";
+export type { GlossaryConfig } from "./vocab/glossary.js";
+export { noteVocabFindings } from "./vocab/findings.js";
+export type { NoteVocabInput } from "./vocab/findings.js";
+export { VocabRegistry, DEFAULT_VOCABULARIES } from "./vocab/registry.js";
+export type { VocabInstance, VocabInstanceSettings } from "./vocab/registry.js";
 
 /**
  * Typed failure for an `if_rev` precondition that did not hold: the target's

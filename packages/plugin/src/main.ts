@@ -7,7 +7,7 @@ import { writeDiscovery, removeDiscovery, writeBridge, type Discovery } from "./
 import { ConnectionSetupModal, VaultMcpSettingTab } from "./connection-ui.js";
 import { findClaudeBinary, claudeIsRegistered, claudeRegister, claudeRemove, claudeEnsureConnectPlugin } from "./claude-cli.js";
 import { ExternalToolRegistry, type VaultMcpApi } from "./mcp/external-tools.js";
-import { Kernel, WriteQueue, WriteJournal, IdempotencyStore, LockStore, UidIndex, loadInstallId } from "./kernel/index.js";
+import { Kernel, WriteQueue, WriteJournal, IdempotencyStore, LockStore, UidIndex, loadInstallId, DEFAULT_VOCABULARIES, type VocabInstanceSettings } from "./kernel/index.js";
 import { obsidianProbe, obsidianServerIdentity, obsidianUidSource } from "./kernel/obsidian-probe.js";
 
 interface VaultMcpSettings {
@@ -23,6 +23,14 @@ interface VaultMcpSettings {
    * read-only mode) — see mcp/external-tools.ts.
    */
   trustedReadOnlyPlugins: string[];
+  /**
+   * Controlled-vocabulary sources for the vocab tools (mcp/tools-vocab.ts):
+   * `{ id, provider, root, config }` rows, mirroring the scheme settings
+   * shape. Defaults to one registry-blueprint instance over the vault's
+   * registries slot plus one glossary instance. No settings-tab UI yet —
+   * hand-edit data.json (v1).
+   */
+  vocabularies: VocabInstanceSettings[];
 }
 const DEFAULT_SETTINGS: VaultMcpSettings = {
   setupAcknowledged: false,
@@ -31,6 +39,8 @@ const DEFAULT_SETTINGS: VaultMcpSettings = {
   enabled: true,
   allowDangerousCli: false,
   trustedReadOnlyPlugins: [],
+  // Cloned so settings edits can never mutate the module-level default rows.
+  vocabularies: DEFAULT_VOCABULARIES.map((v) => ({ ...v })),
 };
 
 class DiagnosticsModal extends Modal {
@@ -197,6 +207,7 @@ export default class VaultMcpPlugin extends Plugin {
       }),
       serverIdentity,
       getExternalTools: () => this.externalRegistry.entries(),
+      getVocabularies: () => this.settings.vocabularies,
       kernel,
     };
 
