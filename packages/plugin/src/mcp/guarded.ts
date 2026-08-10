@@ -157,7 +157,12 @@ const INTENT = z
       "Unlike idempotency identity, a retried call may reword it freely."
   );
 
-/** The kernel argument names, stripped from every mutating call's args. */
+/** The kernel argument names, stripped from every mutating call's args.
+ * RESERVED: the peel below strips these from every mutating call at runtime
+ * regardless of the tool's own schema — withKernelArgs preserving a tool's own
+ * declaration keeps the SCHEMA honest, but the value still never reaches the
+ * handler. A mutating tool (built-in or external) must not name an argument
+ * after one of these. */
 export const KERNEL_ARG_KEYS = ["if_rev", "idempotency_key", "intent"] as const;
 
 /**
