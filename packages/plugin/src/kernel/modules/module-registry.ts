@@ -60,36 +60,47 @@ export interface ModuleDescription {
 }
 
 export class ModuleRegistry {
-  /** Every defect found while constructing or registering — user-facing. */
-  readonly problems: string[] = [];
+  private readonly constructionProblems: string[] = [];
+  /** Defects from the LAST registerAll — reset per call, like `contributed`,
+   * so a long-lived registry serving many connections reflects the current
+   * state instead of accumulating every reconnect's duplicates. */
+  private runProblems: string[] = [];
   private readonly modules: VaultModule[] = [];
   private readonly settings: ModuleSettings;
   /** module id → tool names it contributed on the last registerAll. */
   private contributed = new Map<string, string[]>();
+
+  /** Every defect currently standing — construction findings (permanent for
+   * the registry's lifetime) plus the last registerAll's. User-facing. */
+  get problems(): string[] {
+    return [...this.constructionProblems, ...this.runProblems];
+  }
 
   constructor(modules: VaultModule[], settings: ModuleSettings = {}) {
     this.settings = settings;
     const seen = new Set<string>();
     for (const m of modules) {
       if (seen.has(m.id)) {
-        this.problems.push(`duplicate module id '${m.id}' — first declaration wins`);
+        this.constructionProblems.push(`duplicate module id '${m.id}' — first declaration wins`);
         continue;
       }
+      // A refused module still RESERVES its id: a later module reusing it is a
+      // packaging bug worth its own report, not a fresh registration.
+      seen.add(m.id);
       if (m.posture === "governance") {
-        this.problems.push(
+        this.constructionProblems.push(
           `module '${m.id}' declares posture 'governance' — refused: the v1 host holds capability modules only ` +
             `(governance integration is gated on an accept-reachability review)`,
         );
         continue;
       }
-      seen.add(m.id);
       this.modules.push(m);
     }
     // Settings rows naming a module that does not exist are inert by
     // construction; say so rather than leaving the row silently dead.
     for (const id of Object.keys(settings)) {
       if (!modules.some((m) => m.id === id)) {
-        this.problems.push(`settings name unknown module '${id}' — ignored`);
+        this.constructionProblems.push(`settings name unknown module '${id}' — ignored`);
       }
     }
   }
@@ -127,23 +138,34 @@ export class ModuleRegistry {
    */
   registerAll(reg: ToolRegistrar, host: ModuleHostCtx): void {
     this.contributed = new Map();
+    this.runProblems = [];
     const taken = new Set<string>();
     for (const m of this.enabledModules()) {
       const config = this.configFor(m.id);
-      const problems = m.settingsSchema?.validate?.(config) ?? [];
-      for (const p of problems) this.problems.push(`module '${m.id}' config: ${p}`);
+      // validate() is module-author code over user-edited settings — contained
+      // exactly like register() below: a throwing validator is one module's
+      // defect, reported, and must not cost the modules after it their tools.
+      let configProblems: string[] = [];
+      try {
+        configProblems = m.settingsSchema?.validate?.(config) ?? [];
+      } catch (e) {
+        this.runProblems.push(
+          `module '${m.id}' config validate() threw: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+      for (const p of configProblems) this.runProblems.push(`module '${m.id}' config: ${p}`);
       const names: string[] = [];
       this.contributed.set(m.id, names);
       const scoped: ToolRegistrar = (name: string, def: ToolDef, handler: ToolHandler) => {
         if (forbiddenToolName(name)) {
-          this.problems.push(
+          this.runProblems.push(
             `module '${m.id}' tried to register '${name}' — refused: accept/baseline-shaped tool names are ` +
               `forbidden on the shared surface`,
           );
           return;
         }
         if (taken.has(name)) {
-          this.problems.push(`module '${m.id}' tried to register '${name}' — refused: name already registered`);
+          this.runProblems.push(`module '${m.id}' tried to register '${name}' — refused: name already registered`);
           return;
         }
         taken.add(name);
@@ -153,7 +175,7 @@ export class ModuleRegistry {
       try {
         m.register(scoped, host, config);
       } catch (e) {
-        this.problems.push(`module '${m.id}' register() threw: ${e instanceof Error ? e.message : String(e)}`);
+        this.runProblems.push(`module '${m.id}' register() threw: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
   }

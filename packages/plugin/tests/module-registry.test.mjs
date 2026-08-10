@@ -103,6 +103,16 @@ describe("ModuleRegistry: the v1 posture gate", () => {
     assert.equal(server.tools.size, 0);
     assert.deepEqual(r.describe(), []);
   });
+
+  test("a refused governance module still reserves its id — a later reuse is a duplicate", () => {
+    const r = new ModuleRegistry([
+      mod("shadow", { posture: "governance" }),
+      mod("shadow", { tools: ["obsidian_shadow_tool"] }),
+    ]);
+    assert.ok(r.problems.some((p) => p.includes("duplicate module id 'shadow'")));
+    const server = registerAll(r);
+    assert.equal(server.tools.size, 0);
+  });
 });
 
 describe("ModuleRegistry: the accept tripwire", () => {
@@ -133,6 +143,35 @@ describe("ModuleRegistry: registration hygiene", () => {
     assert.equal(server.tools.get("obsidian_shared").handler().from, "a");
     assert.ok(server.tools.has("obsidian_b_own"));
     assert.ok(r.problems.some((p) => p.includes("module 'b'") && p.includes("already registered")));
+  });
+
+  test("a throwing validate() is contained: reported, the module and everyone after it still register", () => {
+    const r = new ModuleRegistry([
+      mod("badcfg", {
+        settingsSchema: { defaults: {}, validate: () => { throw new Error("validator exploded"); } },
+      }),
+      mod("calm"),
+    ]);
+    const server = registerAll(r);
+    assert.ok(server.tools.has("obsidian_badcfg_tool"));
+    assert.ok(server.tools.has("obsidian_calm_tool"));
+    assert.ok(r.problems.some((p) => p.includes("'badcfg'") && p.includes("validate() threw") && p.includes("validator exploded")));
+  });
+
+  test("run problems reset per registerAll; construction problems persist", () => {
+    const r = new ModuleRegistry(
+      [
+        mod("cfg", { settingsSchema: { validate: () => ["bad depth"] } }),
+        mod("steward", { posture: "governance" }),
+      ],
+    );
+    registerAll(r);
+    registerAll(r);
+    registerAll(r);
+    // The validate finding appears ONCE (the last run's), not once per call…
+    assert.equal(r.problems.filter((p) => p.includes("bad depth")).length, 1);
+    // …and the construction-time governance refusal survives every run.
+    assert.equal(r.problems.filter((p) => p.includes("governance")).length, 1);
   });
 
   test("a throwing register() is contained: reported, other modules unaffected", () => {
@@ -196,14 +235,16 @@ describe("ModuleRegistry: config + describe", () => {
     ]);
   });
 
-  test("host ctx reaches register() verbatim", () => {
+  test("host ctx reaches register() verbatim, including the visible filter", () => {
     const kernel = { marker: true };
+    const visible = (paths) => paths.filter((p) => p.startsWith("Projects/"));
     let got;
     const r = new ModuleRegistry([mod("ctx", { onRegister: (host) => (got = host) })]);
-    registerAll(r, { kernel, getSettings: () => ({ readOnly: true }), sources: { ctx: [1, 2] } });
+    registerAll(r, { kernel, getSettings: () => ({ readOnly: true }), sources: { ctx: [1, 2] }, visible });
     assert.equal(got.kernel, kernel);
     assert.deepEqual(got.getSettings(), { readOnly: true });
     assert.deepEqual(got.sources.ctx, [1, 2]);
+    assert.deepEqual(got.visible(["Projects/a.md", "Archive/b.md"]), ["Projects/a.md"]);
   });
 });
 

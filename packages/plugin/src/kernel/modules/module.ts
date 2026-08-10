@@ -68,6 +68,18 @@ export interface ModuleHostCtx {
    * the built-in tools. Typed loose to keep this file free of guard imports —
    * modules narrow it to `GuardSettings` themselves. */
   getSettings?: () => unknown;
+  /**
+   * The allowlist filter itself — paths in, the visible subset out (the
+   * `visiblePaths`/`VisibleFilter` shape the read-boundary slice injects into
+   * ObsidianBackend). The host wires it at mount time so a module filters
+   * WITHOUT importing guard.ts. The read-boundary rule binds modules exactly
+   * as it binds built-in tools: any tool that enumerates or reads vault
+   * content bounds its own answers by this filter BEFORE it reads — a module
+   * that ignores it re-opens the path/content oracle the slice-3.0 review
+   * closed three times over. Absent (tests, bare embeds) ⇒ nothing is
+   * filtered, matching `visiblePaths` with no allowlist.
+   */
+  visible?: (paths: string[]) => string[];
   /** The plugin-singleton kernel (queue/journal/locks/uids) when active. */
   kernel?: unknown;
   /**
