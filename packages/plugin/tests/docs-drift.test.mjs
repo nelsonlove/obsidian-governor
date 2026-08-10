@@ -114,3 +114,225 @@ test("annotated legacy contexts stay allowed (no over-blocking)", () => {
     );
   }
 });
+
+
+// ---------------------------------------------------------------------------
+// Invariant-claim allowlist ratchet (#152)
+//
+// LOOP.md's standard: invariant words in docs ("never", "every", "always",
+// "cannot", "no way", "guarantee", "impossible") may only be published when
+// the implementation substantiates them. Nothing enforced that, and it
+// failed silently: #140 qualified "every mutating operation lands in an
+// append-only journal" in README.md, because packages/server's FS-failover
+// path writes with no journal (open: #92); hours later #149 rewrote the
+// README and reintroduced the unqualified claim, with no mention of FS mode.
+// It was caught only because the reviewer happened to remember that exact
+// sentence from that morning.
+//
+// This check does NOT decide whether a claim is true — that stays a human
+// judgement. It flags any span combining an invariant word with a
+// security-relevant term, and fails CI unless that EXACT span text is in the
+// checked-in allowlist below. The allowlist is a record of "a human looked
+// at this sentence and deliberately decided it may be published" — not a
+// truth assertion, and not a substitute for #92-style follow-through. A
+// claim that changes even by a qualifying clause is a *different* span and
+// needs its own approval; matching is exact-text on purpose, not fuzzy —
+// deleting or adding a qualifier must trip the check, not slide past it.
+// ---------------------------------------------------------------------------
+
+const ALLOWLIST_PATH = join(REPO_ROOT, "packages", "plugin", "tests", "docs-invariant-claims-allowlist.md");
+
+const INVARIANT_WORD_RE = /\b(never|every|always|cannot|no way|guarantees?|impossible)\b/i;
+const SECURITY_TERM_RE = /\b(journal(?:ed|s|ing)?|accept(?:ed|ance)?|guard(?:s|ed|ing)?|audit(?:s|ed|ing)?|provenance)\b|every write/i;
+
+const LIST_ITEM_RE = /^\s*(?:[-*+]|\d+\.)\s+/;
+
+/**
+ * Split markdown into pragmatic sentence-ish spans. Not a prose parser: a
+ * blank line, an ATX heading, a list item, or a table row each starts a new
+ * block (so a bulleted list or a table doesn't collapse into one giant
+ * span); code fences are skipped entirely (claims inside code aren't prose).
+ * Within a block, spans are split on sentence-ending punctuation followed by
+ * a capital letter, digit, or markup opener — deterministic, not perfect.
+ */
+function extractSpans(text) {
+  const lines = text.split("\n");
+  const blocks = [];
+  let buf = [];
+  let bufStartLine = 0;
+  let inFence = false;
+
+  function flush() {
+    const joined = buf.join(" ").trim();
+    if (joined) blocks.push({ text: joined, line: bufStartLine });
+    buf = [];
+  }
+
+  lines.forEach((line, i) => {
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence;
+      flush();
+      return;
+    }
+    if (inFence) return;
+    const trimmed = line.trim();
+    const startsBlock =
+      trimmed === "" || /^#{1,6}\s/.test(trimmed) || LIST_ITEM_RE.test(line) || trimmed.startsWith("|");
+    if (startsBlock) {
+      flush();
+      if (trimmed === "" || /^#{1,6}\s/.test(trimmed)) return;
+      // strip the list marker itself so spans read as prose, not "- - text"
+      buf.push(trimmed.replace(/^(?:[-*+]|\d+\.)\s+/, ""));
+      bufStartLine = i + 1;
+      return;
+    }
+    if (buf.length === 0) bufStartLine = i + 1;
+    buf.push(trimmed);
+  });
+  flush();
+
+  const spans = [];
+  for (const block of blocks) {
+    const parts = block.text.split(/(?<=[.!?])\s+(?=[A-Z0-9`"'*_\[])/);
+    for (const part of parts) {
+      const t = part.trim();
+      if (t) spans.push({ text: t, line: block.line });
+    }
+  }
+  return spans;
+}
+
+// Both conditions required — the point is security claims, not "every" in
+// prose like "every rename" or "the guard" without any invariant language.
+function isInvariantSecurityClaim(span) {
+  return INVARIANT_WORD_RE.test(span) && SECURITY_TERM_RE.test(span);
+}
+
+function normalizeClaim(s) {
+  return s.trim().replace(/\s+/g, " ");
+}
+
+/**
+ * Allowlist file format: `## <relative-path>` headings group approved
+ * claims by the doc they live in, purely for reviewability — matching
+ * itself is a flat set of exact normalized claim text (the same sentence
+ * approved once covers it wherever it appears). `- ` bullets are entries;
+ * everything else (headings, blank lines, prose comments) is ignored. This
+ * is deliberately the literal sentence, not a hash — a bare hash list is
+ * unreviewable, and review is the entire point of this file.
+ */
+function parseAllowlist(raw) {
+  const set = new Set();
+  for (const line of raw.split("\n")) {
+    const m = /^-\s+(.*)$/.exec(line);
+    if (m) set.add(normalizeClaim(m[1]));
+  }
+  return set;
+}
+
+function loadAllowlist() {
+  return parseAllowlist(readFileSync(ALLOWLIST_PATH, "utf8"));
+}
+
+// The core check: every invariant+security span found in `files` that is
+// not present (exact text) in `allowlist` is a violation.
+function findUnapprovedClaims(files, allowlist) {
+  const violations = [];
+  for (const file of files) {
+    const text = readFileSync(file, "utf8");
+    for (const span of extractSpans(text)) {
+      if (!isInvariantSecurityClaim(span.text)) continue;
+      if (allowlist.has(normalizeClaim(span.text))) continue;
+      violations.push({ file, line: span.line, text: span.text });
+    }
+  }
+  return violations;
+}
+
+function formatViolation(v) {
+  return (
+    `${relative(REPO_ROOT, v.file)}:${v.line} — unapproved invariant+security claim:\n` +
+    `    "${v.text}"\n` +
+    `  → verify the current implementation and perimeter tests substantiate this claim, then add\n` +
+    `    it deliberately to packages/plugin/tests/docs-invariant-claims-allowlist.md — or narrow/\n` +
+    `    qualify the sentence in the doc instead.`
+  );
+}
+
+test("invariant-claim predicate requires BOTH an invariant word and a security term", () => {
+  assert.equal(
+    isInvariantSecurityClaim("every rename heals its own backlinks automatically"),
+    false,
+    "invariant word alone (prose, no security term) must not flag"
+  );
+  assert.equal(
+    isInvariantSecurityClaim("the guard checks the frontmatter configuration"),
+    false,
+    "security term alone (no invariant word) must not flag"
+  );
+  assert.equal(isInvariantSecurityClaim("every write is journaled"), true, "both together must flag");
+});
+
+test("pinned regression: reintroducing the unqualified #140/#149 journal claim fails the check", () => {
+  // The literal sentence #149 reintroduced into README.md after #140 had
+  // qualified it against the unjournaled FS-failover path (#92). This must
+  // never again slip past the check silently.
+  const regressionFixture = "Every mutating operation lands in an append-only journal, with no exceptions.";
+  const spans = extractSpans(regressionFixture);
+  const flagged = spans.filter((s) => isInvariantSecurityClaim(s.text));
+  assert.ok(flagged.length >= 1, "the regression sentence must be recognized as an invariant+security claim");
+
+  const allowlist = loadAllowlist();
+  for (const span of flagged) {
+    assert.equal(
+      allowlist.has(normalizeClaim(span.text)),
+      false,
+      `the unqualified journal claim must never be pre-approved in the allowlist: "${span.text}"`
+    );
+  }
+});
+
+test("a claim whose scope changes is a different claim and needs its own approval", () => {
+  const original = "Every mutating operation lands in an append-only journal.";
+  const scopeWidened = "Every mutating operation through the plugin's guarded path lands in an append-only journal.";
+  assert.ok(isInvariantSecurityClaim(original) && isInvariantSecurityClaim(scopeWidened), "both fixtures must be flaggable");
+
+  const allowlist = new Set([normalizeClaim(original)]);
+  assert.ok(allowlist.has(normalizeClaim(original)), "sanity: the unmodified claim is approved");
+  assert.equal(
+    allowlist.has(normalizeClaim(scopeWidened)),
+    false,
+    "adding a qualifying clause must produce a span the original approval does not cover"
+  );
+});
+
+test("every invariant+security claim currently in README.md / docs/*.md is on the allowlist", () => {
+  const allowlist = loadAllowlist();
+  const violations = findUnapprovedClaims(FILES, allowlist);
+  assert.deepEqual(
+    violations,
+    [],
+    violations.length ? `unapproved invariant security claims:\n\n${violations.map(formatViolation).join("\n\n")}` : ""
+  );
+});
+
+test("allowlist has no duplicate entries and no dead (no-longer-flaggable) entries", () => {
+  const raw = readFileSync(ALLOWLIST_PATH, "utf8");
+  const seen = new Set();
+  const dupes = [];
+  const notFlaggable = [];
+  for (const line of raw.split("\n")) {
+    const m = /^-\s+(.*)$/.exec(line);
+    if (!m) continue;
+    const claim = normalizeClaim(m[1]);
+    if (seen.has(claim)) dupes.push(claim);
+    seen.add(claim);
+    if (!isInvariantSecurityClaim(claim)) notFlaggable.push(claim);
+  }
+  assert.deepEqual(dupes, [], `duplicate allowlist entries:\n${dupes.join("\n")}`);
+  assert.deepEqual(
+    notFlaggable,
+    [],
+    `allowlist entries that no longer match the invariant+security predicate (remove them):\n${notFlaggable.join("\n")}`
+  );
+});
