@@ -16,6 +16,7 @@ import { obsidianVocabSource } from "./tools-vocab.js";
 import { mountModules } from "./modules-mount.js";
 import { registerCodeModeTools, makeCaptureRegister, type CapturedRegistry } from "./tools-code-mode.js";
 import { makeGuarded, resolveGuardedPath, withKernelArgs } from "./guarded.js";
+import { sealUnguardedRegistration } from "./seal-registration.js";
 import { visiblePaths } from "../guard.js";
 import type { JournalActor } from "../kernel/index.js";
 import { obsidianProbe } from "../kernel/obsidian-probe.js";
@@ -102,6 +103,13 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   // them reachable by a client at all.
   (server as any).registerTool = (name: string, def: any, handler: any) =>
     register(name, withKernelArgs(def), handler);
+
+  // Patching registerTool alone left FIVE other registration entry points on
+  // the SDK server unguarded (#83). Sealing them is what makes module.ts's
+  // "no module-specific bypass possible" true by construction rather than by
+  // convention — load-bearing because moduleFromRegistrar hands adapted
+  // modules the real server, and #83 mounts the accept-veto module here.
+  sealUnguardedRegistration(server);
 
   // ── 17 fs-expressible tools — shared registry + live ObsidianBackend ────────
   // decodeHtml: false — no HTML entities expected from in-process calls.
