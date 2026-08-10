@@ -176,8 +176,12 @@ export class SchemeRegistry {
 
   /** Paths in `notes` whose own address canonicalizes to the same string as
    * `addr`, in listing order. Compares via provider.format on both sides —
-   * canonical-form equality, not raw-string equality (so e.g. differing
-   * decimal widths that the provider itself normalizes still match). */
+   * canonical-form equality, not raw-string equality (#93: this is
+   * architectural headroom for a FUTURE provider whose format() legitimately
+   * differs from its raw parse, e.g. normalizing decimal widths; the
+   * johnny-decimal provider's own format() is a raw pass-through — `addr.raw`,
+   * see jd.ts — it does not itself normalize anything today, so for "jd" this
+   * comparison is currently equivalent to comparing raw strings). */
   resolve(instance: SchemeInstance, addr: Address, notes: string[]): string[] {
     const target = instance.provider.format(addr);
     const matches: string[] = [];
