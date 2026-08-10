@@ -37,7 +37,14 @@ describe("#125 — an ABSENT sources listing refuses; an EMPTY one is a real ans
       const errs = findings.filter((f) => f.script === ENGINE_ID && f.check === "pack_error");
       assert.equal(errs.length, 1, `${id} must refuse an absent listing`);
       assert.equal(errs[0].target, id);
+      // Assert the REFUSAL, not merely that something errored. Mutation-checked:
+      // disabling the guard makes the packs iterate `undefined` and CRASH, which
+      // the engine also reports as pack_error — so a bare "a pack_error appeared"
+      // assertion passes against a broken implementation. The message is what
+      // distinguishes a deliberate refusal from an incidental TypeError.
       assert.match(errs[0].detail, /sources|blueprints/i, "names the missing listing");
+      assert.match(errs[0].detail, /absent|missing/i, "says the listing is ABSENT, not merely that something failed");
+      assert.doesNotMatch(errs[0].detail, /undefined is not|not iterable|Cannot read/i, "must not be an incidental crash");
     });
 
     test(`${id}: snapshot with an EMPTY sources listing runs cleanly (empty is a real answer)`, () => {
@@ -52,11 +59,13 @@ describe("#125 — an ABSENT sources listing refuses; an EMPTY one is a real ans
     const errs = findings.filter((f) => f.check === "pack_error");
     assert.equal(errs.length, 1, "sources present but blueprints absent must still refuse");
     assert.match(errs[0].detail, /blueprints/i);
+    assert.doesNotMatch(errs[0].detail, /undefined is not|not iterable|Cannot read/i);
   });
 
   test("the refusal is per-pack: one broken pack does not suppress the others", () => {
     const findings = runEngine([portPack(), stePack()], { ...base });
     const errs = findings.filter((f) => f.check === "pack_error");
     assert.deepEqual(errs.map((e) => e.target).sort(), ["port_lint", "ste_lint"]);
+    for (const e of errs) assert.match(e.detail, /absent|missing/i, "each must be a refusal, not a crash");
   });
 });
