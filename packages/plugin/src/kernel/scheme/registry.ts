@@ -136,11 +136,17 @@ export class SchemeRegistry {
  *
  * Per-entry rules: non-empty string; relative (no leading "/"); no ".."
  * segment (would escape the vault root the same way `guardCall`'s traversal
- * check exists to catch); not "." (names nothing to exclude); a trailing
- * slash is NORMALIZED away rather than refused, matching `guardCall`'s own
- * allowlist-prefix normalization (`p.replace(/\/+$/, "")`) — a user typing
- * "Vault archaeology/" is not making a mistake worth failing the instance
- * over.
+ * check exists to catch); not "." (names nothing to exclude). Three things
+ * are NORMALIZED away rather than refused — a user typo here should not
+ * silently defeat the exclusion it's a typo IN (the #74 you-must-SEE-it
+ * philosophy: a normalized entry is still reported truthfully in
+ * `roots`, never left to quietly mismatch every real path): surrounding
+ * whitespace (`" X "` -> `"X"`, interior whitespace is part of the name and
+ * untouched), a leading "./" (`"./X"` -> `"X"` — otherwise `excludeRoots`'s
+ * exact/prefix match against real vault paths, which never carry a "./",
+ * would simply never fire, a SILENT no-op rather than a validation
+ * problem), and a trailing slash (`"X/"` -> `"X"`, matching `guardCall`'s
+ * own allowlist-prefix normalization `p.replace(/\/+$/, "")`).
  *
  * `raw` undefined (field absent) ⇒ `{roots: undefined, problems: []}`, never
  * `{roots: [], problems: []}` — keeps the "absent means no exclusion, same
@@ -151,22 +157,29 @@ export function validateExcludedRoots(raw: string[] | undefined): { roots: strin
   if (raw === undefined) return { roots: undefined, problems: [] };
   const problems: string[] = [];
   const roots: string[] = [];
-  for (const entry of raw) {
-    if (typeof entry !== "string" || entry.length === 0) {
-      problems.push(`excludedRoots entry ${JSON.stringify(entry)} must be a non-empty string`);
+  for (const rawEntry of raw) {
+    if (typeof rawEntry !== "string" || rawEntry.length === 0) {
+      problems.push(`excludedRoots entry ${JSON.stringify(rawEntry)} must be a non-empty string`);
       continue;
     }
-    if (entry.startsWith("/")) {
-      problems.push(`excludedRoots entry "${entry}" must be relative (no leading "/")`);
+    const trimmed = rawEntry.trim();
+    if (trimmed.length === 0) {
+      problems.push(`excludedRoots entry ${JSON.stringify(rawEntry)} must be a non-empty string`);
       continue;
     }
-    if (entry.split("/").includes("..")) {
-      problems.push(`excludedRoots entry "${entry}" must not contain ".." segments`);
+    if (trimmed.startsWith("/")) {
+      problems.push(`excludedRoots entry "${rawEntry}" must be relative (no leading "/")`);
       continue;
     }
-    const normalized = entry.replace(/\/+$/, "");
+    if (trimmed.split("/").includes("..")) {
+      problems.push(`excludedRoots entry "${rawEntry}" must not contain ".." segments`);
+      continue;
+    }
+    let normalized = trimmed;
+    while (normalized.startsWith("./")) normalized = normalized.slice(2);
+    normalized = normalized.replace(/\/+$/, "");
     if (normalized === "." || normalized.length === 0) {
-      problems.push(`excludedRoots entry "${entry}" does not name a folder`);
+      problems.push(`excludedRoots entry "${rawEntry}" does not name a folder`);
       continue;
     }
     roots.push(normalized);

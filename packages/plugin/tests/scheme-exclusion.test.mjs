@@ -144,6 +144,52 @@ describe("validateExcludedRoots", () => {
     assert.deepEqual(roots, ["Vault archaeology", "Fine/Sub"]);
     assert.equal(problems.length, 1);
   });
+
+  // ── Important 2 (reviewer, round 1): "./Vault archaeology" passed with
+  // zero problems but excludeRoots never matched it — a silent no-op that
+  // defeats the #74 you-must-SEE-it philosophy (the field LOOKS accepted,
+  // but the exclusion never actually happens). Fix: normalize a leading
+  // "./" away, same treatment as the trailing-slash precedent, and trim
+  // surrounding whitespace.
+
+  test('a leading "./" is normalized away, not refused, and the result actually excludes', () => {
+    const { roots, problems } = validateExcludedRoots(["./Vault archaeology"]);
+    assert.deepEqual(roots, ["Vault archaeology"]);
+    assert.deepEqual(problems, []);
+    // Prove the normalization isn't cosmetic-only: the normalized root must
+    // actually fire against a real vault path.
+    assert.deepEqual(excludeRoots(["Vault archaeology/x.md", "Other/y.md"], roots), ["Other/y.md"]);
+  });
+
+  test("repeated leading \"./\" segments are all stripped", () => {
+    const { roots, problems } = validateExcludedRoots(["././Vault archaeology"]);
+    assert.deepEqual(roots, ["Vault archaeology"]);
+    assert.deepEqual(problems, []);
+  });
+
+  test("surrounding whitespace is trimmed", () => {
+    const { roots, problems } = validateExcludedRoots(["  Vault archaeology  "]);
+    assert.deepEqual(roots, ["Vault archaeology"]);
+    assert.deepEqual(problems, []);
+  });
+
+  test("interior whitespace is preserved as part of the name — only surrounding whitespace is trimmed", () => {
+    const { roots, problems } = validateExcludedRoots(["  My   Folder  "]);
+    assert.deepEqual(roots, ["My   Folder"]);
+    assert.deepEqual(problems, []);
+  });
+
+  test('a ".." segment reached via a leading "./" is still a problem (normalization does not mask it)', () => {
+    const { problems } = validateExcludedRoots(["./../etc"]);
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /\.\./);
+  });
+
+  test('"./" alone (normalizes to nothing) is a problem, not a silently-dropped no-op root', () => {
+    const { roots, problems } = validateExcludedRoots(["./"]);
+    assert.equal(roots, undefined);
+    assert.equal(problems.length, 1);
+  });
 });
 
 // ── makeRegistry — excludedRoots validation, skip-and-report ────────────────
@@ -340,6 +386,66 @@ describe("obsidian_resolve_address — excludedRoots", () => {
     const { server } = toolServer({ schemes: JD_WITH_EXCLUSION, notes: NOTES_02_10 });
     const desc = server.tools.get("obsidian_resolve_address").def.description.toLowerCase();
     assert.match(desc, /excluded/);
+  });
+});
+
+// ── Important 1 (reviewer, round 1): multi-instance fall-through parity.
+// obsidian_resolve_address's path direction used to stop at the FIRST
+// instance recognizing the path even when THAT instance excluded it,
+// reporting `reason: "excluded"` — while obsidian_expected_location already
+// `continue`d past an excluding instance to one that claims it. A
+// two-instance config where instance "a" excludes "Vault archaeology" and
+// instance "b" does not (both johnny-decimal, so both recognize the same
+// address) demonstrates the divergence: the archived note's address should
+// be claimed by "b", and both tools must agree.
+
+describe("obsidian_resolve_address / obsidian_expected_location — multi-instance fall-through parity", () => {
+  const TWO_INSTANCE_MIXED = [
+    { id: "a", provider: "johnny-decimal", excludedRoots: ["Vault archaeology"] },
+    { id: "b", provider: "johnny-decimal" },
+  ];
+  const archivedPath = "Vault archaeology/notes gen2/system notes/06.11 Archived.md";
+  const notes = [archivedPath];
+
+  test("obsidian_resolve_address falls through the excluding instance to the claiming one", async () => {
+    const { call } = toolServer({ schemes: TWO_INSTANCE_MIXED, notes });
+    const res = await call("obsidian_resolve_address", { path: archivedPath });
+    assert.deepEqual(res.structuredContent, { path: archivedPath, address: "06.11", scheme: "b" });
+  });
+
+  test("obsidian_expected_location falls through the excluding instance to the claiming one", async () => {
+    const { call } = toolServer({ schemes: TWO_INSTANCE_MIXED, notes });
+    const res = await call("obsidian_expected_location", { path: archivedPath, scheme: undefined });
+    assert.equal(res.structuredContent.address, "06.11");
+  });
+
+  test("the two tools AGREE: neither reports the note as excluded when a non-excluding instance claims it", async () => {
+    const { call } = toolServer({ schemes: TWO_INSTANCE_MIXED, notes });
+    const resolveRes = await call("obsidian_resolve_address", { path: archivedPath });
+    const expectedRes = await call("obsidian_expected_location", { path: archivedPath });
+    assert.equal(resolveRes.structuredContent.address, "06.11");
+    assert.equal(expectedRes.structuredContent.address, "06.11");
+    assert.equal(resolveRes.structuredContent.reason, undefined);
+  });
+
+  test("when EVERY recognizing instance excludes it, obsidian_resolve_address reports reason: excluded", async () => {
+    const bothExclude = [
+      { id: "a", provider: "johnny-decimal", excludedRoots: ["Vault archaeology"] },
+      { id: "b", provider: "johnny-decimal", excludedRoots: ["Vault archaeology"] },
+    ];
+    const { call } = toolServer({ schemes: bothExclude, notes });
+    const res = await call("obsidian_resolve_address", { path: archivedPath });
+    assert.deepEqual(res.structuredContent, { path: archivedPath, address: null, scheme: null, reason: "excluded" });
+  });
+
+  test("when EVERY recognizing instance excludes it, obsidian_expected_location falls through to unrecognized", async () => {
+    const bothExclude = [
+      { id: "a", provider: "johnny-decimal", excludedRoots: ["Vault archaeology"] },
+      { id: "b", provider: "johnny-decimal", excludedRoots: ["Vault archaeology"] },
+    ];
+    const { call } = toolServer({ schemes: bothExclude, notes });
+    const res = await call("obsidian_expected_location", { path: archivedPath });
+    assert.equal(res.structuredContent.address, null);
   });
 });
 

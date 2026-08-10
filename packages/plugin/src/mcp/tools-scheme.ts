@@ -229,6 +229,16 @@ export function registerSchemeTools(server: McpServer, ctx: SchemeToolsCtx): voi
         const schemes = registry.instances().map((instance) => {
           const raw = rawSchemes.find((s) => s.id === instance.id);
           const examples = (PROVIDER_EXAMPLES[instance.providerName] ?? []).map((a) => `${instance.id}:${a}`);
+          // Deliberately NOT reporting `instance.excludedRoots` here (or the
+          // raw config's own copy of it) even though `raw?.config` is
+          // disclosed in full: `excludedRoots` names path-shaped vault
+          // territory by prefix, and this tool is NOT allowlist-filtered —
+          // an allowlisted session that cannot see "Vault archaeology" at
+          // all must not learn the name exists from a scheme instance's
+          // metadata. Same under-disclosure discipline as `visiblePaths`
+          // (guard.ts): the allowlist boundary must never leak through a
+          // side channel. Do not "fix" this asymmetry with `config`, which
+          // is exposed under the provider's own grammar, not raw paths.
           return {
             id: instance.id,
             provider: instance.providerName,
@@ -294,20 +304,31 @@ export function registerSchemeTools(server: McpServer, ctx: SchemeToolsCtx): voi
         if (visible([path]).length === 0) {
           return ok({ path, address: null, scheme: null });
         }
+        // An instance that EXCLUDES this path does not speak for it — same
+        // fall-through as obsidian_expected_location's path direction below:
+        // `continue` to the next instance rather than stopping here, so a
+        // second, non-excluding instance that also recognizes the path still
+        // gets to claim it (a config with two instances, only one of which
+        // excludes the note's root, must not let the excluding one's mere
+        // recognition shadow the other's willing claim). `excludedByAny`
+        // remembers that at least one instance turned it away, so
+        // `reason: "excluded"` is reported ONLY when the loop finishes with
+        // no claimant at all — distinguishing "every instance that
+        // recognizes this note excludes it" from "no scheme recognizes this
+        // note in the first place" (plain `address: null, scheme: null`).
+        let excludedByAny = false;
         for (const instance of registry.instances()) {
           const addr = instance.provider.addressOf(path);
           if (!addr) continue;
-          // The instance does not speak for its own excluded territory: a
-          // note the caller named directly is not HIDDEN (they have it),
-          // but the scheme should not CLAIM it either. `reason: "excluded"`
-          // distinguishes this from "no scheme recognizes this note at all"
-          // (plain `address: null, scheme: null`).
           if (excludeRoots([path], instance.excludedRoots).length === 0) {
-            return ok({ path, address: null, scheme: null, reason: "excluded" });
+            excludedByAny = true;
+            continue;
           }
           return ok({ path, address: instance.provider.format(addr), scheme: instance.id });
         }
-        return ok({ path, address: null, scheme: null });
+        return excludedByAny
+          ? ok({ path, address: null, scheme: null, reason: "excluded" })
+          : ok({ path, address: null, scheme: null });
       } catch (e) {
         return fail(e);
       }

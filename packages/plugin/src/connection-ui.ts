@@ -342,7 +342,9 @@ export class VaultMcpSettingTab extends PluginSettingTab {
           "Vault-relative folder prefixes (one per line) whose contents this scheme instance never resolves or " +
             "lists addresses for — territory it does not speak for. Use this to stop an archive tree from " +
             "colliding with the live spine on a reused address; the excluded notes themselves are unaffected — " +
-            "every other tool still reads, writes and finds them normally. Leave blank for no exclusion."
+            "every other tool still reads, writes and finds them normally. Matching is case-sensitive (macOS's " +
+            "case-insensitive filesystem does not make \"vault archaeology\" match \"Vault archaeology\"). " +
+            "Leave blank for no exclusion."
         )
         .addTextArea((t) => {
           t.setValue((jdInstance.excludedRoots ?? []).join("\n"));
