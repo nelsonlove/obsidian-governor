@@ -9,9 +9,10 @@ The top-level [`README.md`](../README.md) is the user-facing overview (install, 
 surface, the socket/bridge architecture, the path allowlist). These docs go deeper on the
 **kernel** and the **acceptance model** it exists to protect.
 
-> Everything here is verified against the source at branch `assent/kernel-v0`
-> (head `bc1a8a1`), the plugin package `packages/plugin/`. File references are given so
-> each claim is checkable.
+> These docs track **`main`** (the kernel shipped in v0.7.0; current release **0.8.0**),
+> plugin package `packages/plugin/`. The last full line-by-line verification pass ran at
+> pre-ship head `bc1a8a1`; file references are given so each claim is checkable against
+> current source.
 
 ## Read in this order
 
@@ -24,6 +25,7 @@ surface, the socket/bridge architecture, the path allowlist). These docs go deep
 | [modules.md](modules.md) | The module system: the `ModuleRegistry` + mount, settings-toggleable capability modules, the read-only mount gate, and the accept/baseline tripwire. |
 | [scope-provider.md](scope-provider.md) | The scope provider module: Johnny Decimal `jd:` addressing and read-only allocation (compute, not reserve). |
 | [vocabulary.md](vocabulary.md) | The vocabulary provider module: read-only validation of tags, properties, types, and glossary terms. |
+| [conformance.md](conformance.md) | The TS conformance engine: rule packs, the ratchet (baseline-diffed findings), the ported legacy checks, and the headless CLI. |
 
 ## How the pieces fit — the Assent review channel
 
@@ -45,8 +47,8 @@ The end-to-end shape:
    obsidian_pending_review ◀────────────────┼──────────────────────────┘
    (read: what's under review)              │                          │
                                             ▼                          ▼
-                                    Stewardship plugin  ◀── reads journal + baseline
-                                    (the review pane)        publishes pending-index.json
+                                    Acceptance review pane ◀── reads journal + baseline
+                                    (obsidian-stewardship)     publishes pending-index.json
                                             │
                                             ▼
                                     human accepts / reverts  ◀── the SOLE accept authority
@@ -60,49 +62,51 @@ The end-to-end shape:
 - **Agents can see what's pending** via `obsidian_pending_review`, so a well-behaved agent
   avoids stepping on a note a human is about to review.
 - **The human keeps the sole accept veto.** Acceptance is a gesture made in the
-  **[Stewardship](#the-stewardship-plugin) review pane** — never through any tool, never by
-  any agent, never through the CLI. The kernel enforces this structurally (see
+  **[Acceptance review surface](#the-acceptance-review-surface)** — never through any tool,
+  never by any agent, never through the CLI. The kernel enforces this structurally (see
   [acceptance-model.md](acceptance-model.md)).
 
-### The Stewardship plugin
+### The Acceptance review surface
 
-Stewardship is a **separate Obsidian plugin** (repo `obsidian-stewardship`). It is the
-review *surface*: it reads the write journal and its own baseline store, renders a pending-
-review pane, and is where a human accepts or reverts a proposed change. vault-mcp does not
-import it and does not depend on it being installed.
+**Acceptance** (named per the 2026-08-10 ruling; formerly *Stewardship* — code identifiers,
+the repo name, and file paths keep the legacy name until the rename lands, tracked in #115)
+is the review *surface*: it reads the write journal and its own baseline store, renders a
+pending-review pane, and is where a human accepts or reverts a proposed change.
 
-The one contract between them is a file: Stewardship writes a read-only index at
-`<config-dir>/plugins/stewardship/pending-index.json` on every review-queue refresh, and
-vault-mcp's `obsidian_pending_review` reads it (see [agent-writes.md](agent-writes.md#b3--obsidian_pending_review)).
-The coupling is one-directional and data-only — Stewardship publishes, vault-mcp reads.
-Neither exposes an accept verb to an agent.
+Today it ships as a separate Obsidian plugin (repo `obsidian-stewardship`); vault-mcp does
+not import it and does not depend on it being installed. **The plugin boundary is not a
+trust boundary** — both plugins run in the same JS realm, so the separation was never a
+security property. The accept veto is protected by *in-realm unreachability* (no commands,
+gesture-gated handlers, module-scope closures), which survives packaging changes. The
+destination, per the module-consolidation ruling, is for Acceptance to fold into vault-mcp
+as the **governance module** (#83) — gated on a fresh accept-reachability review of the
+merged topology.
+
+The one contract between the two today is a file: the review plugin writes a read-only
+index at `<config-dir>/plugins/stewardship/pending-index.json` on every review-queue
+refresh, and vault-mcp's `obsidian_pending_review` reads it (see
+[agent-writes.md](agent-writes.md#b3--obsidian_pending_review)). The coupling is
+one-directional and data-only — Acceptance publishes, vault-mcp reads. Neither exposes an
+accept verb to an agent.
 
 ## Status & verification
 
-- **Branch / PR.** All of this lives on `assent/kernel-v0` (head `bc1a8a1`), open as
-  **draft [PR #65](https://github.com/nelsonlove/obsidian-vault-mcp-plugin/pull/65) → `main`**.
-  These docs land on `main` when that PR ships.
-- **Plugin version.** `0.6.0` (`packages/plugin/manifest.json`).
-- **Tests.** The full workspace suite is **green at head `bc1a8a1`**:
-
-  | Package | Tests | Suites | Fail |
-  | --- | --- | --- | --- |
-  | `@vault-mcp/core` | 68 | 3 | 0 |
-  | `obsidian-vault-mcp-plugin` | 1012 | 160 | 0 |
-  | `obsidian-vault-mcp-server` | 48 | 10 | 0 |
-  | **Total** | **1128** | **173** | **0** |
-
-  `tsc --noEmit` is clean (it runs as part of the plugin `test` script), and the production
-  esbuild bundles clean. *(Reproduce: `npm install && npm test --workspaces` from the repo
-  root. The plugin suite requires `@vault-mcp/core` to be built first — the monorepo test
-  wiring handles this.)*
-- **Deployed & live-verified.** The kernel through the **module-host mount** is deployed and
-  live-verified: vault-mcp `0.6.0` @ `56cfce0`, a toggle round-trip confirmed (56 tools →
-  scheme module disabled via live settings → 51 tools on next connect → re-enabled → 56
-  back), with `jd:` addressing confirmed to resolve at the kernel level even with the scheme
-  module off. Stewardship's pending-index publisher is deployed live (v0.0.7) and verified.
-  The final slices layered on top — B2 `intent`, the CLI accept-guard, and B3b
-  `obsidian_pending_review` — are **headless-verified** (unit-proven, full suite green) with
-  live JSON-RPC confirmation queued for the announced integration-deploy window.
+- **Shipped.** The kernel is on **`main`** — PR #65 merged and released as **v0.7.0**
+  (GitHub release, BRAT-installable); current release **0.8.0** adds the command-policy
+  guards, the template guard, root-exclusion, and the Phase-1 conformance engine. `main` is
+  trunk; all work branches off it.
+- **Tests.** The workspace suite is green on `main` at each merge (the merge policy requires
+  an independent review and a green suite — `tsc --noEmit` and the production esbuild run as
+  part of it). *(Reproduce: `npm install && npm test --workspaces` from the repo root; the
+  plugin suite needs `@vault-mcp/core` built first — the monorepo wiring handles this.)*
+- **Deployed & live-verified.** The kernel through the module-host mount, B1/B2, the CLI
+  accept-guard, `jd:` addressing, and B3 `obsidian_pending_review` are deployed and
+  live-verified against a real vault; the review plugin's pending-index publisher is live.
+- **Known-open perimeter issues** (tracked publicly, milestone `0.8.1 — perimeter`): the
+  standalone `packages/server` fs-failover surface has no accept-guard (#104), and several
+  plugin-gated tools (`create_note_from_template`, `obsidian_run_command`,
+  `fileclass_insert_fields`) are not yet gated (#105). The acceptance model's guarantees
+  below are stated for the **plugin's guarded write surfaces**; these issues are the honest
+  boundary of that claim until closed.
 </content>
 </invoke>
