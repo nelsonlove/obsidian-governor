@@ -157,6 +157,14 @@ export function structurePack(opts: StructurePackOpts = {}): RulePack {
           out.push({
             script: STRUCTURE_PACK_ID,
             check: "NO-BLUEPRINT",
+            // INTENTIONAL DIVERGENCE from the legacy Python (conformance_check.py):
+            // the finding key here uses the VAULT-RELATIVE path by design. The
+            // Python interpolated an absolute, machine-specific path into this key,
+            // which is non-portable; the TS uses the relative path (consistent with
+            // DROPPED above) as a deliberate correction. This is safe because the
+            // live baseline has ZERO NO-BLUEPRINT findings, so there is no existing
+            // ratchet key to strand. Keep this relative — do NOT switch to absolute.
+            // (Asserted by tests/conformance-legacy-packs.test.mjs: target === "Notes/bar.md".)
             target: src.path,
             kind: bp, // the full wikilink inner, as the ratchet keyed it
             detail: `NO-BLUEPRINT: ${src.path} names [[${bp}]] which does not exist`,
