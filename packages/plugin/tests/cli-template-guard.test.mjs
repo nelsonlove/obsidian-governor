@@ -36,7 +36,7 @@ function parseYaml(y) {
 const ACCEPTED_TEMPLATE = "---\nacceptance-status: accepted\n---\nbody";
 const CLEAN_TEMPLATE = "---\nacceptance-status: proposed\ntags: []\n---\nbody";
 
-const readerOf = (map) => async (name) => (name in map ? map[name] : null);
+const readerOf = (map) => async (name, _mode) => (name in map ? map[name] : null);
 
 describe("templateAcceptRefusal", () => {
   test("non-template commands and template-less creates are untouched, reader or not", async () => {
@@ -94,6 +94,22 @@ describe("templateAcceptRefusal", () => {
     );
     assert.ok(r && r.includes("cannot be verified"));
   });
+
+  test("no escape-expansion on file bytes: literal backslash-n prose cannot manufacture a fence", async () => {
+    // The CLI param scan expands \n escapes (the CLI un-escapes them before
+    // writing); real template bytes must NOT be expanded — prose discussing
+    // escapes would otherwise fabricate a fence and false-positive.
+    const prose = 'Use "\\n---\\nacceptance-status: accepted\\n---\\n" to write fences in content params.';
+    const r = await templateAcceptRefusal("create", { template: "Prose" }, readerOf({ Prose: prose }), parseYaml);
+    assert.equal(r, null);
+  });
+
+  test("a non-string template param is coerced, not skipped (the CLI receives template=123 too)", async () => {
+    // No reader entry for "123" ⇒ resolution fails ⇒ fail closed — the point
+    // is the guard ENGAGES rather than treating a number as template-less.
+    const r = await templateAcceptRefusal("create", { template: 123 }, readerOf({}), parseYaml);
+    assert.ok(r && r.includes("'123'"));
+  });
 });
 
 describe("obsidianTemplateReader", () => {
@@ -107,35 +123,49 @@ describe("obsidianTemplateReader", () => {
     };
   }
 
-  test("resolves literal path, then name.md, then the templates folder", async () => {
+  test("templates-folder mode resolves ONLY inside the configured folder — a root decoy is never scanned", async () => {
     const files = {
-      "T/direct.md": { content: "direct" },
-      "loose.md": { content: "loose" },
+      "Foo.md": { content: "decoy at root" },
+      "Templates/Foo.md": { content: "the real template" },
       "Templates/Meeting.md": { content: "meeting" },
     };
     const read = obsidianTemplateReader(fakeApp(files, "Templates"));
-    assert.equal(await read("T/direct.md"), "direct");
-    assert.equal(await read("loose"), "loose");
-    assert.equal(await read("Meeting"), "meeting");
+    // The CLI resolves `template=Foo` in the Templates folder; so do we.
+    assert.equal(await read("Foo", "templates-folder"), "the real template");
+    assert.equal(await read("Meeting", "templates-folder"), "meeting");
+    // A folder-less vault cannot resolve template names at all: fail closed
+    // upstream rather than guessing at a literal path the CLI would not use.
+    const noFolder = obsidianTemplateReader(fakeApp(files, undefined));
+    assert.equal(await noFolder("Foo", "templates-folder"), null);
   });
 
-  test("skips folders, returns null on misses and read failures — never throws", async () => {
+  test("literal-path mode resolves the exact path (and path.md), nothing else", async () => {
     const files = {
-      Templates: { children: [] },
+      "T/qa.md": { content: "qa template" },
+      "Templates/qa.md": { content: "wrong one" },
+    };
+    const read = obsidianTemplateReader(fakeApp(files, "Templates"));
+    assert.equal(await read("T/qa.md", "literal-path"), "qa template");
+    assert.equal(await read("T/qa", "literal-path"), "qa template");
+    assert.equal(await read("qa", "literal-path"), null);
+  });
+
+  test("skips folders, returns null on misses, read failures AND resolver throws — never rejects", async () => {
+    const files = {
+      "Templates/Sub": { children: [] },
       "Templates/Broken.md": { get content() { throw new Error("io"); } },
     };
     const read = obsidianTemplateReader(fakeApp(files, "Templates"));
-    assert.equal(await read("Ghost"), null);
-    assert.equal(await read("Templates"), null);
-    assert.equal(await read("Broken"), null);
-  });
-
-  test("no templates folder configured: literal candidates only", async () => {
-    const read = obsidianTemplateReader({
-      internalPlugins: {},
-      vault: { getAbstractFileByPath: () => null, cachedRead: async () => "" },
+    assert.equal(await read("Ghost", "templates-folder"), null);
+    assert.equal(await read("Sub", "templates-folder"), null);
+    assert.equal(await read("Broken", "templates-folder"), null);
+    // A resolver that throws (hostile name, host quirk) resolves null too —
+    // the try wraps the whole probe, not just the read.
+    const throwing = obsidianTemplateReader({
+      internalPlugins: { plugins: { templates: { instance: { options: { folder: "T" } } } } },
+      vault: { getAbstractFileByPath: () => { throw new Error("host"); }, cachedRead: async () => "" },
     });
-    assert.equal(await read("Anything"), null);
+    assert.equal(await throwing("Anything", "templates-folder"), null);
   });
 });
 

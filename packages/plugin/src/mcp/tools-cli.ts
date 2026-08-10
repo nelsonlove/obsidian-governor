@@ -117,14 +117,20 @@ const PROPERTY_SET_RE = /^(?:property|frontmatter):(?:set|add|update|patch)$/;
 // content-writing family — create/append/prepend, the periodic-note variants,
 // and base:create (a base item written with the same name=/content= params). All
 // take a caller-controlled `content=` that carries the body (and any frontmatter
-// fence), so all are inspectable pre-exec — none is an opaque residual.
+// fence), so the content THEY ARE HANDED is inspectable pre-exec. (A periodic
+// create with NO content= draws its body from the Daily/Periodic Notes plugin
+// config's template instead — a documented residual; see TEMPLATE_PARAM.)
 const CONTENT_WRITE_RE =
   /^(?:create|append|prepend|base:create|(?:daily|weekly|monthly|quarterly|yearly):(?:create|append|prepend))$/;
 
 // Arbitrary-macro / code-execution commands that can set acceptance opaquely.
 // The authoritative deny-by-default set now lives in cli-policy.ts
 // (OPAQUE_ACCEPT_CLI_COMMANDS); this re-export keeps the historical name for
-// the tool description + report surfaces.
+// the tool description + report surfaces. `quickadd:run-template` STAYS in
+// the set even though the template guard below now scans its template file:
+// the static scan catches a literal accepted fence, but QuickAdd format
+// syntax can COMPUTE frontmatter at run time, which no pre-exec scan can see
+// — the scan is belt, the opacity is real.
 export const CLI_OPAQUE_ACCEPT_RESIDUAL: readonly string[] = OPAQUE_ACCEPT_CLI_COMMANDS;
 
 /**
@@ -180,6 +186,22 @@ export function contentAcceptRefusal(content: string, parseYaml?: (yaml: string)
     .replace(/\\r\\n|\\n/g, "\n") // literal \n (and \r\n) escapes the CLI expands
     .replace(/\\t/g, "\t") // literal \t escapes
     .replace(/\r\n?/g, "\n"); // real CR / CRLF
+  return scanForAcceptFence(expanded, parseYaml);
+}
+
+/**
+ * The same fence scan over REAL FILE BYTES — no CLI escape expansion. The
+ * expansion above is correct only for `content=` param values (the CLI itself
+ * un-escapes those before writing); applied to raw template content it can
+ * MANUFACTURE a fence out of ordinary prose containing literal `\n` text — a
+ * false positive that would refuse a legitimate template. Templates come off
+ * disk, so only real newlines are normalized.
+ */
+export function templateContentAcceptRefusal(content: string, parseYaml?: (yaml: string) => unknown): string | null {
+  return scanForAcceptFence(content.replace(/\r\n?/g, "\n"), parseYaml);
+}
+
+function scanForAcceptFence(expanded: string, parseYaml?: (yaml: string) => unknown): string | null {
   const fenceRe = /(?:^|\n)---[ \t]*\n([\s\S]*?)\n---[ \t]*(?:\n|$)/g;
   let m: RegExpExecArray | null;
   let sawFence = false;
@@ -229,75 +251,101 @@ export function contentAcceptRefusal(content: string, parseYaml?: (yaml: string)
 // legitimate call refused by strictness gets a clear message naming the
 // template; it can be retried with the exact name. Conservative by design.
 
-/** Commands that draw content from a template the params don't carry, and the
- * param that names the template. */
-const TEMPLATE_PARAM: Record<string, string> = {
-  create: "template",
-  "quickadd:run-template": "path",
+/** Commands that draw content from a template the params don't carry: the
+ * param that names the template, and HOW the CLI resolves it — so the guard
+ * scans the SAME file the CLI will copy, never a same-named decoy elsewhere.
+ * Sources (live `obsidian help` capture, CLI v1.13.x):
+ *   create: `template=<name> - Template to use` — a template NAME, resolved
+ *     by the core Templates plugin within its configured folder;
+ *   quickadd:run-template: `path=<vault-path> - Path to a template file in
+ *     the vault` — a literal vault path.
+ * NOT here, documented residual: the periodic creates (daily:create etc.)
+ * with no `content=` draw their body from the Daily/Periodic Notes PLUGIN
+ * CONFIG's template — no param names it, and resolving another plugin's
+ * settings pre-exec is the same class as the obsidian_periodic_note write
+ * residual this codebase already documents as deliberately open. */
+const TEMPLATE_PARAM: Record<string, { param: string; resolve: "templates-folder" | "literal-path" }> = {
+  create: { param: "template", resolve: "templates-folder" },
+  "quickadd:run-template": { param: "path", resolve: "literal-path" },
 };
+
+/** How obsidianTemplateReader should resolve a reference. */
+export type TemplateResolveMode = "templates-folder" | "literal-path";
 
 /**
  * The reason a template-carrying invocation is refused, or null. Non-template
  * calls (no entry in TEMPLATE_PARAM, or the param absent/empty) are always
- * clean — the guard adds nothing to ordinary creates.
+ * clean — the guard adds nothing to ordinary creates. A non-string param
+ * value is COERCED, not skipped: `buildCliArgs` forwards `template=123` to
+ * the CLI as a string, so the guard must see what the CLI sees.
  */
 export async function templateAcceptRefusal(
   command: string,
   params: Record<string, string | number | boolean> | undefined,
-  readTemplate: ((name: string) => Promise<string | null>) | undefined,
+  readTemplate: ((name: string, mode: TemplateResolveMode) => Promise<string | null>) | undefined,
   parseYaml?: (yaml: string) => unknown,
 ): Promise<string | null> {
-  const paramKey = TEMPLATE_PARAM[command.trim()];
-  if (!paramKey) return null;
-  const name = params?.[paramKey];
-  if (typeof name !== "string" || name.length === 0) return null;
+  const entry = TEMPLATE_PARAM[command.trim()];
+  if (!entry) return null;
+  const raw = params?.[entry.param];
+  if (raw === undefined || raw === "") return null;
+  const name = String(raw);
   if (!readTemplate) {
     return `template '${name}' cannot be inspected in this build (no template reader) — an uninspectable template must not fail open`;
   }
   let body: string | null;
   try {
-    body = await readTemplate(name);
+    body = await readTemplate(name, entry.resolve);
   } catch {
     body = null;
   }
   if (body === null) {
     return `template '${name}' could not be resolved for pre-exec inspection — an uninspectable template must not fail open (use the template's exact name or vault path)`;
   }
-  const reason = contentAcceptRefusal(body, parseYaml);
+  const reason = templateContentAcceptRefusal(body, parseYaml);
   return reason ? `template '${name}' ${reason}` : null;
 }
 
 /**
- * The live template reader (server.ts injects it): resolves a template
- * reference against the literal vault path first, then the core Templates
- * plugin's configured folder. Structurally typed — no `obsidian` import.
- * Returns null when nothing resolves; the caller fails closed.
+ * The live template reader (server.ts injects it), resolving PER MODE so the
+ * guard scans the same file the CLI will use — never a same-named decoy:
+ *   "templates-folder" (create template=<name>): candidates ONLY inside the
+ *     core Templates plugin's configured folder. No folder configured ⇒ null
+ *     (fail closed upstream) — a literal-path fallback here would let a
+ *     root-level `Foo.md` be scanned clean while the CLI copies
+ *     `Templates/Foo.md`.
+ *   "literal-path" (quickadd:run-template path=<vault-path>): the exact path
+ *     (and path.md), nothing else.
+ * Structurally typed — no `obsidian` import. Returns null when nothing
+ * resolves and never throws (the whole probe is inside the try — a hostile
+ * name must not turn resolution into a rejection).
  */
 export function obsidianTemplateReader(app: {
   vault: {
     getAbstractFileByPath(path: string): unknown;
     cachedRead(file: unknown): Promise<string>;
   };
-}): (name: string) => Promise<string | null> {
-  return async (name: string) => {
-    const folder = (app as any).internalPlugins?.plugins?.templates?.instance?.options?.folder;
-    const candidates = [
-      name,
-      `${name}.md`,
-      ...(typeof folder === "string" && folder.length > 0 ? [`${folder}/${name}`, `${folder}/${name}.md`] : []),
-    ];
-    for (const p of candidates) {
-      const f = app.vault.getAbstractFileByPath(p);
-      // A folder has `children`; a file does not — the same discriminant the
-      // backend uses. Skip non-files.
-      if (!f || typeof f !== "object" || "children" in (f as object)) continue;
-      try {
+}): (name: string, mode: TemplateResolveMode) => Promise<string | null> {
+  return async (name: string, mode: TemplateResolveMode) => {
+    try {
+      const folder = (app as any).internalPlugins?.plugins?.templates?.instance?.options?.folder;
+      const candidates =
+        mode === "templates-folder"
+          ? typeof folder === "string" && folder.length > 0
+            ? [`${folder}/${name}`, `${folder}/${name}.md`]
+            : []
+          : [name, `${name}.md`];
+      for (const p of candidates) {
+        const f = app.vault.getAbstractFileByPath(p);
+        // A folder has `children`; a file does not — the same discriminant the
+        // backend uses. Skip non-files.
+        if (!f || typeof f !== "object" || "children" in (f as object)) continue;
         return await app.vault.cachedRead(f);
-      } catch {
-        return null;
       }
+      return null;
+    } catch {
+      return null;
     }
-    return null;
   };
 }
 
@@ -374,9 +422,9 @@ export function registerCliTools(
     binary?: string | null;
     exec?: CliExec;
     parseYaml?: (yaml: string) => unknown;
-    /** Resolve+read a template reference (template guard). Absent ⇒ any
-     * template-carrying call fails closed. */
-    readTemplate?: (name: string) => Promise<string | null>;
+    /** Resolve+read a template reference per mode (template guard). Absent ⇒
+     * any template-carrying call fails closed. */
+    readTemplate?: (name: string, mode: TemplateResolveMode) => Promise<string | null>;
   }
 ) {
   // Conditional registration at build time is the dynamic-registration
@@ -404,6 +452,7 @@ export function registerCliTools(
         `Dangerous commands (${DANGEROUS_LIST_DESC}) are blocked unless enabled in plugin settings. ` +
         `Opaque macro/code commands (${[...OPAQUE_ACCEPT_CLI_COMMANDS].join(", ")}) are DENIED by default — the acceptance guard cannot inspect what they execute — and return Error [cli_denied]; a human can re-enable a specific one in settings. ` +
         "Acceptance is human-only: a property:set or content write that would introduce acceptance-status: accepted (or accepted-by/accepted-on) is refused with Error [accept_forbidden] — agents write only acceptance-status: proposed. " +
+        "Template-drawing calls (create template=<name>, quickadd:run-template path=<p>) have the referenced template resolved and scanned with the same rule pre-exec; an acceptance-carrying OR unresolvable template refuses accept_forbidden (fail closed — use the template's exact name/path). " +
         "On timeout, the command may still have completed inside Obsidian (only the CLI forwarder is killed) — verify state before retrying a mutation. " +
         "Prefer a dedicated obsidian_* tool when one exists — those return structured data.",
       inputSchema: {

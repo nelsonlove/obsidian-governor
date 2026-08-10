@@ -154,8 +154,16 @@ non-`.md` paths, the opaque surfaces that could write settings from inside are w
 denies, and the CLI proxy bars its own param values from `.obsidian` territory
 (`configPathRefusal`), so no agent-reachable path rewrites the policy.
 
-What remains open, honestly named: a `create template=<t>` draws frontmatter from a template
-note that can't be read pre-exec — a lesser residual of the same class, not yet gated.
+The former lesser residual — `create template=<t>` drawing frontmatter from a template note —
+is CLOSED by the **template guard**: the template is a vault file, so it is resolved (in the
+core Templates folder, exactly where the CLI resolves it) and scanned with the same rule
+pre-exec; unresolvable fails closed. A re-enabled `quickadd:run-template path=<p>` gets the
+same static scan as belt (its runtime-computed frontmatter stays opaque, so it remains in the
+default-denied set).
+
+What remains open, honestly named: a periodic create with no `content=` draws its body from
+the Daily/Periodic Notes plugin config's template — no param names it; the same class as the
+documented `obsidian_periodic_note` write residual.
 
 ## Why this is structural, not procedural
 
