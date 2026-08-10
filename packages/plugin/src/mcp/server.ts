@@ -10,6 +10,7 @@ import { registerCliTools } from "./tools-cli.js";
 import { registerExternalTools } from "./external-tools.js";
 import { registerLockTools } from "./tools-locks.js";
 import { registerUidTools } from "./tools-uid.js";
+import { registerSchemeTools } from "./tools-scheme.js";
 import { registerLinkTools, obsidianLinkSource } from "./tools-links.js";
 import { registerVocabTools, obsidianVocabSource } from "./tools-vocab.js";
 import { registerCodeModeTools, makeCaptureRegister, type CapturedRegistry } from "./tools-code-mode.js";
@@ -20,6 +21,7 @@ import { obsidianProbe } from "../kernel/obsidian-probe.js";
 import { ObsidianBackend } from "./obsidian-backend.js";
 import { registerWriteNotesTool, type GuardedWrite } from "./tools-write-notes.js";
 import { uuidv7, formatLocalTimestamp } from "./write-notes-compose.js";
+import { makeRegistry, DEFAULT_SCHEMES } from "../kernel/scheme/registry.js";
 
 export interface BuildOpts {
   /** Code Mode: expose the search/describe/call meta-tool surface instead of the full tool set. */
@@ -128,6 +130,15 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   // Addressing by uid needs no tool of its own — `uid:<value>` binds at the
   // interception point above — so this is purely the lookup, in both directions.
   registerUidTools(server, ctx);
+  // ── scope-provider read-only tools (schemes/resolve/next/list/expected) ────
+  // registry() is rebuilt from settings on every call, so a scheme config
+  // edit lands live without a reconnect — the same reason ObsidianBackend's
+  // `visible` above is resolved per call rather than once at connect time.
+  registerSchemeTools(server, {
+    registry: () => makeRegistry(ctx.getSettings().schemes ?? DEFAULT_SCHEMES),
+    notes: () => app.vault.getMarkdownFiles().map((f) => f.path),
+    getSettings: () => ctx.getSettings(),
+  });
   // ── link drift, reported not repaired (slice 2.2) ──────────────────────────
   // Read-only by construction: moves already heal their own links through
   // fileManager.renameFile, so this reports the drift that came from OUTSIDE.
