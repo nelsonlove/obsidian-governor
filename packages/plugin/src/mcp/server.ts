@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { App } from "obsidian";
-import { registerFsTools } from "@vault-mcp/core";
+import { TFile, stringifyYaml, parseYaml, type App } from "obsidian";
+import { registerFsTools, ok } from "@vault-mcp/core";
 import { registerCoreTools, type ServerCtx } from "./tools-core.js";
 import { registerVaultWriteTools } from "./tools-vault-write.js";
 import { registerComplementaryTools } from "./tools-complementary.js";
@@ -18,6 +18,8 @@ import { visiblePaths } from "../guard.js";
 import type { JournalActor } from "../kernel/index.js";
 import { obsidianProbe } from "../kernel/obsidian-probe.js";
 import { ObsidianBackend } from "./obsidian-backend.js";
+import { registerWriteNotesTool, type GuardedWrite } from "./tools-write-notes.js";
+import { uuidv7, formatLocalTimestamp } from "./write-notes-compose.js";
 
 export interface BuildOpts {
   /** Code Mode: expose the search/describe/call meta-tool surface instead of the full tool set. */
@@ -98,7 +100,10 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   // guard's own settings, so a settings change lands without a reconnect.
   const probe = obsidianProbe(app);
   const visible = (paths: string[]) => visiblePaths(paths, ctx.getSettings());
-  registerFsTools(server, new ObsidianBackend(app, visible), {
+  // Hoisted so obsidian_write_notes can drive the same backend writeNote through
+  // its own per-item guarded dispatch (see the write-notes block below).
+  const backend = new ObsidianBackend(app, visible);
+  registerFsTools(server, backend, {
     decodeHtml: false,
     rev: (p) => probe.rev(p),
   });
@@ -138,6 +143,36 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   registerCliTools(server, ctx);
   // ── externally-published tools (other Obsidian plugins via plugin.api) ─────
   registerExternalTools(server, app, ctx);
+
+  // ── batch write + server-side stamping (slice B1) ───────────────────────────
+  // obsidian_write_notes is a DISPATCHER, not a single mutating op: to give each
+  // item its own journal record it drives a per-item guarded single-writer, and
+  // to avoid a reentrant queue deadlock it must not itself take a queue slot. So
+  // it registers UNGUARDED via origRegister (the obsidian_call_tool precedent)
+  // and each item runs through `guardedWrite` — a real makeGuarded wrapper, so
+  // uid/read-only/allowlist/if_rev/idempotency/queue/journal all bind per item.
+  // Not registered in Code Mode: that surface is the three meta-tools only, and
+  // a session there reaches single writes via obsidian_call_tool.
+  if (!opts.codeMode) {
+    const RW = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
+    const guardedWrite = guarded(
+      { title: "write one note", inputSchema: {}, annotations: RW },
+      async ({ path, content, overwrite }: { path: string; content: string; overwrite?: boolean }) =>
+        ok(await backend.writeNote(path, content, overwrite ?? true)),
+      "obsidian_write_notes"
+    ) as unknown as GuardedWrite;
+    registerWriteNotesTool(origRegister, guardedWrite, {
+      readExistingFrontmatter: (path) => {
+        const f = app.vault.getAbstractFileByPath(path);
+        return f instanceof TFile ? app.metadataCache.getFileCache(f)?.frontmatter ?? undefined : undefined;
+      },
+      revOf: (path) => probe.rev(path),
+      stringifyYaml,
+      parseYaml,
+      mintUid: (createdMs) => uuidv7(createdMs),
+      formatTs: formatLocalTimestamp,
+    });
+  }
 
   if (opts.codeMode) {
     // Meta-tools register through origRegister directly: they must NOT be
