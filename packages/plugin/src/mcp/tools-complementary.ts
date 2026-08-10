@@ -1,9 +1,10 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type App, TFile, getAllTags } from "obsidian";
-import { ok, fail } from "./helpers.js";
+import { ok, fail, codedError } from "./helpers.js";
 import { visiblePaths } from "../guard.js";
 import type { ServerCtx } from "./tools-core.js";
+import { runCommandRefusal } from "./cli-policy.js";
 
 const RO = { readOnlyHint: true,  destructiveHint: false, idempotentHint: true,  openWorldHint: false };
 const RW = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
@@ -181,6 +182,15 @@ export function registerComplementaryTools(server: McpServer, app: App, ctx: Ser
     },
     async ({ command_id, file_path }) => {
       try {
+        // Command policy (cli-policy.ts): QuickAdd ids run arbitrary macros
+        // the acceptance guard cannot inspect — denied by default, re-enabled
+        // per-command only through the human-only settings. Same policy object
+        // as obsidian_cli; refused BEFORE anything runs (including the
+        // file_path open, which would leak an action for a refused command).
+        const policyReason = runCommandRefusal(command_id, ctx.getSettings().cliPolicy);
+        if (policyReason) {
+          return codedError("cli_denied", policyReason);
+        }
         if (file_path) {
           await app.workspace.openLinkText(file_path, "", false);
         }

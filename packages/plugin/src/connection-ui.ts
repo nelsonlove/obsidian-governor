@@ -161,6 +161,50 @@ export class VaultMcpSettingTab extends PluginSettingTab {
         })
       );
 
+    // Command policy (mcp/cli-policy.ts). The opaque-accept set — quickadd,
+    // quickadd:run, quickadd:run-template, eval, command, and quickadd:*
+    // run_command ids — is denied by DEFAULT; the re-enable list below is the
+    // one human-only way back in. The deny list always wins over a re-enable.
+    new Setting(containerEl)
+      .setName("Re-enabled opaque commands")
+      .setDesc(
+        "Opaque macro/code commands (quickadd, quickadd:run, quickadd:run-template, eval, command; quickadd:* " +
+          "command ids) are denied by default — the acceptance guard cannot inspect what they execute. List a " +
+          "specific command or id here (one per line) to re-enable it. eval/command additionally require the " +
+          "dangerous-CLI toggle above. Takes effect immediately."
+      )
+      .addTextArea((ta) => {
+        ta.setValue(this.plugin.settings.cliPolicy.allowOpaque.join("\n"));
+        ta.inputEl.rows = 3;
+        ta.inputEl.style.width = "100%";
+        ta.onChange(async (value) => {
+          this.plugin.settings.cliPolicy = {
+            ...this.plugin.settings.cliPolicy,
+            allowOpaque: value.split("\n").map((s) => s.trim()).filter(Boolean),
+          };
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("Denied commands")
+      .setDesc(
+        "Additional obsidian_cli commands or obsidian_run_command ids to deny (one per line; a trailing * makes " +
+          "a prefix pattern, e.g. templater:*). Deny always wins — including over the re-enable list above."
+      )
+      .addTextArea((ta) => {
+        ta.setValue(this.plugin.settings.cliPolicy.deny.join("\n"));
+        ta.inputEl.rows = 3;
+        ta.inputEl.style.width = "100%";
+        ta.onChange(async (value) => {
+          this.plugin.settings.cliPolicy = {
+            ...this.plugin.settings.cliPolicy,
+            deny: value.split("\n").map((s) => s.trim()).filter(Boolean),
+          };
+          await this.plugin.saveSettings();
+        });
+      });
+
     new Setting(containerEl)
       .setName("Trusted read-only plugins")
       .setDesc(
