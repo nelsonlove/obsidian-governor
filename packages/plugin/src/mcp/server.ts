@@ -75,7 +75,16 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
       ...(ctx.serverIdentity ? { server: ctx.serverIdentity } : {}),
     };
   };
-  const guarded = makeGuarded({ getSettings: () => ctx.getSettings(), kernel: ctx.kernel, actor });
+  const guarded = makeGuarded({
+    getSettings: () => ctx.getSettings(),
+    kernel: ctx.kernel,
+    actor,
+    // `jd:<address>` addressing at the interception point: same per-call
+    // freshness as registerSchemeTools's own registry() below (a scheme
+    // config edit lands live), and the same notes() source it uses.
+    schemes: () => makeRegistry(ctx.getSettings().schemes ?? DEFAULT_SCHEMES),
+    schemeNotes: () => app.vault.getMarkdownFiles().map((f) => f.path),
+  });
   const registry: CapturedRegistry = new Map();
   const capture = makeCaptureRegister(registry, guarded);
   const register = opts.codeMode

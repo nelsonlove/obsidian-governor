@@ -1,15 +1,19 @@
 // The single interception point every registerTool call passes through (see the
-// monkeypatch in server.ts). Five things bind here, in order:
+// monkeypatch in server.ts). Six things bind here, in order:
 //
 //   1. uid addressing — `uid:<value>` path arguments resolve to real paths
 //      through the uid index (slice 2.1), for READS and WRITES alike
-//   2. guardCall  — read-only mode + path allowlist (pre-existing)
-//   3. kernel arguments — `if_rev` / `idempotency_key` are peeled off the args
+//   2. scheme addressing — `jd:<address>` (and other configured scheme ids)
+//      path arguments resolve to real paths through the scope-provider
+//      registry, AFTER uid resolution (uid: is reserved and takes
+//      precedence) and, like uid addressing, for READS and WRITES alike
+//   3. guardCall  — read-only mode + path allowlist (pre-existing)
+//   4. kernel arguments — `if_rev` / `idempotency_key` are peeled off the args
 //      (kernel v0) so no tool handler ever sees them
-//   4. write queue — mutating calls serialize plugin-wide (kernel v0)
-//   5. write journal — one audit record per mutating call (kernel v0)
+//   5. write queue — mutating calls serialize plugin-wide (kernel v0)
+//   6. write journal — one audit record per mutating call (kernel v0)
 //
-// Reads take paths 1–2 only and return immediately. Lives in its own module (not
+// Reads take paths 1–3 only and return immediately. Lives in its own module (not
 // inline in server.ts) so it imports nothing from `obsidian` and can be
 // unit-tested headlessly — server.ts cannot, since its tool registrars pull in
 // live Obsidian classes.
@@ -28,6 +32,7 @@ import {
   type JournalEffects,
   type UidIndex,
 } from "../kernel/index.js";
+import { AddressAmbiguousError, AddressUnresolvedError, resolveSchemeArgs, type SchemeRegistry } from "../kernel/scheme/registry.js";
 
 /** Guard/queue-level failure envelope: matches the `Error [code]: message` shape guardCall already emits. */
 function codedError(code: string, message: string) {
@@ -213,6 +218,21 @@ export interface GuardedOpts {
    * tested against an index without a kernel.
    */
   uids?: UidIndex | null;
+  /**
+   * The scope-provider registry backing `jd:<address>` (and other configured
+   * scheme ids) addressing. Resolved PER CALL, like `getSettings`, so a
+   * scheme config edit lands live — mirrors `registerSchemeTools`'s own
+   * `registry()`. Absent ⇒ scheme addressing is skipped entirely and args
+   * pass through byte-identical (tests, bare embeds).
+   */
+  schemes?: () => SchemeRegistry | null;
+  /**
+   * Vault markdown paths scheme addressing resolves an address against.
+   * Called LAZILY by resolveSchemeArgs — only when a scheme-shaped value is
+   * actually encountered — so an ordinary call never pays for enumerating
+   * the vault. Same source `registerSchemeTools` uses.
+   */
+  schemeNotes?: () => string[];
 }
 
 // ── uid addressing ───────────────────────────────────────────────────────────
@@ -237,10 +257,45 @@ export interface GuardedOpts {
 // reads as `uid_unresolved`. That is also what obsidian_resolve_uid reports, so
 // looking a uid up and addressing by it agree.
 
-/** Put `uid:<value>` back where a resolved path appears, so a refusal discloses nothing. */
-function uidSafe(message: string, resolved: Array<{ uid: string; path: string }>): string {
+// ── scheme addressing ────────────────────────────────────────────────────────
+//
+// `path: "jd:06.11"` (or any other configured scheme id) resolves through the
+// scope-provider registry to the real path, mirroring uid addressing exactly
+// and running immediately AFTER it — `uid:` is reserved (SchemeRegistry.parseRef
+// returns null for it), so uid resolution always gets first look, and by the
+// time scheme resolution runs no unresolved `uid:` value remains in the args:
+// it either became a real path or the call already refused above.
+//
+// Also runs BEFORE guardCall, for the identical reason: the allowlist must
+// check the RESOLVED path, not the address, or `jd:06.11` would be a sandbox
+// bypass. The identical disclosure risk follows, and is closed the identical
+// way — resolved scheme paths fold back to their `jd:<address>` ref form in
+// the guard's refusal text (addressSafe, below), and resolution itself runs
+// over the allowlist-VISIBLE notes only (resolveSchemeArgs -> requireOneAddress
+// over visiblePaths), so `address_ambiguous` can only ever name notes this
+// session could have named itself and an address whose only claimant is
+// hidden reads as `address_unresolved` — never `out_of_allowlist`, which would
+// confirm the address exists. That is also what obsidian_resolve_address
+// reports, so looking an address up and addressing by it agree.
+//
+// A value that isn't scheme-shaped at all — an ordinary path, or one that
+// merely contains a colon ("Notes/a:b.md") — is left untouched: parseRef
+// returns null and resolveSchemeArgs never calls requireOneAddress on it.
+
+/**
+ * Put `uid:<value>` and `<scheme>:<address>` back where a resolved path
+ * appears, so a refusal discloses neither. One pass over the combined
+ * resolution lists — an allowlist refusal must hide everything either
+ * addressing scheme resolved, not just whichever ran first.
+ */
+function addressSafe(
+  message: string,
+  uidResolved: Array<{ uid: string; path: string }>,
+  schemeResolved: Array<{ ref: string; path: string }> = []
+): string {
   let out = message;
-  for (const { uid, path } of resolved) out = out.split(path).join(`uid:${uid}`);
+  for (const { uid, path } of uidResolved) out = out.split(path).join(`uid:${uid}`);
+  for (const { ref, path } of schemeResolved) out = out.split(path).join(ref);
   return out;
 }
 
@@ -270,9 +325,25 @@ export function makeGuarded(opts: GuardedOpts) {
       if (e instanceof UidUnresolvedError || e instanceof UidAmbiguousError) return codedError(e.code, e.message);
       throw e;
     }
-    const callArgs = addressed.args;
+    // 1b. scheme addressing (`jd:<address>`), over the possibly uid-rewritten
+    //     args. opts.schemes absent ⇒ skipped entirely, so callArgs stays the
+    //     SAME object resolveUidArgs handed back and behavior is unchanged.
+    let callArgs = addressed.args;
+    let schemeResolved: Array<{ ref: string; path: string }> = [];
+    if (opts.schemes) {
+      try {
+        const schemed = resolveSchemeArgs(callArgs, opts.schemes(), opts.schemeNotes ?? (() => []), settings);
+        callArgs = schemed.args;
+        schemeResolved = schemed.resolved;
+      } catch (e) {
+        // Unresolvable or ambiguous address: refuse, and run nothing — same
+        // contract as the uid case above.
+        if (e instanceof AddressUnresolvedError || e instanceof AddressAmbiguousError) return codedError(e.code, e.message);
+        throw e;
+      }
+    }
     const blocked = guardCall({ isMutating, args: callArgs, settings });
-    if (blocked) return codedError(blocked.code, uidSafe(blocked.message, addressed.resolved));
+    if (blocked) return codedError(blocked.code, addressSafe(blocked.message, addressed.resolved, schemeResolved));
     // Kernel arguments are always PEELED OFF, kernel or not, so no handler ever
     // sees one. What differs without a kernel is whether they can be honored:
     //

@@ -13,6 +13,7 @@
 
 import type { Address, ScopeProvider } from "./provider.js";
 import { jdProvider, DEFAULT_JD_CONFIG, validateJdConfig, type JdConfig } from "./jd.js";
+import { mapPaths, visiblePaths, type GuardSettings } from "../../guard.js";
 
 export interface SchemeInstanceConfig {
   id: string;
@@ -161,4 +162,65 @@ export function requireOneAddress(reg: SchemeRegistry, ref: string, notes: strin
     throw new AddressAmbiguousError(`"${ref}" is ambiguous between: ${candidates.join(", ")}`, candidates);
   }
   return candidates[0];
+}
+
+// ── scheme addressing (`jd:<address>`) ──────────────────────────────────────
+//
+// The uid-addressing analog (see kernel/uid-index.ts's resolveUidArgs, applied
+// at the same interception point in mcp/guarded.ts): `path: "jd:06.11"`
+// resolves to the real path before anything else sees the call. Defined over
+// the guard's own path walker (mapPaths), so the arguments scheme addressing
+// reaches and the arguments the allowlist scopes are the same set by
+// construction, exactly as uid addressing is.
+//
+// Resolution runs over the allowlist-VISIBLE notes only (`visiblePaths`, the
+// same helper `obsidian_resolve_address` uses) — 0 visible candidates ⇒
+// address_unresolved even when a hidden note claims the address, 2+ visible ⇒
+// address_ambiguous naming ONLY the visible ones. A duplicated address with
+// one hidden claimant must not read as more resolvable, and disambiguous, to
+// an allowlisted session than to obsidian_resolve_address — the same
+// no-existence-oracle property uid addressing's D-A fix established.
+
+/** What a call's scheme addressing resolved to — the `jd:<address>` analog of
+ * `UidAddressing`. */
+export interface SchemeAddressing {
+  /**
+   * The arguments with every scheme reference replaced by its resolved path.
+   * The SAME object when the call used no scheme addressing at all —
+   * behavior for ordinary path arguments (including ones merely containing a
+   * colon) is unchanged, byte for byte.
+   */
+  args: Record<string, unknown>;
+  /** Each reference resolved, in walk order. Empty ⇒ no scheme addressing was used. */
+  resolved: Array<{ ref: string; path: string }>;
+}
+
+/**
+ * Rewrite every `<scheme-id>:<address>` path argument (e.g. `jd:06.11`) to the
+ * path it names.
+ *
+ * Throws AddressUnresolvedError / AddressAmbiguousError — the caller (makeGuarded)
+ * renders them as typed tool errors and nothing runs. `reg` absent (no scheme
+ * registry configured for this call) ⇒ every value is left untouched, same as
+ * a value whose `parseRef` is null: a filename that happens to contain a colon,
+ * or an unregistered scheme id, is never mistaken for an address.
+ *
+ * `notes` is called LAZILY — only once a scheme-shaped value is actually
+ * encountered — so an ordinary call (no scheme addressing used) never pays for
+ * enumerating the vault.
+ */
+export function resolveSchemeArgs(
+  args: Record<string, unknown>,
+  reg: SchemeRegistry | null,
+  notes: () => string[],
+  settings?: GuardSettings | null
+): SchemeAddressing {
+  const resolved: Array<{ ref: string; path: string }> = [];
+  const rewritten = mapPaths(args ?? {}, (value) => {
+    if (!reg || !reg.parseRef(value)) return value;
+    const path = requireOneAddress(reg, value, visiblePaths(notes(), settings));
+    resolved.push({ ref: value, path });
+    return path;
+  });
+  return { args: rewritten, resolved };
 }
