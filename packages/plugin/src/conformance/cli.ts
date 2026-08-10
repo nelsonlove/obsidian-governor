@@ -20,6 +20,7 @@ import { makeRegistry, DEFAULT_SCHEMES, type SchemeInstanceConfig } from "../ker
 import { buildSnapshot } from "./snapshot.js";
 import { runEngine, ENGINE_ID } from "./engine.js";
 import { vocabPack, schemePack, structurePack, portPack, stePack, driftPack } from "./packs/index.js";
+import { vaultConventionsFrom } from "./vault-conventions.js";
 import { parseBaseline, renderBaseline, ratchet, type RatchetResult } from "./ratchet.js";
 import type { Finding } from "./finding.js";
 import type { RulePack } from "./rule-pack.js";
@@ -79,10 +80,14 @@ export async function runConformance(opts: RunOpts): Promise<RunResult> {
   // port_lint / ste_lint / drift_audit — the full legacy rail, all in TS).
   // Opt-in until the scope ruling + staged rebaseline.
   if (opts.legacyPacks ?? true) {
-    packs.push(structurePack());
+    // Conventions are resolved ONCE per run and threaded in, never read at
+    // module load — an exported constant that varies with ambient env makes
+    // the suite non-hermetic (self-review finding on this PR).
+    const conv = vaultConventionsFrom(process.env);
+    packs.push(structurePack({ conventions: conv }));
     packs.push(portPack());
     packs.push(stePack());
-    packs.push(driftPack());
+    packs.push(driftPack(conv));
   }
 
   const findings = runEngine(packs, snapshot);

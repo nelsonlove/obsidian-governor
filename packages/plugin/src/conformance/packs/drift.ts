@@ -46,24 +46,22 @@
 // parity -- see issue #136. Do not "simplify" this back to `target: rest` for
 // E/F without re-reading that issue.
 
-import { vaultConventionsFrom } from "../vault-conventions.js";
+import { DEFAULT_VAULT_CONVENTIONS, type VaultConventions } from "../vault-conventions.js";
 import type { Finding } from "../finding.js";
 import type { RulePack, SourceFile, VaultSnapshot } from "../rule-pack.js";
 import { firstSegment, hasDotOrTrashSegment, isUnderscoreRoot } from "./legacy-scope.js";
-
-const CONV = vaultConventionsFrom(process.env);
 
 export const DRIFT_PACK_ID = "drift_audit";
 
 /** Registries root (drift_audit.py's FBF) — where `.action`/`.property`/`.type`/
  * `.tag` registry notes live. */
-export const DEFAULT_REGISTRIES_ROOT = CONV.registriesRoot;
+export const DEFAULT_REGISTRIES_ROOT = DEFAULT_VAULT_CONVENTIONS.registriesRoot;
 /** The System spine (drift_audit.py's SYS) — J's category-collision scan root. */
-const SYS_ROOT = CONV.systemRoot;
+
 /** Where user-script/module surfaces resolve (drift_audit.py's BASE02). */
-const BASE02_ROOT = CONV.artifactsRoot;
+
 /** The plugin-stack note (drift_audit.py's PLUGSTACK). */
-const PLUGSTACK_PATH = CONV.pluginStackPath;
+
 
 // ── Python-parity string helpers (verbatim regex ports) ───────────────────────
 
@@ -125,8 +123,9 @@ function pyTruthy(v: unknown): boolean {
 
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 /** drift_audit.py UID_EXEMPT — the daily-note template's `uid` is empty on
- * purpose (copy payload, not identity), so it is excluded from E/F. */
-const UID_EXEMPT = new Set(CONV.uidExemptPaths);
+ * purpose (copy payload, not identity), so it is excluded from E/F. Derived
+ * per-pack from the injected conventions, never captured at module load: an
+ * exported constant that varies with ambient env makes the suite non-hermetic. */
 /** drift_audit.py UI_CHOICES — utility choices that drive the UI/editor and
  * carry no `.action` entry; excluded from the A direction-1 finding. */
 const UI_CHOICES = new Set(["Reveal slot in Finder", "Convert text to property link"]);
@@ -136,7 +135,12 @@ interface RegistryNote {
   text: string;
 }
 
-export function driftPack(): RulePack {
+export function driftPack(conv: VaultConventions = DEFAULT_VAULT_CONVENTIONS): RulePack {
+  const UID_EXEMPT = new Set(conv.uidExemptPaths);
+  const REGISTRIES_ROOT = conv.registriesRoot;
+  const SYS_ROOT = conv.systemRoot;
+  const BASE02_ROOT = conv.artifactsRoot;
+  const PLUGSTACK_PATH = conv.pluginStackPath;
   return {
     id: DRIFT_PACK_ID,
     run(snapshot: VaultSnapshot): Finding[] {

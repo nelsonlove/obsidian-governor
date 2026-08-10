@@ -18,12 +18,10 @@
 // the pack emits neither, exactly as the ratchet parser dropped them. The pack
 // id IS the `script` field: "conformance_check".
 
-import { vaultConventionsFrom } from "../vault-conventions.js";
+import { DEFAULT_VAULT_CONVENTIONS, type VaultConventions } from "../vault-conventions.js";
 import type { Finding } from "../finding.js";
 import type { RulePack, SourceFile, VaultSnapshot } from "../rule-pack.js";
 import { firstSegment, hasDotOrTrashSegment } from "./legacy-scope.js";
-
-const CONV = vaultConventionsFrom(process.env);
 
 export const STRUCTURE_PACK_ID = "conformance_check";
 
@@ -32,7 +30,7 @@ export const STRUCTURE_PACK_ID = "conformance_check";
  * files under here. `{% include %}` still resolves against the full blueprint
  * listing, matching the Python (which reads include targets off disk by path). */
 export const DEFAULT_BLUEPRINT_ROOT =
-  CONV.registriesRoot;
+  DEFAULT_VAULT_CONVENTIONS.registriesRoot;
 
 const COMMENT = /{#[\s\S]*?#}/g;
 const INCLUDE = /{%-?\s*include\s+"([^"]+)"\s*-?%}/g;
@@ -111,12 +109,17 @@ export function noteInfo(text: string): { bp: string | null; heads: string[] } {
 }
 
 export interface StructurePackOpts {
+  /** Vault-shaped conventions (ungoverned roots, registries root). Injected
+   * rather than read from the environment at module load: an exported constant
+   * that varies with ambient env makes the test suite non-hermetic. */
+  conventions?: VaultConventions;
   /** Vault-relative blueprint-registry root; defaults to DEFAULT_BLUEPRINT_ROOT. */
   blueprintRoot?: string;
 }
 
 export function structurePack(opts: StructurePackOpts = {}): RulePack {
   const registryRoot = (opts.blueprintRoot ?? DEFAULT_BLUEPRINT_ROOT).replace(/\/$/, "");
+  const conv = opts.conventions ?? DEFAULT_VAULT_CONVENTIONS;
   return {
     id: STRUCTURE_PACK_ID,
     run(snapshot: VaultSnapshot): Finding[] {
@@ -150,7 +153,7 @@ export function structurePack(opts: StructurePackOpts = {}): RulePack {
         // ungoverned Assent / Vault archaeology roots.
         if (hasDotOrTrashSegment(src.path)) continue;
         const root = firstSegment(src.path);
-        if (root.startsWith("_") || CONV.ungovernedRoots.includes(root)) continue;
+        if (root.startsWith("_") || conv.ungovernedRoots.includes(root)) continue;
 
         const { bp, heads } = noteInfo(src.text);
         if (bp === null) continue;
