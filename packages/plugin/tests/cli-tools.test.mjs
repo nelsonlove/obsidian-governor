@@ -12,8 +12,11 @@ import {
   isDangerousCliCommand,
   buildCliArgs,
   registerCliTools,
+  cliAcceptRefusal,
+  CLI_OPAQUE_ACCEPT_RESIDUAL,
 } from "../src/mcp/tools-cli.js";
 import { fakeServer } from "./fake-server.mjs";
+import { parseYaml } from "./obsidian-stub.mjs";
 
 // ── findObsidianBinary ────────────────────────────────────────────────────────
 
@@ -184,5 +187,169 @@ describe("registerCliTools", () => {
     const res = await server.tools.get("obsidian_cli").handler({ command: "Eval" });
     assert.equal(res.isError, true);
     assert.equal(executed, false);
+  });
+});
+
+// ── cliAcceptRefusal — the accept-forbidden guard on the CLI path (pure) ───────
+//
+// The scar "the accept verb goes in no API" reaches the CLI proxy here, reusing
+// the SAME accepted-family rule as the MCP write primitive. property:set and
+// content writes that would INTRODUCE acceptance are refused; everything else,
+// including acceptance-status: proposed, is clean.
+
+describe("cliAcceptRefusal — property:set family", () => {
+  test("REJECTS acceptance-status=accepted (documented name=/value= form)", () => {
+    assert.ok(cliAcceptRefusal("property:set", { name: "acceptance-status", value: "accepted", file: "Note" }, parseYaml));
+  });
+  test("REJECTS acceptance-status=accepted (direct shorthand form)", () => {
+    assert.ok(cliAcceptRefusal("property:set", { "acceptance-status": "accepted" }, parseYaml));
+  });
+  test("REJECTS acceptance_status underscore variant", () => {
+    assert.ok(cliAcceptRefusal("property:set", { name: "acceptance_status", value: "accepted" }, parseYaml));
+  });
+  test("REJECTS an accepted-* prefixed value (accepted-by-review)", () => {
+    assert.ok(cliAcceptRefusal("property:set", { name: "acceptance-status", value: "accepted-by-review" }, parseYaml));
+  });
+  for (const key of ["accepted", "accepted-by", "accepted-on", "accepted_by", "accepted_on"]) {
+    test(`REJECTS the provenance key ${key} (name=/value= form)`, () => {
+      assert.ok(cliAcceptRefusal("property:set", { name: key, value: "Nelson" }, parseYaml));
+    });
+    test(`REJECTS the provenance key ${key} (shorthand form)`, () => {
+      assert.ok(cliAcceptRefusal("property:set", { [key]: "Nelson" }, parseYaml));
+    });
+  }
+  test("frontmatter:add alias is guarded too", () => {
+    assert.ok(cliAcceptRefusal("frontmatter:set", { name: "acceptance-status", value: "accepted" }, parseYaml));
+  });
+  // ── ALLOWED — legitimate property sets are untouched ──
+  test("ALLOWS acceptance-status=proposed (the value agents DO write)", () => {
+    assert.equal(cliAcceptRefusal("property:set", { name: "acceptance-status", value: "proposed" }, parseYaml), null);
+  });
+  test("ALLOWS a property literally named 'status' set to 'accepted' (not the acceptance field)", () => {
+    assert.equal(cliAcceptRefusal("property:set", { name: "status", value: "accepted" }, parseYaml), null);
+  });
+  test("ALLOWS a normal property:set foo=bar", () => {
+    assert.equal(cliAcceptRefusal("property:set", { name: "foo", value: "bar", file: "Note" }, parseYaml), null);
+  });
+  test("ALLOWS property:get / property:remove (not set-family)", () => {
+    assert.equal(cliAcceptRefusal("property:get", { name: "acceptance-status" }, parseYaml), null);
+    assert.equal(cliAcceptRefusal("property:remove", { name: "acceptance-status" }, parseYaml), null);
+  });
+});
+
+describe("cliAcceptRefusal — content writes (create/append/prepend + periodic)", () => {
+  const fence = (v) => `---\nacceptance-status: ${v}\n---\nbody`;
+  for (const cmd of ["create", "append", "prepend", "base:create", "daily:append", "weekly:prepend", "monthly:create"]) {
+    test(`REJECTS ${cmd} whose content carries an accepted fence`, () => {
+      assert.ok(cliAcceptRefusal(cmd, { content: fence("accepted") }, parseYaml));
+    });
+  }
+  test("REJECTS base:create with an accepted fence (same name=/content= writer as create)", () => {
+    assert.ok(cliAcceptRefusal("base:create", { name: "My Base", content: fence("accepted") }, parseYaml));
+  });
+  test("ALLOWS a normal base:create (no acceptance)", () => {
+    assert.equal(cliAcceptRefusal("base:create", { name: "My Base", content: "# View\n\nrows" }, parseYaml), null);
+  });
+  test("REJECTS an accepted-family VALUE array form (acceptance-status: [accepted])", () => {
+    assert.ok(cliAcceptRefusal("create", { content: "---\nacceptance-status: [accepted]\n---\nx" }, parseYaml));
+  });
+  test("REJECTS a block-sequence accepted form", () => {
+    assert.ok(cliAcceptRefusal("create", { content: "---\nacceptance-status:\n  - accepted\n---\nx" }, parseYaml));
+  });
+  test("REJECTS an accepted-by provenance key in a fence", () => {
+    assert.ok(cliAcceptRefusal("append", { content: "---\naccepted-by: Nelson\n---\n" }, parseYaml));
+  });
+  test("REJECTS an escaped-newline fence (\\n interpreted by the CLI)", () => {
+    assert.ok(cliAcceptRefusal("create", { content: "---\\nacceptance-status: accepted\\n---\\nbody" }, parseYaml));
+  });
+  test("REJECTS an embedded (non-leading) accepted fence, conservatively", () => {
+    assert.ok(cliAcceptRefusal("append", { content: "some body\n\n---\nacceptance-status: accepted\n---\n" }, parseYaml));
+  });
+  // ── ALLOWED — legitimate content writes are untouched ──
+  test("ALLOWS a plain content write with no frontmatter", () => {
+    assert.equal(cliAcceptRefusal("append", { content: "New line" }, parseYaml), null);
+  });
+  test("ALLOWS content whose fence sets acceptance-status: proposed", () => {
+    assert.equal(cliAcceptRefusal("create", { content: fence("proposed") }, parseYaml), null);
+  });
+  test("ALLOWS a heading that merely mentions the word accepted in prose", () => {
+    assert.equal(cliAcceptRefusal("create", { content: "# Accepted papers\n\nNotes about accepted submissions." }, parseYaml), null);
+  });
+  test("fails CLOSED on a fence when no parser is injected", () => {
+    assert.ok(cliAcceptRefusal("create", { content: fence("proposed") }, undefined));
+  });
+});
+
+describe("cliAcceptRefusal — unrelated commands are clean", () => {
+  for (const cmd of ["read", "search", "history:list", "help", "backlinks", "quickadd", "quickadd:run", "eval", "command"]) {
+    test(`${cmd} is not accept-guarded (returns null)`, () => {
+      assert.equal(cliAcceptRefusal(cmd, { file: "Note", query: "accepted" }, parseYaml), null);
+    });
+  }
+  test("the opaque-macro residual is named for the report/description", () => {
+    assert.deepEqual(CLI_OPAQUE_ACCEPT_RESIDUAL, ["command", "eval", "quickadd", "quickadd:run", "quickadd:run-template"]);
+  });
+});
+
+// ── handler integration: refused BEFORE exec, coded Error [accept_forbidden] ───
+
+describe("registerCliTools — accept guard wired into the handler", () => {
+  function recordingServer() {
+    const server = fakeServer();
+    const calls = [];
+    const exec = async (bin, args) => { calls.push(args); return { exitCode: 0, stdout: "ok", stderr: "", timedOut: false }; };
+    registerCliTools(server, ctxWith({}), { binary: "/bin/obsidian", exec, parseYaml });
+    return { handler: server.tools.get("obsidian_cli").handler, calls };
+  }
+
+  test("property:set acceptance-status=accepted is refused and NOT executed", async () => {
+    const { handler, calls } = recordingServer();
+    const res = await handler({ command: "property:set", params: { name: "acceptance-status", value: "accepted", file: "Note" } });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /Error \[accept_forbidden\]/);
+    assert.equal(calls.length, 0);
+  });
+
+  test("create with an accepted fence is refused and NOT executed", async () => {
+    const { handler, calls } = recordingServer();
+    const res = await handler({ command: "create", params: { name: "N", content: "---\nacceptance-status: accepted\n---\nbody" } });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /accept_forbidden/);
+    assert.equal(calls.length, 0);
+  });
+
+  test("append with an accepted fence is refused and NOT executed", async () => {
+    const { handler, calls } = recordingServer();
+    const res = await handler({ command: "append", params: { file: "N", content: "---\naccepted-on: 2026-08-10\n---\n" } });
+    assert.equal(res.isError, true);
+    assert.equal(calls.length, 0);
+  });
+
+  test("a normal property:set foo=bar runs", async () => {
+    const { handler, calls } = recordingServer();
+    const res = await handler({ command: "property:set", params: { name: "foo", value: "bar", file: "Note" } });
+    assert.notEqual(res.isError, true);
+    assert.equal(calls.length, 1);
+  });
+
+  test("acceptance-status=proposed runs (agents DO write proposed)", async () => {
+    const { handler, calls } = recordingServer();
+    const res = await handler({ command: "property:set", params: { name: "acceptance-status", value: "proposed", file: "Note" } });
+    assert.notEqual(res.isError, true);
+    assert.equal(calls.length, 1);
+  });
+
+  test("a normal content write runs", async () => {
+    const { handler, calls } = recordingServer();
+    const res = await handler({ command: "create", params: { name: "N", content: "# Hello" } });
+    assert.notEqual(res.isError, true);
+    assert.equal(calls.length, 1);
+  });
+
+  test("RESIDUAL: quickadd is NOT stopped by the accept guard (documented, left for policy)", async () => {
+    const { handler, calls } = recordingServer();
+    const res = await handler({ command: "quickadd", params: { choice: "Some Macro" } });
+    assert.notEqual(res.isError, true);
+    assert.equal(calls.length, 1);
   });
 });

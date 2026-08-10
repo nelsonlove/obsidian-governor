@@ -125,7 +125,12 @@ test("external tools register namespaced with restrictive-default annotations", 
     { ownerId: "jd-survey", toolName: "jd_survey_x", spec: spec("x") },
     { ownerId: "jd-survey", toolName: "jd_survey_ro", spec: spec("ro", { annotations: { readOnlyHint: true } }) },
   ];
-  registerExternalTools(server, fakeApp(["jd-survey"]), fakeCtx({ readOnly: false, allowlist: [] }, entries));
+  // MEDIUM-4: a read-only claim is believed only for a TRUSTED publisher.
+  registerExternalTools(
+    server,
+    fakeApp(["jd-survey"]),
+    fakeCtx({ readOnly: false, allowlist: [], trustedReadOnlyPlugins: ["jd-survey"] }, entries)
+  );
   assert.equal(server.calls[0].name, "jd_survey_x");
   assert.equal(server.calls[0].def.annotations.readOnlyHint, false); // mutating by default
   assert.equal(server.calls[1].def.annotations.readOnlyHint, true);
@@ -247,10 +252,14 @@ test("F3: mutating tool passes when allowlist is empty (no restriction)", async 
   assert.deepEqual(res.structuredContent, { ok: 1 });
 });
 
-test("F3: read-only annotated tool not blocked by allowlist check", async () => {
+test("F3: TRUSTED read-only tool not blocked by allowlist check", async () => {
   const entries = [{ ownerId: "p", toolName: "p_ro", spec: spec("ro", { annotations: { readOnlyHint: true } }) }];
   const server = fakeServer();
-  registerExternalTools(server, fakeApp(["p"]), fakeCtx({ readOnly: false, allowlist: ["ok"] }, entries));
+  registerExternalTools(
+    server,
+    fakeApp(["p"]),
+    fakeCtx({ readOnly: false, allowlist: ["ok"], trustedReadOnlyPlugins: ["p"] }, entries)
+  );
   const res = await server.calls[0].handler({ note: "x" }); // no recognized path key — but read-only: allowed
   assert.equal(res.isError, undefined);
 });
@@ -284,4 +293,108 @@ test("Backstop: registerTool throwing for one entry still registers the others",
     registerExternalTools(badServer, fakeApp(["p"]), fakeCtx({ readOnly: false, allowlist: [] }, entries))
   );
   assert.deepEqual(registered, ["p_a", "p_c"]);
+});
+
+// ── MEDIUM-4: an external tool's read-only claim is distrusted by default ─────
+//
+// `readOnlyHint: true` from a third-party plugin is an assertion about code this
+// host cannot inspect, and believing it exempts the publisher from the queue,
+// the journal, the allowlist, the kernel arguments and read-only mode all at
+// once. So it is believed only for publisher ids the user has listed.
+
+import { makeGuarded, withKernelArgs } from "../src/mcp/guarded.ts";
+
+const ACTOR = { transport: "mcp", client: "claude-code/1.0.0", connection: "c1" };
+const roSpec = (name) => spec(name, { annotations: { readOnlyHint: true } });
+
+test("MEDIUM-4: an UNTRUSTED read-only claim is registered as mutating", () => {
+  const server = fakeServer();
+  const entries = [{ ownerId: "p", toolName: "p_ro", spec: roSpec("ro") }];
+  registerExternalTools(server, fakeApp(["p"]), fakeCtx({ readOnly: false, allowlist: [] }, entries));
+  assert.equal(
+    server.calls[0].def.annotations.readOnlyHint,
+    false,
+    "an unverifiable read-only claim must not buy an exemption from the kernel"
+  );
+});
+
+test("MEDIUM-4: the empty default trusts nobody, and trust is exact on the RAW id", () => {
+  const entries = [{ ownerId: "jd-survey", toolName: "jd_survey_ro", spec: roSpec("ro") }];
+  const registered = (settings) => {
+    const server = fakeServer();
+    registerExternalTools(server, fakeApp(["jd-survey"]), fakeCtx(settings, entries));
+    return server.calls[0].def.annotations.readOnlyHint;
+  };
+  assert.equal(registered({ readOnly: false, allowlist: [] }), false, "default: trust nobody");
+  assert.equal(registered({ readOnly: false, allowlist: [], trustedReadOnlyPlugins: [] }), false);
+  assert.equal(
+    registered({ readOnly: false, allowlist: [], trustedReadOnlyPlugins: ["jd_survey"] }),
+    false,
+    "the SANITIZED tool-name form must not inherit trust — ids that sanitize alike are different plugins"
+  );
+  assert.equal(registered({ readOnly: false, allowlist: [], trustedReadOnlyPlugins: ["other"] }), false);
+  assert.equal(registered({ readOnly: false, allowlist: [], trustedReadOnlyPlugins: ["jd-survey"] }), true);
+});
+
+test("MEDIUM-4: an untrusted read-only tool is allowlist-scoped like any mutator", async () => {
+  const entries = [{ ownerId: "p", toolName: "p_ro", spec: roSpec("ro") }];
+  const server = fakeServer();
+  registerExternalTools(server, fakeApp(["p"]), fakeCtx({ readOnly: false, allowlist: ["ok"] }, entries));
+  const res = await server.calls[0].handler({ note: "x" }); // no recognized path key
+  assert.equal(res.isError, true);
+  assert.match(res.content[0].text, /blocked/);
+});
+
+test("MEDIUM-4: read-only mode blocks an untrusted read-only tool entirely", async () => {
+  const entries = [{ ownerId: "p", toolName: "p_ro", spec: roSpec("ro") }];
+  const server = fakeServer();
+  registerExternalTools(server, fakeApp(["p"]), fakeCtx({ readOnly: true, allowlist: [] }, entries));
+  // The block lands where every other one does: the guard, keyed on the
+  // annotations this module chose.
+  const guarded = makeGuarded({ getSettings: () => ({ readOnly: true, allowlist: [] }), actor: () => ACTOR });
+  const { name, def, handler } = server.calls[0];
+  const res = await guarded(def, handler, name)({}, {});
+  assert.equal(res.isError, true);
+  assert.match(res.content[0].text, /Error \[read_only\]/, "an unverifiable read-only claim cannot survive read-only mode");
+});
+
+test("MEDIUM-4: a TRUSTED read-only tool still works in read-only mode", async () => {
+  const entries = [{ ownerId: "p", toolName: "p_ro", spec: roSpec("ro") }];
+  const server = fakeServer();
+  const settings = { readOnly: true, allowlist: [], trustedReadOnlyPlugins: ["p"] };
+  registerExternalTools(server, fakeApp(["p"]), fakeCtx(settings, entries));
+  const guarded = makeGuarded({ getSettings: () => settings, actor: () => ACTOR });
+  const { name, def, handler } = server.calls[0];
+  const res = await guarded(def, handler, name)({}, {});
+  assert.equal(res.isError, undefined);
+  assert.deepEqual(res.structuredContent, { ok: 1 });
+});
+
+test("MEDIUM-4: an untrusted read-only tool gets the kernel arguments and is journaled", async () => {
+  const server = fakeServer();
+  const entries = [{ ownerId: "p", toolName: "p_ro", spec: roSpec("ro") }];
+  registerExternalTools(server, fakeApp(["p"]), fakeCtx({ readOnly: false, allowlist: [] }, entries));
+  const { def } = server.calls[0];
+
+  // withKernelArgs keys on the same annotations, so the declaration follows.
+  const withArgs = withKernelArgs(def);
+  assert.ok("if_rev" in withArgs.inputSchema);
+  assert.ok("idempotency_key" in withArgs.inputSchema);
+
+  // …and the call is journaled, because the journal keys on it too.
+  const journaled = [];
+  const kernel = {
+    runMutation: async (mc, run) => { journaled.push(mc.op); return run(); },
+  };
+  const guarded = makeGuarded({ getSettings: () => ({ readOnly: false, allowlist: [] }), kernel, actor: () => ACTOR });
+  await guarded(def, server.calls[0].handler, "p_ro")({}, {});
+  assert.deepEqual(journaled, ["p_ro"], "an untrusted read-only tool must reach the audit stream");
+});
+
+test("MEDIUM-4: the vault-mcp-api contract is unchanged — publishers still send readOnlyHint", () => {
+  // The SDK side needs no change: the spec shape is identical, and the entry is
+  // registered either way. What changed is only whether this HOST believes it.
+  const reg = new ExternalToolRegistry();
+  reg.registerTools("p", [roSpec("ro")]);
+  assert.equal(reg.entries()[0].spec.annotations.readOnlyHint, true, "the publisher's declaration is preserved verbatim");
 });
