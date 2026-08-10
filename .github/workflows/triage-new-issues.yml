@@ -1,0 +1,55 @@
+name: Triage new issues
+
+# The fleet's priority rule ("no new work while a HIGH is unowned") is evaluated as
+# `gh issue list --milestone <current>`. An issue filed without a milestone is therefore
+# invisible to that check no matter how severe it is — which has already hidden the
+# project's worst open findings. This stamps the current milestone on arrival so the
+# rule is self-maintaining, and flags anything still missing a severity label.
+
+on:
+  issues:
+    types: [opened, reopened]
+
+permissions:
+  issues: write
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const { owner, repo } = context.repo;
+
+            // "Current milestone" = the open milestone due soonest; when none carry a due
+            // date (the usual case here), the lowest number, which is the oldest still open.
+            const milestones = await github.paginate(github.rest.issues.listMilestones, {
+              owner, repo, state: 'open', per_page: 100,
+            });
+            if (milestones.length === 0) {
+              core.info('No open milestone; nothing to stamp.');
+            } else if (issue.milestone) {
+              core.info(`#${issue.number} already milestoned (${issue.milestone.title}).`);
+            } else {
+              const dated = milestones.filter(m => m.due_on);
+              const current = dated.length
+                ? dated.sort((a, b) => new Date(a.due_on) - new Date(b.due_on))[0]
+                : milestones.sort((a, b) => a.number - b.number)[0];
+              await github.rest.issues.update({
+                owner, repo, issue_number: issue.number, milestone: current.number,
+              });
+              core.notice(`#${issue.number} → milestone "${current.title}".`);
+            }
+
+            // Severity cannot be inferred, so this never guesses one — it marks the gap
+            // instead, which keeps an untriaged issue visible rather than silently plausible.
+            const SEVERITY = ['bug', 'security', 'enhancement', 'documentation', 'question'];
+            const labels = (issue.labels || []).map(l => (typeof l === 'string' ? l : l.name));
+            if (!labels.some(l => SEVERITY.includes(l))) {
+              await github.rest.issues.addLabels({
+                owner, repo, issue_number: issue.number, labels: ['needs-triage'],
+              });
+              core.notice(`#${issue.number} has no severity label → needs-triage.`);
+            }
