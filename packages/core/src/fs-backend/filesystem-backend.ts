@@ -29,6 +29,18 @@ import type {
  * to populate it before using index-dependent operations (resolve, backlinks,
  * outlinks, searchByFrontmatter). The vault watcher (vault-watcher.ts) is NOT
  * auto-started here — it's infrastructure that the server layer manages.
+ *
+ * ── accept-forbidden guard (issue #104) ─────────────────────────────────────
+ *
+ * The "the accept verb is in no API" invariant is enforced at the SHARED
+ * primitive underneath this class — `VaultImpl` (fs-backend/vault.ts), which
+ * both this class (via `createVaultAt`) AND packages/server's fs-failover
+ * module-level singleton functions (writeNote/appendNote/setFrontmatterField/
+ * patchNote, exported from vault.ts, bound to a private module-level
+ * VaultImpl) delegate to. Guarding VaultImpl directly — rather than wrapping
+ * it again here — means every VaultBackend surface inherits the SAME check
+ * from the SAME implementation, instead of two guard call sites that could
+ * drift apart. This class is plain delegation, unchanged from before #104.
  */
 export class FilesystemBackend implements VaultBackend {
   private readonly vault: ReturnType<typeof createVaultAt>;

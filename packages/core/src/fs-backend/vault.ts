@@ -9,6 +9,13 @@ import type {
   PatchAnchor,
   PatchOp,
 } from "../vault-backend.js";
+import {
+  AcceptForbiddenError,
+  acceptTransitionReason,
+  parseGuardFrontmatter,
+  stripLeadingBom,
+  LEADING_FRONTMATTER_RE,
+} from "../accept-guard.js";
 
 /**
  * All filesystem access for the vault goes through this module so that
@@ -73,16 +80,26 @@ interface FrontmatterRegion {
   after: string;
 }
 
+// Binds to the SAME canonical recognizer the accept-guard uses
+// (accept-guard.ts's LEADING_FRONTMATTER_RE / stripLeadingBom) rather than a
+// second, narrower `/^---\n/`-only pattern — a frontmatter EDITOR that
+// recognizes less than the guard (or less than Obsidian) treats an
+// existing BOM/CRLF/trailing-whitespace fence as absent and PREPENDS a
+// second frontmatter block instead of editing the real one (issue #104
+// sibling-audit finding). `before` carries a stripped BOM back through so
+// `reassemble` restores it ahead of the (re-)serialized fence.
 function locateFrontmatter(text: string): FrontmatterRegion {
-  const match = text.match(/^---\n([\s\S]*?)\n---\n?/);
+  const bom = text.charCodeAt(0) === 0xfeff ? text[0] : "";
+  const stripped = bom ? text.slice(1) : text;
+  const match = LEADING_FRONTMATTER_RE.exec(stripped);
   if (!match) {
     return { match: null, body: "", before: "", after: text };
   }
   return {
     match,
     body: match[1],
-    before: "",
-    after: text.slice(match[0].length),
+    before: bom,
+    after: stripped.slice(match[0].length),
   };
 }
 
@@ -360,6 +377,48 @@ class VaultImpl {
     return path.relative(this.root, abs).split(path.sep).join("/");
   }
 
+  // ── accept-forbidden guard (issue #104) ─────────────────────────────────────
+  //
+  // Enforced HERE — VaultImpl is the ONE implementation both `FilesystemBackend`
+  // (per-instance, via `createVaultAt`) and packages/server's fs-failover
+  // module-level singleton functions (writeNote/appendNote/setFrontmatterField/
+  // patchNote, exported below) delegate to — so every write surface on the
+  // filesystem backend inherits the SAME check from the SAME place, matching
+  // ObsidianBackend's guard (packages/plugin/src/mcp/obsidian-backend.ts).
+
+  /** The note's current on-disk content, or `null` when it doesn't exist / can't be read. */
+  private async diskContentSafe(relPath: string): Promise<string | null> {
+    try {
+      const abs = this.resolveInVault(relPath);
+      return await fs.readFile(abs, "utf8");
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Reject a full-content write whose RESULTING frontmatter introduces/changes
+   * acceptance. The on-disk value is read ONLY when the result asserts
+   * acceptance at all (the common write pays no extra read), so a legitimate
+   * edit carrying an existing accepted value forward is allowed.
+   */
+  private async guardWrittenContent(relPath: string, resultingContent: string): Promise<void> {
+    const after = parseGuardFrontmatter(resultingContent);
+    if (!after || !acceptTransitionReason(null, after)) return;
+    const before = await this.diskContentSafe(relPath);
+    const reason = acceptTransitionReason(before ? parseGuardFrontmatter(before) : null, after);
+    if (reason) throw new AcceptForbiddenError(reason);
+  }
+
+  /** Reject a frontmatter-level edit (manage_frontmatter set / patch) whose result introduces/changes acceptance. */
+  private guardResultingFrontmatter(
+    before: Record<string, unknown> | null,
+    after: Record<string, unknown>,
+  ): void {
+    const reason = acceptTransitionReason(before, after);
+    if (reason) throw new AcceptForbiddenError(reason);
+  }
+
   async listNotes(
     subdir: string | undefined,
     limit: number,
@@ -394,6 +453,11 @@ class VaultImpl {
     if (!relPath.toLowerCase().endsWith(".md")) {
       throw new Error("Note path must end in .md");
     }
+    // Accept-forbidden guard over the whole note being written (issue #104):
+    // a body that embeds `---\nacceptance-status: accepted\n---` lands
+    // verbatim, so the guard parses the FINAL content, not a structured
+    // argument — checked BEFORE any disk mutation.
+    await this.guardWrittenContent(relPath, content);
     let existed = true;
     try {
       await fs.access(abs);
@@ -422,6 +486,13 @@ class VaultImpl {
     } catch {
       existed = false;
     }
+    // Appended text lands at the END, so it normally cannot touch frontmatter
+    // — EXCEPT when the note is new/empty, where the appended leading `---`
+    // fence becomes the note's real frontmatter. Guard the FINAL content
+    // (existing + appended, matching the "\n" prefix used below) uniformly.
+    const existingContent = existed ? await this.diskContentSafe(relPath) : null;
+    const resultingContent = existingContent === null ? content : `${existingContent}\n${content}`;
+    await this.guardWrittenContent(relPath, resultingContent);
     await fs.mkdir(path.dirname(abs), { recursive: true });
     const prefix = existed ? "\n" : "";
     await fs.appendFile(abs, prefix + content, "utf8");
@@ -524,6 +595,12 @@ class VaultImpl {
       throw new Error("Note path must end in .md");
     }
     const text = await fs.readFile(abs, "utf8");
+    // Accept-forbidden guard over the RESULTING frontmatter (current disk
+    // state with this one field set): setting acceptance-status=accepted or
+    // an accepted-* field is rejected unless the note already held that exact
+    // value. Checked BEFORE any disk mutation.
+    const beforeFm = parseGuardFrontmatter(text);
+    this.guardResultingFrontmatter(beforeFm, { ...(beforeFm ?? {}), [key]: value });
     const region = locateFrontmatter(text);
     const serialized = serializeKey(key, value);
 
@@ -591,9 +668,15 @@ class VaultImpl {
     }
     const text = await fs.readFile(abs, "utf8");
 
-    const fmMatch = text.match(/^---\n[\s\S]*?\n---\n?/);
-    const fmText = fmMatch ? fmMatch[0] : "";
-    const body = fmMatch ? text.slice(fmMatch[0].length) : text;
+    // Binds to the SAME canonical recognizer as the accept-guard and
+    // locateFrontmatter (issue #104 sibling-audit) — a narrower pattern here
+    // would let an anchor land INSIDE a BOM/CRLF-fenced frontmatter block
+    // this function fails to recognize as frontmatter at all.
+    const bom = text.charCodeAt(0) === 0xfeff ? text[0] : "";
+    const stripped = bom ? text.slice(1) : text;
+    const fmMatch = LEADING_FRONTMATTER_RE.exec(stripped);
+    const fmText = fmMatch ? bom + fmMatch[0] : "";
+    const body = fmMatch ? stripped.slice(fmMatch[0].length) : text;
     const bodyLines = body.split("\n");
 
     const range =
@@ -629,7 +712,16 @@ class VaultImpl {
       ];
     }
 
-    await fs.writeFile(abs, fmText + newBodyLines.join("\n"), "utf8");
+    const resultingText = fmText + newBodyLines.join("\n");
+    // Accept-forbidden guard: an anchor can land at the very first line of a
+    // fence-less note for EITHER op:"replace" or op:"prepend" against a
+    // leading block anchor (issue #104 review finding — broader than just
+    // "prepend"), which would let the patched content's own leading `---`
+    // fence become the note's real frontmatter. Guard the ACTUAL resulting
+    // content computed above (not a re-derived approximation) against the
+    // note's on-disk frontmatter.
+    await this.guardWrittenContent(relPath, resultingText);
+    await fs.writeFile(abs, resultingText, "utf8");
     return { found: true, anchor, op, previous };
   }
 
