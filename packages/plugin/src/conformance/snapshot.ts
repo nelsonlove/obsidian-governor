@@ -20,7 +20,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { parseAllFrontmatter } from "@vault-mcp/core";
 import type { VocabNote } from "../kernel/vocab/blueprint.js";
-import type { VaultSnapshot } from "./rule-pack.js";
+import type { SourceFile, VaultSnapshot } from "./rule-pack.js";
 
 export interface SnapshotOpts {
   /** Absolute content root to walk. */
@@ -59,6 +59,13 @@ export async function buildSnapshot(opts: SnapshotOpts): Promise<VaultSnapshot> 
   const skip = new Set([...DEFAULT_SKIP, ...(opts.skipDirs ?? [])]);
   const notes: VocabNote[] = [];
   const paths: string[] = [];
+  // Raw source text for the ported legacy packs (structure/port/ste). The `.md`
+  // raw text feeds port/ste (line-by-line regex scans over the whole file,
+  // frontmatter included); `.blueprint` raw text feeds the structure pack.
+  // Universal-newline-normalized so `^---\n` anchors bite on CRLF-authored
+  // files, matching Python's `Path.read_text`.
+  const sources: SourceFile[] = [];
+  const blueprints: SourceFile[] = [];
 
   async function walk(absDir: string): Promise<void> {
     let entries;
@@ -78,21 +85,35 @@ export async function buildSnapshot(opts: SnapshotOpts): Promise<VaultSnapshot> 
       }
       const isMd = entry.name.endsWith(".md");
       const isFileclass = entry.name.endsWith(".fileclass");
-      if (!isMd && !isFileclass) continue;
+      const isBlueprint = entry.name.endsWith(".blueprint");
+      if (!isMd && !isFileclass && !isBlueprint) continue;
       let text = "";
       try {
         text = await readFile(abs, "utf8");
       } catch {
         continue; // unreadable file — skip
       }
-      const { frontmatter, body } = splitNote(text);
+      // Universal-newline normalize (CRLF/CR → LF) up front, so both the parsed
+      // listing and the raw sources see the same LF text Python's read_text saw.
+      const raw = text.replace(/\r\n?/g, "\n");
+      if (isBlueprint) {
+        blueprints.push({ path: vaultPath, text: raw });
+        continue; // blueprints are not vocab/scheme notes
+      }
+      const { frontmatter, body } = splitNote(raw);
       notes.push({ path: vaultPath, frontmatter, body });
-      if (isMd) paths.push(vaultPath);
+      if (isMd) {
+        paths.push(vaultPath);
+        sources.push({ path: vaultPath, text: raw });
+      }
     }
   }
 
   await walk(opts.root);
   notes.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   paths.sort();
-  return { notes, paths };
+  const byPath = (a: SourceFile, b: SourceFile) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  sources.sort(byPath);
+  blueprints.sort(byPath);
+  return { notes, paths, sources, blueprints };
 }
