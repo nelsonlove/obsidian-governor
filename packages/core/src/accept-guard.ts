@@ -198,16 +198,78 @@ export function acceptForbiddenReason(fm: Record<string, unknown> | undefined | 
 // It binds to the SAME `LEADING_FRONTMATTER_RE` / `stripLeadingBom` as
 // `frontmatterOf` above — one fence recognizer, not two that can drift.
 //
-// Best-effort otherwise, matching the codebase's existing style for this
-// class of helper (see fs-backend/vault.ts's `parseSingleKeyFromLines` /
-// fs-backend/index-store.ts's `parseAllFrontmatter`): scalars, quoted
-// scalars, inline arrays `[a, b]`, block arrays (`key:\n  - a`), and inline
-// maps `{k: v}` (one level, scalar values only — enough to detect an
-// accepted-family assertion, not a general YAML parser).
+// ── Fail-closed, not best-effort (residual on #104) ─────────────────────────
+//
+// The real honorer of this text is Obsidian's own YAML parser, which models
+// the FULL language. This subset does not, and previously treated anything
+// it couldn't classify as ABSENT — a line it couldn't parse was silently
+// skipped, so a construct real YAML honors (an anchor, a block scalar, a
+// value containing a bare `\r`, …) could carry an acceptance assertion
+// straight past the guard while `parseGuardFrontmatter` reported zero keys
+// or a garbage value. A guard that recognizes LESS than the honorer is a
+// bypass, not caution — the same shape as #126/#137, one layer down (the
+// VALUE parser instead of the fence recognizer).
+//
+// So: once the leading fence has matched (frontmatter DOES exist), every
+// line in the block must be classified into a definite key/value SHAPE — one
+// of: comment/blank (skipped, as before), inline scalar (quoted or plain),
+// inline flow array/map (one level, scalar elements), or a block array of
+// scalar items. Anything else — a line the subset cannot map to one of
+// those shapes with confidence — throws `AcceptForbiddenError` instead of
+// being silently skipped or guessed at. This can refuse a legitimate write
+// whose frontmatter happens to use a construct outside that list (a block
+// scalar `|`/`>`, a YAML anchor/alias/tag, a block-style nested mapping, a
+// sequence of mappings, a bare control character in a scalar, a
+// multi-document `---`/`...` marker, or a flow collection nested inside
+// another). That trade-off — and why none of those are reachable through
+// Obsidian's own Properties UI, hence judged exotic rather than common — is
+// recorded on issue #104, not restated here.
+//
+// Quote-aware splitting (`splitFlowTopLevel`) also closes a narrower,
+// same-class gap in the flow array/map readers themselves: the previous
+// `.split(",")` broke a quoted element containing a comma (`["a, b"]`) into
+// two malformed pieces instead of refusing or parsing it correctly.
+//
+// Matches the codebase's existing style for this class of helper (see
+// fs-backend/vault.ts's `parseSingleKeyFromLines` / fs-backend/index-store.ts's
+// `parseAllFrontmatter`) in scope — scalars, quoted scalars, inline arrays
+// `[a, b]`, block arrays (`key:\n  - a`), and inline maps `{k: v}` — just no
+// longer silent about what falls outside that scope.
+
+const FRONTMATTER_UNCLASSIFIABLE_REASON =
+  "the frontmatter could not be confidently inspected for an acceptance assertion — it contains a YAML construct " +
+  "this guard's parser does not model (for example: a raw control character in a value, an anchor/alias/tag, a " +
+  "block scalar, a block-style nested mapping or sequence of mappings, or a flow collection nested inside another). " +
+  "Simplify the frontmatter to plain scalars, quoted strings, inline arrays/maps, and block arrays of scalars, or " +
+  "make the edit directly in Obsidian, and retry";
+
+/** Leading YAML indicator characters that make an UNQUOTED scalar something this subset does not model. */
+const YAML_INDICATOR_RE = /^[?&*!|>#%@`[\]{}]/;
+
+/** Raw control bytes (excluding tab and the already-split `\n`) inside a frontmatter line — most notably a bare `\r` that `/\r?\n/` did not consume because nothing followed it. Real YAML treats a lone `\r` as a line break inside a scalar; this subset cannot, so its presence means the byte sequence has already diverged from what the vault will honor. */
+const CONTROL_CHAR_RE = /[\x00-\x08\x0B-\x1F]/;
 
 function guardScalar(raw: string): string | number | boolean {
   const s = raw.trim();
-  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) return s.slice(1, -1);
+  if (s.startsWith('"') || s.startsWith("'")) {
+    const q = s[0];
+    if (s.length >= 2 && s.endsWith(q)) {
+      // Matches the ORIGINAL (pre-fail-closed) unquoting exactly — a plain
+      // slice, no escape processing — so this stays a narrow fail-closed
+      // fix, not a scope-creeping rewrite of quoted-scalar fidelity.
+      return s.slice(1, -1);
+    }
+    // Starts quoted but isn't fully quote-wrapped on this one line — could be
+    // a multi-line quoted scalar continuing past this line, which this
+    // subset does not follow.
+    throw new AcceptForbiddenError(FRONTMATTER_UNCLASSIFIABLE_REASON);
+  }
+  if (YAML_INDICATOR_RE.test(s)) {
+    // An unquoted value starting with a YAML indicator (anchor `&`, alias
+    // `*`, tag `!`, block scalar `|`/`>`, etc.) is never a plain scalar in
+    // real YAML — it always carries special meaning this subset skips.
+    throw new AcceptForbiddenError(FRONTMATTER_UNCLASSIFIABLE_REASON);
+  }
   if (s === "true") return true;
   if (s === "false") return false;
   if (/^-?\d+$/.test(s)) {
@@ -218,32 +280,85 @@ function guardScalar(raw: string): string | number | boolean {
     const n = parseFloat(s);
     if (Number.isFinite(n)) return n;
   }
-  return s.replace(/^['"]|['"]$/g, "");
+  return s;
+}
+
+/**
+ * Split a flow-collection's inner content (between `[...]` / `{...}`) on
+ * top-level commas, respecting quotes (a comma inside a quoted element is
+ * not a separator — the naive `.split(",")` this replaced was itself a
+ * divergence from real YAML). Throws when it finds a NESTED flow structure
+ * (`[`/`]`/`{`/`}` outside a quote) or an unterminated quote — neither is
+ * modeled by this subset.
+ */
+function splitFlowTopLevel(s: string): string[] {
+  if (s.trim() === "") return [];
+  const out: string[] = [];
+  let buf = "";
+  let inQuote: '"' | "'" | null = null;
+  for (let idx = 0; idx < s.length; idx++) {
+    const c = s[idx];
+    if (inQuote) {
+      buf += c;
+      if (c === "\\" && idx + 1 < s.length) {
+        buf += s[idx + 1];
+        idx++;
+      } else if (c === inQuote) {
+        inQuote = null;
+      }
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      inQuote = c;
+      buf += c;
+      continue;
+    }
+    if (c === "{" || c === "}" || c === "[" || c === "]") {
+      throw new AcceptForbiddenError(FRONTMATTER_UNCLASSIFIABLE_REASON);
+    }
+    if (c === ",") {
+      out.push(buf.trim());
+      buf = "";
+      continue;
+    }
+    buf += c;
+  }
+  if (inQuote) throw new AcceptForbiddenError(FRONTMATTER_UNCLASSIFIABLE_REASON);
+  out.push(buf.trim());
+  return out;
 }
 
 function guardInlineArray(inner: string): Array<string | number | boolean> {
-  const s = inner.trim();
-  if (s === "") return [];
-  return s.split(",").map((x) => guardScalar(x));
+  return splitFlowTopLevel(inner).map(guardScalar);
 }
 
 function guardInlineMap(inner: string): Record<string, string | number | boolean> {
   const out: Record<string, string | number | boolean> = {};
-  const s = inner.trim();
-  if (s === "") return out;
-  for (const pair of s.split(",")) {
+  for (const pair of splitFlowTopLevel(inner)) {
     const i = pair.indexOf(":");
-    if (i < 0) continue;
+    if (i < 0) throw new AcceptForbiddenError(FRONTMATTER_UNCLASSIFIABLE_REASON);
     out[pair.slice(0, i).trim()] = guardScalar(pair.slice(i + 1));
   }
   return out;
 }
 
+/** A block-array item (`- <raw>`) as a scalar — refuses an unquoted `key: value` shape (a mapping-in-sequence item, not modeled) before falling through to `guardScalar`. */
+function guardListItem(raw: string): string | number | boolean {
+  const t = raw.trim();
+  if (!/^['"]/.test(t) && /^[^'"]*:(\s|$)/.test(t)) {
+    throw new AcceptForbiddenError(FRONTMATTER_UNCLASSIFIABLE_REASON);
+  }
+  return guardScalar(t);
+}
+
 /**
  * Parse the leading `---\n…\n---` frontmatter fence of `markdown` into a plain
  * object suitable for `acceptTransitionReason` / `acceptForbiddenReason`.
- * Returns `null` when there is no leading fence (matching `frontmatterOf`).
- * See the block comment above for scope/limits.
+ * Returns `null` when there is no leading fence (matching `frontmatterOf`) —
+ * that is "confidently no frontmatter," not "couldn't tell." Once a fence
+ * HAS matched, every line in it must classify confidently or this throws
+ * `AcceptForbiddenError` rather than silently reporting fewer keys than the
+ * block actually has. See the block comment above for scope/limits.
  */
 export function parseGuardFrontmatter(markdown: string): Record<string, unknown> | null {
   const m = LEADING_FRONTMATTER_RE.exec(stripLeadingBom(markdown));
@@ -253,19 +368,39 @@ export function parseGuardFrontmatter(markdown: string): Record<string, unknown>
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (line.trim() === "" || line.trimStart().startsWith("#")) continue;
+
+    if (CONTROL_CHAR_RE.test(line)) {
+      throw new AcceptForbiddenError(FRONTMATTER_UNCLASSIFIABLE_REASON);
+    }
+    if (line.trim() === "...") {
+      // YAML document-end marker. (A bare `---` line can't reach here — the
+      // non-greedy LEADING_FRONTMATTER_RE fence match would already have
+      // closed AT that line, so it's never part of `m[1]`.)
+      throw new AcceptForbiddenError(FRONTMATTER_UNCLASSIFIABLE_REASON);
+    }
+
     const km = /^([^:\s][^:]*):(.*)$/.exec(line);
-    if (!km) continue;
+    if (!km) throw new AcceptForbiddenError(FRONTMATTER_UNCLASSIFIABLE_REASON);
     const key = km[1].trim();
     const rest = km[2].trim();
 
     if (rest === "" && lines[i + 1] && /^\s*-\s+/.test(lines[i + 1])) {
       const arr: Array<string | number | boolean> = [];
       while (lines[i + 1] && /^\s*-\s+/.test(lines[i + 1])) {
-        arr.push(guardScalar(lines[i + 1].replace(/^\s*-\s+/, "")));
+        arr.push(guardListItem(lines[i + 1].replace(/^\s*-\s+/, "")));
         i++;
       }
       out[key] = arr;
       continue;
+    }
+    if (rest === "" && lines[i + 1] && /^\s+\S/.test(lines[i + 1])) {
+      // Block-style nested mapping (`key:\n  sub: val`) — real, and honored
+      // by Obsidian's YAML parser, but not modeled here (previously
+      // silently mis-parsed as an empty scalar with the child lines
+      // dropped — the exact class of bug this fix closes). Not producible
+      // via Obsidian's own Properties UI, so refusing is judged exotic
+      // rather than common; see accept-guard.test.ts.
+      throw new AcceptForbiddenError(FRONTMATTER_UNCLASSIFIABLE_REASON);
     }
     if (rest.startsWith("[") && rest.endsWith("]")) {
       out[key] = guardInlineArray(rest.slice(1, -1));

@@ -70,6 +70,171 @@ describe("parseGuardFrontmatter", () => {
   });
 });
 
+// ── Fail-closed on constructs the subset does not model (issue #104 residual
+// — "decide over the honored bytes") ────────────────────────────────────────
+//
+// Before this fix, a line the subset couldn't classify was silently SKIPPED
+// — not refused — so `parseGuardFrontmatter` could report FEWER keys than
+// the block actually has (down to zero), reading as "clean" when it wasn't.
+// Every case below must now REFUSE (throw AcceptForbiddenError) rather than
+// silently drop the line, whether or not the unclassifiable construct itself
+// carries an acceptance assertion — once a fence has matched, the guard must
+// be able to account for every line in it.
+
+function assertRefusesUnclassifiable(markdown: string) {
+  assert.throws(
+    () => parseGuardFrontmatter(markdown),
+    (e: unknown) => e instanceof AcceptForbiddenError && (e as AcceptForbiddenError).code === "accept_forbidden",
+  );
+}
+
+describe("parseGuardFrontmatter — fail-closed on unclassifiable constructs", () => {
+  test("the known instance: a lone CR inside a scalar value — was 'zero keys read as clean', now REFUSED", () => {
+    // /\r?\n/ does not consume a bare \r with no following \n, so it stays
+    // embedded in the "line" string; the subset's key/value regex then fails
+    // on it entirely (JS `.` excludes \r). Previously: `!km` → `continue` →
+    // zero keys → guardWrittenContent read this as clean. Now: refused.
+    const withLoneCr = "---\nacceptance-status: accepted\rXYZ\n---\nbody";
+    assertRefusesUnclassifiable(withLoneCr);
+  });
+
+  test("a bare control character elsewhere in a value is refused", () => {
+    assertRefusesUnclassifiable("---\nname: foo\x0bbar\n---\nbody");
+  });
+
+  test("a YAML anchor (&) is refused", () => {
+    assertRefusesUnclassifiable("---\nname: &anchor value\n---\nbody");
+  });
+
+  test("a YAML alias (*) is refused", () => {
+    assertRefusesUnclassifiable("---\nname: *anchor\n---\nbody");
+  });
+
+  test("an explicit YAML tag (!!) is refused", () => {
+    assertRefusesUnclassifiable("---\nname: !!str hello\n---\nbody");
+  });
+
+  test("a literal block scalar (|) is refused", () => {
+    assertRefusesUnclassifiable("---\nsummary: |\n  line one\n  line two\n---\nbody");
+  });
+
+  test("a folded block scalar (>) is refused", () => {
+    assertRefusesUnclassifiable("---\nsummary: >\n  line one\n  line two\n---\nbody");
+  });
+
+  test("a flow sequence nested inside another (not modeled) is refused", () => {
+    assertRefusesUnclassifiable("---\nitems: [[a, b], c]\n---\nbody");
+  });
+
+  test("a flow mapping nested inside a sequence (not modeled) is refused", () => {
+    assertRefusesUnclassifiable("---\nitems: [{a: 1}, {b: 2}]\n---\nbody");
+  });
+
+  test("a multi-document end marker (...) inside the block is refused", () => {
+    assertRefusesUnclassifiable("---\nname: N\n...\nmore: 1\n---\nbody");
+  });
+
+  test("a block-style nested mapping (key:\\n  sub: val) is refused", () => {
+    // Previously silently mis-parsed as an empty scalar with the child lines
+    // dropped entirely — this construct is real YAML and Obsidian honors it,
+    // but the subset has no recursive model for it.
+    assertRefusesUnclassifiable("---\nmetadata:\n  acceptance-status: accepted\n---\nbody");
+  });
+
+  test("a sequence of mappings (- key: value list items) is refused", () => {
+    assertRefusesUnclassifiable("---\nrelated:\n  - title: Foo\n    date: 2024-01-01\n---\nbody");
+  });
+
+  test("an unquoted scalar starting with an indicator character inside a block array item is refused", () => {
+    assertRefusesUnclassifiable("---\ntags:\n  - &anchor\n  - b\n---\nbody");
+  });
+
+  test("an unterminated quoted scalar is refused rather than guessed at", () => {
+    assertRefusesUnclassifiable('---\nname: "unterminated\n---\nbody');
+  });
+
+  test("a quoted array element containing an internal comma inside a NESTED bracket is still refused (nested flow, not the comma itself)", () => {
+    assertRefusesUnclassifiable("---\ntags: [\"a\", [\"b\", \"c\"]]\n---\nbody");
+  });
+
+  test("end-to-end: the lone-CR bypass is refused THROUGH writeNote, not just at the parser", async () => {
+    const { backend } = await freshBackend();
+    await assert.rejects(
+      () =>
+        backend.writeNote("note.md", "---\nacceptance-status: accepted\rXYZ\n---\nbody", false),
+      (e: unknown) => e instanceof AcceptForbiddenError,
+    );
+    await assert.rejects(() => backend.readNote("note.md"), /ENOENT|not found|no such file/i);
+  });
+});
+
+// ── Non-regression: ordinary frontmatter still parses and still ALLOWS
+// legitimate writes ──────────────────────────────────────────────────────────
+
+describe("parseGuardFrontmatter — non-regression on ordinary constructs", () => {
+  test("strings, lists, quoted values all still parse", () => {
+    const fm = parseGuardFrontmatter(
+      '---\ntitle: My Note\ntags: [a, b]\nquoted: "hello, world"\n---\nbody',
+    );
+    assert.deepEqual(fm, { title: "My Note", tags: ["a", "b"], quoted: "hello, world" });
+  });
+
+  test("a quoted array element CONTAINING a comma is parsed as ONE element, not split", () => {
+    const fm = parseGuardFrontmatter('---\ntags: ["a, b", "c"]\n---\nbody');
+    assert.deepEqual(fm, { tags: ["a, b", "c"] });
+  });
+
+  test("a nested (flow) map still parses — key: {sub: val}", () => {
+    const fm = parseGuardFrontmatter("---\nmetadata: {owner: nelson, count: 2}\n---\nbody");
+    assert.deepEqual(fm, { metadata: { owner: "nelson", count: 2 } });
+  });
+
+  test("CRLF line endings throughout the block still parse", () => {
+    const fm = parseGuardFrontmatter("---\r\nname: N\r\ntags: [a, b]\r\n---\r\nbody");
+    assert.deepEqual(fm, { name: "N", tags: ["a", "b"] });
+  });
+
+  test("a leading BOM still parses", () => {
+    const fm = parseGuardFrontmatter("\uFEFF---\nname: N\n---\nbody");
+    assert.deepEqual(fm, { name: "N" });
+  });
+
+  test("trailing whitespace on the fence lines still parses", () => {
+    const fm = parseGuardFrontmatter("--- \t\nname: N\n---\t\nbody");
+    assert.deepEqual(fm, { name: "N" });
+  });
+
+  test("a block array of quoted scalars containing colons is allowed (quoting disambiguates from a mapping item)", () => {
+    const fm = parseGuardFrontmatter('---\nnotes:\n  - "Note: Draft"\n  - plain\n---\nbody');
+    assert.deepEqual(fm, { notes: ["Note: Draft", "plain"] });
+  });
+
+  describe("legitimate writes through FilesystemBackend still succeed with these ordinary constructs", () => {
+    test("CRLF + BOM + quoted-comma frontmatter on a NEW note succeeds", async () => {
+      const { backend } = await freshBackend();
+      const content = "\uFEFF---\r\ntitle: N\r\ntags: [\"a, b\", c]\r\n---\r\nbody";
+      const result = await backend.writeNote("note.md", content, false);
+      assert.equal(result.created, true);
+    });
+
+    test("preserving an existing accepted value verbatim on an UNRELATED edit is still ALLOWED, even with ordinary nested-flow-map frontmatter alongside it", async () => {
+      const { backend, vaultRoot } = await freshBackend();
+      await seedDirectly(
+        vaultRoot,
+        "note.md",
+        "---\nacceptance-status: accepted\nmetadata: {owner: nelson}\n---\noriginal",
+      );
+      const result = await backend.writeNote(
+        "note.md",
+        "---\nacceptance-status: accepted\nmetadata: {owner: nelson}\n---\nedited body",
+        true,
+      );
+      assert.equal(result.created, false);
+      assert.match(await backend.readNote("note.md"), /edited body/);
+    });
+  });
+});
+
 describe("acceptTransitionReason / acceptForbiddenReason (re-exported from core)", () => {
   test("introducing acceptance-status:accepted is blocked", () => {
     assert.ok(acceptTransitionReason(null, { "acceptance-status": "accepted" }));
