@@ -104,11 +104,16 @@ accept verb to an agent.
   installed); the review plugin's pending-index publisher is live. Live-verification passes
   are recorded per-PR in the project's build records rather than restated here.
 - **Known-open perimeter issues** (tracked publicly, milestone `0.8.1 — perimeter`): the
-  standalone `packages/server` fs-failover surface has no accept-guard (#104), and several
-  plugin-gated tools (`create_note_from_template`, `obsidian_run_command`,
-  `fileclass_insert_fields`) are not yet gated (#105). The acceptance model's guarantees
-  below are stated for the **plugin's guarded write surfaces**; these issues are the honest
-  boundary of that claim until closed. **Separately** (#92): that same `packages/server`
+  standalone `packages/server` fs-failover surface now **does** enforce the accept-forbidden
+  guard — it is applied in `VaultImpl`, the shared primitive both that surface and the
+  `FilesystemBackend` delegate to — but **#104 remains open**: the guard decides frontmatter
+  values over a hand-rolled YAML subset, so constructs the vault's real YAML honors but the
+  subset does not model are still a gap; `moveNote`'s backlink rewrite is an unguarded
+  content write; and a live-vault read-back confirming the guard recognizes everything
+  Obsidian honors is still owed. Of the tools tracked by **#105**,
+  `create_note_from_template` and `obsidian_run_command` are now gated; `fileclass_insert_fields`
+  is not. The acceptance model's guarantees below are stated for the **plugin's guarded write
+  surfaces**; these issues are the honest boundary of that claim until closed. **Separately** (#92): that same `packages/server`
   fs-failover surface has no write journal and no serialized write queue either — those
   live in the plugin's kernel, which `packages/server` does not and must not depend on. FS-mode
   writes are refused by default (`Error [fs_writes_disabled]`) and require an explicit,
