@@ -18,25 +18,51 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/github-script@v7
+        env:
+          CURRENT_MILESTONE: ${{ vars.CURRENT_MILESTONE }}
         with:
           script: |
             const issue = context.payload.issue;
             const { owner, repo } = context.repo;
 
-            // "Current milestone" = the open milestone due soonest; when none carry a due
-            // date (the usual case here), the lowest number, which is the oldest still open.
+            // Resolving "current milestone" must never GUESS. A silently mis-filed issue is
+            // the same failure this workflow exists to prevent: a machine-evaluated rule
+            // returning a confidently wrong set. So every ambiguous case fails loudly instead.
+            //   repo variable CURRENT_MILESTONE set + open   -> use it
+            //   set but not an open milestone (stale)        -> fail the run
+            //   unset, exactly one open milestone            -> use it (unambiguous)
+            //   unset, several open milestones               -> fail the run, asking for the variable
             const milestones = await github.paginate(github.rest.issues.listMilestones, {
               owner, repo, state: 'open', per_page: 100,
             });
-            if (milestones.length === 0) {
-              core.info('No open milestone; nothing to stamp.');
-            } else if (issue.milestone) {
-              core.info(`#${issue.number} already milestoned (${issue.milestone.title}).`);
+            const declared = (process.env.CURRENT_MILESTONE || '').trim();
+
+            if (issue.milestone) {
+              core.info(`#${issue.number} already milestoned (${issue.milestone.title}); left alone.`);
+            } else if (milestones.length === 0) {
+              core.info('No open milestone exists; nothing to stamp.');
             } else {
-              const dated = milestones.filter(m => m.due_on);
-              const current = dated.length
-                ? dated.sort((a, b) => new Date(a.due_on) - new Date(b.due_on))[0]
-                : milestones.sort((a, b) => a.number - b.number)[0];
+              let current;
+              if (declared) {
+                current = milestones.find(m => m.title === declared);
+                if (!current) {
+                  core.setFailed(
+                    `CURRENT_MILESTONE is "${declared}" but no OPEN milestone has that title ` +
+                    `(open: ${milestones.map(m => m.title).join(', ')}). ` +
+                    `Update the repo variable — #${issue.number} was left unmilestoned rather than mis-filed.`
+                  );
+                  return;
+                }
+              } else if (milestones.length === 1) {
+                current = milestones[0];
+              } else {
+                core.setFailed(
+                  `Several milestones are open (${milestones.map(m => m.title).join(', ')}) and ` +
+                  `CURRENT_MILESTONE is unset, so "current" is ambiguous. Set the repo variable. ` +
+                  `#${issue.number} was left unmilestoned rather than guessed into the wrong one.`
+                );
+                return;
+              }
               await github.rest.issues.update({
                 owner, repo, issue_number: issue.number, milestone: current.number,
               });
