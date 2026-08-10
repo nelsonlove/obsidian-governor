@@ -12,9 +12,12 @@ import {
   formatLocalTimestamp,
   canonicalOrder,
   acceptForbiddenReason,
+  acceptTransitionReason,
+  frontmatterOf,
   composeNote,
   AcceptForbiddenError,
 } from "../src/mcp/write-notes-compose.ts";
+import { parseYaml } from "./obsidian-stub.mjs";
 
 // A deterministic YAML stand-in — enough to assert on, key order preserved.
 const fakeYaml = (obj) => Object.entries(obj).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join("\n") + "\n";
@@ -102,6 +105,109 @@ describe("acceptForbiddenReason", () => {
       assert.equal(reason !== null, forbidden);
     });
   }
+});
+
+describe("acceptForbiddenReason — value-TYPE forms (S3: array / map)", () => {
+  for (const [label, fm, forbidden] of [
+    ["acceptance-status: [accepted] (array)", { "acceptance-status": ["accepted"] }, true],
+    ["acceptance-status: {value: accepted} (map)", { "acceptance-status": { value: "accepted" } }, true],
+    ["acceptance-status: [proposed] (array, not accepted)", { "acceptance-status": ["proposed"] }, false],
+    ["acceptance-status: {value: proposed} (map, not accepted)", { "acceptance-status": { value: "proposed" } }, false],
+  ]) {
+    test(`${label} → ${forbidden ? "forbidden" : "clean"}`, () => {
+      assert.equal(acceptForbiddenReason(fm) !== null, forbidden);
+    });
+  }
+});
+
+describe("frontmatterOf", () => {
+  test("extracts and parses a leading frontmatter fence", () => {
+    const fm = frontmatterOf("---\nacceptance-status: accepted\nname: N\n---\nbody", parseYaml);
+    assert.deepEqual(fm, { "acceptance-status": "accepted", name: "N" });
+  });
+  test("null when the body has no leading fence", () => {
+    assert.equal(frontmatterOf("just a body\n---\nnot frontmatter\n---", parseYaml), null);
+  });
+  test("null when `---` is not the very first line (Obsidian's rule)", () => {
+    assert.equal(frontmatterOf("\n---\nacceptance-status: accepted\n---\n", parseYaml), null);
+  });
+  test("tolerates a leading BOM", () => {
+    const fm = frontmatterOf("﻿---\nacceptance-status: accepted\n---\nx", parseYaml);
+    assert.deepEqual(fm, { "acceptance-status": "accepted" });
+  });
+});
+
+describe("acceptTransitionReason — introduce/change blocked, preserve allowed", () => {
+  test("introducing acceptance-status:accepted (nothing on disk) is blocked", () => {
+    assert.ok(acceptTransitionReason(null, { "acceptance-status": "accepted" }));
+  });
+  test("changing proposed → accepted is blocked", () => {
+    assert.ok(acceptTransitionReason({ "acceptance-status": "proposed" }, { "acceptance-status": "accepted" }));
+  });
+  test("preserving an existing accepted verbatim is ALLOWED", () => {
+    assert.equal(
+      acceptTransitionReason({ "acceptance-status": "accepted" }, { "acceptance-status": "accepted" }),
+      null,
+    );
+  });
+  test("introducing an accepted-by field is blocked", () => {
+    assert.ok(acceptTransitionReason({ name: "N" }, { name: "N", "accepted-by": "nelson" }));
+  });
+  test("preserving an existing accepted-by unchanged is ALLOWED", () => {
+    assert.equal(acceptTransitionReason({ "accepted-by": "nelson" }, { "accepted-by": "nelson", note: 1 }), null);
+  });
+  test("changing an existing accepted-by value is blocked", () => {
+    assert.ok(acceptTransitionReason({ "accepted-by": "nelson" }, { "accepted-by": "an-agent" }));
+  });
+  test("array / map accepted forms are blocked (S3)", () => {
+    assert.ok(acceptTransitionReason(null, { "acceptance-status": ["accepted"] }));
+    assert.ok(acceptTransitionReason(null, { "acceptance-status": { value: "accepted" } }));
+  });
+  test("a non-accepted status transition (→ proposed / rejected) is clean", () => {
+    assert.equal(acceptTransitionReason({ "acceptance-status": "accepted" }, { "acceptance-status": "rejected" }), null);
+    assert.equal(acceptTransitionReason(null, { "acceptance-status": "proposed" }), null);
+  });
+});
+
+describe("composeNote — body-injected acceptance is caught (S2)", () => {
+  const base = {
+    stamp: false,
+    now: 0,
+    mintUid: () => "UID",
+    formatTs: () => "TS",
+    stringifyYaml: fakeYaml,
+    parseYaml,
+  };
+  test("stamp:false, no structured frontmatter, body embeds an accepted fence → rejected", () => {
+    assert.throws(
+      () => composeNote({ ...base, frontmatter: undefined, body: "---\nacceptance-status: accepted\n---\nhello" }),
+      (e) => e instanceof AcceptForbiddenError && e.code === "accept_forbidden",
+    );
+  });
+  test("body-embedded array form is rejected too", () => {
+    assert.throws(
+      () => composeNote({ ...base, frontmatter: undefined, body: "---\nacceptance-status: [accepted]\n---\nx" }),
+      (e) => e instanceof AcceptForbiddenError,
+    );
+  });
+  test("preserving an existing accepted through a body-embedded fence is ALLOWED", () => {
+    const { content } = composeNote({
+      ...base,
+      frontmatter: undefined,
+      existing: { "acceptance-status": "accepted" },
+      body: "---\nacceptance-status: accepted\n---\nedited body",
+    });
+    assert.match(content, /acceptance-status: accepted/);
+  });
+  test("a structured (non-empty) frontmatter means a second body fence is just body text, not frontmatter", () => {
+    // The real frontmatter is {name:x}; the body's own `---` block never lands as frontmatter.
+    const { frontmatter } = composeNote({
+      ...base,
+      frontmatter: { name: "x" },
+      body: "---\nacceptance-status: accepted\n---\nnot frontmatter",
+    });
+    assert.deepEqual(Object.keys(frontmatter), ["name"]);
+  });
 });
 
 describe("composeNote — accept-forbidden guard (stamped or not)", () => {

@@ -17,6 +17,7 @@ import { ok } from "../src/mcp/helpers.ts";
 import { makeGuarded } from "../src/mcp/guarded.ts";
 import { Kernel, WriteQueue, WriteJournal, IdempotencyStore, LockStore } from "../src/kernel/index.ts";
 import { registerWriteNotesTool } from "../src/mcp/tools-write-notes.ts";
+import { parseYaml } from "./obsidian-stub.mjs";
 
 const ACTOR = { transport: "mcp", client: "claude-code/1.0.0", connection: "conn-1" };
 const OPEN_SETTINGS = { readOnly: false, allowlist: [] };
@@ -77,6 +78,7 @@ function harness({ existing = new Map() } = {}) {
     readExistingFrontmatter: (path) => existingFm.get(path),
     revOf: (path) => vault.get(path)?.rev,
     stringifyYaml: fakeYaml,
+    parseYaml,
     mintUid: (ms) => `uid-${ms}`,
     formatTs: (ms) => `TS(${ms})`,
     now: () => 42,
@@ -238,6 +240,49 @@ describe("obsidian_write_notes — accept-forbidden guard", () => {
       assert.equal(recs.filter((r) => r.target.path === "Good/Ok.md").length, 1);
     });
   }
+
+  test("rejects a body-injected accepted fence (S2) per-item; sibling proceeds", async () => {
+    const { call, vault, writeCalls } = harness();
+    const res = await call({
+      notes: [
+        { path: "Bad/Inject.md", body: "---\nacceptance-status: accepted\n---\nsneaky" },
+        { path: "Good/Clean.md", frontmatter: { name: "C" }, body: "y" },
+      ],
+      stamp: false,
+    });
+    const body = structured(res);
+    assert.equal(body.error_count, 1);
+    assert.equal(body.errors[0].path, "Bad/Inject.md");
+    assert.equal(body.errors[0].code, "accept_forbidden");
+    assert.equal(writeCalls.includes("Bad/Inject.md"), false, "a rejected item never dispatches");
+    assert.equal(body.count, 1);
+    assert.equal(vault.has("Good/Clean.md"), true);
+  });
+
+  for (const [label, frontmatter] of [
+    ["array value-type [accepted]", { "acceptance-status": ["accepted"] }],
+    ["map value-type {value: accepted}", { "acceptance-status": { value: "accepted" } }],
+  ]) {
+    test(`rejects the ${label} form (S3)`, async () => {
+      const { call } = harness();
+      const res = await call({ notes: [{ path: "Bad/Type.md", frontmatter, body: "x" }], stamp: false });
+      const body = structured(res);
+      assert.equal(body.error_count, 1);
+      assert.equal(body.errors[0].code, "accept_forbidden");
+    });
+  }
+
+  test("ALLOWS preserving an existing accepted under stamp (no laundering block on a legitimate edit)", async () => {
+    const existing = new Map([
+      ["Keep/Acc.md", { rev: 100, content: "old", frontmatter: { "acceptance-status": "accepted" } }],
+    ]);
+    const { call, vault } = harness({ existing });
+    const res = await call({ notes: [{ path: "Keep/Acc.md", frontmatter: { name: "A" }, body: "edited" }], stamp: true });
+    const body = structured(res);
+    assert.equal(body.error_count, 0, "carrying an existing accepted forward is allowed");
+    assert.equal(body.count, 1);
+    assert.match(vault.get("Keep/Acc.md").content, /acceptance-status: "accepted"/);
+  });
 
   test("a total-failure batch carries the MCP error flag", async () => {
     const { call } = harness();
