@@ -33,7 +33,12 @@ export function portPack(): RulePack {
       for (const note of snapshot.notes) {
         const text = (note as { text?: string }).text;
         if (typeof text !== "string") continue; // needs raw text; skip if absent
-        const lines = text.split(/\r?\n/);
+        // Line split. The snapshot normalizes CRLF→LF, so `\n` covers the real
+        // cases. Caveat vs Python `str.splitlines()`: that also breaks on \v \f
+        // \x1c–\x1e NEL U+2028 U+2029 — absent from the vault (349/349 key
+        // parity over the live tree), so not split here; a note containing one
+        // could diverge by merging two logical lines (documented, not a blocker).
+        const lines = text.split("\n");
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i];
           if (HISTORICAL.test(line)) continue;
