@@ -73,20 +73,85 @@ describe("#83 — every registration entry point except registerTool is sealed",
   });
 });
 
-describe("the seal covers the SDK's ACTUAL surface, so a new entry point cannot slip in", () => {
-  test("every registration-shaped method on McpServer.prototype is patched or sealed", async () => {
+/**
+ * The class-level guarantee, rewritten after review (#170).
+ *
+ * The FIRST version filtered `McpServer.prototype` with a hardcoded regex of
+ * the six names already known. That closed the five INSTANCES while its comment
+ * claimed it closed the CLASS: a genuinely new entry point could never enter
+ * the candidate set, so it could never be reported unaccounted. Demonstrated by
+ * the reviewer against the real SDK — adding `registerWidget` to the prototype
+ * registered unguarded with the suite fully green.
+ *
+ * My own mutation missed it for an instructive reason: dropping a name from
+ * SEALED_REGISTRARS proves detection of LIST SHRINKAGE — an unaccounted method
+ * among names the regex already knew. It cannot prove detection of a name the
+ * regex was never told about. Different properties, and only the second is
+ * "closing the class". Precisely the distinction that made 9 of 10 tests
+ * vacuous on #142, reproduced here in the PR that existed to fix this shape.
+ *
+ * So: EVERY method on the prototype must be classified — guarded, sealed, or
+ * explicitly recorded as not-registration. Anything new is unaccounted BY
+ * DEFAULT and fails until a human classifies it. That is the same fail-closed
+ * discipline the accept guard uses, turned on the test itself.
+ */
+
+/** Prototype members reviewed and confirmed NOT to register a client-reachable
+ * surface. Adding to this list is a deliberate act with a reviewer, which is
+ * the point — it is the human classification step, not a convenience. */
+const KNOWN_NOT_REGISTRATION = [
+  "constructor", "experimental", "connect", "close", "isConnected",
+  "setToolRequestHandlers", "createToolError", "validateToolInput",
+  "validateToolOutput", "executeToolHandler", "handleAutomaticTaskPolling",
+  "setCompletionRequestHandler", "handlePromptCompletion",
+  "handleResourceCompletion", "setResourceRequestHandlers",
+  "setPromptRequestHandlers",
+  // Internal factories: reachable only from the public registrars above, which
+  // are themselves guarded or sealed.
+  "_createRegisteredResource", "_createRegisteredResourceTemplate",
+  "_createRegisteredPrompt", "_createRegisteredTool",
+  // Notifications and logging — emit, never register.
+  "sendLoggingMessage", "sendResourceListChanged", "sendToolListChanged",
+  "sendPromptListChanged",
+];
+
+describe("the seal covers the SDK's ACTUAL surface, so a NEW entry point cannot slip in", () => {
+  test("every prototype member is classified: guarded, sealed, or known-not-registration", async () => {
     const { McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js");
-    const proto = McpServer.prototype;
-    const registrationish = Object.getOwnPropertyNames(proto).filter(
-      (n) => /^(tool|prompt|resource|registerTool|registerPrompt|registerResource)$/.test(n),
-    );
-    assert.ok(registrationish.length >= 6, `expected the SDK's registration surface, saw ${registrationish}`);
-    const accounted = new Set(["registerTool", ...SEALED_REGISTRARS]);
-    const unaccounted = registrationish.filter((n) => !accounted.has(n));
+    const all = Object.getOwnPropertyNames(McpServer.prototype);
+    const accounted = new Set(["registerTool", ...SEALED_REGISTRARS, ...KNOWN_NOT_REGISTRATION]);
+    const unaccounted = all.filter((n) => !accounted.has(n));
     assert.deepEqual(
       unaccounted,
       [],
-      `unaccounted registration entry points — each is a potential unguarded surface: ${unaccounted.join(", ")}`,
+      `unclassified McpServer member(s): ${unaccounted.join(", ")}. Each is a potential unguarded ` +
+        `registration surface. Seal it (SEALED_REGISTRARS), route it through the guard, or — only ` +
+        `after confirming it registers nothing client-reachable — add it to KNOWN_NOT_REGISTRATION.`,
+    );
+  });
+
+  test("an UNKNOWN new member is unaccounted by default — the property the first version lacked", () => {
+    // Simulates a future SDK release adding an entry point nobody has heard of.
+    const proto = { registerTool() {}, tool() {}, registerWidget() {} };
+    const all = Object.getOwnPropertyNames(proto);
+    const accounted = new Set(["registerTool", ...SEALED_REGISTRARS, ...KNOWN_NOT_REGISTRATION]);
+    assert.deepEqual(
+      all.filter((n) => !accounted.has(n)),
+      ["registerWidget"],
+      "a name nobody enumerated must land in unaccounted, not be filtered away",
+    );
+  });
+
+  test("sealing does not silently cover an unknown method either — it is refused, not assumed safe", () => {
+    const s = { registerTool: () => {}, registerWidget: () => "registered!" };
+    sealUnguardedRegistration(s);
+    // The seal only touches names it knows; the TEST above is what catches the
+    // rest. Pinning the division of labour so a later reader does not assume
+    // the seal alone is sufficient.
+    assert.equal(s.registerWidget(), "registered!");
+    assert.ok(
+      !new Set(["registerTool", ...SEALED_REGISTRARS, ...KNOWN_NOT_REGISTRATION]).has("registerWidget"),
+      "and the classification test is what fails on it",
     );
   });
 });
