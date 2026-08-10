@@ -97,3 +97,30 @@ describe("schemeFindings — malformed_name and unaddressed are mutually exclusi
     );
   });
 });
+
+// expectedFolder's result depends only on the address's container token, so
+// findings.ts memoizes it per container token within one schemeFindings call
+// (jd.ts itself stays an unmemoized, always-fresh linear scan — see
+// findings.ts's makeExpectedFolderCache doc). This pins that the memoized
+// path produces IDENTICAL findings to what an unmemoized per-note lookup
+// would: several notes sharing category "06" (so the cache entry is written
+// once and reused on every subsequent lookup, both before and after the one
+// misfiled note), with only the genuinely misfiled note flagged.
+describe("schemeFindings — expectedFolder memoization does not change results", () => {
+  test("many notes sharing a category: the cached lookup still flags only the misfiled one", () => {
+    const notes = [
+      "00-09 System/06 Agent tooling/06.11 A.md", // seeds the "06" cache entry, correctly filed
+      "00-09 System/06 Agent tooling/06.12 B.md", // correctly filed — reuses the cached entry
+      "00-09 System/06 Agent tooling/06.13 C.md", // correctly filed — reuses the cached entry
+      "00-09 System/06 Misfiled/06.20 D.md", // misfiled — reuses the SAME cached entry
+      "00-09 System/06 Agent tooling/06.14 E.md", // correctly filed — after the misfiled lookup
+    ];
+    const findings = schemeFindings(instance, notes);
+    assert.deepEqual(
+      findings.map((f) => ({ path: f.path, code: f.code })),
+      [{ path: "00-09 System/06 Misfiled/06.20 D.md", code: "misfiled" }],
+    );
+    assert.match(findings[0].detail, /00-09 System\/06 Agent tooling/);
+    assert.match(findings[0].detail, /00-09 System\/06 Misfiled/);
+  });
+});

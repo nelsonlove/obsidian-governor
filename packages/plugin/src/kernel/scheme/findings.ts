@@ -7,7 +7,7 @@
 // semantic constants (Nelson's config-not-hardwired ruling). This module
 // only sequences four provider-delegated checks and sorts the result.
 
-import type { SchemeFinding } from "./provider.js";
+import type { Address, SchemeFinding, ScopeProvider } from "./provider.js";
 import type { SchemeInstance } from "./registry.js";
 
 function basenameOf(path: string): string {
@@ -18,6 +18,29 @@ function basenameOf(path: string): string {
 function folderOf(path: string): string {
   const idx = path.lastIndexOf("/");
   return idx === -1 ? "" : path.slice(0, idx);
+}
+
+/** `expectedFolder`'s result depends only on `addr`'s container token
+ * (`addr.levels[addr.levels.length - 2]`), never on the rest of `addr` or on
+ * which note is asking — but jd.ts's implementation reruns a fresh linear
+ * scan of `notes` on every call (~370ms for one call on a ~1260-note vault,
+ * benchmarked). `schemeFindings` calls it once per addressed note, so an
+ * unmemoized listing is O(n^2) in vault size. Memoize HERE, keyed on the
+ * container token, rather than in jd.ts — jd.ts's contract is "pure per
+ * call", and caching inside it would either leak across calls with
+ * different `notes` listings or require a cache-invalidation story the
+ * provider interface doesn't have. Scoped to one `schemeFindings` call: a
+ * fresh cache per invocation, never carried across calls or vaults. */
+function makeExpectedFolderCache(provider: ScopeProvider, notes: string[]) {
+  const cache = new Map<string, string | null>();
+  return (addr: Address): string | null => {
+    if (addr.levels.length < 2) return provider.expectedFolder(addr, notes);
+    const token = addr.levels[addr.levels.length - 2];
+    if (cache.has(token)) return cache.get(token) ?? null;
+    const result = provider.expectedFolder(addr, notes);
+    cache.set(token, result);
+    return result;
+  };
 }
 
 /**
@@ -48,6 +71,7 @@ export function schemeFindings(instance: SchemeInstance, notes: string[]): Schem
   const provider = instance.provider;
   const findings: SchemeFinding[] = [];
   const firstClaimant = new Map<string, string>(); // formatted address -> first path to claim it
+  const expectedFolderOf = makeExpectedFolderCache(provider, notes);
 
   for (const path of notes) {
     const malformed = provider.validateName(basenameOf(path)).map((f) => ({ ...f, path }));
@@ -81,7 +105,7 @@ export function schemeFindings(instance: SchemeInstance, notes: string[]): Schem
       });
     }
 
-    const expected = provider.expectedFolder(addr, notes);
+    const expected = expectedFolderOf(addr);
     const actual = folderOf(path);
     if (expected !== null && expected !== actual) {
       findings.push({
