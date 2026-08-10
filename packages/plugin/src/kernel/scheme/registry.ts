@@ -12,7 +12,7 @@
 // ScopeProvider.
 
 import type { Address, ScopeProvider } from "./provider.js";
-import { jdProvider, DEFAULT_JD_CONFIG, type JdConfig } from "./jd.js";
+import { jdProvider, DEFAULT_JD_CONFIG, validateJdConfig, type JdConfig } from "./jd.js";
 
 export interface SchemeInstanceConfig {
   id: string;
@@ -31,14 +31,23 @@ export interface SchemeInstance {
 /**
  * One entry per known provider name: how to deep-merge a partial config over
  * that provider's own defaults (key-level — each key either takes the
- * override wholesale or falls back to the default, never merged deeper) and
- * build the live ScopeProvider. `config` arrives as `unknown` because
- * `SchemeInstanceConfig.provider` is a compile-time literal, but a config
- * loaded from JSON can name any string at runtime — the registry must
- * validate it defensively, not trust the type.
+ * override wholesale or falls back to the default, never merged deeper),
+ * validate a raw config before trusting it, and build the live ScopeProvider.
+ * `config` arrives as `unknown` because `SchemeInstanceConfig.provider` is a
+ * compile-time literal, but a config loaded from JSON can name any string at
+ * runtime — the registry must validate it defensively, not trust the type.
+ *
+ * Flexible user config schema (Nelson's ruling): `config` is a per-provider
+ * namespace validated BY THE PROVIDER, not by the registry — `validate` is
+ * the provider's own hook (validateJdConfig for "johnny-decimal"), and
+ * makeRegistry below calls it before `make`, same skip-and-report path as an
+ * unknown provider name.
  */
-const PROVIDER_FACTORIES: Record<string, (config: unknown) => ScopeProvider> = {
-  "johnny-decimal": (config) => jdProvider({ ...DEFAULT_JD_CONFIG, ...(config as Partial<JdConfig> | undefined) }),
+const PROVIDER_FACTORIES: Record<string, { make: (config: unknown) => ScopeProvider; validate: (config: unknown) => string[] }> = {
+  "johnny-decimal": {
+    make: (config) => jdProvider({ ...DEFAULT_JD_CONFIG, ...(config as Partial<JdConfig> | undefined) }),
+    validate: validateJdConfig,
+  },
 };
 
 /** "jd:06.11", "uid:abc" — a scheme id (lowercase, digits/hyphens) and an
@@ -102,7 +111,14 @@ export function makeRegistry(configs: SchemeInstanceConfig[]): SchemeRegistry {
       console.error(`[scheme-registry] unknown provider "${cfg.provider}" for scheme id "${cfg.id}" — instance skipped`);
       continue;
     }
-    instances.push({ id: cfg.id, providerName: cfg.provider, provider: factory(cfg.config) });
+    const problems = factory.validate(cfg.config);
+    if (problems.length > 0) {
+      console.error(
+        `[scheme-registry] invalid config for scheme id "${cfg.id}" (provider "${cfg.provider}") — instance skipped: ${problems.join("; ")}`,
+      );
+      continue;
+    }
+    instances.push({ id: cfg.id, providerName: cfg.provider, provider: factory.make(cfg.config) });
   }
   return new SchemeRegistry(instances);
 }

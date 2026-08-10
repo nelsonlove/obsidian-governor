@@ -98,6 +98,73 @@ describe("makeRegistry — building instances from config", () => {
     // Sanity: the merged config actually differs from the untouched default.
     assert.notDeepEqual(inst.provider.parse("31001"), null);
   });
+
+  // ── Task 5: registry-from-settings ──────────────────────────────────────────
+
+  test("makeRegistry(DEFAULT_SCHEMES) — the settings default — merges DEFAULT_JD_CONFIG under partial overrides", () => {
+    // DEFAULT_SCHEMES is exactly what VaultMcpSettings.schemes defaults to
+    // (main.ts DEFAULT_SETTINGS.schemes = DEFAULT_SCHEMES). A settings-loaded
+    // instance with a partial config override must merge the SAME way a
+    // hand-built one does — expandedAreas untouched at its provider default.
+    const settingsLikeConfigs = [{ id: "jd", provider: "johnny-decimal", config: { expandedCategories: ["27", "31"] } }];
+    const reg = makeRegistry(settingsLikeConfigs);
+    const inst = reg.get("jd");
+    assert.equal(inst.provider.parse("92021")?.kind, "expanded-item"); // expandedAreas default preserved
+    assert.equal(inst.provider.parse("31001")?.kind, "expanded-item"); // expandedCategories override applied
+
+    // The untouched DEFAULT_SCHEMES entry itself builds the same as an empty override.
+    const defaultReg = makeRegistry(DEFAULT_SCHEMES);
+    const defaultInst = defaultReg.get("jd");
+    assert.deepEqual(defaultInst.provider.parse("90001"), inst.provider.parse("90001"));
+  });
+
+  // ── Amendment 2: flexible user config, validated by the provider ───────────
+
+  test("an invalid config (expandedAreas as a string, not an array) is skipped with console.error, not thrown", () => {
+    const originalError = console.error;
+    const messages = [];
+    console.error = (msg) => messages.push(msg);
+    let reg;
+    try {
+      reg = makeRegistry([{ id: "jd", provider: "johnny-decimal", config: { expandedAreas: "90-99" } }]);
+    } finally {
+      console.error = originalError;
+    }
+    assert.equal(reg.instances().length, 0);
+    assert.equal(reg.get("jd"), null);
+    assert.equal(messages.length, 1);
+    assert.match(messages[0], /expandedAreas must be an array of strings/);
+  });
+
+  test("an invalid contentDecimalFloor (out of range) is skipped with console.error listing the problem", () => {
+    const originalError = console.error;
+    const messages = [];
+    console.error = (msg) => messages.push(msg);
+    let reg;
+    try {
+      reg = makeRegistry([{ id: "jd", provider: "johnny-decimal", config: { contentDecimalFloor: 100 } }]);
+    } finally {
+      console.error = originalError;
+    }
+    assert.equal(reg.instances().length, 0);
+    assert.match(messages[0], /contentDecimalFloor must be an integer between 0 and 99/);
+  });
+
+  test("a valid contentDecimalFloor override changes nextFree's plain-category allocation (floor 5 -> 06.05)", () => {
+    const reg = makeRegistry([{ id: "jd", provider: "johnny-decimal", config: { contentDecimalFloor: 5 } }]);
+    const inst = reg.get("jd");
+    const notes = ["00-09 System/06 Agent tooling/06.00 JDex.md"];
+    const next = inst.provider.nextFree({ kind: "category", token: "06" }, notes);
+    assert.equal(inst.provider.format(next), "06.05");
+  });
+
+  test("contentDecimalFloor absent from config preserves default behavior (-> 06.10)", () => {
+    const reg = makeRegistry(DEFAULT_SCHEMES);
+    const inst = reg.get("jd");
+    const notes = ["00-09 System/06 Agent tooling/06.00 JDex.md"];
+    const next = inst.provider.nextFree({ kind: "category", token: "06" }, notes);
+    assert.equal(inst.provider.format(next), "06.10");
+  });
 });
 
 // ── parseRef ─────────────────────────────────────────────────────────────────

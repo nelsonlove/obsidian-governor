@@ -29,6 +29,19 @@ export interface JdConfig {
   expandedAreas: string[];
   /** Single categories that use 5-digit flat IDs, e.g. ["27"]. */
   expandedCategories: string[];
+  /**
+   * Scheme semantics are configuration, not hardwired (Nelson's ruling): the
+   * lowest two-digit decimal (0-99) that nextFree's plain-category branch
+   * allocates as content — decimals below the floor are reserved (standard
+   * zeros in the stock scheme). Optional, defaulting to 10 (today's hardwired
+   * behavior) when absent, so an unconfigured instance is byte-identical to
+   * before this field existed. Not added to DEFAULT_JD_CONFIG itself — the
+   * `?? 10` fallback at the one call site (nextFree) is the default, so a
+   * config merge that never mentions this key behaves exactly as if it were
+   * required-with-a-default, without forcing every config literal to spell it
+   * out.
+   */
+  contentDecimalFloor?: number;
 }
 
 export const DEFAULT_JD_CONFIG: JdConfig = {
@@ -153,11 +166,13 @@ function idTokenFromName(name: string): string {
 
 /**
  * Given a set of used decimal parts in a normal category, return the next free
- * two-digit content decimal (".10".."".99"), or null if the category is full.
- * Content IDs start at .10 — .00–.09 are the reserved standard zeros.
+ * two-digit content decimal (floor..99), or null if the category is full.
+ * Content IDs start at `floor` (default 10 — .00-.09 are the reserved
+ * standard zeros in the stock scheme); a configured floor reserves a
+ * different-sized band instead, per JdConfig.contentDecimalFloor.
  */
-function nextContentDecimal(used: Set<number>): string | null {
-  for (let n = 10; n <= 99; n++) {
+function nextContentDecimal(used: Set<number>, floor: number): string | null {
+  for (let n = floor; n <= 99; n++) {
     if (!used.has(n)) return String(n).padStart(2, "0");
   }
   return null;
@@ -502,7 +517,7 @@ export function jdProvider(cfg: JdConfig): ScopeProvider {
             used.add(parseInt(p.decimal as string, 10));
           }
         }
-        const decimal = nextContentDecimal(used);
+        const decimal = nextContentDecimal(used, cfg.contentDecimalFloor ?? 10);
         return decimal === null ? null : parse(`${scope.token}.${decimal}`);
       }
       if (scope.kind === "area" && cfg.expandedAreas.includes(scope.token)) {
@@ -527,4 +542,72 @@ export function jdProvider(cfg: JdConfig): ScopeProvider {
       return null;
     },
   };
+}
+
+// ── config validation ───────────────────────────────────────────────────────
+//
+// Flexible user config schema (Nelson's ruling): schemes[].config is a
+// per-provider namespace validated by the provider, skip-and-report rather
+// than thrown. This is that validation for the JD provider — the registry
+// (registry.ts) calls it before constructing an instance and skips the
+// instance (console.error) when the returned list is non-empty. A config that
+// is `undefined` (no override at all) is always valid — there is nothing to
+// check. Each check reuses the SAME token grammar parseJdId/nextContentDecimal
+// rely on (RE_AREA with matching digits, RE_CATEGORY), so "valid area/category
+// token" here can never drift from what the provider itself will accept.
+
+function isValidAreaToken(token: string): boolean {
+  const m = token.match(RE_AREA);
+  return !!m && m[1] === m[2];
+}
+
+function isValidCategoryToken(token: string): boolean {
+  return RE_CATEGORY.test(token);
+}
+
+/**
+ * Validate a raw (untrusted, `unknown`) JdConfig override. Returns a list of
+ * human-readable problems — empty means valid. Never throws: a malformed
+ * config (e.g. loaded from hand-edited data.json) is data to report, not an
+ * exception to propagate.
+ */
+export function validateJdConfig(config: unknown): string[] {
+  if (config === undefined) return [];
+  const problems: string[] = [];
+  if (config === null || typeof config !== "object" || Array.isArray(config)) {
+    problems.push("config must be an object");
+    return problems;
+  }
+  const c = config as Record<string, unknown>;
+
+  if ("expandedAreas" in c && c.expandedAreas !== undefined) {
+    const v = c.expandedAreas;
+    if (!Array.isArray(v) || !v.every((x) => typeof x === "string")) {
+      problems.push("expandedAreas must be an array of strings (e.g. [\"90-99\"])");
+    } else {
+      for (const token of v) {
+        if (!isValidAreaToken(token)) problems.push(`expandedAreas: "${token}" is not a valid area token (expected e.g. "90-99")`);
+      }
+    }
+  }
+
+  if ("expandedCategories" in c && c.expandedCategories !== undefined) {
+    const v = c.expandedCategories;
+    if (!Array.isArray(v) || !v.every((x) => typeof x === "string")) {
+      problems.push("expandedCategories must be an array of strings (e.g. [\"27\"])");
+    } else {
+      for (const token of v) {
+        if (!isValidCategoryToken(token)) problems.push(`expandedCategories: "${token}" is not a valid category token (expected e.g. "27")`);
+      }
+    }
+  }
+
+  if ("contentDecimalFloor" in c && c.contentDecimalFloor !== undefined) {
+    const v = c.contentDecimalFloor;
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 0 || v > 99) {
+      problems.push("contentDecimalFloor must be an integer between 0 and 99");
+    }
+  }
+
+  return problems;
 }

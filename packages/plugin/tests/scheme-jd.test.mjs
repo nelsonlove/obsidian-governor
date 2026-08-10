@@ -14,7 +14,7 @@
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { jdProvider, DEFAULT_JD_CONFIG } from "../src/kernel/scheme/jd.js";
+import { jdProvider, DEFAULT_JD_CONFIG, validateJdConfig } from "../src/kernel/scheme/jd.js";
 
 const p = jdProvider(DEFAULT_JD_CONFIG);
 
@@ -186,5 +186,60 @@ describe("methods deferred to task 2 are live, not stubs", () => {
     );
     assert.equal(p.expectedFolder(p.parse("06.12"), notes), "00-09 System/06 Agent tooling");
     assert.equal(p.format(p.nextFree({ kind: "category", token: "06" }, notes)), "06.10");
+  });
+});
+
+// ── Task 5 amendment 2: validateJdConfig — flexible user config, validated ──
+// by the provider (skip-and-report, never throw).
+
+describe("validateJdConfig — problems list, empty means valid", () => {
+  test("undefined config (no override at all) is valid", () => {
+    assert.deepEqual(validateJdConfig(undefined), []);
+  });
+
+  test("an empty object is valid — every key is optional", () => {
+    assert.deepEqual(validateJdConfig({}), []);
+  });
+
+  test("a fully valid override is valid", () => {
+    assert.deepEqual(validateJdConfig({ expandedAreas: ["90-99"], expandedCategories: ["27", "31"], contentDecimalFloor: 5 }), []);
+  });
+
+  test("a non-object config (e.g. a string, an array, null) is invalid", () => {
+    assert.equal(validateJdConfig("90-99").length, 1);
+    assert.equal(validateJdConfig(["90-99"]).length, 1);
+    assert.equal(validateJdConfig(null).length, 1);
+  });
+
+  test("expandedAreas as a string (not an array) is invalid, matching the amendment's example", () => {
+    const problems = validateJdConfig({ expandedAreas: "90-99" });
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /expandedAreas must be an array of strings/);
+  });
+
+  test("expandedAreas with a malformed token (e.g. mismatched digits) is invalid", () => {
+    const problems = validateJdConfig({ expandedAreas: ["05-19"] });
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /"05-19" is not a valid area token/);
+  });
+
+  test("expandedCategories with a malformed token is invalid", () => {
+    const problems = validateJdConfig({ expandedCategories: ["not-a-category"] });
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /"not-a-category" is not a valid category token/);
+  });
+
+  test("contentDecimalFloor must be an integer 0..99", () => {
+    assert.deepEqual(validateJdConfig({ contentDecimalFloor: 0 }), []);
+    assert.deepEqual(validateJdConfig({ contentDecimalFloor: 99 }), []);
+    assert.equal(validateJdConfig({ contentDecimalFloor: -1 }).length, 1);
+    assert.equal(validateJdConfig({ contentDecimalFloor: 100 }).length, 1);
+    assert.equal(validateJdConfig({ contentDecimalFloor: 5.5 }).length, 1);
+    assert.equal(validateJdConfig({ contentDecimalFloor: "5" }).length, 1);
+  });
+
+  test("multiple problems are all reported, not just the first", () => {
+    const problems = validateJdConfig({ expandedAreas: "90-99", contentDecimalFloor: 100 });
+    assert.equal(problems.length, 2);
   });
 });

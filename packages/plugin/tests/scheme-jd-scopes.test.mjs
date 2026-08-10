@@ -259,3 +259,27 @@ describe("nextFree — next unused address in a scope", () => {
     assert.equal(p.nextFree({ kind: "category", token: "27" }, notes), null);
   });
 });
+
+// ── Task 5 amendment 1: configurable content-decimal floor ─────────────────
+
+describe("nextFree — configurable contentDecimalFloor (default preserves today's hardwired 10)", () => {
+  test("floor absent (DEFAULT_JD_CONFIG) -> content still starts at .10", () => {
+    const notes = ["00-09 System/06 Agent tooling/06.00 JDex.md"];
+    assert.equal(p.format(p.nextFree({ kind: "category", token: "06" }, notes)), "06.10");
+  });
+
+  test("floor 5 -> content starts at .05 (decimals 5..99 allocatable)", () => {
+    const withFloor5 = jdProvider({ ...DEFAULT_JD_CONFIG, contentDecimalFloor: 5 });
+    const notes = ["00-09 System/06 Agent tooling/06.00 JDex.md"];
+    assert.equal(withFloor5.format(withFloor5.nextFree({ kind: "category", token: "06" }, notes)), "06.05");
+  });
+
+  test("floor 5 -> a used .05 is skipped for the next free decimal", () => {
+    const withFloor5 = jdProvider({ ...DEFAULT_JD_CONFIG, contentDecimalFloor: 5 });
+    const notes = [
+      "00-09 System/06 Agent tooling/06.00 JDex.md",
+      "00-09 System/06 Agent tooling/06.05 Taken.md",
+    ];
+    assert.equal(withFloor5.format(withFloor5.nextFree({ kind: "category", token: "06" }, notes)), "06.06");
+  });
+});

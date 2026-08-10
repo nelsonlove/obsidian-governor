@@ -10,6 +10,7 @@ import { isVisible, type GuardSettings } from "../guard.js";
 import type { ExternalToolEntry } from "./external-tools.js";
 import type { Kernel, ServerIdentity, VocabInstanceSettings } from "../kernel/index.js";
 import { findObsidianBinary } from "./tools-cli.js";
+import type { SchemeInstanceConfig } from "../kernel/scheme/registry.js";
 
 export interface ServerCtx {
   pluginVersion: string;
@@ -22,8 +23,18 @@ export interface ServerCtx {
    *   `trustedReadOnlyPlugins`   — plugin ids whose `readOnlyHint: true` is
    *                                believed. Any other publisher's read-only
    *                                claim is distrusted; see external-tools.ts.
+   *   `schemes`                  — scope-provider instance configs (id +
+   *                                provider + per-provider config), fed to
+   *                                kernel/scheme/registry.ts's makeRegistry.
+   *                                Optional here for the same reason the rest
+   *                                of this bag is optional: absent in tests
+   *                                that don't exercise scheme tools.
    */
-  getSettings: () => GuardSettings & { allowDangerousCli?: boolean; trustedReadOnlyPlugins?: string[] };
+  getSettings: () => GuardSettings & {
+    allowDangerousCli?: boolean;
+    trustedReadOnlyPlugins?: string[];
+    schemes?: SchemeInstanceConfig[];
+  };
   /** The configured controlled-vocabulary sources (tools-vocab.ts). Optional:
    * absent means the defaults; absent in tests that don't exercise it. */
   getVocabularies?: () => VocabInstanceSettings[];
