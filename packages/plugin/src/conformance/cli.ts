@@ -7,8 +7,11 @@
 // ready-to-write rebaseline body come out. `main` is the thin wrapper that
 // reads argv/env, loads the baseline note, prints, and sets the exit code.
 //
-// Phase 1 wires the two module packs (vocab + scheme). The legacy checks
-// (drift/blueprint/ste/port) become packs in phase 2 and simply join the list.
+// Phase 1 wired the two module packs (vocab + scheme). Three of the four
+// legacy checks (structure+legacy-scope from conformance_check, port, ste) are
+// ported and join the list behind the opt-in `legacyPacks` flag
+// (`--legacy-packs`), default off until the Phase-3 scope ruling + staged
+// rebaseline; drift_audit remains Python-only.
 
 import { readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
