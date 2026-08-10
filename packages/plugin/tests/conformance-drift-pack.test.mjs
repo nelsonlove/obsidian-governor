@@ -5,15 +5,30 @@
  * The drift pack maps each Python finding string `"{LETTER}: {rest}"` onto the
  * canonical 4-tuple Finding keyed BYTE-IDENTICAL to the ratchet's `parse_drift`:
  *   { script: "drift_audit", check: <LETTER>, target: <rest>, kind: "" }
- * so the accepted-debt baseline's 56 drift keys carry across the port. Every
- * finding-producing check (A/B/D/E/F/G/J) is exercised here, plus a clean
- * fixture, the empty `kind`, and the E/F traversal-order + scope edges. The
- * print-only checks (C/H/I) emit no findings and so appear nowhere.
+ * for every check EXCEPT E and F, whose Python message embeds volatile data
+ * (an order-dependent homes list for E, a count + traversal-ordered path
+ * sample for F). `parse_drift`'s docstring keys those two specially — E on
+ * the uid alone (target <uid>, kind "dup-uid"), F count/sample-independently
+ * (target "uid-coverage", kind "uid-less") — so the accepted-debt baseline's
+ * keys carry across the port AND stay stable under unrelated edits (issue
+ * #136: keying E/F on the raw message text produces a permanent false-NEW
+ * treadmill, since the message changes on every unrelated uid-less note or
+ * duplicate-uid claimant).
+ *
+ * Every finding-producing check (A/B/D/E/F/G/J) is exercised here, plus a
+ * clean fixture, the empty `kind`, the E/F traversal-order + scope edges, and
+ * — the load-bearing regression coverage for #136 — two KEY STABILITY tests
+ * that add an unrelated uid-less note (F) / duplicate-uid claimant (E) and
+ * assert the key is unchanged while the message differs. A message-level
+ * parity test cannot catch this class of bug by construction; only a
+ * key-level test can. The print-only checks (C/H/I) emit no findings and so
+ * appear nowhere.
  */
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { driftPack, DEFAULT_REGISTRIES_ROOT } from "../src/conformance/packs/index.ts";
+import { findingKey } from "../src/conformance/finding.ts";
 
 const FBF = DEFAULT_REGISTRIES_ROOT;
 const BASE02 = "00-09 System/02 Obsidian/02.03 Artifacts for 02 Obsidian";
@@ -147,56 +162,123 @@ describe("driftPack D (surface existence)", () => {
 });
 
 // ── E / F. uid identity in raw traversal order ─────────────────────────────────
+//
+// E and F are keyed specially (issue #136): their MESSAGE (`detail`) still
+// carries the traversal-ordered homes list / count+sample, and is asserted
+// below exactly as before. But the ratchet KEY — `target`/`kind`, what
+// `findingKey()` serializes — must NOT move when that volatile data changes.
+// The two "key stability" tests are the load-bearing regression coverage: a
+// message-level parity check cannot catch this class of bug by construction,
+// only a key-level one can.
 
 describe("driftPack E/F (uid)", () => {
   const UID = "0192f1a0-1234-7abc-8def-0123456789ab";
   const withUid = (p, uid = UID) => ({ path: p, text: `---\nuid: ${uid}\n---\nbody\n` });
   const noUid = (p) => ({ path: p, text: "---\ntitle: x\n---\nbody\n" });
 
-  test("E: two notes sharing a uid → one finding, homes joined in traversal order", () => {
+  test("E: two notes sharing a uid → one finding, homes joined in traversal order in `detail`", () => {
     const s = snap({
       walkOrder: ["Notes/a.md", "Notes/b.md"],
       sources: [withUid("Notes/a.md"), withUid("Notes/b.md")],
     });
-    const t = targets(run(s), "E");
-    assert.deepEqual(t, [`uid ${UID} is claimed by 2 notes: Notes/a.md; Notes/b.md`]);
+    const findings = run(s).filter((f) => f.check === "E");
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].detail, `E: uid ${UID} is claimed by 2 notes: Notes/a.md; Notes/b.md`);
   });
 
-  test("F: uid-less notes → one aggregated finding, sample in WALK order (not sorted), +N more", () => {
+  test("E key: keyed on the uid, not the homes list (issue #136) — target is the uid, kind is 'dup-uid'", () => {
+    const s = snap({
+      walkOrder: ["Notes/a.md", "Notes/b.md"],
+      sources: [withUid("Notes/a.md"), withUid("Notes/b.md")],
+    });
+    const f = run(s).find((x) => x.check === "E");
+    assert.equal(f.target, UID);
+    assert.equal(f.kind, "dup-uid");
+    assert.equal(findingKey(f), `drift_audit|E|${UID}|dup-uid`);
+  });
+
+  test("E key stability: a THIRD claimant joins (changing the homes list and its order) — the key is unchanged", () => {
+    const two = snap({
+      walkOrder: ["Notes/a.md", "Notes/b.md"],
+      sources: [withUid("Notes/a.md"), withUid("Notes/b.md")],
+    });
+    const keyBefore = findingKey(run(two).find((f) => f.check === "E"));
+
+    // A third claimant joins, ahead of the other two in traversal order —
+    // this changes both the COUNT and the ORDER of the homes list embedded
+    // in the message.
+    const three = snap({
+      walkOrder: ["Notes/zzz.md", "Notes/a.md", "Notes/b.md"],
+      sources: [withUid("Notes/zzz.md"), withUid("Notes/a.md"), withUid("Notes/b.md")],
+    });
+    const fAfter = run(three).find((f) => f.check === "E");
+    const keyAfter = findingKey(fAfter);
+
+    assert.equal(keyAfter, keyBefore, "the E key must be stable when an unrelated claimant joins");
+    // The message DID change — proving a message-level check would have
+    // reported a false NEW finding here.
+    assert.equal(fAfter.detail, `E: uid ${UID} is claimed by 3 notes: Notes/zzz.md; Notes/a.md; Notes/b.md`);
+  });
+
+  test("F: uid-less notes → one aggregated finding, sample in WALK order (not sorted), +N more, in `detail`", () => {
     // walkOrder is deliberately NOT alphabetical — the sample must follow it.
     const order = ["Notes/z.md", "Notes/a.md", "Notes/m.md", "Notes/b.md", "Notes/y.md", "Notes/c.md", "Notes/n.md"];
     const s = snap({ walkOrder: order, sources: order.map(noUid) });
-    const t = targets(run(s), "F");
-    assert.deepEqual(t, [
-      "7 note(s) lack a usable uid — run 'Stamp missing UIDs': Notes/z.md; Notes/a.md; Notes/m.md; Notes/b.md; Notes/y.md (+2 more)",
-    ]);
+    const f = run(s).find((x) => x.check === "F");
+    assert.equal(
+      f.detail,
+      "F: 7 note(s) lack a usable uid — run 'Stamp missing UIDs': Notes/z.md; Notes/a.md; Notes/m.md; Notes/b.md; Notes/y.md (+2 more)",
+    );
   });
 
-  test("F: five or fewer uid-less notes → no '(+N more)' suffix", () => {
+  test("F: five or fewer uid-less notes → no '(+N more)' suffix in `detail`", () => {
     const order = ["Notes/z.md", "Notes/a.md"];
-    const t = targets(run(snap({ walkOrder: order, sources: order.map(noUid) })), "F");
-    assert.deepEqual(t, ["2 note(s) lack a usable uid — run 'Stamp missing UIDs': Notes/z.md; Notes/a.md"]);
+    const f = run(snap({ walkOrder: order, sources: order.map(noUid) })).find((x) => x.check === "F");
+    assert.equal(f.detail, "F: 2 note(s) lack a usable uid — run 'Stamp missing UIDs': Notes/z.md; Notes/a.md");
+  });
+
+  test("F key: keyed count/sample-independently (issue #136) — target 'uid-coverage', kind 'uid-less'", () => {
+    const order = ["Notes/z.md", "Notes/a.md"];
+    const f = run(snap({ walkOrder: order, sources: order.map(noUid) })).find((x) => x.check === "F");
+    assert.equal(f.target, "uid-coverage");
+    assert.equal(f.kind, "uid-less");
+    assert.equal(findingKey(f), "drift_audit|F|uid-coverage|uid-less");
+  });
+
+  test("F key stability: an UNRELATED additional uid-less note is added — the key is unchanged though count/sample changes", () => {
+    const order = ["Notes/z.md", "Notes/a.md", "Notes/m.md", "Notes/b.md", "Notes/y.md"];
+    const before = snap({ walkOrder: order, sources: order.map(noUid) });
+    const keyBefore = findingKey(run(before).find((f) => f.check === "F"));
+
+    const orderPlusOne = [...order, "Notes/unrelated-new-note.md"];
+    const after = snap({ walkOrder: orderPlusOne, sources: orderPlusOne.map(noUid) });
+    const fAfter = run(after).find((f) => f.check === "F");
+    const keyAfter = findingKey(fAfter);
+
+    assert.equal(keyAfter, keyBefore, "the F key must be stable when an unrelated uid-less note is added");
+    // The message DID change (count 5 → 6, "+1 more" appears) — proving a
+    // message-level check would have reported a false NEW finding here.
+    assert.ok(fAfter.detail.startsWith("F: 6 note(s) lack a usable uid"));
   });
 
   test("a non-UUID uid value counts as no-identity (F), not a valid identity", () => {
     const bad = { path: "Notes/x.md", text: "---\nuid: not-a-uuid\n---\n" };
-    const t = targets(run(snap({ walkOrder: ["Notes/x.md"], sources: [bad] })), "F");
-    assert.equal(t.length, 1);
-    assert.ok(t[0].startsWith("1 note(s) lack a usable uid"));
+    const f = run(snap({ walkOrder: ["Notes/x.md"], sources: [bad] })).find((x) => x.check === "F");
+    assert.ok(f.detail.startsWith("F: 1 note(s) lack a usable uid"));
   });
 
   test("iter_notes scope: dot/.trash segments, _ roots, and Assent are excluded from E/F", () => {
     const order = ["_hold/s.md", "Assent/t.md", ".obsidian/u.md", "x/.hidden/v.md", "Notes/real.md"];
     const s = snap({ walkOrder: order, sources: order.map(noUid) });
-    const t = targets(run(s), "F");
+    const f = run(s).find((x) => x.check === "F");
     // only the one governed note counts
-    assert.deepEqual(t, ["1 note(s) lack a usable uid — run 'Stamp missing UIDs': Notes/real.md"]);
+    assert.equal(f.detail, "F: 1 note(s) lack a usable uid — run 'Stamp missing UIDs': Notes/real.md");
   });
 
   test("the daily-note template is uid-exempt (empty uid is copy payload, not drift)", () => {
     const tpl = `${FBF}/Daily notes/Daily note.template.md`;
     const s = snap({ walkOrder: [tpl], sources: [noUid(tpl)] });
-    assert.deepEqual(targets(run(s), "F"), []);
+    assert.equal(run(s).filter((f) => f.check === "F").length, 0);
   });
 });
 

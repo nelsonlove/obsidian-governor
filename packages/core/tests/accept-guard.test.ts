@@ -70,6 +70,315 @@ describe("parseGuardFrontmatter", () => {
   });
 });
 
+// ── Fail-closed on constructs the subset does not model (issue #104 residual
+// — "decide over the honored bytes") ────────────────────────────────────────
+//
+// Before this fix, a line the subset couldn't classify was silently SKIPPED
+// — not refused — so `parseGuardFrontmatter` could report FEWER keys than
+// the block actually has (down to zero), reading as "clean" when it wasn't.
+// Every case below must now REFUSE (throw AcceptForbiddenError) rather than
+// silently drop the line, whether or not the unclassifiable construct itself
+// carries an acceptance assertion — once a fence has matched, the guard must
+// be able to account for every line in it.
+//
+// SCOPE: this list is deliberately SHORT. Refusing is only correct where a
+// confident classification is genuinely impossible without a full YAML
+// document model. Constructs that are merely *nested* (block mappings, flow
+// collections inside flow collections, sequences of mappings, block scalars)
+// are PARSED, not refused — see the two describes that follow. Refusing those
+// rejected 22.9% of a real vault while buying no safety, since parsing them is
+// what actually lets the predicate SEE an assertion hidden inside one.
+
+function assertRefusesUnclassifiable(markdown: string) {
+  assert.throws(
+    () => parseGuardFrontmatter(markdown),
+    (e: unknown) => e instanceof AcceptForbiddenError && (e as AcceptForbiddenError).code === "accept_forbidden",
+  );
+}
+
+describe("parseGuardFrontmatter — fail-closed on unclassifiable constructs", () => {
+  test("the known instance: a lone CR inside a scalar value — was 'zero keys read as clean', now REFUSED", () => {
+    // /\r?\n/ does not consume a bare \r with no following \n, so it stays
+    // embedded in the "line" string; the subset's key/value regex then fails
+    // on it entirely (JS `.` excludes \r). Previously: `!km` → `continue` →
+    // zero keys → guardWrittenContent read this as clean. Now: refused.
+    const withLoneCr = "---\nacceptance-status: accepted\rXYZ\n---\nbody";
+    assertRefusesUnclassifiable(withLoneCr);
+  });
+
+  test("a bare control character elsewhere in a value is refused", () => {
+    assertRefusesUnclassifiable("---\nname: foo\x0bbar\n---\nbody");
+  });
+
+  test("a YAML anchor (&) is refused", () => {
+    assertRefusesUnclassifiable("---\nname: &anchor value\n---\nbody");
+  });
+
+  test("a YAML alias (*) is refused", () => {
+    assertRefusesUnclassifiable("---\nname: *anchor\n---\nbody");
+  });
+
+  test("an explicit YAML tag (!!) is refused", () => {
+    assertRefusesUnclassifiable("---\nname: !!str hello\n---\nbody");
+  });
+
+  test("a multi-document end marker (...) inside the block is refused", () => {
+    assertRefusesUnclassifiable("---\nname: N\n...\nmore: 1\n---\nbody");
+  });
+
+  test("an unquoted scalar starting with an indicator character inside a block array item is refused", () => {
+    assertRefusesUnclassifiable("---\ntags:\n  - &anchor\n  - b\n---\nbody");
+  });
+
+  test("an unterminated quoted scalar is refused rather than guessed at", () => {
+    assertRefusesUnclassifiable('---\nname: "unterminated\n---\nbody');
+  });
+
+  test("end-to-end: the lone-CR bypass is refused THROUGH writeNote, not just at the parser", async () => {
+    const { backend } = await freshBackend();
+    await assert.rejects(
+      () =>
+        backend.writeNote("note.md", "---\nacceptance-status: accepted\rXYZ\n---\nbody", false),
+      (e: unknown) => e instanceof AcceptForbiddenError,
+    );
+    await assert.rejects(() => backend.readNote("note.md"), /ENOENT|not found|no such file/i);
+  });
+});
+
+// ── Constructs that now PARSE instead of being refused ──────────────────────
+//
+// These all USED to throw (and were pinned as "refused" by earlier revisions
+// of this file). Refusing them was the bug, not the safety rail: they are
+// ordinary YAML that Obsidian honors, and blanket-refusing them rejected
+// 336/1468 (22.9%) of a real vault. Each test asserts the resulting STRUCTURE,
+// not merely that no exception was thrown — a parser that silently returned
+// `{}` would satisfy "does not throw" while reopening the exact
+// silent-divergence hole this whole change closes.
+
+describe("parseGuardFrontmatter — constructs that now PARSE (were over-broadly refused)", () => {
+  test("a literal block scalar (|) parses, newlines preserved", () => {
+    const fm = parseGuardFrontmatter("---\nsummary: |\n  line one\n  line two\n---\nbody");
+    assert.deepEqual(fm, { summary: "line one\nline two" });
+  });
+
+  test("a folded block scalar (>) parses, lines folded onto one", () => {
+    const fm = parseGuardFrontmatter("---\nsummary: >\n  line one\n  line two\n---\nbody");
+    assert.deepEqual(fm, { summary: "line one line two" });
+  });
+
+  test("a flow sequence nested inside another parses to a nested array", () => {
+    const fm = parseGuardFrontmatter("---\nitems: [[a, b], c]\n---\nbody");
+    assert.deepEqual(fm, { items: [["a", "b"], "c"] });
+  });
+
+  test("flow mappings inside a flow sequence parse to an array of objects", () => {
+    const fm = parseGuardFrontmatter("---\nitems: [{a: 1}, {b: 2}]\n---\nbody");
+    assert.deepEqual(fm, { items: [{ a: 1 }, { b: 2 }] });
+  });
+
+  test("a block-style nested mapping parses recursively", () => {
+    const fm = parseGuardFrontmatter("---\nmetadata:\n  owner: nelson\n  count: 2\n---\nbody");
+    assert.deepEqual(fm, { metadata: { owner: "nelson", count: 2 } });
+  });
+
+  test("a sequence of mappings parses as ONE object per item, sibling keys grouped", () => {
+    const fm = parseGuardFrontmatter(
+      "---\nrelated:\n  - title: Foo\n    date: 2024-01-01\n  - title: Bar\n    date: 2024-02-02\n---\nbody",
+    );
+    assert.deepEqual(fm, {
+      related: [
+        { title: "Foo", date: "2024-01-01" },
+        { title: "Bar", date: "2024-02-02" },
+      ],
+    });
+  });
+
+  test("a quoted element beside a NESTED bracket parses — the comma is not a splitter and the nesting is modeled", () => {
+    const fm = parseGuardFrontmatter('---\ntags: ["a", ["b", "c"]]\n---\nbody');
+    assert.deepEqual(fm, { tags: ["a", ["b", "c"]] });
+  });
+
+  test("an unquoted Obsidian wikilink (a nested flow sequence to YAML) parses", () => {
+    // `projects: [[Some Note]]` is why nested-flow support is not academic —
+    // it is the single most common nested collection in a real Obsidian vault.
+    const fm = parseGuardFrontmatter("---\nprojects: [[Some Note]]\n---\nbody");
+    assert.deepEqual(fm, { projects: [["Some Note"]] });
+  });
+
+  test("an empty flow mapping as the WHOLE frontmatter parses to no keys, not a refusal", () => {
+    // `---\n{}\n---` is what an Apple Notes import writes; it asserts nothing,
+    // so refusing it was a pure false positive.
+    assert.deepEqual(parseGuardFrontmatter("---\n{}\n---\nbody"), {});
+  });
+
+  test("an empty flow sequence as the WHOLE frontmatter parses to no keys, not a refusal", () => {
+    assert.deepEqual(parseGuardFrontmatter("---\n[]\n---\nbody"), {});
+  });
+
+  test("a non-empty flow MAPPING as the whole frontmatter parses to its keys", () => {
+    assert.deepEqual(parseGuardFrontmatter("---\n{owner: nelson, count: 2}\n---\nbody"), {
+      owner: "nelson",
+      count: 2,
+    });
+  });
+
+  test("a truly empty fence is still 'no frontmatter' (null), distinct from '{}' (no keys)", () => {
+    assert.equal(parseGuardFrontmatter("---\n---\nbody"), null);
+  });
+});
+
+// ── The security payoff: parsing beats refusing ─────────────────────────────
+//
+// This is the WHOLE reason the constructs above are parsed rather than
+// refused. When the reader refused them it also could not SEE them, and the
+// acceptance predicate ran over a tree with the construct missing. Now the
+// predicate runs over the real structure, so an assertion hidden inside any of
+// them is caught. Each case goes through the REAL guard path
+// (FilesystemBackend.writeNote → guardWrittenContent), not just the parser, and
+// asserts nothing landed on disk.
+
+describe("an acceptance assertion hidden inside a now-parsed construct is still CAUGHT", () => {
+  async function assertRefusedAndNothingWritten(content: string) {
+    const { backend } = await freshBackend();
+    await assert.rejects(
+      () => backend.writeNote("note.md", content, false),
+      (e: unknown) => e instanceof AcceptForbiddenError && (e as AcceptForbiddenError).code === "accept_forbidden",
+    );
+    await assert.rejects(() => backend.readNote("note.md"), /ENOENT|not found|no such file/i);
+  }
+
+  test("acceptance-status whose value is a LITERAL block scalar", async () => {
+    await assertRefusedAndNothingWritten("---\nacceptance-status: |\n  accepted\n---\nbody");
+  });
+
+  test("acceptance-status whose value is a FOLDED block scalar", async () => {
+    await assertRefusedAndNothingWritten("---\nacceptance-status: >\n  accepted\n---\nbody");
+  });
+
+  test("acceptance-status hidden one level down in a NESTED flow sequence", async () => {
+    await assertRefusedAndNothingWritten("---\nacceptance-status: [[accepted]]\n---\nbody");
+  });
+
+  test("acceptance-status hidden in a flow MAPPING inside a flow sequence", async () => {
+    await assertRefusedAndNothingWritten("---\nacceptance-status: [{v: accepted}]\n---\nbody");
+  });
+
+  test("acceptance-status hidden in a block-style nested mapping", async () => {
+    await assertRefusedAndNothingWritten("---\nacceptance-status:\n  value: accepted\n---\nbody");
+  });
+
+  test("acceptance-status hidden in a SEQUENCE OF MAPPINGS", async () => {
+    await assertRefusedAndNothingWritten(
+      "---\nacceptance-status:\n  - by: nelson\n    value: accepted\n---\nbody",
+    );
+  });
+
+  test("an accepted-by KEY whose value is a nested block mapping", async () => {
+    await assertRefusedAndNothingWritten("---\naccepted-by:\n  name: nelson\n---\nbody");
+  });
+
+  test("a QUOTED acceptance key is unquoted before the predicate sees it", async () => {
+    // `"accepted-by": nelson` — without unquoting, the key reads as the literal
+    // `"accepted-by"` (quotes included), which `isAcceptedKey` does not match,
+    // and the assertion walks straight past the guard. Found by differential-
+    // testing this reader against PyYAML over the real vault.
+    await assertRefusedAndNothingWritten('---\n"accepted-by": nelson\n---\nbody');
+  });
+
+  test("acceptance-status asserted from a flow MAPPING at the document root", async () => {
+    await assertRefusedAndNothingWritten("---\n{acceptance-status: accepted}\n---\nbody");
+  });
+
+  test("NOT a false positive: a NESTED acceptance-status is a DIFFERENT property and is ALLOWED", async () => {
+    // Obsidian reads the TOP-LEVEL `acceptance-status` property; `metadata`
+    // holding a sub-key of the same name is a different property entirely, so
+    // refusing it would be a false positive. The rule is: acceptance-family
+    // KEYS at the top level, recursing into their VALUES — decide over what
+    // the honorer honors, not more.
+    const { backend } = await freshBackend();
+    const result = await backend.writeNote(
+      "note.md",
+      "---\nmetadata:\n  acceptance-status: accepted\n---\nbody",
+      false,
+    );
+    assert.equal(result.created, true);
+    assert.match(await backend.readNote("note.md"), /acceptance-status: accepted/);
+  });
+
+  test("an empty-flow-collection frontmatter is a legitimate write and SUCCEEDS", async () => {
+    const { backend } = await freshBackend();
+    assert.equal((await backend.writeNote("a.md", "---\n{}\n---\nbody", false)).created, true);
+    assert.equal((await backend.writeNote("b.md", "---\n[]\n---\nbody", false)).created, true);
+  });
+});
+
+// ── Non-regression: ordinary frontmatter still parses and still ALLOWS
+// legitimate writes ──────────────────────────────────────────────────────────
+
+describe("parseGuardFrontmatter — non-regression on ordinary constructs", () => {
+  test("strings, lists, quoted values all still parse", () => {
+    const fm = parseGuardFrontmatter(
+      '---\ntitle: My Note\ntags: [a, b]\nquoted: "hello, world"\n---\nbody',
+    );
+    assert.deepEqual(fm, { title: "My Note", tags: ["a", "b"], quoted: "hello, world" });
+  });
+
+  test("a quoted array element CONTAINING a comma is parsed as ONE element, not split", () => {
+    const fm = parseGuardFrontmatter('---\ntags: ["a, b", "c"]\n---\nbody');
+    assert.deepEqual(fm, { tags: ["a, b", "c"] });
+  });
+
+  test("a nested (flow) map still parses — key: {sub: val}", () => {
+    const fm = parseGuardFrontmatter("---\nmetadata: {owner: nelson, count: 2}\n---\nbody");
+    assert.deepEqual(fm, { metadata: { owner: "nelson", count: 2 } });
+  });
+
+  test("CRLF line endings throughout the block still parse", () => {
+    const fm = parseGuardFrontmatter("---\r\nname: N\r\ntags: [a, b]\r\n---\r\nbody");
+    assert.deepEqual(fm, { name: "N", tags: ["a", "b"] });
+  });
+
+  test("a leading BOM still parses", () => {
+    const fm = parseGuardFrontmatter("\uFEFF---\nname: N\n---\nbody");
+    assert.deepEqual(fm, { name: "N" });
+  });
+
+  test("trailing whitespace on the fence lines still parses", () => {
+    const fm = parseGuardFrontmatter("--- \t\nname: N\n---\t\nbody");
+    assert.deepEqual(fm, { name: "N" });
+  });
+
+  test("a block array of quoted scalars containing colons is allowed (quoting disambiguates from a mapping item)", () => {
+    const fm = parseGuardFrontmatter('---\nnotes:\n  - "Note: Draft"\n  - plain\n---\nbody');
+    assert.deepEqual(fm, { notes: ["Note: Draft", "plain"] });
+  });
+
+  describe("legitimate writes through FilesystemBackend still succeed with these ordinary constructs", () => {
+    test("CRLF + BOM + quoted-comma frontmatter on a NEW note succeeds", async () => {
+      const { backend } = await freshBackend();
+      const content = "\uFEFF---\r\ntitle: N\r\ntags: [\"a, b\", c]\r\n---\r\nbody";
+      const result = await backend.writeNote("note.md", content, false);
+      assert.equal(result.created, true);
+    });
+
+    test("preserving an existing accepted value verbatim on an UNRELATED edit is still ALLOWED, even with ordinary nested-flow-map frontmatter alongside it", async () => {
+      const { backend, vaultRoot } = await freshBackend();
+      await seedDirectly(
+        vaultRoot,
+        "note.md",
+        "---\nacceptance-status: accepted\nmetadata: {owner: nelson}\n---\noriginal",
+      );
+      const result = await backend.writeNote(
+        "note.md",
+        "---\nacceptance-status: accepted\nmetadata: {owner: nelson}\n---\nedited body",
+        true,
+      );
+      assert.equal(result.created, false);
+      assert.match(await backend.readNote("note.md"), /edited body/);
+    });
+  });
+});
+
 describe("acceptTransitionReason / acceptForbiddenReason (re-exported from core)", () => {
   test("introducing acceptance-status:accepted is blocked", () => {
     assert.ok(acceptTransitionReason(null, { "acceptance-status": "accepted" }));

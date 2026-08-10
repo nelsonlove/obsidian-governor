@@ -32,7 +32,7 @@ import {
   type AuthConfig,
 } from "./auth.js";
 import { createPresenceMonitor } from "./presence.js";
-import { createFsHandler } from "./fs-mode.js";
+import { createFsHandler, isFsWritesEnabled } from "./fs-mode.js";
 import { createLiveProxy } from "./live-proxy.js";
 import { createSemanticProxy } from "./semantic-proxy.js";
 
@@ -65,12 +65,17 @@ export function buildFront(deps: FrontDeps): express.Express {
   // Health — no auth, no body parse.
   // `mode` tells a monitor whether the proxy is in live or fallback mode.
   // `fsWriteSyncCaveat` flags that FS-mode writes bypass Obsidian's sync pipeline.
+  // `fsWritesEnabled` (issue #92) reports whether FS-mode writes are currently
+  // permitted at all — FS mode has no journal/serialized queue (those live in
+  // the plugin's kernel), so writes made there are refused unless the deployment
+  // opted in via VAULT_MCP_FS_ALLOW_WRITES. A boolean, not a secret.
   app.get("/health", (_req, res) => {
     res.json({
       status: "ok",
       mode: presence.isLive() ? "live" : "fs",
       authEnabled: cfg.enabled,
       fsWriteSyncCaveat: true,
+      fsWritesEnabled: isFsWritesEnabled(),
     });
   });
 

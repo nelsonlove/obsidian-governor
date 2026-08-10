@@ -401,8 +401,14 @@ class VaultImpl {
    * acceptance. The on-disk value is read ONLY when the result asserts
    * acceptance at all (the common write pays no extra read), so a legitimate
    * edit carrying an existing accepted value forward is allowed.
+   *
+   * Not `private`: `rewriteBacklinks` (issue #104 moveNote gap) is a free
+   * function below, not a method — TypeScript's `private` is enforced at the
+   * class boundary, not the module boundary, so a same-file helper still
+   * needs this to be at least package-visible to call it on the `vault`
+   * instance it's given.
    */
-  private async guardWrittenContent(relPath: string, resultingContent: string): Promise<void> {
+  async guardWrittenContent(relPath: string, resultingContent: string): Promise<void> {
     const after = parseGuardFrontmatter(resultingContent);
     if (!after || !acceptTransitionReason(null, after)) return;
     const before = await this.diskContentSafe(relPath);
@@ -887,6 +893,15 @@ async function rewriteBacklinks(
     });
 
     if (changed) {
+      // Accept-forbidden guard (issue #104 moveNote gap): this rewrite
+      // substitutes link paths inside an EXISTING file's content, but it is
+      // still a content write like writeNote/appendNote/patchNote, and
+      // wasn't guarded like them. No exploit demonstrated — smuggling an
+      // acceptance assertion through would require the new link target
+      // itself to carry a line break plus the assertion — but the other
+      // three content-write paths on this backend are all guarded, and this
+      // one should not be the exception.
+      await vault.guardWrittenContent(src, next);
       await fs.writeFile(absSrc, next, "utf8");
       filesTouched++;
     }

@@ -93,30 +93,20 @@ describe("rebaselineRefusal — the computed guard replacing PHASE1_PACKS_INCOMP
  * written) — structurally the same mistake as an accept-guard scanning a
  * normalized copy instead of the bytes that land.
  */
-describe("isLiveBaseline — decided over the file written, not over argv shape (Critical 1)", () => {
-  const ROOT = "/vault";
-  const LIVE = "/vault/Assent/Build/conformance/Conformance baseline.md";
-
-  test("the default (unspecified) baseline path is the live one", async () => {
-    const { isLiveBaseline } = await import("../src/conformance/cli.ts");
-    assert.equal(isLiveBaseline(LIVE, ROOT), true);
-  });
-
-  test("--baseline pointed AT the live path is still the live baseline", async () => {
-    const { isLiveBaseline } = await import("../src/conformance/cli.ts");
-    assert.equal(isLiveBaseline(LIVE, ROOT), true, "explicit --baseline must not launder the live record");
-  });
-
-  test("a non-normalized alias of the live path is still the live baseline", async () => {
-    const { isLiveBaseline } = await import("../src/conformance/cli.ts");
-    assert.equal(isLiveBaseline("/vault/Assent/Build/../Build/conformance/Conformance baseline.md", ROOT), true);
-  });
-
-  test("a genuine fixture elsewhere is NOT the live baseline", async () => {
-    const { isLiveBaseline } = await import("../src/conformance/cli.ts");
-    assert.equal(isLiveBaseline("/tmp/fixture-baseline.md", ROOT), false);
-  });
-});
+// REMOVED (#144): the `isLiveBaseline` suite that lived here.
+//
+// It asserted over SYNTHETIC, non-existent paths (`/vault/...`), so
+// `realpathSync` threw on every single case and only the `resolve()` string
+// comparison was ever exercised — the symlink half the implementation
+// advertised had ZERO coverage while the suite reported green. Worse, the
+// property it pinned ("decided over the file written, not argv shape") was
+// FALSE: it decided over `join(resolve(root), BASELINE_REL)`, and `root` is
+// caller-controlled, so pointing `--root` elsewhere laundered the live record.
+//
+// Replaced by tests/conformance-baseline-identity.test.mjs, which drives the
+// real `runCli` against REAL files on disk and is mutation-verified: each
+// bypass test was confirmed to FAIL against the pre-#144 implementation, so
+// none of them can pass vacuously the way these did.
 
 describe("coverageRefusal — applies to plain runs, not just rebaseline (Critical 2)", () => {
   test("a run whose baseline names an unmeasured pack REFUSES rather than reporting CONFORMING", async () => {

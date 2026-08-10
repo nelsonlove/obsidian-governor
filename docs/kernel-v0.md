@@ -6,7 +6,7 @@ stream of operations. It lives in `packages/plugin/src/kernel/` and is Obsidian-
 construction (pure TypeScript, headlessly testable); the MCP layer wires it to the live vault.
 
 The user-facing prose for these primitives is in the top-level
-[README](../README.md#write-queue--journal); this doc is the reference, with the exact
+[reference](reference.md#write-queue--journal); this doc is the reference, with the exact
 constants and file locations.
 
 ## The serialized write queue

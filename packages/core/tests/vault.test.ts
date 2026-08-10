@@ -272,3 +272,99 @@ describe("locateFrontmatter parity — frontmatter-edit writes never duplicate a
   });
 });
 
+// ── moveNote's backlink rewrite — accept-forbidden guard (issue #104 gap) ───
+//
+// `rewriteBacklinks`'s `fs.writeFile(absSrc, next, "utf8")` had NO
+// `guardWrittenContent` call at all — the only one of the four content-write
+// paths on this backend that didn't. No exploit was demonstrated for this
+// gap; it's closed on the same "every content write on this backend is
+// guarded, no exceptions" basis as the other three, not a proven bypass.
+
+describe("moveNote — backlink rewrite is guarded (issue #104 moveNote gap)", () => {
+  test("a backlink rewrite whose resulting content would introduce an accepted-family value is REFUSED", async () => {
+    // The rewritten wikilink target is renamed to literally "accepted" — the
+    // substituted token `[[accepted]]` is unquoted, so to a real YAML parser
+    // it is a NESTED flow sequence (a list containing a list containing the
+    // string "accepted"), which `isAcceptedValue` already recurses through.
+    // This subset does not attempt to parse nested flow collections at all —
+    // it refuses them as unclassifiable (Task 1 of this same fix) — so
+    // either way the write must be refused: recognized as accepted, or not
+    // confidently ruled out. Exercises the SAME `guardWrittenContent` call
+    // now wired into this path.
+    await writeFile(
+      path.join(tmpRoot, "linker.md"),
+      "---\nacceptance-status: [[old-name]]\n---\nbody",
+      "utf8",
+    );
+    await writeFile(path.join(tmpRoot, "old-name.md"), "content", "utf8");
+
+    const backlinksProvider = (p: string) => (p === "old-name.md" ? ["linker.md"] : []);
+    const resolveRef = (ref: string) => (ref === "old-name" ? "old-name.md" : undefined);
+
+    await assert.rejects(
+      () =>
+        vault.moveNote("old-name.md", "accepted.md", {
+          update_backlinks: true,
+          overwrite: false,
+          backlinks_provider: backlinksProvider,
+          resolve_ref: resolveRef,
+        }),
+      isAcceptForbidden,
+    );
+
+    // The backlink file must be untouched — refusal means nothing lands.
+    const linkerContent = await vault.readNote("linker.md");
+    assert.match(linkerContent, /\[\[old-name\]\]/, "the un-rewritten link must still be present");
+    assert.doesNotMatch(linkerContent, /\[\[accepted\]\]/);
+  });
+
+  test("an ORDINARY backlink rewrite (no acceptance involved) still SUCCEEDS", async () => {
+    await writeFile(
+      path.join(tmpRoot, "linker.md"),
+      "---\nname: N\n---\nSome text [[old-name]] more text",
+      "utf8",
+    );
+    await writeFile(path.join(tmpRoot, "old-name.md"), "content", "utf8");
+
+    const backlinksProvider = (p: string) => (p === "old-name.md" ? ["linker.md"] : []);
+    const resolveRef = (ref: string) => (ref === "old-name" ? "old-name.md" : undefined);
+
+    const result = await vault.moveNote("old-name.md", "new-name.md", {
+      update_backlinks: true,
+      overwrite: false,
+      backlinks_provider: backlinksProvider,
+      resolve_ref: resolveRef,
+    });
+    assert.equal(result.backlinks_updated, 1);
+    assert.equal(result.backlinks_files_touched, 1);
+    const linkerContent = await vault.readNote("linker.md");
+    assert.match(linkerContent, /\[\[new-name\]\]/);
+  });
+
+  test("preserving an existing (human-set) accepted value verbatim through a backlink rewrite is ALLOWED", async () => {
+    // The link lives in the BODY, well away from frontmatter — an ordinary
+    // shape, not the exotic wikilink-as-frontmatter-value case above — and
+    // the note's PRE-EXISTING acceptance is untouched by the rewrite.
+    await writeFile(
+      path.join(tmpRoot, "linker.md"),
+      "---\nacceptance-status: accepted\n---\nSee [[old-name]] for detail.",
+      "utf8",
+    );
+    await writeFile(path.join(tmpRoot, "old-name.md"), "content", "utf8");
+
+    const backlinksProvider = (p: string) => (p === "old-name.md" ? ["linker.md"] : []);
+    const resolveRef = (ref: string) => (ref === "old-name" ? "old-name.md" : undefined);
+
+    const result = await vault.moveNote("old-name.md", "new-name.md", {
+      update_backlinks: true,
+      overwrite: false,
+      backlinks_provider: backlinksProvider,
+      resolve_ref: resolveRef,
+    });
+    assert.equal(result.backlinks_files_touched, 1);
+    const linkerContent = await vault.readNote("linker.md");
+    assert.match(linkerContent, /\[\[new-name\]\]/);
+    assert.match(linkerContent, /acceptance-status: accepted/);
+  });
+});
+
