@@ -49,7 +49,7 @@
 import { DEFAULT_VAULT_CONVENTIONS, type VaultConventions } from "../vault-conventions.js";
 import type { Finding } from "../finding.js";
 import type { RulePack, SourceFile, VaultSnapshot } from "../rule-pack.js";
-import { requireSources } from "../rule-pack.js";
+import { requireSources, requireListing_ } from "../rule-pack.js";
 import { firstSegment, hasDotOrTrashSegment, isUnderscoreRoot } from "./legacy-scope.js";
 
 export const DRIFT_PACK_ID = "drift_audit";
@@ -165,8 +165,15 @@ export function driftPack(conv: VaultConventions = DEFAULT_VAULT_CONVENTIONS): R
       const sources: SourceFile[] = requireSources(snapshot, DRIFT_PACK_ID);
       const sourceText = new Map(sources.map((s) => [s.path, s.text]));
       // `.exists()` universe — files ∪ dirs (a path exists if it is either).
-      const existsSet = new Set<string>([...(snapshot.files ?? []), ...(snapshot.dirs ?? [])]);
-      const configByPath = new Map((snapshot.obsidianConfig ?? []).map((c) => [c.path, c.text]));
+      // ABSENT is refused, not read as empty. `obsidianConfig` is the one that
+      // fails QUIET — #136's check A reports CONFORMING with ~30 of 74 findings
+      // gone; files/dirs fail loud (every .exists() answers false).
+      const files = requireListing_(snapshot.files, DRIFT_PACK_ID, "files");
+      const dirs = requireListing_(snapshot.dirs, DRIFT_PACK_ID, "dirs");
+      const obsidianConfig = requireListing_(snapshot.obsidianConfig, DRIFT_PACK_ID, "obsidianConfig");
+      const walkOrder = requireListing_(snapshot.walkOrder, DRIFT_PACK_ID, "walkOrder");
+      const existsSet = new Set<string>([...files, ...dirs]);
+      const configByPath = new Map(obsidianConfig.map((c) => [c.path, c.text]));
 
       // Registry families under FBF (drift_audit.py's `by_suffix`): every note
       // whose name ends with `suffix`, sorted by path (Python `sorted(rglob())`).
@@ -227,7 +234,7 @@ export function driftPack(conv: VaultConventions = DEFAULT_VAULT_CONVENTIONS): R
           }
         }
         const idToName = new Map<string, string>();
-        for (const cfg of snapshot.obsidianConfig ?? []) {
+        for (const cfg of obsidianConfig) {
           if (!/^\.obsidian\/plugins\/[^/]+\/manifest\.json$/.test(cfg.path)) continue;
           try {
             const m = JSON.parse(cfg.text);
@@ -293,7 +300,7 @@ export function driftPack(conv: VaultConventions = DEFAULT_VAULT_CONVENTIONS): R
       // NOT part of the finding key for E/F (#136): keying on the message made
       // the key move whenever an unrelated note changed the count or the order,
       // producing permanent false-NEW churn against the accepted baseline. ────
-      const governed = (snapshot.walkOrder ?? []).filter(
+      const governed = walkOrder.filter(
         (p) => !hasDotOrTrashSegment(p) && !isUnderscoreRoot(p) && firstSegment(p) !== "Assent",
       );
       const uidHomes = new Map<string, string[]>();
@@ -366,7 +373,7 @@ export function driftPack(conv: VaultConventions = DEFAULT_VAULT_CONVENTIONS): R
       // drift_audit.py iterates `SYS.iterdir()` (direct children); a two-digit
       // number claimed by more than one folder is a Johnny-Decimal collision.
       const seenCodes = new Map<string, string[]>();
-      for (const d of snapshot.dirs ?? []) {
+      for (const d of dirs) {
         if (!d.startsWith(SYS_ROOT + "/")) continue;
         const rest = d.slice(SYS_ROOT.length + 1);
         if (rest.includes("/")) continue; // direct children only
