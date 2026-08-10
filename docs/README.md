@@ -3,7 +3,7 @@
 This directory documents the **vault-mcp kernel**: the governed write substrate that
 turns the plugin's `obsidian_*` tools from "an agent editing files" into "an agent
 proposing changes that a human reviews and accepts." It is the plugin-side half of the
-[Assent](#the-assent-review-channel) review channel.
+[Assent](#how-the-pieces-fit--the-assent-review-channel) review channel.
 
 The top-level [`README.md`](../README.md) is the user-facing overview (install, the tool
 surface, the socket/bridge architecture, the path allowlist). These docs go deeper on the
@@ -93,15 +93,16 @@ accept verb to an agent.
 
 - **Shipped.** The kernel is on **`main`** — PR #65 merged and released as **v0.7.0**
   (GitHub release, BRAT-installable); current release **0.8.0** adds the command-policy
-  guards, the template guard, root-exclusion, and the Phase-1 conformance engine. `main` is
-  trunk; all work branches off it.
+  guards, root-exclusion, the kernel-test flake fix (#96), and the Phase-1 conformance
+  engine. `main` is trunk; all work branches off it.
 - **Tests.** The workspace suite is green on `main` at each merge (the merge policy requires
   an independent review and a green suite — `tsc --noEmit` and the production esbuild run as
   part of it). *(Reproduce: `npm install && npm test --workspaces` from the repo root; the
   plugin suite needs `@vault-mcp/core` built first — the monorepo wiring handles this.)*
-- **Deployed & live-verified.** The kernel through the module-host mount, B1/B2, the CLI
-  accept-guard, `jd:` addressing, and B3 `obsidian_pending_review` are deployed and
-  live-verified against a real vault; the review plugin's pending-index publisher is live.
+- **Deployed.** The kernel through the module-host mount, B1/B2, the CLI accept-guard,
+  `jd:` addressing, and B3 `obsidian_pending_review` are deployed (0.8.0 released and
+  installed); the review plugin's pending-index publisher is live. Live-verification passes
+  are recorded per-PR in the project's build records rather than restated here.
 - **Known-open perimeter issues** (tracked publicly, milestone `0.8.1 — perimeter`): the
   standalone `packages/server` fs-failover surface has no accept-guard (#104), and several
   plugin-gated tools (`create_note_from_template`, `obsidian_run_command`,
