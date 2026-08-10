@@ -274,8 +274,15 @@ export function coverageRefusal(
  *
  * Returns null when identity genuinely cannot be established; every caller
  * treats null as "refuse", never as "not the live one".
+ *
+ * EXPORTED deliberately (#168): this technique — realpath resolution, a
+ * dangling symlink followed by hand, no lexical fallback that could launder an
+ * alias — is security-critical and was being reimplemented elsewhere precisely
+ * because it was unexported. A second copy is a second place a bypass has to be
+ * fixed, and this codebase has spent a week deleting duplicated guards. One
+ * implementation, imported.
  */
-function intendedRealPath(p: string, depth = 0): string | null {
+export function intendedRealPath(p: string, depth = 0): string | null {
   if (depth > 8) return null; // symlink loop
   const abs = resolve(p);
   try {
@@ -300,7 +307,7 @@ function intendedRealPath(p: string, depth = 0): string | null {
 
 /** Same file by the FILESYSTEM's answer (device + inode), which is what catches
  * a hardlink or a case-insensitive alias. Null when either side cannot be stat'd. */
-function sameFile(a: string, b: string): boolean | null {
+export function sameFile(a: string, b: string): boolean | null {
   try {
     const sa = statSync(a);
     const sb = statSync(b);
@@ -311,7 +318,7 @@ function sameFile(a: string, b: string): boolean | null {
 }
 
 /** `child` is inside `parent` (or is `parent`), compared on resolved paths. */
-function isInside(parent: string, child: string): boolean {
+export function isInside(parent: string, child: string): boolean {
   const p = resolve(parent);
   const c = resolve(child);
   return c === p || c.startsWith(p.endsWith(sep) ? p : p + sep);
