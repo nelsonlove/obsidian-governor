@@ -20,6 +20,7 @@ import {
   DEFAULT_SCHEMES,
   AddressUnresolvedError,
   AddressAmbiguousError,
+  SchemeUnavailableError,
   resolveSchemeArgs,
 } from "../src/kernel/scheme/registry.ts";
 import { UidIndex } from "../src/kernel/index.ts";
@@ -212,6 +213,44 @@ describe("resolveSchemeArgs", () => {
     const { args } = resolveSchemeArgs({ path: "jd:92021.10" }, reg, () => NOTES, settings);
     assert.equal(args.path, "90-99 Projects/92021 Big thing/92021.10 Sub.md");
   });
+
+  // ── issue #88: a ref naming a SKIPPED instance is a typed refusal ──────────
+
+  test("a ref naming a SKIPPED id throws SchemeUnavailableError, coded 'scheme_unavailable', naming only the id", () => {
+    const originalError = console.error;
+    console.error = () => {};
+    let reg;
+    try {
+      reg = makeRegistry([{ id: "jd", provider: "not-a-real-provider" }]);
+    } finally {
+      console.error = originalError;
+    }
+    assert.throws(
+      () => resolveSchemeArgs({ path: "jd:06.11" }, reg, () => NOTES),
+      (e) => {
+        assert.ok(e instanceof SchemeUnavailableError);
+        assert.equal(e.code, "scheme_unavailable");
+        assert.match(e.message, /"jd"/);
+        return true;
+      }
+    );
+  });
+
+  test("a duplicate id that DOES have a live instance is NOT refused — the live instance serves", () => {
+    const originalError = console.error;
+    console.error = () => {};
+    let reg;
+    try {
+      reg = makeRegistry([
+        { id: "jd", provider: "johnny-decimal" },
+        { id: "jd", provider: "johnny-decimal", config: { contentDecimalFloor: 5 } },
+      ]);
+    } finally {
+      console.error = originalError;
+    }
+    const { args } = resolveSchemeArgs({ path: "jd:06.11" }, reg, () => NOTES);
+    assert.equal(args.path, VAULT_MCP_PATH, "resolves normally against the FIRST (winning) row's provider");
+  });
 });
 
 // ── addressSafe — fold-back, tested directly ───────────────────────────────────
@@ -368,6 +407,87 @@ describe("scheme addressing through the guarded wrapper", () => {
     const { guarded, handler, notesCallCount } = harness();
     await guarded(RW_DEF, handler, "obsidian_write_note")({ path: "jd:06.11", content: "x" }, {});
     assert.equal(notesCallCount(), 1);
+  });
+
+  // ── issue #88: a ref naming a SKIPPED instance is a typed refusal, and the
+  // handler never runs — same contract as address_unresolved/address_ambiguous
+  // above, at the same interception point ────────────────────────────────────
+
+  test("a ref naming a skipped scheme id is a typed scheme_unavailable refusal, and the handler never runs", async () => {
+    const originalError = console.error;
+    console.error = () => {};
+    let registry;
+    try {
+      registry = makeRegistry([{ id: "jd", provider: "not-a-real-provider" }]);
+    } finally {
+      console.error = originalError;
+    }
+    const { seen, handler } = handlerHarness();
+    const guarded = makeGuarded({
+      getSettings: () => ({ readOnly: false, allowlist: [] }),
+      actor: () => ACTOR,
+      schemes: () => registry,
+      schemeNotes: () => NOTES,
+    });
+    const res = await guarded(RW_DEF, handler, "obsidian_write_note")({ path: "jd:06.11", content: "x" }, {});
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[scheme_unavailable\]/);
+    assert.match(res.content[0].text, /"jd"/);
+    assert.deepEqual(seen, [], "nothing ran");
+  });
+
+  test("the scheme_unavailable refusal never echoes the underlying problem text, even one naming vault territory", async () => {
+    const originalError = console.error;
+    console.error = () => {};
+    let registry;
+    try {
+      registry = makeRegistry([{ id: "jd", provider: "johnny-decimal", excludedRoots: ["/DISTINCTIVE-MARKER-ROOT"] }]);
+    } finally {
+      console.error = originalError;
+    }
+    const { seen, handler } = handlerHarness();
+    const guarded = makeGuarded({
+      getSettings: () => ({ readOnly: false, allowlist: [] }),
+      actor: () => ACTOR,
+      schemes: () => registry,
+      schemeNotes: () => NOTES,
+    });
+    const res = await guarded(RW_DEF, handler, "obsidian_write_note")({ path: "jd:06.11", content: "x" }, {});
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[scheme_unavailable\]/);
+    assert.equal(res.content[0].text.includes("DISTINCTIVE-MARKER-ROOT"), false, "problem text must never leak into the refusal");
+    assert.deepEqual(seen, []);
+  });
+
+  test("a duplicate id WITH a live instance is not refused through the guarded wrapper either — the live instance serves", async () => {
+    const originalError = console.error;
+    console.error = () => {};
+    let registry;
+    try {
+      registry = makeRegistry([
+        { id: "jd", provider: "johnny-decimal" },
+        { id: "jd", provider: "johnny-decimal", config: { contentDecimalFloor: 5 } },
+      ]);
+    } finally {
+      console.error = originalError;
+    }
+    const { seen, handler } = handlerHarness();
+    const guarded = makeGuarded({
+      getSettings: () => ({ readOnly: false, allowlist: [] }),
+      actor: () => ACTOR,
+      schemes: () => registry,
+      schemeNotes: () => NOTES,
+    });
+    const res = await guarded(RW_DEF, handler, "obsidian_write_note")({ path: "jd:06.11", content: "x" }, {});
+    assert.equal(res.isError, undefined);
+    assert.deepEqual(seen, [{ path: VAULT_MCP_PATH, content: "x" }]);
+  });
+
+  test("an unregistered scheme id (never configured, not skipped either) still passes through as an ordinary path", async () => {
+    const { guarded, seen, handler } = harness();
+    const res = await guarded(RW_DEF, handler, "obsidian_write_note")({ path: "nope:06.11", content: "x" }, {});
+    assert.equal(res.isError, undefined);
+    assert.deepEqual(seen, [{ path: "nope:06.11", content: "x" }]);
   });
 });
 

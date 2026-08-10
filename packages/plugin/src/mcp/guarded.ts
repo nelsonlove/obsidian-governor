@@ -32,7 +32,13 @@ import {
   type JournalEffects,
   type UidIndex,
 } from "../kernel/index.js";
-import { AddressAmbiguousError, AddressUnresolvedError, resolveSchemeArgs, type SchemeRegistry } from "../kernel/scheme/registry.js";
+import {
+  AddressAmbiguousError,
+  AddressUnresolvedError,
+  SchemeUnavailableError,
+  resolveSchemeArgs,
+  type SchemeRegistry,
+} from "../kernel/scheme/registry.js";
 
 /** Guard/queue-level failure envelope: matches the `Error [code]: message` shape guardCall already emits. */
 function codedError(code: string, message: string) {
@@ -352,9 +358,13 @@ export function makeGuarded(opts: GuardedOpts) {
         callArgs = schemed.args;
         schemeResolved = schemed.resolved;
       } catch (e) {
-        // Unresolvable or ambiguous address: refuse, and run nothing — same
+        // Unresolvable or ambiguous address, or a ref naming a SKIPPED
+        // instance (#88 — configured but no live instance, e.g. an unknown
+        // provider or invalid config): refuse, and run nothing — same
         // contract as the uid case above.
-        if (e instanceof AddressUnresolvedError || e instanceof AddressAmbiguousError) return codedError(e.code, e.message);
+        if (e instanceof AddressUnresolvedError || e instanceof AddressAmbiguousError || e instanceof SchemeUnavailableError) {
+          return codedError(e.code, e.message);
+        }
         throw e;
       }
     }
