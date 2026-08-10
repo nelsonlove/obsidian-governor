@@ -10,7 +10,7 @@ An agent may *propose* a change to the vault. It may write notes, edit frontmatt
 its reasoning, and mark its own work `acceptance-status: proposed`. What it may **never** do
 is declare that a change has been **accepted**. Acceptance — the moment a human blesses a
 proposed change as canonical — is made by a person, in the
-[Stewardship](README.md#the-stewardship-plugin) review pane, and **nowhere else**.
+[Acceptance](README.md#the-acceptance-review-surface) review pane, and **nowhere else**.
 
 The design scar, stated exactly as it appears throughout the source:
 
@@ -39,6 +39,24 @@ filesystem-expressible write routes through — so it holds on **every write sur
 not tool by tool. The rule itself is defined once
 (`packages/plugin/src/mcp/write-notes-compose.ts`) and reused everywhere; there is no second
 definition of "accepted" to drift.
+
+### Recognition parity: a guard stricter than the write path is a bypass
+
+One definition of *accepted* is not sufficient on its own — the guard and the write path must
+also agree on **what counts as frontmatter in the first place**. They once did not, and that
+gap was a live bypass (#126): the write-path recognizer tolerated a leading byte-order mark
+before the opening `---` (as Obsidian itself does), while the fence scanner did not. An
+acceptance fence behind one invisible byte was therefore *scanned clean and honored on
+landing* — the guard was stricter than reality, which reads as caution and behaves as a hole.
+
+The rule this leaves behind: **anything deciding "would this content assert acceptance?" must
+recognize at least what the vault will honor.** Both sides now share `stripLeadingBom` and
+`LEADING_FRONTMATTER_RE` from `write-notes-compose.ts` rather than re-deriving the shape, and
+the property is pinned by `tests/accept-fence-parity.test.mjs` — a corpus crossing every
+tolerated fence variation with accepting and clean payloads, asserting *write path would honor
+⟹ guard refuses*. Loosening one side without the other fails that suite. The scanner is still
+permitted to be **broader** (it also scans embedded fences, conservatively); it is never
+permitted to be narrower.
 
 ### What counts as "accepted" (every value-type, every key spelling)
 
@@ -154,8 +172,16 @@ non-`.md` paths, the opaque surfaces that could write settings from inside are w
 denies, and the CLI proxy bars its own param values from `.obsidian` territory
 (`configPathRefusal`), so no agent-reachable path rewrites the policy.
 
-What remains open, honestly named: a `create template=<t>` draws frontmatter from a template
-note that can't be read pre-exec — a lesser residual of the same class, not yet gated.
+The former lesser residual — `create template=<t>` drawing frontmatter from a template note —
+is CLOSED by the **template guard**: the template is a vault file, so it is resolved (in the
+core Templates folder, exactly where the CLI resolves it) and scanned with the same rule
+pre-exec; unresolvable fails closed. A re-enabled `quickadd:run-template path=<p>` gets the
+same static scan as belt (its runtime-computed frontmatter stays opaque, so it remains in the
+default-denied set).
+
+What remains open, honestly named: a periodic create with no `content=` draws its body from
+the Daily/Periodic Notes plugin config's template — no param names it; the same class as the
+documented `obsidian_periodic_note` write residual.
 
 ## Why this is structural, not procedural
 

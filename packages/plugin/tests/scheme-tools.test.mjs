@@ -129,6 +129,50 @@ describe("obsidian_schemes", () => {
     assert.equal(res.isError, undefined);
     assert.deepEqual(res.structuredContent.schemes, []);
   });
+
+  // ── issue #88: skipped instances are listed, bare-bones, for discoverability ──
+
+  test("a skipped instance (unknown provider) is listed as {id, available: false} — no config, no problems, no capabilities", async () => {
+    const schemes = [{ id: "jd", provider: "johnny-decimal" }, { id: "bogus", provider: "not-a-real-provider" }];
+    const originalError = console.error;
+    console.error = () => {};
+    let res;
+    try {
+      const { call } = toolServer({ schemes });
+      res = await call("obsidian_schemes");
+    } finally {
+      console.error = originalError;
+    }
+    assert.equal(res.isError, undefined);
+    assert.deepEqual(res.structuredContent.schemes, [
+      {
+        id: "jd",
+        provider: "johnny-decimal",
+        capabilities: { validate: true, itemAddresses: true, allocate: true, ordered: true },
+        config: {},
+        examples: ["jd:06.11", "jd:92021.10", "jd:00-09"],
+      },
+      { id: "bogus", available: false },
+    ]);
+  });
+
+  test("a duplicate-id row with a live instance is NOT reported as skipped/unavailable — only the live entry appears", async () => {
+    const schemes = [
+      { id: "jd", provider: "johnny-decimal" },
+      { id: "jd", provider: "johnny-decimal", config: { contentDecimalFloor: 5 } },
+    ];
+    const originalError = console.error;
+    console.error = () => {};
+    let res;
+    try {
+      const { call } = toolServer({ schemes });
+      res = await call("obsidian_schemes");
+    } finally {
+      console.error = originalError;
+    }
+    assert.equal(res.structuredContent.schemes.length, 1);
+    assert.equal(res.structuredContent.schemes[0].id, "jd");
+  });
 });
 
 // ── obsidian_resolve_address ─────────────────────────────────────────────────
@@ -177,6 +221,24 @@ describe("obsidian_resolve_address", () => {
     const { call } = toolServer();
     const res = await call("obsidian_resolve_address", { address: "not an address" });
     assert.equal(res.isError, true);
+  });
+
+  // ── issue #88: an address ref naming a SKIPPED scheme id ────────────────────
+
+  test("an address prefixed with a SKIPPED scheme id is a coded scheme_unavailable refusal naming only the id", async () => {
+    const schemes = [{ id: "jd", provider: "johnny-decimal" }, { id: "bogus", provider: "not-a-real-provider" }];
+    const originalError = console.error;
+    console.error = () => {};
+    let res;
+    try {
+      const { call } = toolServer({ schemes });
+      res = await call("obsidian_resolve_address", { address: "bogus:06.11" });
+    } finally {
+      console.error = originalError;
+    }
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /Error \[scheme_unavailable\]/);
+    assert.match(res.content[0].text, /"bogus"/);
   });
 
   test("a duplicated address reports every visible path and flags the ambiguity", async () => {
@@ -321,6 +383,25 @@ describe("obsidian_next_address", () => {
     assert.match(res.content[0].text, /unknown scheme/);
   });
 
+  // ── issue #88: a `scheme` argument naming a SKIPPED id ──────────────────────
+
+  test("a `scheme` naming a SKIPPED id is a coded scheme_unavailable refusal naming only the id, never the problem", async () => {
+    const schemes = [{ id: "jd", provider: "johnny-decimal" }, { id: "bogus", provider: "not-a-real-provider" }];
+    const originalError = console.error;
+    console.error = () => {};
+    let res;
+    try {
+      const { call } = toolServer({ schemes });
+      res = await call("obsidian_next_address", { scope: "06", scheme: "bogus" });
+    } finally {
+      console.error = originalError;
+    }
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /Error \[scheme_unavailable\]/);
+    assert.match(res.content[0].text, /"bogus"/);
+    assert.equal(res.content[0].text.includes("unknown provider"), false, "the underlying problem text must not be echoed");
+  });
+
   test("allowlist: a hidden note's slot is not counted as used", async () => {
     // 06.11 lives under "00-09 System", visible under this allowlist — this
     // just pins that the allowlist plumbing runs; the interesting hiding case
@@ -435,6 +516,24 @@ describe("obsidian_list_scope", () => {
     assert.match(res.content[0].text, /Error \[invalid_scope\]/);
   });
 
+  // ── issue #88: a `scheme` argument naming a SKIPPED id ──────────────────────
+
+  test("a `scheme` naming a SKIPPED id is a coded scheme_unavailable refusal naming only the id", async () => {
+    const schemes = [{ id: "jd", provider: "johnny-decimal" }, { id: "bogus", provider: "not-a-real-provider" }];
+    const originalError = console.error;
+    console.error = () => {};
+    let res;
+    try {
+      const { call } = toolServer({ schemes });
+      res = await call("obsidian_list_scope", { scope: "06", scheme: "bogus" });
+    } finally {
+      console.error = originalError;
+    }
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /Error \[scheme_unavailable\]/);
+    assert.match(res.content[0].text, /"bogus"/);
+  });
+
   test("allowlist: a hidden member is excluded from the listing, and its slot reads as free (no existence oracle)", async () => {
     // A note that genuinely occupies .10, but sits outside the allowlist
     // (unlike its siblings, individually admitted). It must not appear in
@@ -531,6 +630,40 @@ describe("obsidian_expected_location", () => {
     const { call } = toolServer();
     const res = await call("obsidian_expected_location", { path: "x.md", scheme: "nope" });
     assert.equal(res.isError, true);
+  });
+
+  // ── issue #88: a SKIPPED scheme id, named either way this tool accepts one ──
+
+  test("path: a `scheme` naming a SKIPPED id is a coded scheme_unavailable refusal naming only the id", async () => {
+    const schemes = [{ id: "jd", provider: "johnny-decimal" }, { id: "bogus", provider: "not-a-real-provider" }];
+    const originalError = console.error;
+    console.error = () => {};
+    let res;
+    try {
+      const { call } = toolServer({ schemes });
+      res = await call("obsidian_expected_location", { path: "x.md", scheme: "bogus" });
+    } finally {
+      console.error = originalError;
+    }
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /Error \[scheme_unavailable\]/);
+    assert.match(res.content[0].text, /"bogus"/);
+  });
+
+  test("address: an address ref naming a SKIPPED scheme id is a coded scheme_unavailable refusal", async () => {
+    const schemes = [{ id: "jd", provider: "johnny-decimal" }, { id: "bogus", provider: "not-a-real-provider" }];
+    const originalError = console.error;
+    console.error = () => {};
+    let res;
+    try {
+      const { call } = toolServer({ schemes });
+      res = await call("obsidian_expected_location", { address: "bogus:06.11" });
+    } finally {
+      console.error = originalError;
+    }
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /Error \[scheme_unavailable\]/);
+    assert.match(res.content[0].text, /"bogus"/);
   });
 
   test("allowlist: a hidden path withholds everything, including its own folder", async () => {

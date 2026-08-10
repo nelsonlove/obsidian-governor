@@ -27,12 +27,19 @@ import {
   UidUnresolvedError,
   WriteTimeoutError,
   resolveUidArgs,
+  UID_PREFIX,
   type Kernel,
   type JournalActor,
   type JournalEffects,
   type UidIndex,
 } from "../kernel/index.js";
-import { AddressAmbiguousError, AddressUnresolvedError, resolveSchemeArgs, type SchemeRegistry } from "../kernel/scheme/registry.js";
+import {
+  AddressAmbiguousError,
+  AddressUnresolvedError,
+  SchemeUnavailableError,
+  resolveSchemeArgs,
+  type SchemeRegistry,
+} from "../kernel/scheme/registry.js";
 
 /** Guard/queue-level failure envelope: matches the `Error [code]: message` shape guardCall already emits. */
 function codedError(code: string, message: string) {
@@ -368,9 +375,13 @@ function resolveAndGuard(
       callArgs = schemed.args;
       schemeResolved = schemed.resolved;
     } catch (e) {
-      // Unresolvable or ambiguous address: refuse, and run nothing — same
+      // Unresolvable or ambiguous address, or a ref naming a SKIPPED
+      // instance (#88 — configured but no live instance, e.g. an unknown
+      // provider or invalid config): refuse, and run nothing — same
       // contract as the uid case above.
-      if (e instanceof AddressUnresolvedError || e instanceof AddressAmbiguousError) return { blocked: { code: e.code, message: e.message } };
+      if (e instanceof AddressUnresolvedError || e instanceof AddressAmbiguousError || e instanceof SchemeUnavailableError) {
+        return { blocked: { code: e.code, message: e.message } };
+      }
       throw e;
     }
   }
@@ -406,6 +417,9 @@ export function makeGuarded(opts: GuardedOpts) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (def: any, handler: any, name?: string) => async (args: any, extra: any) => {
     const isMutating = def?.annotations?.readOnlyHint === false;
+    // Steps 1/1b/3 (uid resolution, scheme resolution, read-only+allowlist)
+    // live in resolveAndGuard so obsidian_write_notes can share the IDENTICAL
+    // resolution and refusal via resolveGuardedPath — one implementation, not two.
     const resolved = resolveAndGuard(args ?? {}, isMutating, opts);
     if ("blocked" in resolved) return codedError(resolved.blocked.code, resolved.blocked.message);
     const callArgs = resolved.args;
@@ -431,6 +445,14 @@ export function makeGuarded(opts: GuardedOpts) {
       );
     }
     if (!isMutating || !opts.kernel) return handler(toolArgs, extra);
+    // Audit-of-intent (#91): the address forms the caller actually used,
+    // paired with what they resolved to at THIS interception — `target`
+    // records what was touched; this records what was asked for, so a stale
+    // or wrong index is visible in the record rather than silently absorbed.
+    const addressedAs = [
+      ...resolved.uidResolved.map(({ uid, path }) => ({ ref: `${UID_PREFIX}${uid}`, path })),
+      ...resolved.schemeResolved,
+    ];
     try {
       return await opts.kernel.runMutation(
         {
@@ -442,6 +464,7 @@ export function makeGuarded(opts: GuardedOpts) {
           ...(ifRev !== undefined ? { ifRev } : {}),
           ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
           ...(intent !== undefined ? { intent } : {}),
+          ...(addressedAs.length > 0 ? { addressedAs } : {}),
         },
         () => handler(toolArgs, extra)
       );

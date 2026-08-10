@@ -28,10 +28,11 @@ interface VaultModule {
 **Posture** distinguishes the two kinds of surface a module could face:
 
 - **`capability`** — faces agents; contributes tools.
-- **`governance`** — faces the human; a deliberately one-way, read-only surface (Stewardship's
-  shape). **The v1 host refuses governance modules outright** at construction — folding a
-  governance module in is gated on a fresh accept-reachability review of the merged topology.
-  The posture exists in the type now so the contract already models the asymmetry.
+- **`governance`** — faces the human; a deliberately one-way, read-only surface (the shape of
+  [Acceptance](README.md#the-acceptance-review-surface), the review plugin). **The v1 host
+  refuses governance modules outright** at construction — folding the governance module in
+  (#83) is gated on a fresh accept-reachability review of the merged topology. The posture
+  exists in the type now so the contract already models the asymmetry.
 
 ## Registration goes *through* the registry — the key property
 
