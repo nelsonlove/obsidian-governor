@@ -105,11 +105,17 @@ export default class VaultMcpPlugin extends Plugin {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
     // Object.assign is shallow: a hand-edited data.json carrying a PARTIAL
     // cliPolicy (one list, not both) would leave the other undefined and
-    // crash the settings tab. Normalize the nested shape; policy semantics
-    // (deny beats allow, opaque set denied by default) are unaffected.
+    // crash the settings tab; a WRONG-TYPED one (a string where a list
+    // belongs) would crash the policy matcher mid-call. Normalize to fresh
+    // arrays of strings — dropping malformed values, never throwing — and
+    // never alias DEFAULT_SETTINGS' own arrays (the schemes structuredClone
+    // discipline). Policy semantics are unaffected: a dropped malformed
+    // entry can only mean MORE denied, never less.
+    const list = (v: unknown): string[] =>
+      Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : [];
     this.settings.cliPolicy = {
-      deny: this.settings.cliPolicy?.deny ?? [],
-      allowOpaque: this.settings.cliPolicy?.allowOpaque ?? [],
+      deny: list(this.settings.cliPolicy?.deny),
+      allowOpaque: list(this.settings.cliPolicy?.allowOpaque),
     };
   }
   async saveSettings() { await this.saveData(this.settings); }

@@ -133,28 +133,29 @@ The complete set of CLI commands that write note content or frontmatter — all 
 
 The refusal is a typed `Error [accept_forbidden]`, and nothing runs.
 
-### The one documented residual
+### The opaque-macro residual — CLOSED by the command policy
 
 Some CLI commands execute **opaque code** whose effect cannot be inspected before it runs:
 
 ```
-CLI_OPAQUE_ACCEPT_RESIDUAL = ["command", "eval", "quickadd", "quickadd:run", "quickadd:run-template"]
+OPAQUE_ACCEPT_CLI_COMMANDS = ["quickadd", "quickadd:run", "quickadd:run-template", "eval", "command"]
+OPAQUE_ACCEPT_COMMAND_IDS  = ["quickadd:*"]   // obsidian_run_command ids
 ```
 
-- `eval` and `command` already sit behind the **"Allow dangerous CLI commands"** setting gate
-  (off by default).
-- `quickadd` / `quickadd:run` / `quickadd:run-template` run arbitrary QuickAdd macros. A macro
-  *could* set acceptance opaquely, and it cannot be inspected pre-execution. vault-mcp
-  deliberately does **not** block QuickAdd (that would break legitimate macro use), so this is
-  named honestly as a **residual** — in the tool description and here — rather than silently
-  closed. A `create template=<t>` draws frontmatter from a template note that also can't be
-  read pre-exec: a lesser residual of the same class.
+These are now **denied by default — fail closed** — by the settings-driven command policy
+(`mcp/cli-policy.ts`), on both surfaces (`obsidian_cli` commands and `obsidian_run_command`
+ids), with a typed `Error [cli_denied]` before anything executes. Re-enabling is per-command,
+exact-match only, through the human-only settings (`Security › "Re-enabled opaque commands"`);
+a settings deny list always wins, including over a re-enable. The policy **composes** with the
+older gates rather than replacing them: a re-enabled `eval`/`command` still needs the
+**"Allow dangerous CLI commands"** toggle, and the accept guard on inspectable writes is
+untouched. The human-only property is itself enforced: the MCP write primitives refuse
+non-`.md` paths, the opaque surfaces that could write settings from inside are what the policy
+denies, and the CLI proxy bars its own param values from `.obsidian` territory
+(`configPathRefusal`), so no agent-reachable path rewrites the policy.
 
-The right closure for the residual is a **settings-level allowlist/denylist** for
-`obsidian_cli` / `run_command` (a board item), not a broader guard — the guard is complete for
-every path whose effect is inspectable before it runs. This is stated plainly so the boundary
-is not mistaken for a leak: the guard is airtight for inspectable writes, and the opaque-macro
-gap is a policy decision the settings surface owns, not an oversight.
+What remains open, honestly named: a `create template=<t>` draws frontmatter from a template
+note that can't be read pre-exec — a lesser residual of the same class, not yet gated.
 
 ## Why this is structural, not procedural
 

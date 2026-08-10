@@ -4,6 +4,7 @@ import { buildRegisterCommand } from "./register-command.js";
 import { bridgeDestPath } from "./paths.js";
 import { findClaudeBinary, claudeIsRegistered } from "./claude-cli.js";
 import { DANGEROUS_LIST_DESC } from "./mcp/tools-cli.js";
+import { OPAQUE_ACCEPT_CLI_COMMANDS, OPAQUE_ACCEPT_COMMAND_IDS } from "./mcp/cli-policy.js";
 import { validateJdConfig, type JdConfig } from "./kernel/scheme/jd.js";
 
 /** Parse a comma-separated text field into a trimmed, non-empty string list.
@@ -168,10 +169,10 @@ export class VaultMcpSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Re-enabled opaque commands")
       .setDesc(
-        "Opaque macro/code commands (quickadd, quickadd:run, quickadd:run-template, eval, command; quickadd:* " +
+        `Opaque macro/code commands (${[...OPAQUE_ACCEPT_CLI_COMMANDS].join(", ")}; ${[...OPAQUE_ACCEPT_COMMAND_IDS].join(", ")} ` +
           "command ids) are denied by default — the acceptance guard cannot inspect what they execute. List a " +
-          "specific command or id here (one per line) to re-enable it. eval/command additionally require the " +
-          "dangerous-CLI toggle above. Takes effect immediately."
+          "specific command or exact command id here (one per line; no wildcards — each entry re-enables exactly " +
+          "one) to re-enable it. eval/command additionally require the dangerous-CLI toggle above. Takes effect immediately."
       )
       .addTextArea((ta) => {
         ta.setValue(this.plugin.settings.cliPolicy.allowOpaque.join("\n"));

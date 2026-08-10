@@ -173,7 +173,8 @@ export function registerComplementaryTools(server: McpServer, app: App, ctx: Ser
     {
       title: "Run Obsidian command",
       description:
-        "Execute an Obsidian command by its ID (see obsidian_get_command_ids). Optionally open file_path first so file-scoped commands have a target.",
+        "Execute an Obsidian command by its ID (see obsidian_get_command_ids). Optionally open file_path first so file-scoped commands have a target. " +
+        "QuickAdd command ids (quickadd:*) run opaque macros the acceptance guard cannot inspect and are DENIED by default (Error [cli_denied]); a human can re-enable a specific id in the vault-mcp settings.",
       inputSchema: {
         command_id: z.string().min(1).describe("Obsidian command ID, e.g. 'editor:toggle-bold'."),
         file_path: z.string().optional().describe("Open this vault-relative path before running the command."),

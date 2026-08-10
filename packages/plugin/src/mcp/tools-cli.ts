@@ -37,7 +37,7 @@ import type { ServerCtx } from "./tools-core.js";
 // Reuse the SAME accepted-family rule the MCP note-write primitive uses — no
 // second definition of "accepted" on the CLI path (see cliAcceptRefusal below).
 import { acceptForbiddenReason } from "./write-notes-compose.js";
-import { cliCommandRefusal, OPAQUE_ACCEPT_CLI_COMMANDS } from "./cli-policy.js";
+import { cliCommandRefusal, configPathRefusal, OPAQUE_ACCEPT_CLI_COMMANDS } from "./cli-policy.js";
 
 // Mutating + can reach outside the vault (plugin installs fetch the network).
 const CLI_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };
@@ -329,6 +329,13 @@ export function registerCliTools(
         const policyReason = cliCommandRefusal(command, settings.cliPolicy);
         if (policyReason) {
           return codedError("cli_denied", policyReason);
+        }
+        // Config territory is unreachable through the proxy whatever the
+        // external binary's own path handling — the human-only settings
+        // property must not rest on an unverified assumption about it.
+        const configReason = configPathRefusal(args.params);
+        if (configReason) {
+          return codedError("cli_denied", configReason);
         }
         if (isDangerousCliCommand(command) && !settings.allowDangerousCli) {
           return fail(

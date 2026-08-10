@@ -8,10 +8,14 @@
 // inside code the guard never sees. Until now that was a documented residual;
 // this module closes it by FAILING CLOSED: the opaque-accept set is DENIED by
 // default, and re-enabling a specific command is a HUMAN-ONLY act (a plugin
-// setting, reachable through the Obsidian settings tab / data.json — there is
-// no MCP surface that writes plugin settings, and the surfaces that could
-// reach one indirectly, `eval`/`command`/quickadd macros, are exactly what
-// this policy denies by default).
+// setting, reachable through the Obsidian settings tab / data.json). The
+// human-only property is enforced, not assumed: the MCP write primitives
+// refuse non-`.md` paths structurally; the opaque surfaces that could write
+// settings from inside (`eval`/`command`/quickadd macros) are what this
+// policy denies by default; and the CLI proxy's own param values are barred
+// from `.obsidian` territory by `configPathRefusal` below, so the inspectable
+// CLI write commands cannot target data.json either — whatever the external
+// binary's path handling turns out to be.
 //
 // Policy semantics, in evaluation order:
 //   1. `deny` (settings) — always refused. Deny BEATS allow: a command both
@@ -49,15 +53,18 @@ export const OPAQUE_ACCEPT_CLI_COMMANDS = [
  * is bounded by the plugin that registered it and stays allowed. */
 export const OPAQUE_ACCEPT_COMMAND_IDS = ["quickadd:*"] as const;
 
-/** The `cliPolicy` settings row. Both lists hold exact names or `prefix*`
- * globs. Absent/empty ⇒ the defaults: opaque-accept set denied, everything
- * else allowed. */
+/** The `cliPolicy` settings row. Absent/empty ⇒ the defaults: opaque-accept
+ * set denied, everything else allowed. */
 export interface CliCommandPolicy {
-  /** Additional denied entries, checked first — deny beats allow. */
+  /** Additional denied entries, checked first — deny beats allow. Exact
+   * names or `prefix*` globs. */
   deny?: string[];
-  /** Opaque-accept entries the human re-enabled. Matched against the COMMAND
-   * (not against the default set's spelling), so `allowOpaque: ["quickadd"]`
-   * re-enables exactly `quickadd` and not `quickadd:run`. */
+  /** Opaque-accept entries the human re-enabled. EXACT MATCH ONLY — globs
+   * are deliberately not honored here, in either direction: an entry
+   * re-enables one command or one run_command id, never a family. (A glob
+   * would also leak across surfaces — `quickadd:*` meant for run_command ids
+   * would silently re-enable the CLI's `quickadd:run`/`quickadd:run-template`
+   * too.) Deny globs stay: over-denying is safe, over-allowing is not. */
   allowOpaque?: string[];
 }
 
@@ -74,6 +81,11 @@ function matchesAny(name: string, patterns: readonly string[] | undefined): bool
   return (patterns ?? []).some((p) => matchesCommandPattern(name, p));
 }
 
+/** allowOpaque is exact-only (see CliCommandPolicy) — no pattern semantics. */
+function allowedOpaque(name: string, policy: CliCommandPolicy | undefined): boolean {
+  return (policy?.allowOpaque ?? []).some((p) => p.trim() === name);
+}
+
 function refusal(
   name: string,
   policy: CliCommandPolicy | undefined,
@@ -81,13 +93,13 @@ function refusal(
   surface: string,
 ): string | null {
   if (matchesAny(name, policy?.deny)) {
-    return `${surface} '${name}' is denied by the vault-mcp command policy (settings › Command policy › denied commands).`;
+    return `${surface} '${name}' is denied by the vault-mcp command policy (settings › Security › "Denied commands").`;
   }
-  if (matchesAny(name, opaqueSet) && !matchesAny(name, policy?.allowOpaque)) {
+  if (matchesAny(name, opaqueSet) && !allowedOpaque(name, policy)) {
     return (
       `${surface} '${name}' executes opaque macros/code that the acceptance guard cannot inspect, and is ` +
       `denied by default (fail closed). A human can re-enable this specific command in the vault-mcp ` +
-      `settings (Command policy › re-enabled opaque commands) — there is no agent-writable path to that setting.`
+      `settings (Security › "Re-enabled opaque commands") — there is no agent-writable path to that setting.`
     );
   }
   return null;
@@ -96,6 +108,36 @@ function refusal(
 /** The reason an `obsidian_cli` command is refused by policy, or null. */
 export function cliCommandRefusal(command: string, policy?: CliCommandPolicy): string | null {
   return refusal(command.trim(), policy, OPAQUE_ACCEPT_CLI_COMMANDS, "CLI command");
+}
+
+/**
+ * Config-territory guard for CLI param VALUES: the "human-only settings"
+ * property assumes no MCP surface can write plugin settings. The MCP write
+ * primitives enforce that structurally (they refuse non-`.md` paths), but
+ * `obsidian_cli` forwards param values to the external CLI binary unvalidated
+ * — whether the binary's `create file=…`/`property:set` would accept a path
+ * into `.obsidian/` is the binary's business, not something we can verify
+ * from here. So the proxy refuses to forward ANY param value that names
+ * `.obsidian` territory or tries to traverse out of the vault (`..`
+ * segments), for every command — reads included (the journal lives there
+ * too, and no legitimate CLI use targets config through this proxy).
+ * Belt-and-suspenders: even if the binary would refuse anyway, the policy's
+ * guarantee no longer rests on an unverified assumption about it.
+ */
+export function configPathRefusal(params?: Record<string, string | number | boolean>): string | null {
+  for (const [key, value] of Object.entries(params ?? {})) {
+    if (typeof value !== "string") continue;
+    // Normalize separators; check segment-wise so "x.obsidian.md" stays clean
+    // while ".obsidian", "./.obsidian/x", or "a\\.obsidian\\b" refuse.
+    const segments = value.trim().replace(/\\/g, "/").split("/");
+    if (segments.includes(".obsidian")) {
+      return `param '${key}' names .obsidian territory — plugin config and state are not reachable through the CLI proxy.`;
+    }
+    if (segments.includes("..")) {
+      return `param '${key}' contains a '..' path segment — the CLI proxy stays inside the vault.`;
+    }
+  }
+  return null;
 }
 
 /** The reason an `obsidian_run_command` id is refused by policy, or null. */

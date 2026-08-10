@@ -20,6 +20,7 @@ import {
   OPAQUE_ACCEPT_CLI_COMMANDS,
   OPAQUE_ACCEPT_COMMAND_IDS,
   cliCommandRefusal,
+  configPathRefusal,
   matchesCommandPattern,
   runCommandRefusal,
 } from "../src/mcp/cli-policy.ts";
@@ -89,18 +90,51 @@ describe("runCommandRefusal: command ids", () => {
     assert.equal(runCommandRefusal("daily-notes", {}), null);
   });
 
-  test("allowOpaque can re-enable a specific id or the whole prefix", () => {
+  test("allowOpaque is exact-only: one entry re-enables one id, never a family", () => {
     assert.equal(runCommandRefusal("quickadd:runQuickAdd", { allowOpaque: ["quickadd:runQuickAdd"] }), null);
     assert.ok(runCommandRefusal("quickadd:toggleMacro", { allowOpaque: ["quickadd:runQuickAdd"] }));
-    assert.equal(runCommandRefusal("quickadd:toggleMacro", { allowOpaque: ["quickadd:*"] }), null);
+    // A glob in allowOpaque is NOT honored — over-allowing by pattern is the
+    // cross-surface leak this rule exists to close.
+    assert.ok(runCommandRefusal("quickadd:toggleMacro", { allowOpaque: ["quickadd:*"] }));
+  });
+
+  test("no cross-surface leak: a run_command-shaped allowOpaque entry does not re-enable CLI commands", () => {
+    // The same allowOpaque list serves both surfaces. An entry meant for
+    // run_command ids ('quickadd:*') must not silently re-enable the CLI's
+    // quickadd:run / quickadd:run-template.
+    const policy = { allowOpaque: ["quickadd:*"] };
+    assert.ok(cliCommandRefusal("quickadd:run", policy));
+    assert.ok(cliCommandRefusal("quickadd:run-template", policy));
+    assert.ok(cliCommandRefusal("quickadd", policy));
   });
 
   test("deny beats allowOpaque for ids too", () => {
-    assert.ok(runCommandRefusal("quickadd:runQuickAdd", { deny: ["quickadd:*"], allowOpaque: ["quickadd:*"] }));
+    assert.ok(runCommandRefusal("quickadd:runQuickAdd", { deny: ["quickadd:*"], allowOpaque: ["quickadd:runQuickAdd"] }));
   });
 
   test("the default id set is exactly the QuickAdd prefix", () => {
     assert.deepEqual([...OPAQUE_ACCEPT_COMMAND_IDS], ["quickadd:*"]);
+  });
+});
+
+describe("configPathRefusal: config territory unreachable through the proxy", () => {
+  test(".obsidian paths refuse in any param, any separator style", () => {
+    assert.ok(configPathRefusal({ file: ".obsidian/plugins/vault-mcp/data.json" }));
+    assert.ok(configPathRefusal({ path: "./.obsidian/app.json" }));
+    assert.ok(configPathRefusal({ target: "sub\\.obsidian\\x" }));
+  });
+
+  test(".. traversal refuses; lookalikes stay clean", () => {
+    assert.ok(configPathRefusal({ file: "../outside.md" }));
+    assert.ok(configPathRefusal({ file: "a/../../b.md" }));
+    assert.equal(configPathRefusal({ file: "notes/x.obsidian.md" }), null);
+    assert.equal(configPathRefusal({ file: "notes/dots..in..name.md" }), null);
+    assert.equal(configPathRefusal({ file: "Projects/A.md", content: "hello" }), null);
+    assert.equal(configPathRefusal(undefined), null);
+  });
+
+  test("non-string params are ignored", () => {
+    assert.equal(configPathRefusal({ silent: true, depth: 3 }), null);
   });
 });
 
@@ -169,6 +203,15 @@ describe("obsidian_cli handler: policy wiring", () => {
     const res = await handler({ command: "eval", params: { code: "1+1" } });
     assert.equal(res.isError, true);
     assert.match(res.content[0].text, /cli_denied/);
+    assert.equal(calls.length, 0);
+  });
+
+  test("a param naming .obsidian territory refuses cli_denied and never executes", async () => {
+    const { handler, calls } = cliServer({});
+    const res = await handler({ command: "create", params: { file: ".obsidian/plugins/vault-mcp/data.json", content: "x" } });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /cli_denied/);
+    assert.match(res.content[0].text, /\.obsidian territory/);
     assert.equal(calls.length, 0);
   });
 
