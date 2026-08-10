@@ -11,6 +11,7 @@ import { registerExternalTools } from "./external-tools.js";
 import { registerLockTools } from "./tools-locks.js";
 import { registerUidTools } from "./tools-uid.js";
 import { registerLinkTools, obsidianLinkSource } from "./tools-links.js";
+import { registerVocabTools, obsidianVocabSource } from "./tools-vocab.js";
 import { registerCodeModeTools, makeCaptureRegister, type CapturedRegistry } from "./tools-code-mode.js";
 import { makeGuarded, withKernelArgs } from "./guarded.js";
 import { visiblePaths } from "../guard.js";
@@ -126,6 +127,13 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   // Read-only by construction: moves already heal their own links through
   // fileManager.renameFile, so this reports the drift that came from OUTSIDE.
   registerLinkTools(server, obsidianLinkSource(app), ctx);
+  // ── the controlled vocabulary's read surface (step 5, vocab provider) ──────
+  // Validation and resolution only — the enforcement ladder is a later slice,
+  // and the whole-vault rule pack (kernel/vocab/findings.ts) is not a tool.
+  registerVocabTools(server, obsidianVocabSource(app), {
+    getSettings: ctx.getSettings,
+    getVocabularies: ctx.getVocabularies,
+  });
   // ── official-CLI proxy — conditional on the CLI binary being installed ──────
   registerCliTools(server, ctx);
   // ── externally-published tools (other Obsidian plugins via plugin.api) ─────
