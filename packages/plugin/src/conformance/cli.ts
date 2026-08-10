@@ -29,6 +29,17 @@ export interface RunOpts {
   vocabularies: VocabInstanceSettings[];
   schemes: SchemeInstanceConfig[];
   excludedRoots?: string[];
+  /**
+   * Register the ported legacy checks (port_lint, ste_lint, …). Default OFF:
+   * they run over the whole governed tree and their findings are not in the
+   * accepted baseline yet, so including them in a live run would gate
+   * NONCONFORMING on unported-scope noise (and the Phase-1 guard correctly
+   * forbids rebaselining the live baseline). They stay opt-in until the scope
+   * ruling + staged baseline migration (Phase 3). The packs are built, tested,
+   * and parity-verified regardless — this only controls their inclusion in a
+   * run.
+   */
+  legacyPacks?: boolean;
 }
 
 export interface RunResult {
@@ -51,9 +62,11 @@ export async function runConformance(opts: RunOpts): Promise<RunResult> {
   packs.push(vocabPack(vocabInstances.map((i) => i.provider)));
   // scheme instances: from settings, independent of the listing.
   packs.push(schemePack(makeRegistry(opts.schemes).instances()));
-  // Legacy check ports (Phase 2). port_lint: line-oriented over each note's
-  // raw text, so it needs the snapshot's `text` field.
-  packs.push(portPack());
+  // Legacy check ports (Phase 2) — opt-in until the scope ruling + rebaseline.
+  // port_lint is line-oriented over each note's raw text (snapshot `text`).
+  if (opts.legacyPacks) {
+    packs.push(portPack());
+  }
 
   const findings = runEngine(packs, snapshot);
   const result = ratchet(findings, parseBaseline(opts.baselineText));
@@ -146,6 +159,7 @@ async function main(argv: string[]): Promise<void> {
     baselineText,
     vocabularies: DEFAULT_VOCABULARIES,
     schemes: DEFAULT_SCHEMES,
+    legacyPacks: argv.includes("--legacy-packs"),
   });
 
   if (rebaseline) {

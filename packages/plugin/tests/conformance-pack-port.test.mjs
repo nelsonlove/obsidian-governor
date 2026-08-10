@@ -64,3 +64,15 @@ describe("portPack — pattern parity", () => {
     assert.deepEqual(run([note("N.md", "a normal note about ~/obsidian/06.11\n")]), []);
   });
 });
+
+describe("portPack — review fixes", () => {
+  test(".fileclass (non-.md) notes are out of scope (Python walks *.md only)", () => {
+    const p = portPack();
+    const f = p.run({ notes: [{ path: "Reg/X.fileclass", text: "~/obsidian-old\n", frontmatter: {}, body: "" }], paths: [] });
+    assert.deepEqual(f, []);
+  });
+  test("a snapshot note missing text throws (silent-zero class → loud failure)", () => {
+    const p = portPack();
+    assert.throws(() => p.run({ notes: [{ path: "N.md", frontmatter: {}, body: "" }], paths: ["N.md"] }), /no text/);
+  });
+});

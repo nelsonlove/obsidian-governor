@@ -31,8 +31,16 @@ export function portPack(): RulePack {
     run(snapshot: VaultSnapshot): Finding[] {
       const out: Finding[] = [];
       for (const note of snapshot.notes) {
+        // The Python walks `*.md` only; non-markdown snapshot notes
+        // (`.fileclass`, carried for the vocab pack) are out of scope.
+        if (!note.path.endsWith(".md")) continue;
         const text = (note as { text?: string }).text;
-        if (typeof text !== "string") continue; // needs raw text; skip if absent
+        // A snapshot note always carries text; its absence is a wiring bug, not
+        // a clean note — fail LOUD (engine → pack_error) rather than silently
+        // reading zero (the silent-zero class the sentinels exist to catch).
+        if (typeof text !== "string") {
+          throw new Error(`port_lint: snapshot note '${note.path}' has no text (wiring bug)`);
+        }
         // Line split. The snapshot normalizes CRLF→LF, so `\n` covers the real
         // cases. Caveat vs Python `str.splitlines()`: that also breaks on \v \f
         // \x1c–\x1e NEL U+2028 U+2029 — absent from the vault (349/349 key
