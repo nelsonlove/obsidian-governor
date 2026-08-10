@@ -32,14 +32,20 @@ export interface RunOpts {
   excludedRoots?: string[];
   /**
    * Register the four ported legacy checks (structure/port/ste/drift — the
-   * whole Python rail, now in TS). Default OFF: they reproduce the Python
-   * scripts over the governed tree, but the accepted baseline predates the
-   * vault consolidation (its non-drift keys are pre-consolidation paths), so a
-   * live run would gate NONCONFORMING on ~the full keyset with no sanctioned
-   * exit — and the live-baseline rebaseline guard correctly refuses. The packs
-   * stay opt-in until the scope ruling + staged baseline migration. Every pack
-   * is built, tested, and parity-verified regardless; this only controls their
-   * inclusion in a run.
+   * whole Python rail, now in TS). **Default ON** (issue #116).
+   *
+   * It defaulted OFF while the ports were landing, on the reasoning that an
+   * unproven pack should not gate a run. Measured against the restored
+   * baseline, that default was backwards: the accepted-debt baseline's keys are
+   * *exclusively* legacy-pack keys, so a run without these packs cannot
+   * reproduce a single one of them and reports the ENTIRE baseline as CLEARED —
+   * 124 of 124, on every invocation. That is not a conservative default; it is
+   * a guaranteed false "all previously-accepted debt is now fixed" report, and
+   * it is the shape most likely to be mistaken for a real result.
+   *
+   * A pack set and the baseline it is ratcheted against have to describe the
+   * same universe. `--no-legacy-packs` still opts out for a module-packs-only
+   * run, but the caller then has to mean it.
    */
   legacyPacks?: boolean;
 }
@@ -52,6 +58,8 @@ export interface RunResult {
   /** The fenced-block body to write on --rebaseline. */
   rebaseline: string;
   exitCode: 0 | 1;
+  /** Ids of the packs that actually ran — the registered set the baseline is measured against. */
+  packIds: string[];
 }
 
 export async function runConformance(opts: RunOpts): Promise<RunResult> {
@@ -68,7 +76,7 @@ export async function runConformance(opts: RunOpts): Promise<RunResult> {
   // blueprint listing, and config/existence inputs (conformance_check /
   // port_lint / ste_lint / drift_audit — the full legacy rail, all in TS).
   // Opt-in until the scope ruling + staged rebaseline.
-  if (opts.legacyPacks) {
+  if (opts.legacyPacks ?? true) {
     packs.push(structurePack());
     packs.push(portPack());
     packs.push(stePack());
@@ -76,19 +84,122 @@ export async function runConformance(opts: RunOpts): Promise<RunResult> {
   }
 
   const findings = runEngine(packs, snapshot);
-  const result = ratchet(findings, parseBaseline(opts.baselineText));
+  const baselineKeys = parseBaseline(opts.baselineText);
+  const result = ratchet(findings, baselineKeys);
+  const packIds = packs.map((p) => p.id);
   return {
+    packIds,
     findings,
     ratchet: result,
-    report: renderReport(result),
+    report: renderReport(result, packIds, baselinePackIds(baselineKeys), findings),
     rebaseline: renderBaseline(findings),
     exitCode: result.exitCode,
   };
 }
 
-function renderReport(r: RatchetResult): string {
+/**
+ * The pack ids the accepted-debt baseline actually describes — the first field
+ * of each ratchet key (`script|check|target|kind`).
+ *
+ * This is what makes the rebaseline guard a COMPUTED fact rather than a
+ * hardcoded constant that goes stale. A key with no `|` contributes itself, so
+ * a malformed baseline degrades to naming a pack that is not registered — which
+ * refuses — rather than throwing or silently naming nothing.
+ */
+export function baselinePackIds(baselineKeys: Set<string>): Set<string> {
+  const ids = new Set<string>();
+  for (const key of baselineKeys) {
+    const id = key.split("|")[0];
+    if (id) ids.add(id);
+  }
+  return ids;
+}
+
+/**
+ * The reason a `--rebaseline` must be refused, or null when it may proceed.
+ *
+ * TWO independent reasons, and they are not the same check:
+ *
+ * 1. **Uncovered packs.** The baseline names a pack that is not in this run's
+ *    registered set, so rebaselining would write out a keyset that cannot
+ *    contain that pack's keys — silently DESTROYING accepted debt a human
+ *    granted. This applies to a fixture baseline as much as the live one; the
+ *    old hardcoded guard only protected the live path.
+ * 2. **The live baseline is an acceptance record.** Rewriting it re-accepts
+ *    whatever the current run found, and acceptance is human-only. That reason
+ *    does not expire when the pack set becomes complete, which is exactly why
+ *    this must not collapse into check 1 — with every pack registered, a
+ *    coverage-only guard would start PERMITTING the live rebaseline, quietly
+ *    turning a governance boundary into a pack-completeness detail.
+ *
+ * Replaces `GUARD_LIVE_REBASELINE`/`PHASE1_PACKS_INCOMPLETE`, whose stated
+ * reason ("drift_audit is unported") silently became false when the drift pack
+ * landed. A constant encoding a fact about the pack set has to be computed from
+ * the pack set.
+ */
+export function rebaselineRefusal(opts: {
+  targetsLiveBaseline: boolean;
+  baselinePackIds: Set<string>;
+  registeredPackIds: Set<string>;
+}): string | null {
+  const uncovered = [...opts.baselinePackIds].filter((id) => !opts.registeredPackIds.has(id)).sort();
+  if (uncovered.length) {
+    return (
+      `refusing to --rebaseline: the baseline holds accepted debt for ${uncovered.join(", ")}, which did not run in ` +
+      `this configuration. Rewriting it now would drop those accepted keys — debt a human granted — because a run ` +
+      `cannot reproduce a pack it never registered. Re-run with those packs enabled, or target a baseline that does ` +
+      `not describe them.`
+    );
+  }
+  if (opts.targetsLiveBaseline) {
+    return (
+      "refusing to --rebaseline the live baseline: it is an acceptance record, and rewriting it accepts every " +
+      "current finding. Acceptance is a human gesture only — it is never granted by running a tool. Target a " +
+      "fixture with --baseline=<path> instead."
+    );
+  }
+  return null;
+}
+
+/** Registered packs contributing findings that the baseline says nothing about. */
+function packsWithoutBaseline(
+  registered: string[],
+  baseline: Set<string>,
+  findings: Finding[],
+): Array<{ id: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const f of findings) counts.set(f.script, (counts.get(f.script) ?? 0) + 1);
+  return registered
+    .filter((id) => !baseline.has(id) && (counts.get(id) ?? 0) > 0)
+    .map((id) => ({ id, count: counts.get(id) as number }))
+    .sort((a, b) => b.count - a.count || a.id.localeCompare(b.id));
+}
+
+function renderReport(
+  r: RatchetResult,
+  registeredPackIds: string[] = [],
+  baselineIds: Set<string> = new Set(),
+  findings: Finding[] = [],
+): string {
   const lines: string[] = [];
   lines.push(`conformance: ${r.carried} carried, ${r.newKeys.length} NEW, ${r.clearedKeys.length} cleared`);
+  // A pack with NO baseline representation reports its entire output as NEW.
+  // Undistinguished, that is indistinguishable from a catastrophic regression —
+  // the same silent-zero class the engine's pack sentinels and the missing
+  // baseline already refuse, at pack granularity. Say which packs those are so
+  // the NEW count can be read correctly instead of alarming.
+  const uncovered = packsWithoutBaseline(registeredPackIds, baselineIds, findings);
+  if (uncovered.length) {
+    const total = uncovered.reduce((n, p) => n + p.count, 0);
+    lines.push(
+      "",
+      `NOTE: ${uncovered.length} pack(s) have NO accepted baseline, contributing ${total} of the ${r.newKeys.length} NEW keys:`,
+    );
+    for (const p of uncovered) lines.push(`  ! ${p.id} — ${p.count} finding(s), 0 accepted`);
+    lines.push(
+      "  These are unmeasured, not newly broken. Accepting a baseline for them is a human act; no run can grant it.",
+    );
+  }
   if (r.newKeys.length) {
     lines.push("", "NEW (regressions — run fails):");
     for (const k of r.newKeys) lines.push(`  + ${k}`);
@@ -138,30 +249,12 @@ export function writeFence(noteText: string, body: string): string {
   return noteText.replace(re, () => block);
 }
 
-// All four legacy checks are now ported (structure ← conformance_check, port ←
-// port_lint, ste ← ste_lint, drift ← drift_audit) — the Python rail is retired.
-// The live baseline still predates the vault consolidation (its non-drift keys
-// are pre-consolidation paths) and the legacy packs are opt-in, so a
-// `--rebaseline` against the LIVE baseline would strand the accepted debt (a
-// default run without `--legacy-packs` drops every legacy key; even with them
-// on, the pre-consolidation paths churn). Rebaselining the default (live)
-// baseline stays refused until the staged migration; a fixture baseline
-// (explicit --baseline=) is always allowed.
-const GUARD_LIVE_REBASELINE = true;
-
 async function main(argv: string[]): Promise<void> {
   const rebaseline = argv.includes("--rebaseline");
   const rootArg = argv.find((a) => a.startsWith("--root="))?.slice("--root=".length);
   const root = rootArg ? resolve(rootArg) : discoverRoot(process.cwd());
   const baselineArg = argv.find((a) => a.startsWith("--baseline="))?.slice("--baseline=".length);
   const baselinePath = baselineArg ? resolve(baselineArg) : join(root, BASELINE_REL);
-  if (rebaseline && !baselineArg && GUARD_LIVE_REBASELINE) {
-    throw new Error(
-      "refusing to --rebaseline the live baseline — it predates the vault consolidation and the legacy " +
-        "packs are opt-in, so it would strand the accepted debt. Target a fixture with --baseline=<path>, " +
-        "or wait for the staged baseline migration.",
-    );
-  }
   const baselineText = existsSync(baselinePath) ? await readFile(baselinePath, "utf8") : "";
 
   const res = await runConformance({
@@ -169,8 +262,22 @@ async function main(argv: string[]): Promise<void> {
     baselineText,
     vocabularies: DEFAULT_VOCABULARIES,
     schemes: DEFAULT_SCHEMES,
-    legacyPacks: argv.includes("--legacy-packs"),
+    // Default ON — see RunOpts.legacyPacks. The baseline describes these packs
+    // and nothing else, so omitting them clears it wholesale.
+    legacyPacks: !argv.includes("--no-legacy-packs"),
   });
+
+  if (rebaseline) {
+    // Computed from the run that just happened, not a hardcoded constant.
+    // Checked BEFORE the write: a refused rebaseline must leave the accepted
+    // debt exactly as it was.
+    const refusal = rebaselineRefusal({
+      targetsLiveBaseline: !baselineArg,
+      baselinePackIds: baselinePackIds(parseBaseline(baselineText)),
+      registeredPackIds: new Set(res.packIds),
+    });
+    if (refusal) throw new Error(refusal);
+  }
 
   if (rebaseline) {
     const next = writeFence(baselineText || "# Conformance baseline\n", res.rebaseline);
