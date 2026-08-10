@@ -74,11 +74,17 @@ export interface FsHandlerOpts {
   indexStatus?: boolean;
   /**
    * Explicit override for whether FS-mode writes are permitted (issue #92).
-   * Omitted (the normal case) ⇒ resolved per-call from `isFsWritesEnabled()`
-   * (the `VAULT_MCP_FS_ALLOW_WRITES` env var), so every FS-server entry point
-   * (createFsHandler, the semantic proxy's FS client) picks up the same
-   * deployment-wide setting without being wired individually. Set explicitly
-   * only for tests or callers that need a value independent of the env var.
+   * Omitted (the normal case) ⇒ resolved from `isFsWritesEnabled()` (the
+   * `VAULT_MCP_FS_ALLOW_WRITES` env var) at the moment `buildFsServer()`
+   * constructs the backend — so every FS-server entry point picks up the
+   * same deployment-wide setting without being wired individually. The
+   * granularity differs by caller: `createFsHandler().handle()` calls
+   * `buildFsServer(opts)` fresh per HTTP request, so it re-reads the env var
+   * every time; `semantic-proxy.ts`'s `getFsClient()` builds its FS backend
+   * once and caches it for the process's lifetime (until `stop()`), so a
+   * mid-process env var change there only takes effect after a restart. Set
+   * `allowWrites` explicitly only for tests or callers that need a value
+   * independent of the env var.
    */
   allowWrites?: boolean;
 }
