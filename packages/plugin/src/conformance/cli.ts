@@ -12,8 +12,8 @@
 // legacy rail now lives in TS, but stays gated until the staged rebaseline.
 
 import { readFile, writeFile } from "node:fs/promises";
-import { existsSync, realpathSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, realpathSync, lstatSync, readlinkSync, statSync } from "node:fs";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { VocabRegistry, DEFAULT_VOCABULARIES, type VocabInstanceSettings } from "../kernel/vocab/registry.js";
 import { makeRegistry, DEFAULT_SCHEMES, type SchemeInstanceConfig } from "../kernel/scheme/registry.js";
@@ -177,16 +177,131 @@ export function coverageRefusal(
  * thing. Resolved both sides, and through symlinks where they exist, so an
  * alias cannot launder the identity either.
  */
-export function isLiveBaseline(baselinePath: string, root: string): boolean {
-  const live = join(resolve(root), BASELINE_REL);
-  const real = (p: string): string => {
-    try {
-      return realpathSync(p);
-    } catch {
-      return resolve(p);
+/**
+ * The path a write to `p` would actually land on, following symlinks, WITHOUT
+ * silently degrading when `p` does not exist yet.
+ *
+ * `realpathSync` throws on a non-existent path, and the previous version caught
+ * that and fell back to `resolve()`. That fallback was the bug (#144): it could
+ * not tell "does not exist" from "could not resolve", so a DANGLING symlink
+ * aimed at the live record resolved to its own name, compared unequal, and the
+ * write was allowed — creating the live acceptance record from nothing. So:
+ * resolve the deepest existing ancestor for real, then re-append the segments
+ * below it. A dangling symlink is followed by hand rather than ignored.
+ *
+ * Returns null when identity genuinely cannot be established; every caller
+ * treats null as "refuse", never as "not the live one".
+ */
+function intendedRealPath(p: string, depth = 0): string | null {
+  if (depth > 8) return null; // symlink loop
+  const abs = resolve(p);
+  try {
+    return realpathSync(abs);
+  } catch {
+    /* does not exist (or is a dangling link) — fall through */
+  }
+  try {
+    const st = lstatSync(abs);
+    if (st.isSymbolicLink()) {
+      // Dangling symlink: follow it manually. Its TARGET is where a write lands.
+      return intendedRealPath(resolve(dirname(abs), readlinkSync(abs)), depth + 1);
     }
-  };
-  return resolve(baselinePath) === resolve(live) || real(baselinePath) === real(live);
+  } catch {
+    /* no lstat either — a plain non-existent path; resolve its parent */
+  }
+  const parent = dirname(abs);
+  if (parent === abs) return null;
+  const realParent = intendedRealPath(parent, depth + 1);
+  return realParent === null ? null : join(realParent, basename(abs));
+}
+
+/** Same file by the FILESYSTEM's answer (device + inode), which is what catches
+ * a hardlink or a case-insensitive alias. Null when either side cannot be stat'd. */
+function sameFile(a: string, b: string): boolean | null {
+  try {
+    const sa = statSync(a);
+    const sb = statSync(b);
+    return sa.dev === sb.dev && sa.ino === sb.ino;
+  } catch {
+    return null;
+  }
+}
+
+/** `child` is inside `parent` (or is `parent`), compared on resolved paths. */
+function isInside(parent: string, child: string): boolean {
+  const p = resolve(parent);
+  const c = resolve(child);
+  return c === p || c.startsWith(p.endsWith(sep) ? p : p + sep);
+}
+
+/**
+ * The reason `--rebaseline` may not write to `baselinePath`, or null when it may.
+ *
+ * Replaces `isLiveBaseline` (#144), which decided over `join(resolve(root),
+ * BASELINE_REL)` — and `root` is caller-controlled (`--root` / the
+ * `ASSENT_CONTENT_ROOT` env var). Pointing `--root` somewhere harmless and
+ * `--baseline=` at the real acceptance record made the live record read as "not
+ * live", and it was rewritten at exit 0. The first fix removed *argv shape* as
+ * the proxy for "which file this writes" and substituted `root`, which is
+ * another caller-controlled string. **The lesson is not "use a better string":
+ * it is that no caller-supplied value can answer "is this the protected file".
+ * Only the filesystem can.**
+ *
+ * Every branch here fails CLOSED. That is affordable precisely because the
+ * refused set is tiny — writing an acceptance baseline is rare and is a human
+ * act anyway — which is the test the fail-closed rule actually requires
+ * (measure the refused population; do not assume it is exotic).
+ */
+export function rebaselineTargetRefusal(baselinePath: string, root: string): string | null {
+  // 1. Outside the content root ⇒ refuse outright, rather than "not live".
+  //    This is what closes the decoupled-root bypass: if --root points
+  //    elsewhere, the real acceptance record is no longer inside it.
+  if (!isInside(root, baselinePath)) {
+    return (
+      `refusing to --rebaseline ${baselinePath}: it is outside the content root (${resolve(root)}). ` +
+      `A baseline is only meaningful relative to the vault it describes, and permitting an out-of-root ` +
+      `target lets --root and --baseline be pointed at different vaults so the live acceptance record ` +
+      `reads as somebody else's fixture.`
+    );
+  }
+
+  const livePath = join(resolve(root), BASELINE_REL);
+
+  // 2. Same name.
+  if (resolve(baselinePath) === livePath) return liveRefusal(baselinePath);
+
+  // 3. Same file by device+inode — catches hardlinks and case-insensitive
+  //    aliases, neither of which any string comparison can see. (On APFS,
+  //    realpath does NOT case-canonicalize, so `.../CONFORMANCE BASELINE.md`
+  //    and the real name are different strings and the same inode.)
+  const same = sameFile(baselinePath, livePath);
+  if (same === true) return liveRefusal(baselinePath);
+
+  // 4. Where each would actually land, symlinks followed by hand.
+  const target = intendedRealPath(baselinePath);
+  const live = intendedRealPath(livePath);
+  if (target === null || live === null) {
+    return (
+      `refusing to --rebaseline ${baselinePath}: cannot establish whether this is the live acceptance ` +
+      `record. Refusing an indeterminate target rather than assuming it is safe — the consequence of ` +
+      `being wrong is rewriting or fabricating a record only a human may grant.`
+    );
+  }
+  if (target === live) return liveRefusal(baselinePath);
+  // Case-insensitive match: conservative, because a filesystem that folds case
+  // makes these one file and we cannot always tell which kind we are on.
+  if (target.toLowerCase() === live.toLowerCase()) return liveRefusal(baselinePath);
+
+  return null;
+}
+
+function liveRefusal(shown: string): string {
+  return (
+    `refusing to --rebaseline ${shown}: it is the live acceptance record (by filesystem identity, not ` +
+    `by name — hardlinks, symlinks and case aliases all resolve to it). Rewriting it accepts every ` +
+    `current finding, and creating it accepts them from zero. Acceptance is a human gesture only — it ` +
+    `is never granted by running a tool.`
+  );
 }
 
 /**
@@ -339,7 +454,7 @@ export function baselineMissingRefusal(baselinePath: string, exists: boolean, no
   );
 }
 
-async function main(argv: string[]): Promise<void> {
+export async function runCli(argv: string[]): Promise<void> {
   const rebaseline = argv.includes("--rebaseline");
   const rootArg = argv.find((a) => a.startsWith("--root="))?.slice("--root=".length);
   const root = rootArg ? resolve(rootArg) : discoverRoot(process.cwd());
@@ -382,8 +497,12 @@ async function main(argv: string[]): Promise<void> {
     // --baseline= at the live baseline's own path used to slip this guard
     // entirely. Checked BEFORE the write: a refused rebaseline must leave the
     // accepted debt exactly as it was.
+    // Identity first: whether this write lands on the live acceptance record is
+    // decided by the filesystem, before any coverage reasoning (#144).
+    const targetRefusal = rebaselineTargetRefusal(baselinePath, root);
+    if (targetRefusal) throw new Error(targetRefusal);
     const refusal = rebaselineRefusal({
-      targetsLiveBaseline: isLiveBaseline(baselinePath, root),
+      targetsLiveBaseline: false, // established above; a live target already threw
       baselinePackIds: baselineIds,
       registeredPackIds: covered,
     });
@@ -402,7 +521,7 @@ async function main(argv: string[]): Promise<void> {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main(process.argv.slice(2)).catch((e) => {
+  runCli(process.argv.slice(2)).catch((e) => {
     process.stderr.write(`conformance: ${e instanceof Error ? e.message : String(e)}\n`);
     process.exitCode = 3;
   });
