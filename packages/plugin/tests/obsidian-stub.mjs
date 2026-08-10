@@ -57,6 +57,68 @@ export function getAllTags(cache) {
   return out;
 }
 
+/**
+ * A deliberately small YAML reader — enough for the frontmatter the tests write:
+ * `key: scalar`, quoted scalars, inline arrays `[a, b]`, and inline maps
+ * `{k: v}`. The real Obsidian parseYaml is far richer; this only has to make the
+ * accept-forbidden guard's value-TYPE handling (string / array / map) testable
+ * headlessly, so array/map acceptance forms are read as the guard sees them.
+ */
+export function parseYaml(text) {
+  const scalar = (raw) => {
+    const s = raw.trim();
+    if (s === "") return null;
+    if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) return s.slice(1, -1);
+    if (s === "true") return true;
+    if (s === "false") return false;
+    if (s === "null" || s === "~") return null;
+    if (/^-?\d+(\.\d+)?$/.test(s)) return Number(s);
+    return s;
+  };
+  const inline = (raw) => {
+    const s = raw.trim();
+    if (s.startsWith("[") && s.endsWith("]")) {
+      const inner = s.slice(1, -1).trim();
+      return inner === "" ? [] : inner.split(",").map((x) => scalar(x));
+    }
+    if (s.startsWith("{") && s.endsWith("}")) {
+      const inner = s.slice(1, -1).trim();
+      const out = {};
+      if (inner !== "") {
+        for (const pair of inner.split(",")) {
+          const i = pair.indexOf(":");
+          if (i < 0) continue;
+          out[pair.slice(0, i).trim()] = scalar(pair.slice(i + 1));
+        }
+      }
+      return out;
+    }
+    return scalar(s);
+  };
+  const obj = {};
+  const lines = String(text).split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === "" || line.trimStart().startsWith("#")) continue;
+    const m = /^([^:\s][^:]*):(.*)$/.exec(line);
+    if (!m) continue;
+    const key = m[1].trim();
+    const rest = m[2].trim();
+    // Block sequence: `key:` then following `  - item` lines.
+    if (rest === "" && lines[i + 1] && /^\s*-\s+/.test(lines[i + 1])) {
+      const arr = [];
+      while (lines[i + 1] && /^\s*-\s+/.test(lines[i + 1])) {
+        arr.push(scalar(lines[i + 1].replace(/^\s*-\s+/, "")));
+        i++;
+      }
+      obj[key] = arr;
+    } else {
+      obj[key] = inline(rest);
+    }
+  }
+  return obj;
+}
+
 let installed = false;
 
 /** Point the "obsidian" specifier at this module for every subsequent import. */

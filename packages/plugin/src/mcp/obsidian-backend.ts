@@ -30,9 +30,10 @@
  * are unchanged down to the object.
  */
 
-import { TFile, TFolder, getAllTags, type App } from "obsidian";
+import { TFile, TFolder, getAllTags, parseYaml, type App } from "obsidian";
 import { CHARACTER_LIMIT, deriveJdIdFromPath } from "@vault-mcp/core";
 import { backlinkKeys } from "./helpers.js";
+import { AcceptForbiddenError, acceptTransitionReason, frontmatterOf } from "./write-notes-compose.js";
 import type {
   VaultBackend,
   NoteRef,
@@ -99,6 +100,54 @@ export class ObsidianBackend implements VaultBackend {
   /** One path's visibility, for the answers that name a single note. */
   private isVisible(path: string): boolean {
     return this.visible([path]).length === 1;
+  }
+
+  // ── accept-forbidden guard (the "accept verb is in no API" scar) ─────────────
+  //
+  // Enforced HERE, at the shared write primitive every fs-expressible write tool
+  // (write_note / append / manage_frontmatter / patch / move) routes through —
+  // and which obsidian_write_notes' per-item guarded dispatch also reaches via
+  // writeNote — so the invariant holds on EVERY write surface, not just the one
+  // it originally shipped on. The check is over the note that WOULD LAND ON DISK
+  // (frontmatter parsed from the final markdown, a body-embedded fence included),
+  // for every value-type, and it is a TRANSITION: introducing or changing
+  // acceptance to the accepted-family is blocked; carrying an existing
+  // (human-granted) accepted value forward UNCHANGED is allowed.
+
+  /** Parse the leading frontmatter of a markdown string via Obsidian's own YAML parser. */
+  private fmOf(markdown: string): Record<string, unknown> | null {
+    return frontmatterOf(markdown, parseYaml);
+  }
+
+  /** The note's current on-disk frontmatter, parsed from its raw text; null when the note is new/absent/unparseable. */
+  private async diskFrontmatter(path: string): Promise<Record<string, unknown> | null> {
+    const f = this.app.vault.getAbstractFileByPath(path);
+    if (!(f instanceof TFile)) return null;
+    try {
+      return this.fmOf(await this.app.vault.read(f));
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Reject a full-content write whose RESULTING frontmatter introduces/changes
+   * acceptance. The on-disk value is read ONLY when the result asserts
+   * acceptance at all (the common write pays no extra read), and preservation is
+   * tested against it so a legitimate edit carrying an existing accepted value
+   * forward is allowed.
+   */
+  private async guardWrittenContent(path: string, resultingContent: string): Promise<void> {
+    const after = this.fmOf(resultingContent);
+    if (!after || !acceptTransitionReason(null, after)) return;
+    const reason = acceptTransitionReason(await this.diskFrontmatter(path), after);
+    if (reason) throw new AcceptForbiddenError(reason);
+  }
+
+  /** Reject a frontmatter-level edit (manage_frontmatter set / patch) whose result introduces/changes acceptance. */
+  private guardResultingFrontmatter(before: Record<string, unknown> | null, after: Record<string, unknown>): void {
+    const reason = acceptTransitionReason(before, after);
+    if (reason) throw new AcceptForbiddenError(reason);
   }
 
   // ── listing & navigation ────────────────────────────────────────────────────
@@ -353,7 +402,12 @@ export class ObsidianBackend implements VaultBackend {
 
     if (op === "set") {
       if (value === undefined) throw new Error("`value` is required for op='set'");
-      const hadFm = !!this.app.metadataCache.getFileCache(file)?.frontmatter;
+      const beforeFm = this.app.metadataCache.getFileCache(file)?.frontmatter ?? null;
+      // Accept-forbidden guard over the RESULTING frontmatter (before with this
+      // one field set): setting acceptance-status=accepted or an accepted-* field
+      // is rejected unless the note already held that exact value.
+      this.guardResultingFrontmatter(beforeFm, { ...(beforeFm ?? {}), [key]: value });
+      const hadFm = !!beforeFm;
       let previous: FrontmatterEditValue | undefined;
       await this.app.fileManager.processFrontMatter(file, (fm) => {
         previous = fm[key];
@@ -423,6 +477,11 @@ export class ObsidianBackend implements VaultBackend {
       next = head + content + sep + tail;
     }
 
+    // Accept-forbidden guard: a patch anchors on a heading/block and cannot
+    // normally touch the leading frontmatter, but the invariant is enforced over
+    // the note that would land regardless — so the resulting frontmatter is
+    // checked against the current one, and a preserved value passes untouched.
+    this.guardResultingFrontmatter(this.fmOf(text), this.fmOf(next) ?? {});
     await this.app.vault.modify(file, next);
     return { found: true, anchor, op, previous };
   }
@@ -435,6 +494,10 @@ export class ObsidianBackend implements VaultBackend {
     overwrite: boolean,
   ): Promise<{ path: string; created: boolean }> {
     if (!relPath.endsWith(".md")) throw new Error("path must end in .md");
+    // Accept-forbidden guard over the whole note being written (S1/S2): a body
+    // that embeds `---\nacceptance-status: accepted\n---` lands verbatim, so the
+    // guard parses the FINAL content, not a structured argument.
+    await this.guardWrittenContent(relPath, content);
     const existing = this.app.vault.getAbstractFileByPath(relPath);
     if (existing instanceof TFile) {
       if (!overwrite) throw new Error(`exists (set overwrite=true to replace): ${relPath}`);
@@ -453,9 +516,20 @@ export class ObsidianBackend implements VaultBackend {
     if (!relPath.endsWith(".md")) throw new Error("path must end in .md");
     const existing = this.app.vault.getAbstractFileByPath(relPath);
     if (existing instanceof TFile) {
+      // Appended text lands at the END, so it normally cannot touch frontmatter
+      // — EXCEPT when the note is empty (or frontmatter-less), where the
+      // appended leading `---` fence becomes the note's real frontmatter (S5).
+      // So guard the FINAL content (existing + appended) uniformly, the exact
+      // transition check writeNote uses: introduce/change-to-accepted is
+      // rejected, a genuine preserve of an existing accepted still passes.
+      const before = await this.app.vault.read(existing);
+      await this.guardWrittenContent(relPath, before + content);
       await this.app.vault.append(existing, content);
       return { path: relPath, created: false };
     }
+    // Creating the note: the appended content IS the whole note, so its own
+    // leading fence would become real frontmatter — guard it like a write.
+    await this.guardWrittenContent(relPath, content);
     await ensureParentFolders(this.app, relPath);
     await this.app.vault.create(relPath, content);
     return { path: relPath, created: true };
