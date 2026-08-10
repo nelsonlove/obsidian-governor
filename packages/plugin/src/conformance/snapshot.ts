@@ -25,7 +25,7 @@ import { join, relative, resolve, dirname, basename, sep } from "node:path";
 import { parseAllFrontmatter } from "@vault-mcp/core";
 import type { VocabNote } from "../kernel/vocab/blueprint.js";
 import type { SourceFile, VaultSnapshot } from "./rule-pack.js";
-import { intendedRealPath, isInside } from "./cli.js";
+import { intendedRealPath, isInside } from "./path-identity.js";
 
 export interface SnapshotOpts {
   /** Absolute content root to walk. */
