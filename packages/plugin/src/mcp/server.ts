@@ -160,7 +160,9 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
     getVocabularies: ctx.getVocabularies,
   });
   // ── official-CLI proxy — conditional on the CLI binary being installed ──────
-  registerCliTools(server, ctx);
+  // parseYaml is injected for the accept-forbidden guard's content-fence scan
+  // (tools-cli.ts stays obsidian-free; obsidian is types-only in node tests).
+  registerCliTools(server, ctx, { parseYaml });
   // ── externally-published tools (other Obsidian plugins via plugin.api) ─────
   registerExternalTools(server, app, ctx);
 
