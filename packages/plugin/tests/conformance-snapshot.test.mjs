@@ -297,3 +297,113 @@ describe("buildSnapshot territory guard (#157) — deny-list overrides an explic
     }
   });
 });
+
+/**
+ * buildSnapshot territory guard (#157) — MID-WALK, not just at `root`.
+ *
+ * Review finding on the first version of this guard: checking `root` alone
+ * is not "unconditional" — it bounds what `root` may equal, not what the walk
+ * may actually read. Two concrete gaps it left open, both closed here:
+ *
+ *   1. A symlinked FILE nested inside an otherwise-legitimate tree:
+ *      `entry.isDirectory()` is false for a symlink regardless of its
+ *      target, so it reaches Pass 1 untouched by the root-level check, and
+ *      its REAL target is what `readFile` actually honors.
+ *   2. A plainly-named denied directory nested several levels below `root`
+ *      (no symlink at all) — Pass 2 previously recursed into it
+ *      unconditionally.
+ */
+describe("buildSnapshot territory guard (#157) — checked mid-walk, not just at root", () => {
+  test("a symlinked FILE nested inside a legitimate tree, pointing into a denied territory, is refused", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conf-midwalk-symlink-deny-"));
+    try {
+      await mkdir(path.join(root, "Notes"), { recursive: true });
+      const oldVault = path.join(root, "..", path.basename(root) + "-oldvault-standin");
+      await mkdir(path.join(oldVault, "80-89 Divorce"), { recursive: true });
+      await writeFile(path.join(oldVault, "80-89 Divorce", "secret.md"), "---\ntitle: secret\n---\n\nprivate\n");
+      const escapeLink = path.join(root, "Notes", "leaked.md");
+      await symlink(path.join(oldVault, "80-89 Divorce", "secret.md"), escapeLink);
+      await assert.rejects(
+        () => buildSnapshot({ root, boundary: root }),
+        /permanently denied territory.*80-89/i,
+      );
+      await rm(oldVault, { recursive: true, force: true });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a symlinked FILE nested inside a legitimate tree, pointing merely OUTSIDE the boundary, is refused", async () => {
+    const parent = await mkdtemp(path.join(tmpdir(), "conf-midwalk-symlink-out-"));
+    try {
+      const boundary = path.join(parent, "vault");
+      const outside = path.join(parent, "elsewhere");
+      await mkdir(path.join(boundary, "Notes"), { recursive: true });
+      await mkdir(outside, { recursive: true });
+      await writeFile(path.join(outside, "E.md"), "---\ntitle: E\n---\n\nelsewhere\n");
+      await symlink(path.join(outside, "E.md"), path.join(boundary, "Notes", "leaked.md"));
+      await assert.rejects(
+        () => buildSnapshot({ root: boundary, boundary }),
+        /symlink resolving outside the declared content-root boundary/,
+      );
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  test("a symlinked FILE that stays INSIDE the boundary and isn't denied still works", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conf-midwalk-symlink-ok-"));
+    try {
+      await mkdir(path.join(root, "Notes"), { recursive: true });
+      await mkdir(path.join(root, "Real"), { recursive: true });
+      await writeFile(path.join(root, "Real", "R.md"), "---\ntitle: R\n---\n\nreal\n");
+      await symlink(path.join(root, "Real", "R.md"), path.join(root, "Notes", "link.md"));
+      const snap = await buildSnapshot({ root, boundary: root });
+      assert.ok(snap.notes.some((n) => n.path === "Notes/link.md"), "the in-boundary symlink is walked normally");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a plainly-named denied directory NESTED several levels below root (no symlink) is refused", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conf-midwalk-nested-deny-"));
+    try {
+      const nested = path.join(root, "Area", "Sub", "80-89 Legal");
+      await mkdir(nested, { recursive: true });
+      await writeFile(path.join(nested, "N.md"), "---\ntitle: N\n---\n\nnested\n");
+      await assert.rejects(
+        () => buildSnapshot({ root, boundary: root }),
+        /refusing to descend.*permanently denied territory.*80-89/i,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a nested 'Legal Holds' (plural) directory is refused — the plural inflection is covered", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conf-midwalk-plural-"));
+    try {
+      const nested = path.join(root, "Area", "Legal Holds");
+      await mkdir(nested, { recursive: true });
+      await assert.rejects(
+        () => buildSnapshot({ root, boundary: root }),
+        /refusing to descend.*permanently denied territory.*hold/i,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a nested 'Household budget' directory (substring, not whole word) is NOT denied mid-walk either", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conf-midwalk-household-"));
+    try {
+      const nested = path.join(root, "Area", "Household budget");
+      await mkdir(nested, { recursive: true });
+      await writeFile(path.join(nested, "B.md"), "---\ntitle: B\n---\n\nbudget\n");
+      const snap = await buildSnapshot({ root, boundary: root });
+      assert.ok(snap.notes.some((n) => n.path === "Area/Household budget/B.md"));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

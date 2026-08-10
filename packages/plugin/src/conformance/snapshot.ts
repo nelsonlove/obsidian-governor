@@ -115,18 +115,30 @@ function isWithin(parent: string, child: string): boolean {
   return child === parent || child.startsWith(parent.endsWith(sep) ? parent : parent + sep);
 }
 
-/** Path segments that are refused EVEN WHEN they fall inside a declared
- * boundary and even when the caller asks for them explicitly by name — the
- * one case where an explicit request is exactly what should be refused
- * (issue #157). Matched against every segment of the RESOLVED real path, so a
- * symlink cannot launder past this either. Returns the human name of the
+/** A single path SEGMENT (one directory or file name — no separators) that is
+ * refused EVEN WHEN it falls inside a declared boundary and even when the
+ * caller asks for it explicitly by name — the one case where an explicit
+ * request is exactly what should be refused (issue #157). Returns the human
+ * name of the violated territory, or null when nothing matched. No syscall:
+ * used both against a RESOLVED real path's segments (`deniedTerritory`) and,
+ * during the walk, against an already-verified-real directory's own name
+ * (cheap — no need to re-resolve a real path for something that is already
+ * known not to be a symlink). */
+function deniedSegment(seg: string): string | null {
+  if (seg.toLowerCase() === "obsidian-old") return "the retired ~/obsidian-old vault";
+  if (/^80-89\b/.test(seg)) return "80-89 legal material";
+  if (/\bholds?\b/i.test(seg)) return "a path under a hold";
+  return null;
+}
+
+/** Every segment of the RESOLVED real path, checked with `deniedSegment` — so
+ * a symlink cannot launder past this either. Returns the human name of the
  * violated territory, or null when nothing matched. */
 function deniedTerritory(realPath: string): string | null {
   for (const seg of realPath.split(sep)) {
     if (!seg) continue;
-    if (seg.toLowerCase() === "obsidian-old") return "the retired ~/obsidian-old vault";
-    if (/^80-89\b/.test(seg)) return "80-89 legal material";
-    if (/\bhold\b/i.test(seg)) return "a path under a hold";
+    const hit = deniedSegment(seg);
+    if (hit) return hit;
   }
   return null;
 }
@@ -142,8 +154,13 @@ function declaredBoundary(opts: SnapshotOpts): string | null {
 }
 
 /**
- * Throws if `opts.root` may not be walked. Called as the FIRST statement of
- * `buildSnapshot`, before any filesystem read.
+ * Throws if `opts.root` may not be walked; otherwise returns the resolved
+ * REAL boundary path, so the walk below can re-run the same checks against
+ * anything it discovers mid-tree (a symlinked file, or a plainly-named
+ * denied subdirectory a few levels down) — checking `root` alone is not
+ * "unconditional": it bounds what `root` may equal, not what the walk may
+ * actually read. Called as the FIRST statement of `buildSnapshot`, before any
+ * filesystem read.
  *
  * Three independent refusals, checked in this order:
  *
@@ -162,7 +179,7 @@ function declaredBoundary(opts: SnapshotOpts): string | null {
  * supplied — a symlink's true target is not something a caller pointing at
  * the symlink is necessarily entitled to see echoed back.
  */
-function assertRootPermitted(opts: SnapshotOpts): void {
+function assertRootPermitted(opts: SnapshotOpts): string {
   const realRoot = realish(opts.root);
   if (realRoot === null) {
     throw new Error(
@@ -203,6 +220,8 @@ function assertRootPermitted(opts: SnapshotOpts): void {
         `A corpus measurement may only read notes within the vault its boundary declares.`,
     );
   }
+
+  return realBoundary;
 }
 
 function toVaultPath(root: string, abs: string): string {
@@ -249,7 +268,7 @@ async function rawEntries(absDir: string) {
 }
 
 export async function buildSnapshot(opts: SnapshotOpts): Promise<VaultSnapshot> {
-  assertRootPermitted(opts);
+  const realBoundary = assertRootPermitted(opts);
   const excluded = opts.excludedRoots ?? [];
   const skip = new Set([...DEFAULT_SKIP, ...(opts.skipDirs ?? [])]);
   const notes: VocabNote[] = [];
@@ -281,6 +300,34 @@ export async function buildSnapshot(opts: SnapshotOpts): Promise<VaultSnapshot> 
       const abs = join(absDir, entry.name);
       const vaultPath = toVaultPath(opts.root, abs);
       if (isExcluded(vaultPath, excluded)) continue;
+      // A symlinked FILE is the one entry shape the root-level territory
+      // guard cannot see: `entry.isDirectory()` is false for it regardless of
+      // its target, so it reaches this loop untouched by anything above. Its
+      // REAL target — not its in-tree location — is what `readFile` below
+      // will actually honor, so it gets the identical checks `root` got,
+      // BEFORE that read happens.
+      if (entry.isSymbolicLink()) {
+        const real = realish(abs);
+        if (real === null) {
+          throw new Error(
+            `buildSnapshot: refusing to read ${vaultPath} — its real path could not be established (unreadable ` +
+              `ancestor or a symlink loop). An indeterminate target is refused, never assumed safe.`,
+          );
+        }
+        const denied = deniedTerritory(real);
+        if (denied) {
+          throw new Error(
+            `buildSnapshot: refusing to read ${vaultPath} — it is a symlink resolving into a permanently denied ` +
+              `territory (${denied}). This is refused even though it sits inside an otherwise-permitted tree.`,
+          );
+        }
+        if (!isWithin(realBoundary, real)) {
+          throw new Error(
+            `buildSnapshot: refusing to read ${vaultPath} — it is a symlink resolving outside the declared ` +
+              `content-root boundary.`,
+          );
+        }
+      }
       files.push(vaultPath);
       const isMd = entry.name.endsWith(".md");
       const isFileclass = entry.name.endsWith(".fileclass");
@@ -326,6 +373,13 @@ export async function buildSnapshot(opts: SnapshotOpts): Promise<VaultSnapshot> 
       const vaultPath = toVaultPath(opts.root, abs);
       if (isExcluded(vaultPath, excluded)) continue;
       if (skip.has(entry.name)) continue;
+      const denied = deniedSegment(entry.name);
+      if (denied) {
+        throw new Error(
+          `buildSnapshot: refusing to descend into ${vaultPath} — it is a permanently denied territory ` +
+            `(${denied}). This is refused even though it sits inside an otherwise-permitted tree.`,
+        );
+      }
       dirs.push(vaultPath);
       await walk(abs);
     }
