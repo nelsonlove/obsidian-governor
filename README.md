@@ -98,6 +98,11 @@ currently-open hardening work, in **[docs/acceptance-model.md](docs/acceptance-m
   promising otherwise is theater. The guarantee is narrower and real: nothing arriving through
   a supported surface can forge acceptance, everything is journaled, and out-of-band changes
   surface as drift.
+- **The FS-fallback path is the one documented exception to "journaled."** The headless
+  filesystem-failover mode in `packages/server` — refused by default, explicit opt-in only —
+  writes with no journal and no serialized queue until Obsidian reconnects
+  ([#92](https://github.com/nelsonlove/obsidian-vault-mcp-plugin/issues/92)). Every claim above
+  about journaling is scoped to the plugin's guarded path, not this fallback.
 - **Actively hardened, in the open.** The write perimeter is under continuous adversarial
   review; known gaps are tracked as public issues on this repo (milestone `0.8.1 — perimeter`)
   rather than papered over. The docs bound every claim to what's actually shipped.

@@ -142,8 +142,8 @@ test("annotated legacy contexts stay allowed (no over-blocking)", () => {
 
 const ALLOWLIST_PATH = join(REPO_ROOT, "packages", "plugin", "tests", "docs-invariant-claims-allowlist.md");
 
-const INVARIANT_WORD_RE = /\b(never|every|always|cannot|no way|guarantees?|impossible)\b/i;
-const SECURITY_TERM_RE = /\b(journal(?:ed|s|ing)?|accept(?:ed|ance)?|guard(?:s|ed|ing)?|audit(?:s|ed|ing)?|provenance)\b|every write/i;
+const INVARIANT_WORD_RE = /\b(never|every|always|cannot|no way|guarantee(?:s|d|ing)?|impossible)\b/i;
+const SECURITY_TERM_RE = /\b(journal(?:ed|s|ing)?|accept(?:ed|ance|s)?|guard(?:s|ed|ing)?|audit(?:s|ed|ing)?|provenance|every write)\b/i;
 
 const LIST_ITEM_RE = /^\s*(?:[-*+]|\d+\.)\s+/;
 

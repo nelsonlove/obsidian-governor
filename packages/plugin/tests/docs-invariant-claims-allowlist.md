@@ -31,6 +31,7 @@ only; matching is by exact text regardless of which file it's under).
 - Open the journal (or the Acceptance pane, if installed): every change is there, attributed, diffable, waiting for your verdict.
 - **Acceptance is a human gesture, and it goes in no API.** There is no accept tool, no accept argument, and no way to smuggle acceptance in as data: the accept-forbidden guard at the shared write primitive rejects any write that would introduce `acceptance-status: accepted` (or `accepted-by` / `accepted-on`), on every write surface including the CLI proxy, while leaving your own existing accepted values untouched.
 - The guarantee is narrower and real: nothing arriving through a supported surface can forge acceptance, everything is journaled, and out-of-band changes surface as drift.
+- Every claim above about journaling is scoped to the plugin's guarded path, not this fallback.
 - Context-conscious sessions can use **Code Mode** (`--code-mode` on the bridge command): three meta-tools — search, describe, call — over the same registry, with every guard binding on the target tool exactly as on the full surface.
 
 ## docs/README.md
