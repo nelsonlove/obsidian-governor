@@ -319,9 +319,6 @@ export class VaultMcpSettingTab extends PluginSettingTab {
         exists: () => false,
         applyFrontmatter: async () => {},
       },
-      // Unused stand-in like the others above — the governance module's handler
-      // never runs here (this list is for `isEnabled`/`collect` rendering only).
-      pendingReviewSource: { read: async () => null },
     });
   }
 

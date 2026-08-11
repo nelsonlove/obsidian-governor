@@ -10,6 +10,7 @@ import { ExternalToolRegistry, type VaultMcpApi } from "./mcp/external-tools.js"
 import { Kernel, WriteQueue, WriteJournal, IdempotencyStore, LockStore, UidIndex, loadInstallId, DEFAULT_VOCABULARIES, type VocabInstanceSettings, type ModuleSettings } from "./kernel/index.js";
 import { obsidianProbe, obsidianServerIdentity, obsidianUidSource } from "./kernel/obsidian-probe.js";
 import { DEFAULT_SCHEMES, type SchemeInstanceConfig } from "./kernel/scheme/registry.js";
+import { wireGovernance } from "./governance/wiring.js";
 
 interface VaultMcpSettings {
   setupAcknowledged: boolean;
@@ -297,6 +298,21 @@ export default class VaultMcpPlugin extends Plugin {
     }
 
     this.addSettingTab(new VaultMcpSettingTab(this.app, this));
+
+    // ── governance (Acceptance) review pane (#83, cycle 2) ─────────────────────
+    // Wired ONLY when the governance module is enabled (default OFF — the module
+    // default is `enabled: false`, so an absent settings row means off). This is
+    // the human-only Accept surface: an Obsidian review pane whose Accept / Revert
+    // / Adopt / auto-accept-allowlist controls are gesture-gated closures — NEVER a
+    // command, an MCP tool, or a method on this plugin instance. It is independent
+    // of the MCP socket (`settings.enabled`): a human can review even with the
+    // transport off. The read-only obsidian_pending_review MCP view is registered
+    // always-on in server.ts, separate from this toggle. See src/governance/.
+    if (this.settings.modules?.governance?.enabled === true) {
+      void wireGovernance(this, {
+        getConfig: () => (this.settings.modules?.governance?.config ?? {}) as Record<string, unknown>,
+      }).catch((e) => console.error("[vault-mcp] governance pane wiring failed", e));
+    }
 
     this.addCommand({
       id: "connect-claude-code",

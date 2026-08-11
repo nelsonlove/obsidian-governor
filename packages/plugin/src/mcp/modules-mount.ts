@@ -52,7 +52,6 @@ import { registerSchemeTools } from "./tools-scheme.js";
 import { registerVocabTools, type VocabSource, type VocabToolsCtx } from "./tools-vocab.js";
 import { registerSkillsTools, type SkillsBackend, type SkillsToolsCtx } from "./tools-skills.js";
 import { DEFAULT_SKILLS_CONFIG, validateSkillsConfig } from "../kernel/skills/index.js";
-import { registerPendingReviewTools, type PendingReviewSource, type PendingReviewToolsCtx } from "./tools-pending-review.js";
 
 // ── manifests (#81: config-host — see
 //    docs/superpowers/specs/2026-08-10-config-host-design.md) ──────────────
@@ -402,53 +401,42 @@ const SKILLS_MANIFEST: ModuleManifest = {
   },
 };
 
-// ── governance (Acceptance) module manifest (#83, cycle 1: the Stewardship fold) ─
+// ── governance (Acceptance) module manifest (#83, cycle 2: the accept gesture + pane) ─
 //
-// The FIRST governance-DOMAIN module — deliberately a ONE-WAY, read-only surface
-// (Assent's Stewardship shape): it may let an agent SEE what a human is about to
-// review; it contributes NO mutation, NO accept/adopt/baseline verb. The accept
-// gesture stays a human action in the Obsidian pane (cycle 2, its own reviewed cycle).
+// The governance module's enabled-flag gates the Obsidian REVIEW PANE — the human-only
+// Accept / Revert / Adopt / auto-accept-allowlist surface (src/governance/{pane,wiring}.ts,
+// wired in main.ts, NOT here). It contributes ZERO tools to the MCP transport: the accept
+// gesture never touches the bridge. The one MCP read surface — obsidian_pending_review — is
+// registered ALWAYS-ON and read-only in server.ts, DECOUPLED from this toggle (cycle 2 fixed
+// the cycle-1 regression that gated the read surface behind this default-off module). So an
+// agent can always SEE the pending queue; only a human at the pane can accept.
 //
-// Posture is "capability", NOT "governance": the ModuleRegistry deliberately REFUSES
-// the "governance" posture in v1 (it is inert), which is the containment gate #83
-// records. This module clears that gate by contributing only a read-only surface —
-// so it mounts as an ordinary capability module, subject to the same read-only-only
-// registrar gate, the accept/baseline-name tripwire, and collision checks as every
-// other module. It ships DISABLED: the whole governance surface is opt-in, a human
-// turns it on in the config tab (mirroring the skills module's default-off posture).
-//
-// The ONE tool it contributes is the EXISTING obsidian_pending_review (#75) — reused
-// verbatim (registerPendingReviewTools), read-only, allowlist-filtered, graceful-empty
-// when Stewardship's index is absent. Cycle 1 adds ZERO accept/baseline/adopt surface:
-// the moved kernel/governance logic (baseline-store, auto-accept eligibility, …) is
-// unwired substrate, reachable from no tool, no plugin instance, and no `app`.
+// Posture is "capability", NOT "governance": the ModuleRegistry deliberately REFUSES the
+// "governance" posture in v1 (it is inert). This module clears that gate by contributing NO
+// MCP tools at all — its register() is a no-op on the transport — so it mounts as an ordinary
+// (empty) capability module, subject to the same read-only-only registrar gate, the
+// accept/baseline-name tripwire, and collision checks as every other module. It ships DISABLED:
+// the whole accept pane is opt-in; a human turns it on in the config tab. Because the module
+// contributes nothing to MCP, the tripwire's "no accept-shaped tool reaches the surface" holds
+// trivially — the accept path lives entirely behind gesture-gated pane buttons.
 const GOVERNANCE_MANIFEST: ModuleManifest = {
   summary:
-    "Governance (Acceptance): a deliberately one-way, read-only window onto the human review queue. " +
-    "It lets an agent SEE which notes are pending human review — as published by the Stewardship review " +
-    "queue — so it can avoid stepping on a note a human is about to review. It contributes NOTHING that " +
-    "mutates a note or a baseline, and there is no accept / reject / adopt verb anywhere in it (the accept " +
-    "gesture stays a human action). Ships disabled — a human enables the surface here.",
-  // No `config` block: the pending-review surface has no configurable knob today (the
-  // index location is derived from the vault config dir), so — like the vocab module —
-  // this manifest renders its section from summary + capability directory alone. The
-  // section's enable/disable toggle IS its config tab; typed fields arrive if a later
-  // cycle needs one.
+    "Governance (Acceptance): the human-only review pane. When enabled, vault-mcp registers an Obsidian " +
+    "review pane where a human reviews agent changes and Accepts / Reverts / Adopts a baseline, plus an " +
+    "auto-accept allowlist for provably-mechanical changes. Every accept-class control is a real-click " +
+    "gesture in the pane — never a command, never an MCP tool, never a method on any object reachable " +
+    "from `app`. This module contributes ZERO tools to the MCP transport: the read-only obsidian_pending_review " +
+    "view is always available regardless of this toggle. Ships disabled — a human enables the accept pane here.",
+  // No `config` block with typed fields today: the accept pane has no MCP-side knobs (badge
+  // display prefs live in `modules.governance.config` and are read by the pane wiring, defaulting
+  // ON). Like the vocab module, this manifest renders its section from summary + directory alone;
+  // the section's enable/disable toggle IS its config tab.
+  //
+  // The directory is deliberately EMPTY — the module adds no MCP tool, address form, rule pack, or
+  // kernel arg. The capability it provides (the review pane) is an Obsidian UI surface, described
+  // in the summary, not an MCP capability. An empty directory renders a section with no tool rows.
   directory: {
-    tools: [
-      {
-        name: "obsidian_pending_review",
-        purpose:
-          "List the notes currently pending human review, as published by the Stewardship plugin's review queue.",
-        readOnly: true,
-        caveats: [
-          "Read-only and advisory: it reports review status another plugin published; it can never accept, " +
-            "reject, or otherwise change a note's review state (there is no accept verb in any API).",
-          "Only notes within the session's path allowlist are reported (no path oracle); returns an empty " +
-            "list when Stewardship is not installed or has not refreshed its queue.",
-        ],
-      },
-    ],
+    tools: [],
   },
 };
 
@@ -473,10 +461,6 @@ export interface MountDeps {
   /** The skills module's injected backend (obsidianSkillsBackend live) — the
    * exporter read seam plus the mark write primitive. */
   skillsSource: SkillsBackend;
-  /** The governance module's injected read source for obsidian_pending_review
-   * (obsidianPendingReviewSource live) — the Stewardship pending-index reader.
-   * Structurally read-only (a single `read()`), so the module cannot mutate. */
-  pendingReviewSource: PendingReviewSource;
 }
 
 /** The ModuleHostCtx modules receive — deliberately minimal (gate point 2).
@@ -540,19 +524,21 @@ export function builtinModules(deps: MountDeps): VaultModule[] {
       (server: any, ctx: SkillsToolsCtx) => registerSkillsTools(server, deps.skillsSource, ctx),
       (_host, config) => ({ config, getSettings: deps.getSettings }),
     ),
-    // The governance (Acceptance) module (#83, cycle 1): the Stewardship fold's first
-    // landing. Deliberately NOT `mutating` — it contributes only the read-only
-    // obsidian_pending_review surface, so the mount's read-only-only registrar gate
-    // admits it without the `mutating` escape hatch, and the accept/baseline-name
-    // tripwire + collision checks apply. Default DISABLED: the one-way governance
-    // surface is opt-in (a human enables it in the config tab). The ctxOf feeds the
-    // reused registerPendingReviewTools its injected read source + the guard settings
-    // for allowlist filtering — the same wiring the always-on registration used before
-    // this fold, now behind the module toggle.
+    // The governance (Acceptance) module (#83, cycle 2): the accept pane's toggle. It
+    // contributes ZERO MCP tools — its registrar is a NO-OP on the transport. Its
+    // enabled-flag is read by main.ts (NOT here) to decide whether to wire the Obsidian
+    // review pane (src/governance/wiring.ts). Deliberately NOT `mutating`: it registers no
+    // tool at all, so the mount's read-only-only registrar gate is satisfied vacuously and
+    // the accept/baseline-name tripwire has nothing to catch (the accept path lives entirely
+    // behind gesture-gated pane buttons, never on the MCP surface). Default DISABLED: the
+    // accept pane is opt-in (a human enables it in the config tab). The read-only
+    // obsidian_pending_review view is registered always-on in server.ts, independent of this.
     moduleFromRegistrar(
       { id: "governance", capabilities: ["acceptance"], enabled: false, manifest: GOVERNANCE_MANIFEST },
-      (server: any, ctx: PendingReviewToolsCtx) => registerPendingReviewTools(server, ctx),
-      () => ({ source: deps.pendingReviewSource, getSettings: deps.getSettings }),
+      // No-op registrar: the governance capability is an Obsidian UI pane (wired in main.ts),
+      // not an MCP tool. Contributing nothing keeps the transport read-only by construction.
+      () => { /* contributes no MCP tools */ },
+      () => ({}),
     ),
   ];
 }
