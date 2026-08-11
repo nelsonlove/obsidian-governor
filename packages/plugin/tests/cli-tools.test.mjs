@@ -15,6 +15,7 @@ import {
   cliAcceptRefusal,
   contentAcceptRefusal,
   expandCliEscapes,
+  expandCliEscapesRich,
   scanForAcceptFence,
   CLI_OPAQUE_ACCEPT_RESIDUAL,
 } from "../src/mcp/tools-cli.js";
@@ -326,6 +327,32 @@ describe("expandCliEscapes — the escaped-escape readings (R2/R3)", () => {
   });
 });
 
+describe("expandCliEscapesRich — the maximal decoder reading (R4, #153 axis 2)", () => {
+  test("decodes \\xHH hex escapes to their code points", () => {
+    assert.equal(expandCliEscapesRich(String.raw`\x2d\x2d\x2d`), "---");
+    assert.equal(expandCliEscapesRich(String.raw`a\x0ab`), "a\nb");
+  });
+  test("decodes \\uHHHH and \\u{H…} unicode escapes", () => {
+    assert.equal(expandCliEscapesRich("\\u002d\\u002d"), "--"); // 4-digit \uHHHH branch
+    assert.equal(expandCliEscapesRich(String.raw`\u{2d}\u{2d}`), "--");
+  });
+  test("decodes octal \\NNN escapes", () => {
+    assert.equal(expandCliEscapesRich(String.raw`\55\55\55`), "---"); // \55 = 0o55 = '-'
+    assert.equal(expandCliEscapesRich(String.raw`a\12b`), "a\nb"); // \12 = 0o12 = LF
+  });
+  test("collapses an escaped escape and drops letter escapes exactly as R3 (R4 = R3 + numeric)", () => {
+    assert.equal(expandCliEscapesRich(String.raw`a\\b`), String.raw`a\b`);
+    // Ambiguous C letters drop to their letter, NOT to a control char (`\e`→e,
+    // not ESC), so R4 covers R3's letter-drop rather than opening a gap with it.
+    assert.equal(expandCliEscapesRich(String.raw`accept\ed`), "accepted");
+    assert.equal(expandCliEscapesRich(String.raw`\a\b\f\v`), "abfv");
+  });
+  test("a malformed numeric escape falls back to dropping the backslash", () => {
+    assert.equal(expandCliEscapesRich(String.raw`a\xZq`), "axZq");
+    assert.equal(expandCliEscapesRich(String.raw`a\u00zzb`), "au00zzb");
+  });
+});
+
 describe("contentAcceptRefusal — refuses under EVERY plausible reading (#153)", () => {
   // Each payload is written with the escape sequences a CLI param would carry.
   // `refuse` asserts BOTH the low-level predicate and the CLI-command wrapper,
@@ -360,6 +387,18 @@ describe("contentAcceptRefusal — refuses under EVERY plausible reading (#153)"
   // Escaped-escape at a fence boundary combined with a dropped key backslash.
   refuse("escaped-escape mixed with a dropped key backslash",
     String.raw`\-\-\-\n\acceptance-status: accepted\n\-\-\-`);
+
+  // Axis 2 (#153, independent review): a CLI that decodes NUMERIC escapes can
+  // encode the whole fence — `\x2d`→'-', `\x0a`→a real LF — invisibly to
+  // R1/R2/R3. R4 (the maximal decoder) refuses these.
+  refuse("hex-escaped fence + status (\\x2d / \\x0a)",
+    String.raw`\x2d\x2d\x2d\x0aacceptance-status:\x20accepted\x0a\x2d\x2d\x2d`);
+  refuse("unicode-escaped fence + status (\\uHHHH)",
+    "\\u002d\\u002d\\u002d\\u000aacceptance-status:\\u0020accepted\\u000a\\u002d\\u002d\\u002d");
+  refuse("braced-unicode-escaped fence + status (\\u{H…})",
+    String.raw`\u{2d}\u{2d}\u{2d}\u{0a}acceptance-status: accepted\u{0a}\u{2d}\u{2d}\u{2d}`);
+  refuse("octal-escaped fence + status (\\NNN)",
+    String.raw`\55\55\55\12acceptance-status: accepted\12\55\55\55`);
 });
 
 describe("contentAcceptRefusal — benign escape-bearing content is NOT refused (#153 false-positive bound)", () => {
@@ -380,6 +419,12 @@ describe("contentAcceptRefusal — benign escape-bearing content is NOT refused 
     String.raw`---\nacceptance-status: proposed\n---\nbody`);
   allow("escaped escapes and drops that never form a fence + assertion together",
     String.raw`Path: C:\\server\\share — status \accepted informally in chat`);
+  // Axis 2: numeric escape sequences (hex/unicode/octal) that decode under R4
+  // but never form a fence asserting acceptance — bounds R4's false-positive surface.
+  allow("hex and unicode escapes in prose, no acceptance fence",
+    String.raw`Color \x23ff0000, accent \u00e9, path C:\x2ftmp — reviewed and accepted informally`);
+  allow("a proposed fence alongside benign hex escapes",
+    String.raw`---\nstatus: proposed\n---\ncodes \x41\x42 and \u0043 are not acceptance`);
 });
 
 describe("cliAcceptRefusal — unrelated commands are clean", () => {

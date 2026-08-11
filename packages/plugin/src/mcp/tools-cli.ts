@@ -206,14 +206,19 @@ export function cliAcceptRefusal(
 // jewel accept boundary on guessing right, we DO NOT PICK a reading. We enumerate
 // the plausible readings, expand under EACH, and REFUSE (fail closed) if ANY
 // reading yields an acceptance assertion inside a frontmatter fence. The guard's
-// property becomes: *no plausible reading of these bytes asserts acceptance* —
+// property becomes: *no bracketed reading of these bytes asserts acceptance* —
 // no reliance on modelling the external program correctly (issue #153, option 3).
 //
-// The escaped-backslash ambiguity leaves exactly three COHERENT readings. Two
-// binary choices generate them — (a) is `\\` an escaped escape? (b) is an
-// unrecognized `\X` kept literal or is its backslash dropped? — but the fourth
-// combination (drop `\X` yet NOT treat `\\` as an escape) is incoherent: dropping
-// the backslash on an arbitrary `\X` IS treating `\\`→`\` for X=`\`. So:
+// The plausible readings vary along TWO independent axes; the set below brackets
+// both, so any decoder between the extremes is dominated by one of the readings
+// (a union of readings can only ADD refusals — see contentAcceptRefusal — so a
+// bracketing reading is pure fail-closed insurance).
+//
+// AXIS 1 — the escaped-backslash treatment. Two binary choices — (a) is `\\` an
+// escaped escape? (b) is an unrecognized `\X` kept literal or is its backslash
+// dropped? — generate exactly three COHERENT readings (the fourth combination,
+// "drop `\X` yet NOT treat `\\` as an escape", is incoherent: dropping the
+// backslash on an arbitrary `\X` IS treating `\\`→`\` for X=`\`):
 //
 //   R1 — no escaped escape. Recognize only `\n`/`\r\n`/`\t`, greedily, anywhere;
 //        every other byte (a lone `\`, a `\\` pair) is literal. This is exactly
@@ -227,9 +232,28 @@ export function cliAcceptRefusal(
 //        fence and `accept\ed` to `accepted`, the escaped-escape family's sharp
 //        edge.
 //
-// R2 is a coherent plausible reading even where a given payload happens to be
-// caught only by R1 or R3 — the guarantee quantifies over ALL plausible
-// readings, not the one we guess is likeliest, so it is scanned regardless.
+// AXIS 2 — the RECOGNIZED-ESCAPE VOCABULARY. R1/R2/R3 all freeze it at
+// `{\n, \r\n, \t}`, which is itself a bet on the binary: a richer decoder that
+// honors NUMERIC escapes (`\xHH`, `\uHHHH`, `\u{…}`, octal `\NNN`) or the rest of
+// the C letter set (`\a\b\f\v\e\0`) can encode the WHOLE fence — e.g. `\x2d`→`-`,
+// `\x0a`→a real LF — invisibly to all three, reopening #153 one notch over
+// (found by the independent review of this fix). So we add:
+//
+//   R4 — a MAXIMAL decoder: R3 (escaped escape, unknown letter escape dropped)
+//        PLUS the numeric escapes `\xHH`/`\uHHHH`/`\u{…}`/octal decoded to their
+//        code points. It is deliberately R3+numeric, not a full C decoder: a CLI
+//        that decodes `\x` but drops `\e`→`e` (rather than ESC) is coherent, so
+//        folding the ambiguous C letters `\a\b\e\f\v` to control codes would open
+//        a gap between R3 and R4; dropping them (as R3) closes it. This is the far
+//        corner of axis 2 and pure fail-closed insurance; it makes the
+//        numeric-escape family a refusal too.
+//
+// The recognized set is thus bracketed by {minimal: R1/R2/R3} and {maximal: R4}
+// rather than assumed; the exact set the shipped binary honors is still not
+// modelled — the point is that it no longer has to be. (Option 4 — pinning the
+// binary's real vocabulary empirically — would let this set be trimmed to a
+// proven-tight one, but is not required for the fail-closed guarantee.)
+//
 // Unlike the template path, the raw caller bytes are NOT a plausible reading:
 // they are provably not what lands (the CLI un-escapes), so scanning them raw
 // would model a program the CLI is not.
@@ -266,20 +290,103 @@ export function expandCliEscapes(content: string, unknownEscape: "keep" | "drop"
   return out;
 }
 
+/** The STRUCTURAL escapes R4 decodes to whitespace (needed for fence structure).
+ * The ambiguous C LETTER escapes (`\a\b\e\f\v`) are DELIBERATELY not here: a CLI
+ * that decodes `\x`/`\u` but treats `\e` as a dropped letter (`\e`→`e`, not ESC)
+ * is a coherent decoder, so folding `\e`→ESC would MISS it while R3 (drop) misses
+ * the numeric half — a gap between the two readings. R4 therefore drops every
+ * non-structural, non-numeric letter escape exactly as R3 does, and only ADDS
+ * numeric decoding on top (so R4 = R3 + numeric). Digit-initial escapes (`\0`,
+ * `\012`) go through the octal branch, not here. */
+const RICH_STRUCTURAL_ESCAPES: Record<string, string> = { n: "\n", r: "\r", t: "\t" };
+
+/**
+ * Expand a CLI param value under the MAXIMAL decoder reading (R4): escaped escape
+ * (`\\`→`\`), the structural escapes `\n`/`\r`/`\t`, the NUMERIC escapes `\xHH`
+ * (2 hex), `\uHHHH` (4 hex), `\u{H…}` (braced code point) and octal `\NNN` (1–3
+ * octal digits) decoded to their code points; any OTHER `\X` has its backslash
+ * dropped (`\X`→`X`), exactly as R3. So R4 is "R3 plus numeric decoding" — it
+ * covers R3's letter-drop case AND the numeric-escape family R3 leaves literal. A
+ * malformed numeric escape (e.g. `\x` with <2 hex following) takes that same
+ * unknown-drop fallback. Exported for the escape-semantics fixture suite. This is
+ * fail-closed insurance for a CLI whose escape vocabulary is richer than
+ * `{\n,\r\n,\t}` (#153, axis 2).
+ */
+export function expandCliEscapesRich(content: string): string {
+  const isHex = (c: string | undefined) => c !== undefined && /[0-9a-fA-F]/.test(c);
+  const isOct = (c: string | undefined) => c !== undefined && c >= "0" && c <= "7";
+  let out = "";
+  let i = 0;
+  const n = content.length;
+  while (i < n) {
+    const ch = content[i];
+    if (ch === "\\" && i + 1 < n) {
+      const next = content[i + 1];
+      if (next === "\\") { out += "\\"; i += 2; continue; } // escaped escape
+      // `\xHH` — exactly two hex digits.
+      if (next === "x" && isHex(content[i + 2]) && isHex(content[i + 3])) {
+        out += String.fromCharCode(parseInt(content.slice(i + 2, i + 4), 16));
+        i += 4;
+        continue;
+      }
+      // `\u{H…}` — braced code point.
+      if (next === "u" && content[i + 2] === "{") {
+        const close = content.indexOf("}", i + 3);
+        const hex = close > i + 3 ? content.slice(i + 3, close) : "";
+        if (close > i + 3 && /^[0-9a-fA-F]+$/.test(hex)) {
+          const cp = parseInt(hex, 16);
+          if (cp <= 0x10ffff) {
+            out += String.fromCodePoint(cp);
+            i = close + 1;
+            continue;
+          }
+        }
+        // malformed → unknown-drop fallback below
+      }
+      // `\uHHHH` — exactly four hex digits.
+      if (next === "u" && isHex(content[i + 2]) && isHex(content[i + 3]) && isHex(content[i + 4]) && isHex(content[i + 5])) {
+        out += String.fromCharCode(parseInt(content.slice(i + 2, i + 6), 16));
+        i += 6;
+        continue;
+      }
+      // Octal `\NNN` — 1–3 octal digits (covers `\0`, `\012`, …).
+      if (isOct(next)) {
+        let j = i + 1;
+        while (j < n && j < i + 4 && isOct(content[j])) j++;
+        out += String.fromCharCode(parseInt(content.slice(i + 1, j), 8) & 0xff);
+        i = j;
+        continue;
+      }
+      // Structural escapes `\n`/`\r`/`\t` (letter escapes `\a\b\e\f\v` are NOT
+      // here — see RICH_STRUCTURAL_ESCAPES — they take the drop fallback below).
+      const c = RICH_STRUCTURAL_ESCAPES[next];
+      if (c !== undefined) { out += c; i += 2; continue; }
+      // Any other `\X` → drop the backslash (as R3), reconsidering nothing.
+      out += next;
+      i += 2;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
 /**
  * Scan written content for an acceptance-asserting frontmatter fence. The CLI
  * interprets a param value's backslash escapes before the vault sees them, so
  * the guard must decide over a RECONSTRUCTION of the honored document, not the
  * bytes it was handed. Because the exact escape semantics of the external binary
- * are unsettled, it expands under EVERY plausible reading (R1/R2/R3 above) and
+ * are unsettled, it expands under EVERY bracketed reading (R1/R2/R3/R4 above) and
  * refuses if ANY of them yields an acceptance assertion inside a `---` fence —
- * so no reading can smuggle acceptance past it (#153). Every `---`-delimited YAML
- * block (leading or embedded) in each expansion is parsed and checked with the
- * shared rule. `append` content is not a note's leading frontmatter, but the
- * resulting note cannot be read pre-exec, so acceptance-carrying content is
- * blocked conservatively — nobody legitimately writes an accepted acceptance
- * fence into a body. With no parser injected, we fail CLOSED on any fence at all
- * (defensive; production always injects obsidian.parseYaml).
+ * so no bracketed reading can smuggle acceptance past it (#153). Every
+ * `---`-delimited YAML block (leading or embedded) in each expansion is parsed
+ * and checked with the shared rule. `append` content is not a note's leading
+ * frontmatter, but the resulting note cannot be read pre-exec, so
+ * acceptance-carrying content is blocked conservatively — nobody legitimately
+ * writes an accepted acceptance fence into a body. With no parser injected, we
+ * fail CLOSED on any fence at all (defensive; production always injects
+ * obsidian.parseYaml).
  */
 export function contentAcceptRefusal(content: string, parseYaml?: (yaml: string) => unknown): string | null {
   // R1 — the shipped model, kept byte-for-byte so no current refusal weakens.
@@ -290,6 +397,7 @@ export function contentAcceptRefusal(content: string, parseYaml?: (yaml: string)
     r1,
     expandCliEscapes(content, "keep"), // R2 — escaped escape, unknown kept literal
     expandCliEscapes(content, "drop"), // R3 — escaped escape, unknown dropped
+    expandCliEscapesRich(content), // R4 — maximal decoder (numeric + C escapes), axis 2
   ];
   // Fail closed if ANY plausible reading asserts acceptance in a fence. Distinct
   // expansions only (identical readings — the common escape-free case — scan once).
