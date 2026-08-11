@@ -252,21 +252,7 @@ export function cliAcceptRefusal(
 // rather than assumed; the exact set the shipped binary honors is still not
 // modelled — the point is that it no longer has to be. (Option 4 — pinning the
 // binary's real vocabulary empirically — would let this set be trimmed to a
-// proven-tight one, but is not required for the fail-closed guarantee.) R4 also
-// closes the lone-`\r` sibling of finding 2: `\r`→CR is a structural escape, and
-// the embedded-fence scan folds a lone CR into an LF, so a CR-only fence delimiter
-// is caught. The other C control escapes `\a\b\f\v` need no reading of their own:
-// a control byte is not a `-`/`:`/newline, so it cannot form a fence DELIMITER,
-// and their only fence-relevant outcome — becoming a LETTER toward "accepted" — is
-// exactly the drop reading R3/R4 already model.
-//
-// BACKSTOP — for an esoteric convention outside every standard escaper (which are
-// all covered by R1–R4): after the modeled readings, two more substitutions
-// replace EVERY escape token with a single fence-forming char — LF, then `-` — and
-// re-scan (`substituteCliEscapes`). So an unknown escape that some non-standard
-// binary turns into a line break or a dash still cannot assemble an unseen fence.
-// Its documented residual (a mixed convention needing DIFFERENT unmodeled outcomes
-// at different positions) is stated at `substituteCliEscapes`.
+// proven-tight one, but is not required for the fail-closed guarantee.)
 //
 // Unlike the template path, the raw caller bytes are NOT a plausible reading:
 // they are provably not what lands (the CLI un-escapes), so scanning them raw
@@ -326,91 +312,61 @@ const RICH_STRUCTURAL_ESCAPES: Record<string, string> = { n: "\n", r: "\r", t: "
  * fail-closed insurance for a CLI whose escape vocabulary is richer than
  * `{\n,\r\n,\t}` (#153, axis 2).
  */
-/**
- * Classify the CLI escape TOKEN at `content[i]` (which must be a backslash): its
- * byte length and the character the maximal decoder (R4) resolves it to. Returns
- * null when `content[i]` is not a backslash or is a trailing lone backslash (no
- * escape). The ONE tokenizer both R4 (`expandCliEscapesRich`, which emits
- * `decoded`) and the backstop (`substituteCliEscapes`, which replaces the whole
- * token) bind to — so the two cannot disagree about where an escape ends.
- */
-function richEscapeAt(content: string, i: number): { len: number; decoded: string } | null {
+export function expandCliEscapesRich(content: string): string {
   const isHex = (c: string | undefined) => c !== undefined && /[0-9a-fA-F]/.test(c);
   const isOct = (c: string | undefined) => c !== undefined && c >= "0" && c <= "7";
-  if (content[i] !== "\\" || i + 1 >= content.length) return null;
-  const next = content[i + 1];
-  if (next === "\\") return { len: 2, decoded: "\\" }; // escaped escape
-  // `\xHH` — exactly two hex digits.
-  if (next === "x" && isHex(content[i + 2]) && isHex(content[i + 3])) {
-    return { len: 4, decoded: String.fromCharCode(parseInt(content.slice(i + 2, i + 4), 16)) };
-  }
-  // `\u{H…}` — braced code point.
-  if (next === "u" && content[i + 2] === "{") {
-    const close = content.indexOf("}", i + 3);
-    const hex = close > i + 3 ? content.slice(i + 3, close) : "";
-    if (close > i + 3 && /^[0-9a-fA-F]+$/.test(hex)) {
-      const cp = parseInt(hex, 16);
-      if (cp <= 0x10ffff) return { len: close + 1 - i, decoded: String.fromCodePoint(cp) };
+  let out = "";
+  let i = 0;
+  const n = content.length;
+  while (i < n) {
+    const ch = content[i];
+    if (ch === "\\" && i + 1 < n) {
+      const next = content[i + 1];
+      if (next === "\\") { out += "\\"; i += 2; continue; } // escaped escape
+      // `\xHH` — exactly two hex digits.
+      if (next === "x" && isHex(content[i + 2]) && isHex(content[i + 3])) {
+        out += String.fromCharCode(parseInt(content.slice(i + 2, i + 4), 16));
+        i += 4;
+        continue;
+      }
+      // `\u{H…}` — braced code point.
+      if (next === "u" && content[i + 2] === "{") {
+        const close = content.indexOf("}", i + 3);
+        const hex = close > i + 3 ? content.slice(i + 3, close) : "";
+        if (close > i + 3 && /^[0-9a-fA-F]+$/.test(hex)) {
+          const cp = parseInt(hex, 16);
+          if (cp <= 0x10ffff) {
+            out += String.fromCodePoint(cp);
+            i = close + 1;
+            continue;
+          }
+        }
+        // malformed → unknown-drop fallback below
+      }
+      // `\uHHHH` — exactly four hex digits.
+      if (next === "u" && isHex(content[i + 2]) && isHex(content[i + 3]) && isHex(content[i + 4]) && isHex(content[i + 5])) {
+        out += String.fromCharCode(parseInt(content.slice(i + 2, i + 6), 16));
+        i += 6;
+        continue;
+      }
+      // Octal `\NNN` — 1–3 octal digits (covers `\0`, `\012`, …).
+      if (isOct(next)) {
+        let j = i + 1;
+        while (j < n && j < i + 4 && isOct(content[j])) j++;
+        out += String.fromCharCode(parseInt(content.slice(i + 1, j), 8) & 0xff);
+        i = j;
+        continue;
+      }
+      // Structural escapes `\n`/`\r`/`\t` (letter escapes `\a\b\e\f\v` are NOT
+      // here — see RICH_STRUCTURAL_ESCAPES — they take the drop fallback below).
+      const c = RICH_STRUCTURAL_ESCAPES[next];
+      if (c !== undefined) { out += c; i += 2; continue; }
+      // Any other `\X` → drop the backslash (as R3), reconsidering nothing.
+      out += next;
+      i += 2;
+      continue;
     }
-    // malformed → unknown-drop fallback below
-  }
-  // `\uHHHH` — exactly four hex digits.
-  if (next === "u" && isHex(content[i + 2]) && isHex(content[i + 3]) && isHex(content[i + 4]) && isHex(content[i + 5])) {
-    return { len: 6, decoded: String.fromCharCode(parseInt(content.slice(i + 2, i + 6), 16)) };
-  }
-  // Octal `\NNN` — 1–3 octal digits (covers `\0`, `\012`, …).
-  if (isOct(next)) {
-    let j = i + 1;
-    while (j < content.length && j < i + 4 && isOct(content[j])) j++;
-    return { len: j - i, decoded: String.fromCharCode(parseInt(content.slice(i + 1, j), 8) & 0xff) };
-  }
-  // Structural escapes `\n`/`\r`/`\t` (letter escapes `\a\b\e\f\v` are NOT here —
-  // see RICH_STRUCTURAL_ESCAPES — they take the drop fallback below).
-  const c = RICH_STRUCTURAL_ESCAPES[next];
-  if (c !== undefined) return { len: 2, decoded: c };
-  // Any other `\X` → drop the backslash (as R3).
-  return { len: 2, decoded: next };
-}
-
-export function expandCliEscapesRich(content: string): string {
-  let out = "";
-  let i = 0;
-  while (i < content.length) {
-    const tok = richEscapeAt(content, i);
-    if (tok) { out += tok.decoded; i += tok.len; continue; }
-    out += content[i];
-    i += 1;
-  }
-  return out;
-}
-
-/**
- * BACKSTOP reading: replace every CLI escape TOKEN (as `richEscapeAt` tokenizes
- * one) with a single fence-forming character `sub`, modelling a NON-standard
- * escaper that maps an escape to that character even though no reading above
- * decodes it there. Scanned for `sub ∈ {LF, '-'}` — the two characters an unknown
- * escape would need to become to help assemble a `---`/newline fence the modeled
- * readings cannot see — so an esoteric convention that turns some `\X` into a line
- * break or a dash still cannot land acceptance unrefused. Exported for the
- * escape-semantics fixture suite.
- *
- * The residual this LEAVES (documented, not papered over): a single non-standard
- * convention that needs DIFFERENT unmodeled outcomes at DIFFERENT escape positions
- * to co-build one fence (some `\X`→'-', others→LF, from escapes R1–R4 don't
- * already resolve) is not caught, because a global substitution emits one char
- * everywhere. Covering that means treating every escape as a wildcard, whose
- * false-positive cost is unbounded (it would refuse benign notes that merely
- * contain the word "accepted" near backslashes). No standard un-escaper (C / JSON
- * / JS / shell / printf) behaves that way — they are all covered by R1–R4 — so the
- * mixed-esoteric case is a named residual, not a silent assumption.
- */
-export function substituteCliEscapes(content: string, sub: string): string {
-  let out = "";
-  let i = 0;
-  while (i < content.length) {
-    const tok = richEscapeAt(content, i);
-    if (tok) { out += sub; i += tok.len; continue; }
-    out += content[i];
+    out += ch;
     i += 1;
   }
   return out;
@@ -421,12 +377,12 @@ export function substituteCliEscapes(content: string, sub: string): string {
  * interprets a param value's backslash escapes before the vault sees them, so
  * the guard must decide over a RECONSTRUCTION of the honored document, not the
  * bytes it was handed. Because the exact escape semantics of the external binary
- * are unsettled, it expands under EVERY bracketed reading (R1/R2/R3/R4 above) plus
- * the two BACKSTOP substitutions, and refuses if ANY of them yields an acceptance
- * assertion inside a `---` fence — so no bracketed reading can smuggle acceptance
- * past it (#153). Every `---`-delimited YAML block (leading or embedded) in each
- * expansion is parsed and checked with the shared rule. `append` content is not a
- * note's leading frontmatter, but the resulting note cannot be read pre-exec, so
+ * are unsettled, it expands under EVERY bracketed reading (R1/R2/R3/R4 above) and
+ * refuses if ANY of them yields an acceptance assertion inside a `---` fence —
+ * so no bracketed reading can smuggle acceptance past it (#153). Every
+ * `---`-delimited YAML block (leading or embedded) in each expansion is parsed
+ * and checked with the shared rule. `append` content is not a note's leading
+ * frontmatter, but the resulting note cannot be read pre-exec, so
  * acceptance-carrying content is blocked conservatively — nobody legitimately
  * writes an accepted acceptance fence into a body. With no parser injected, we
  * fail CLOSED on any fence at all (defensive; production always injects
@@ -442,8 +398,6 @@ export function contentAcceptRefusal(content: string, parseYaml?: (yaml: string)
     expandCliEscapes(content, "keep"), // R2 — escaped escape, unknown kept literal
     expandCliEscapes(content, "drop"), // R3 — escaped escape, unknown dropped
     expandCliEscapesRich(content), // R4 — maximal decoder (numeric + C escapes), axis 2
-    substituteCliEscapes(content, "\n"), // backstop — unknown escape → line break
-    substituteCliEscapes(content, "-"), // backstop — unknown escape → fence dash
   ];
   // Fail closed if ANY plausible reading asserts acceptance in a fence. Distinct
   // expansions only (identical readings — the common escape-free case — scan once).

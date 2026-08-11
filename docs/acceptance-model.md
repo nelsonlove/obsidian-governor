@@ -82,29 +82,18 @@ the original model, kept verbatim so no prior refusal weakens), R2 (escaped esca
 unrecognized `\X` kept literal), and R3 (escaped escape, `\X` collapsed to `X`). Axis 2 is the
 recognized-escape vocabulary — R1/R2/R3 all freeze it at `{\n, \r\n, \t}`, itself a bet on the
 binary, so a fourth reading R4 (a maximal decoder: R3 plus the numeric escapes
-`\xHH`/`\uHHHH`/`\u{…}`/octal decoded to their code points, and a lone `\r`→CR) brackets a CLI
-that honors a richer set — otherwise `\x2d`→`-` and `\x0a`→a real LF could encode a whole fence
-invisibly (found by this fix's independent review). The remaining C letter escapes `\a\b\f\v`
-need no reading of their own: a control byte is not a fence delimiter, and their only
-fence-relevant outcome — becoming a letter toward "accepted" — is exactly R3/R4's drop.
-
-For an **esoteric** convention outside every standard escaper (all of which — C, JSON, JS, shell,
-printf — are covered by R1–R4), a **backstop** adds two more substitution readings that replace
-*every* escape token with a single fence-forming character — a line break, then a dash — and
-re-scan, so an unknown escape a non-standard binary turns into a newline or a `-` still cannot
-assemble an unseen fence. `contentAcceptRefusal` scans all six. Its property is therefore *no
-bracketed reading of these bytes asserts acceptance* — no reliance on modelling the external
-program correctly (#153, resolved via option 3; the recognized set is bracketed, not assumed —
-pinning the binary's real vocabulary empirically would let it be trimmed, but is not required for
-the guarantee). This is the reason the rule above is "decide over the honored bytes" rather than
-"never normalize": where normalization is unavoidable, the normalization itself becomes part of
-the guard's attack surface, so every bracketed normalization is decided over. Two residuals are
-named, not papered over: a small, bounded false-positive surface (benign content that, under some
-reading, would form a fence asserting acceptance — which agents may not write anyway), and — for
-the backstop only — a single non-standard convention that would need *different* unmodeled
-outcomes at *different* escape positions to co-build one fence, which a global substitution cannot
-reach (covering it means treating every escape as a wildcard, whose false-positive cost is
-unbounded). Both are pinned by `cli-tools.test.mjs`'s escape-semantics fixtures.
+`\xHH`/`\uHHHH`/`\u{…}`/octal decoded to their code points) brackets a CLI that honors a richer
+set — otherwise `\x2d`→`-` and `\x0a`→a real LF could encode a whole fence invisibly (found by
+this fix's independent review). `contentAcceptRefusal` expands under **all four** readings. Its
+property is therefore *no bracketed reading of these bytes asserts acceptance* — no reliance on
+modelling the external program correctly (#153, resolved via option 3; the recognized set is
+bracketed, not assumed — pinning the binary's real vocabulary empirically would let it be
+trimmed, but is not required for the guarantee). This is the reason the rule above is "decide
+over the honored bytes" rather than "never normalize": where normalization is unavoidable, the
+normalization itself becomes part of the guard's attack surface, so every bracketed normalization
+is decided over. The residual it leaves is a small, bounded false-positive surface (benign content
+that, under some reading, would form a fence asserting acceptance — which agents may not write
+anyway), pinned by `cli-tools.test.mjs`'s escape-semantics fixtures.
 
 The scanner then adds a deliberately **broader** second pass — embedded fences over a
 line-ending-folded copy — because appended content the note will carry cannot be read back
