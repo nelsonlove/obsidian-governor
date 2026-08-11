@@ -52,6 +52,7 @@ import { registerSchemeTools } from "./tools-scheme.js";
 import { registerVocabTools, type VocabSource, type VocabToolsCtx } from "./tools-vocab.js";
 import { registerSkillsTools, type SkillsBackend, type SkillsToolsCtx } from "./tools-skills.js";
 import { DEFAULT_SKILLS_CONFIG, validateSkillsConfig } from "../kernel/skills/index.js";
+import { registerPendingReviewTools, type PendingReviewSource, type PendingReviewToolsCtx } from "./tools-pending-review.js";
 
 // ── manifests (#81: config-host — see
 //    docs/superpowers/specs/2026-08-10-config-host-design.md) ──────────────
@@ -401,6 +402,56 @@ const SKILLS_MANIFEST: ModuleManifest = {
   },
 };
 
+// ── governance (Acceptance) module manifest (#83, cycle 1: the Stewardship fold) ─
+//
+// The FIRST governance-DOMAIN module — deliberately a ONE-WAY, read-only surface
+// (Assent's Stewardship shape): it may let an agent SEE what a human is about to
+// review; it contributes NO mutation, NO accept/adopt/baseline verb. The accept
+// gesture stays a human action in the Obsidian pane (cycle 2, its own reviewed cycle).
+//
+// Posture is "capability", NOT "governance": the ModuleRegistry deliberately REFUSES
+// the "governance" posture in v1 (it is inert), which is the containment gate #83
+// records. This module clears that gate by contributing only a read-only surface —
+// so it mounts as an ordinary capability module, subject to the same read-only-only
+// registrar gate, the accept/baseline-name tripwire, and collision checks as every
+// other module. It ships DISABLED: the whole governance surface is opt-in, a human
+// turns it on in the config tab (mirroring the skills module's default-off posture).
+//
+// The ONE tool it contributes is the EXISTING obsidian_pending_review (#75) — reused
+// verbatim (registerPendingReviewTools), read-only, allowlist-filtered, graceful-empty
+// when Stewardship's index is absent. Cycle 1 adds ZERO accept/baseline/adopt surface:
+// the moved kernel/governance logic (baseline-store, auto-accept eligibility, …) is
+// unwired substrate, reachable from no tool, no plugin instance, and no `app`.
+const GOVERNANCE_MANIFEST: ModuleManifest = {
+  summary:
+    "Governance (Acceptance): a deliberately one-way, read-only window onto the human review queue. " +
+    "It lets an agent SEE which notes are pending human review — as published by the Stewardship review " +
+    "queue — so it can avoid stepping on a note a human is about to review. It contributes NOTHING that " +
+    "mutates a note or a baseline, and there is no accept / reject / adopt verb anywhere in it (the accept " +
+    "gesture stays a human action). Ships disabled — a human enables the surface here.",
+  // No `config` block: the pending-review surface has no configurable knob today (the
+  // index location is derived from the vault config dir), so — like the vocab module —
+  // this manifest renders its section from summary + capability directory alone. The
+  // section's enable/disable toggle IS its config tab; typed fields arrive if a later
+  // cycle needs one.
+  directory: {
+    tools: [
+      {
+        name: "obsidian_pending_review",
+        purpose:
+          "List the notes currently pending human review, as published by the Stewardship plugin's review queue.",
+        readOnly: true,
+        caveats: [
+          "Read-only and advisory: it reports review status another plugin published; it can never accept, " +
+            "reject, or otherwise change a note's review state (there is no accept verb in any API).",
+          "Only notes within the session's path allowlist are reported (no path oracle); returns an empty " +
+            "list when Stewardship is not installed or has not refreshed its queue.",
+        ],
+      },
+    ],
+  },
+};
+
 /** What the mount needs from the live plugin (server.ts supplies the Obsidian
  * adapters; tests supply fakes). The same per-call freshness discipline as
  * the direct registrations it replaces: config the HANDLERS read (allowlist,
@@ -422,6 +473,10 @@ export interface MountDeps {
   /** The skills module's injected backend (obsidianSkillsBackend live) — the
    * exporter read seam plus the mark write primitive. */
   skillsSource: SkillsBackend;
+  /** The governance module's injected read source for obsidian_pending_review
+   * (obsidianPendingReviewSource live) — the Stewardship pending-index reader.
+   * Structurally read-only (a single `read()`), so the module cannot mutate. */
+  pendingReviewSource: PendingReviewSource;
 }
 
 /** The ModuleHostCtx modules receive — deliberately minimal (gate point 2).
@@ -484,6 +539,20 @@ export function builtinModules(deps: MountDeps): VaultModule[] {
       { id: "skills", capabilities: ["compile", "export", "authoring"], enabled: false, mutating: true, manifest: SKILLS_MANIFEST },
       (server: any, ctx: SkillsToolsCtx) => registerSkillsTools(server, deps.skillsSource, ctx),
       (_host, config) => ({ config, getSettings: deps.getSettings }),
+    ),
+    // The governance (Acceptance) module (#83, cycle 1): the Stewardship fold's first
+    // landing. Deliberately NOT `mutating` — it contributes only the read-only
+    // obsidian_pending_review surface, so the mount's read-only-only registrar gate
+    // admits it without the `mutating` escape hatch, and the accept/baseline-name
+    // tripwire + collision checks apply. Default DISABLED: the one-way governance
+    // surface is opt-in (a human enables it in the config tab). The ctxOf feeds the
+    // reused registerPendingReviewTools its injected read source + the guard settings
+    // for allowlist filtering — the same wiring the always-on registration used before
+    // this fold, now behind the module toggle.
+    moduleFromRegistrar(
+      { id: "governance", capabilities: ["acceptance"], enabled: false, manifest: GOVERNANCE_MANIFEST },
+      (server: any, ctx: PendingReviewToolsCtx) => registerPendingReviewTools(server, ctx),
+      () => ({ source: deps.pendingReviewSource, getSettings: deps.getSettings }),
     ),
   ];
 }

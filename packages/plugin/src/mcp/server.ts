@@ -10,7 +10,7 @@ import { registerCliTools, obsidianTemplateReader } from "./tools-cli.js";
 import { registerExternalTools } from "./external-tools.js";
 import { registerLockTools } from "./tools-locks.js";
 import { registerUidTools } from "./tools-uid.js";
-import { registerPendingReviewTools, obsidianPendingReviewSource } from "./tools-pending-review.js";
+import { obsidianPendingReviewSource } from "./tools-pending-review.js";
 import { registerLinkTools, obsidianLinkSource } from "./tools-links.js";
 import { obsidianVocabSource } from "./tools-vocab.js";
 import { obsidianSkillsBackend } from "./tools-skills.js";
@@ -153,15 +153,20 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   // Addressing by uid needs no tool of its own — `uid:<value>` binds at the
   // interception point above — so this is purely the lookup, in both directions.
   registerUidTools(server, ctx);
-  // ── pending human-review queue, read-only (slice B3b) ──────────────────────
+  // ── pending human-review queue, read-only (slice B3b; #83 cycle 1) ─────────
   // A READ of the index Stewardship publishes at
   // `<config dir>/plugins/stewardship/pending-index.json`, so an agent can see
   // what a human is about to review and avoid stepping on it. Allowlist-filtered
   // like tools-uid.ts (no path oracle), and graceful-empty when Stewardship is
   // absent or its queue never refreshed. Read-only by construction: it reports
   // review status another plugin published; it exposes no accept/baseline verb.
-  registerPendingReviewTools(server, { source: obsidianPendingReviewSource(app), getSettings: () => ctx.getSettings() });
-  // ── capability modules: scope-provider + vocab, mounted through the host ───
+  //
+  // As of the governance fold (#83, cycle 1) this is no longer an always-on
+  // registration: obsidian_pending_review is the governance (Acceptance) module's
+  // one read-only surface, mounted THROUGH the ModuleRegistry below (behind the
+  // module's settings toggle, the tripwire, and the read-only-only gate). The live
+  // source adapter is threaded into the mount deps as `pendingReviewSource`.
+  // ── capability modules: scope-provider + vocab + skills + governance ───────
   // Ruled decision #2 realized: the two capability modules register THROUGH
   // the ModuleRegistry — settings-toggleable (`modules.<id>.enabled`), behind
   // the accept/baseline tripwire, collision refusal, and the mount's
@@ -174,6 +179,7 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
     schemeNotes: () => app.vault.getMarkdownFiles().map((f) => f.path),
     vocabSource: obsidianVocabSource(app),
     skillsSource: obsidianSkillsBackend(app),
+    pendingReviewSource: obsidianPendingReviewSource(app),
   });
   // Skip-and-report only reports if someone reads the report: every mount
   // defect (unknown module id in settings, a gate-refused tool, a config
