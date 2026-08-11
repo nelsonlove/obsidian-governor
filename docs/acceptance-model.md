@@ -64,15 +64,28 @@ filesystem backend can bind to it rather than each re-deriving a boundary. `fron
 `parseGuardFrontmatter` and the accept scanner's leading-fence check are all callers of that
 one recognizer, run against the raw honored bytes.
 
-**One caller is a known exception, stated rather than glossed:** the CLI content path
-(`contentAcceptRefusal`) must expand the `\n`/`\t` escapes the CLI itself expands before the
-vault sees them, so it necessarily decides over a *reconstruction* of the honored document
-rather than the bytes it was handed. That reconstruction is a model of another program's
-escape semantics, and a model can be wrong — it does not currently account for an escaped
-backslash. That is a real residual (#153), and it is the
-reason the rule above is "decide over the honored bytes" rather than "never normalize": where
-normalization is unavoidable, the normalization itself becomes part of the guard's attack
-surface and has to be reasoned about explicitly.
+**One caller cannot avoid normalizing, and is handled by not trusting a single normalization:**
+the CLI content path (`contentAcceptRefusal`) must expand the escapes the CLI itself expands
+before the vault sees them, so it necessarily decides over a *reconstruction* of the honored
+document rather than the bytes it was handed. A reconstruction is a model of another program's
+escape semantics, and a model can be wrong: the original one recognized `\n`/`\r\n`/`\t` but had
+no notion of an **escaped backslash** (`\\`), so a crafted payload could make the guard perceive
+the frontmatter fence ending in a different place than the honored document has it, hiding an
+acceptance assertion inside the real fence (#153, found by #146's review).
+
+Rather than bet the accept boundary on guessing the external binary's exact escape semantics,
+the guard **does not pick a reading**. The escaped-backslash ambiguity leaves exactly three
+coherent readings — R1 (no escaped escape; the original model, kept verbatim so no prior refusal
+weakens), R2 (escaped escape, an unrecognized `\X` kept literal), and R3 (escaped escape, `\X`
+collapsed to `X`). `contentAcceptRefusal` expands under **all three** and refuses if **any** of
+them asserts acceptance inside a `---` fence. Its property is therefore *no plausible reading of
+these bytes asserts acceptance* — no reliance on modelling the external program correctly (#153,
+resolved via option 3). This is the reason the rule above is "decide over the honored bytes"
+rather than "never normalize": where normalization is unavoidable, the normalization itself
+becomes part of the guard's attack surface, so every plausible normalization is decided over.
+The residual it leaves is a small, bounded false-positive surface (benign content that, under
+some reading, would form a fence asserting acceptance — which agents may not write anyway),
+pinned by `cli-tools.test.mjs`'s escape-semantics fixtures.
 
 The scanner then adds a deliberately **broader** second pass — embedded fences over a
 line-ending-folded copy — because appended content the note will carry cannot be read back
@@ -169,9 +182,10 @@ The complete set of CLI commands that write note content or frontmatter — all 
 - **Content writers** `create`, `append`, `prepend`, **`base:create`**, and the periodic-note
   variants `daily|weekly|monthly|quarterly|yearly:(create|append|prepend)`. Their
   caller-controlled `content=` is scanned for an acceptance-asserting frontmatter fence,
-  including one hidden behind the CLI's `\n`/`\t` escape expansion, and including embedded
-  (not just leading) fences. With no YAML parser injected the scan **fails closed** on any
-  fence at all.
+  including one hidden behind the CLI's escape expansion — scanned under **every plausible
+  reading of that expansion** (#153; see the accept-guard section on the CLI reconstruction),
+  and including embedded (not just leading) fences. With no YAML parser injected the scan
+  **fails closed** on any fence at all.
 
 The refusal is a typed `Error [accept_forbidden]`, and nothing runs.
 

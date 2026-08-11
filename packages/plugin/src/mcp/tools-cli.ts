@@ -411,7 +411,7 @@ export function templateContentAcceptRefusal(content: string, parseYaml?: (yaml:
  *     acceptance-asserting block anywhere in written content is refused.
  *     Broader than the write path is fine; narrower is the bypass.
  */
-function scanForAcceptFence(honored: string, parseYaml?: (yaml: string) => unknown): string | null {
+export function scanForAcceptFence(honored: string, parseYaml?: (yaml: string) => unknown): string | null {
   const leading = leadingFrontmatterBlock(honored);
   if (leading !== null) {
     const reason = acceptReasonForBlock(leading, parseYaml);
