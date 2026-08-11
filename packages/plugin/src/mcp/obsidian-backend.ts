@@ -30,10 +30,10 @@
  * are unchanged down to the object.
  */
 
-import { TFile, TFolder, getAllTags, parseYaml, type App } from "obsidian";
-import { CHARACTER_LIMIT, deriveJdIdFromPath } from "@vault-mcp/core";
+import { TFile, TFolder, getAllTags, type App } from "obsidian";
+import { CHARACTER_LIMIT, deriveJdIdFromPath, parseGuardFrontmatter } from "@vault-mcp/core";
 import { backlinkKeys } from "./helpers.js";
-import { AcceptForbiddenError, acceptTransitionReason, frontmatterOf } from "./write-notes-compose.js";
+import { AcceptForbiddenError, acceptTransitionReason } from "./write-notes-compose.js";
 import type {
   VaultBackend,
   NoteRef,
@@ -114,9 +114,26 @@ export class ObsidianBackend implements VaultBackend {
   // acceptance to the accepted-family is blocked; carrying an existing
   // (human-granted) accepted value forward UNCHANGED is allowed.
 
-  /** Parse the leading frontmatter of a markdown string via Obsidian's own YAML parser. */
+  /**
+   * Parse the leading frontmatter of a markdown string for the accept guard,
+   * using the SAME fail-closed recognizer the fs write path uses
+   * (`parseGuardFrontmatter`) rather than a YAML-parser-backed reader. This is
+   * the #155 live-exercise fix: `frontmatterOf(markdown, obsidian.parseYaml)`
+   * decides over what `obsidian.parseYaml` produces, and that parser does NOT
+   * treat a lone carriage return (0x0d with no following 0x0a) inside a scalar
+   * as a line break — so it saw ONE scalar with no acceptance key while
+   * Obsidian's metadataCache honorer split the same bytes into TWO keys, one of
+   * them an acceptance assertion. The guard passed a write the vault then
+   * honored. `parseGuardFrontmatter` splits on `\r?\n` (a lone `\r` is never a
+   * line break to it) and FAILS CLOSED on any raw control character — and on
+   * every other construct it cannot confidently classify under the honorer's
+   * interpretation — throwing `AcceptForbiddenError`. Converging all three write
+   * paths (this backend, `parseGuardFrontmatter` on the fs path, and the CLI's
+   * `scanForAcceptFence`) onto one recognizer means they decide identically:
+   * the class is "both sides must look at the same document" (#104/#126/#129/#137).
+   */
   private fmOf(markdown: string): Record<string, unknown> | null {
-    return frontmatterOf(markdown, parseYaml);
+    return parseGuardFrontmatter(markdown);
   }
 
   /** The note's current on-disk frontmatter, parsed from its raw text; null when the note is new/absent/unparseable. */
