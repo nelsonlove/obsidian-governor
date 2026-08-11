@@ -701,8 +701,11 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
   }));
 
   // Clear the debounce timers on unload (Obsidian tears down views/events/dom-events/ribbon
-  // automatically; the setTimeout handles are ours to clear).
+  // automatically; the setTimeout handles are ours to clear). The same hook flips the disposed
+  // flag below.
+  let disposed = false;
   plugin.register(() => {
+    disposed = true;
     const timers = silentTimers.get(plugin);
     if (timers) { for (const t of timers.values()) clearTimeout(t); timers.clear(); }
   });
@@ -711,9 +714,19 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
   // recompute the queue when an agent write lands — so pending changes surface without a manual
   // Refresh click. The poll only STATS the journal each tick and only calls refresh() when the
   // journal actually grew; refresh() is read-only.
+  //
+  // `onLayoutReady` takes a plain callback and returns no EventRef, so `plugin.register` cannot
+  // detach it — and a plugin unloaded in the onload→layout-ready window has ALREADY flushed its
+  // register-cleanups, so an interval created here afterward would never be cleared: a leaked 2.5s
+  // poll that keeps running pollJournal → sweepAutoAccept → setBaseline (advancing baselines) on a
+  // disposed instance. So the callback is gated on the `disposed` flag the cleanup hook flips —
+  // the exact guard `wireUidIndex` uses for the same reason. If disposed, do nothing (no refresh,
+  // no interval).
   plugin.app.workspace.onLayoutReady(async () => {
+    if (disposed) return;
     await refresh(plugin);
     try { pollState(plugin).lastSig = await journalSignature(plugin); } catch { /* first poll will refresh */ }
+    if (disposed) return; // an unload may have landed during the awaited refresh above
     plugin.registerInterval(window.setInterval(() => void pollJournal(plugin), JOURNAL_POLL_MS));
   });
 }

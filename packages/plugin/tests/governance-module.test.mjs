@@ -228,6 +228,21 @@ describe("governance module: THE TRIPWIRE — source reachability (accept surfac
     assert.ok(!/\baddCommand\b/.test(wiring), "the governance wiring must register no command");
   });
 
+  test("wiring.ts: onLayoutReady is disposed-guarded so an unload never leaks an auto-accept poll", () => {
+    // The poll interval created in onLayoutReady runs pollJournal → sweepAutoAccept → setBaseline
+    // (it advances baselines). onLayoutReady returns no EventRef, so if the plugin unloads in the
+    // onload→layout-ready window the register-cleanups have already flushed and an interval created
+    // afterward is never cleared — a leaked auto-accept poll on a disposed instance. The callback
+    // must be gated on a disposed flag flipped by plugin.register (the wireUidIndex pattern).
+    const wiring = code("governance/wiring.ts");
+    assert.match(wiring, /let disposed = false;/, "must track a disposed flag");
+    assert.match(wiring, /plugin\.register\(\(\) => \{[\s\S]*?disposed = true;/, "cleanup hook must flip disposed");
+    const m = /onLayoutReady\(async \(\) => \{([\s\S]*?)\n  \}\);/.exec(wiring);
+    assert.ok(m, "onLayoutReady callback must exist");
+    assert.match(m[1], /if \(disposed\) return;/, "onLayoutReady must bail when disposed");
+    assert.match(m[1], /registerInterval/, "the poll interval is created inside onLayoutReady");
+  });
+
   test("pane.ts: the controller lives in a module-private WeakMap, never on the instance", () => {
     const pane = code("governance/pane.ts");
     assert.ok(!/\bthis\.controller\b/.test(pane), "no this.controller (would be reachable)");
