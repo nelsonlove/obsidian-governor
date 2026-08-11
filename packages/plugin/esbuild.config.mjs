@@ -20,12 +20,25 @@ async function buildBridgeOnce() {
 
 const bridgeText = hasBridge ? await buildBridgeOnce() : "";
 
+// The skills module's bundled "new-skill" static skill (#82): its SKILL.md +
+// conventions.md are embedded at build time and emitted by the exporter into
+// the output dir (src/kernel/skills/static-skills.ts reads these defines).
+// Absent assets ⇒ empty defines ⇒ STATIC_FILES is empty, exactly as under
+// tsx (tests), which run without the defines at all.
+const readAsset = (p) => (fs.existsSync(p) ? fs.readFileSync(p, "utf8") : "");
+const newSkillMd = readAsset("assets/new-skill/SKILL.md");
+const conventionsMd = readAsset("assets/new-skill/conventions.md");
+
 const plugin = {
   entryPoints: ["src/main.ts"],
   bundle: true, format: "cjs", platform: "node", target: "es2022",
   external: obsidianExternals,
   // `define` replaces the bare identifier __BRIDGE_SOURCE__ (see src/bridge-asset.ts).
-  define: { __BRIDGE_SOURCE__: JSON.stringify(bridgeText) },
+  define: {
+    __BRIDGE_SOURCE__: JSON.stringify(bridgeText),
+    __NEW_SKILL_MD__: JSON.stringify(newSkillMd),
+    __NEW_SKILL_CONVENTIONS__: JSON.stringify(conventionsMd),
+  },
   outfile: "main.js",
   sourcemap: production ? false : "inline",
   minify: production, logLevel: "info",

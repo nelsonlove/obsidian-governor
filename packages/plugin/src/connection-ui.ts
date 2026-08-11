@@ -310,6 +310,15 @@ export class VaultMcpSettingTab extends PluginSettingTab {
       getVocabularies: () => this.plugin.settings.vocabularies,
       schemeNotes: () => [],
       vocabSource: { paths: () => [], frontmatter: () => null, body: async () => null },
+      skillsSource: {
+        notes: async () => [],
+        resolveLink: () => null,
+        embed: async () => null,
+        basePath: () => null,
+        frontmatterOf: () => null,
+        exists: () => false,
+        applyFrontmatter: async () => {},
+      },
     });
   }
 

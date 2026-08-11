@@ -60,6 +60,9 @@ export interface AdapterMeta {
   enabled: boolean;
   /** Default "capability" — the only posture the v1 registry instantiates. */
   posture?: ModulePosture;
+  /** Declares this module may contribute mutating tools — see
+   * `VaultModule.mutating`. The mount gate honors it; absent ⇒ read-only-only. */
+  mutating?: boolean;
   /** @deprecated see manifest below. */
   settingsSchema?: ModuleSettingsSchema;
   /** The module's config-host subscription (manifest.ts) — typed config
@@ -87,6 +90,7 @@ export function moduleFromRegistrar<C>(
     posture: meta.posture ?? "capability",
     capabilities: meta.capabilities,
     enabled: meta.enabled,
+    ...(meta.mutating ? { mutating: true } : {}),
     ...(meta.settingsSchema ? { settingsSchema: meta.settingsSchema } : {}),
     ...(meta.manifest ? { manifest: meta.manifest } : {}),
     ...(meta.configBinding ? { configBinding: meta.configBinding } : {}),
