@@ -33,7 +33,7 @@ const parseYaml = (s) => {
 
 describe("#105 part 1 — the rule the MCP template tool must apply pre-exec", () => {
   test("a template whose frontmatter asserts acceptance is refused", () => {
-    const body = "---\nacceptance-status: accepted\n---\n# {{title}}\n";
+    const body = "---\nacceptance-status: accepted\n---\n# Body\n";
     assert.ok(templateContentAcceptRefusal(body, parseYaml), "must refuse");
   });
 
@@ -46,8 +46,11 @@ describe("#105 part 1 — the rule the MCP template tool must apply pre-exec", (
     assert.ok(templateContentAcceptRefusal(body, parseYaml));
   });
 
-  test("an ordinary template is NOT refused — the guard must not break normal use", () => {
-    const body = "---\ntitle: {{title}}\ntags: [daily]\n---\n\n## Notes\n\n- \n";
+  test("an ordinary token-free template is NOT refused — the guard must not break normal use", () => {
+    // A template with no expansion token stays clean. (A dated/titled template
+    // carrying `{{date}}`/`{{title}}` now refuses by design — #137, Option 2 —
+    // covered in template-expansion-guard.test.mjs.)
+    const body = "---\ntitle: Daily note\ntags: [daily]\n---\n\n## Notes\n\n- \n";
     assert.equal(templateContentAcceptRefusal(body, parseYaml), null);
   });
 

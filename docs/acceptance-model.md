@@ -209,17 +209,19 @@ template that literally contains neither (Templater's date-format facility honor
 `[…]` literal escape, which is enough to synthesize arbitrary bytes). **A static scan is a
 floor, not a proof.**
 
-So the template guard **fails closed on expansion tokens** (#137, Option 2): a template whose
-resolved bytes carry *any* Templater expansion token is **refused outright**, because its
-expanded output cannot be inspected before it lands (`templateExpansionRefusal` refuses on any
-`<%` opener, covering every Templater tag form). The refusal names the escape hatch — expand
+So the template guard **fails closed on expansion tokens** (#137, Option 2): a template whose resolved bytes carry *any* expansion token — a Templater `<%` opener **or** a core-Templates `{{ … }}` field — is **refused outright**, because its expanded output cannot be inspected before it lands (`templateExpansionRefusal` refuses on either opener as a substring, covering every Templater tag form and the whole core-Templates field class).
+The refusal names the escape hatch — expand
 the template in Obsidian first, or use a
 template without expansion tokens. Both create-from-template surfaces route through the one
 predicate (`templateContentAcceptRefusal` in `tools-cli.ts`): the CLI `create template=` /
 `quickadd:run-template path=` path **and** the MCP `obsidian_create_note_from_template` tool
 (`tools-integrations.ts`), so neither twin can be left unguarded. The core Templates plugin's
-`{{title}}`/`{{date}}` fields are deliberately *not* refused — they expand a fixed, closed set
-of values with no arbitrary-emission facility.
+`{{date:FORMAT}}`/`{{time:FORMAT}}` fields run FORMAT through moment, which honors the `[…]`
+literal escape and so can emit an acceptance assertion and its `---` fence from a template
+carrying neither — the same arbitrary-emission vector as Templater's date format, reached
+through the plain `create template=` path — which is why the whole `{{ … }}` class is refused
+rather than a carved-out "safe" subset (an earlier fix exempted these fields on a false "no
+arbitrary-emission facility" claim; that exemption *was* the #137 hole).
 
 What remains open, honestly named:
 

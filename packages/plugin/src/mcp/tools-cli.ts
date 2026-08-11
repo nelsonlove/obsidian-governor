@@ -107,18 +107,22 @@ export const DANGEROUS_LIST_DESC = [...DANGEROUS_EXACT].sort().join(", ") + ", a
 //     the same rule pre-exec (unresolvable fails closed). It refuses a template
 //     carrying a literal accepted fence (the STATIC case), AND — the post-scan
 //     expansion hole this once left open (#137) — it now FAILS CLOSED on any
-//     Templater expansion token in the resolved bytes.
+//     expansion token in the resolved bytes: a Templater `<%` opener OR a
+//     core-Templates `{{` field opener.
 //
-//     Why the expansion check is needed: Obsidian/Templater expands `<% %>`
-//     tags AFTER a byte scan, and Templater's date-format facility honors
-//     moment's `[…]` literal escape — so an expansion could emit both the
-//     acceptance assertion and the fence characters from a template that
-//     contains neither, and the scanned bytes would not be the landed bytes
-//     (the #126 defect shape one level up). Because the expanded output cannot
-//     be inspected pre-render, a template carrying an expansion token is
-//     refused outright (`templateExpansionRefusal`, below) rather than scanned
-//     and trusted. The static scan remains for templates with no expansion
-//     token but a literal fence.
+//     Why the expansion check is needed: Obsidian expands both Templater `<% %>`
+//     tags and core Templates `{{date:FMT}}`/`{{time:FMT}}` fields AFTER a byte
+//     scan, and BOTH honor moment's `[…]` literal escape — so an expansion could
+//     emit both the acceptance assertion and the fence characters from a
+//     template that contains neither, and the scanned bytes would not be the
+//     landed bytes (the #126 defect shape one level up). The `create template=`
+//     path uses the core Templates plugin specifically, so `{{date:FMT}}` is a
+//     live arbitrary-emission facility on exactly this surface — carving it out
+//     was the flaw. Because the expanded output cannot be inspected pre-render, a
+//     template carrying ANY expansion token is refused outright
+//     (`templateExpansionRefusal`, below) rather than scanned and trusted. The
+//     static scan remains for templates with no expansion token but a literal
+//     fence.
 //
 //     A re-enabled `quickadd:run-template` gets the same checks on its `path=`
 //     template. It remains in the policy's default-deny set regardless, because
@@ -234,26 +238,43 @@ export function contentAcceptRefusal(content: string, parseYaml?: (yaml: string)
 // Obsidian first, or use a template without expansion tokens — is named in the
 // refusal so a legitimate caller is not merely stonewalled.
 //
-// Token set: the guard is deliberately conservative and refuses on ANY `<%`
-// opener — that is the union of every Templater tag form (`<% %>` interpolation,
-// `<%* %>` execution, `<%~ %>` / `<%+ %>`, and the `<%_`/`-%>`/`_%>`
-// whitespace-control variants). It does NOT key on the core Templates plugin's
-// `{{title}}`/`{{date}}` fields: those expand a fixed, closed set of values and
-// carry no arbitrary-emission facility, so refusing them would break ordinary
-// template use (`accept-fence-parity` pins a `{{title}}` template as clean).
+// Token set: the guard is deliberately conservative and refuses on TWO opener
+// families, each matched as a SUBSTRING (not a parse — being broader than either
+// grammar is the point, fail closed):
+//   • ANY `<%` opener — the union of every Templater tag form (`<% %>`
+//     interpolation, `<%* %>` execution, `<%~ %>` / `<%+ %>`, and the
+//     `<%_`/`-%>`/`_%>` whitespace-control variants).
+//   • ANY `{{` opener — the core Templates plugin's fields (`{{title}}`,
+//     `{{date}}`, `{{time}}`, and the format forms `{{date:FMT}}`/`{{time:FMT}}`).
+// The `{{ }}` family is NOT exempt, and the earlier claim that it "expands a
+// fixed, closed set of values with no arbitrary-emission facility" was FALSE and
+// is the exact hole this correction closes: `{{date:FMT}}`/`{{time:FMT}}` run FMT
+// through moment, which honors the `[…]` literal escape — so a single field can
+// emit an `acceptance-status: accepted` assertion AND the `---` fence around it,
+// through the plain `create template=` path, from a template whose bytes carry
+// neither. That is the same arbitrary-emission facility as Templater's date
+// format, so the whole `{{ … }}` class fails closed, not a carved-out subset.
+// Per Nelson's Option-2 ruling this refuses dated/titled templates (the common
+// case) — that cost IS the ruling; the carve-out was the deviation. The escape
+// hatch (expand in Obsidian first, or use a template with no expansion token) is
+// named in the refusal, so a legitimate caller is not merely stonewalled.
 
 /** A Templater expansion token: any `<%`-opened tag. Substring, not a parse — being broader than Templater's grammar is the point (fail closed). */
 const TEMPLATER_EXPANSION_TOKEN = "<%";
+/** A core-Templates field opener: any `{{`. Substring, not a parse — deliberately broader than the `{{title}}`/`{{date}}`/`{{time}}` set the plugin expands, and refusing the whole class is the point (fail closed). The `{{date:FMT}}` moment literal-escape IS an arbitrary-emission facility, so no bare form is "safe" to carve out. */
+const CORE_TEMPLATE_FIELD_TOKEN = "{{";
 
 /**
  * The reason a template must not be created from because its RESOLVED content
- * carries a Templater expansion token whose output cannot be inspected before
- * it lands (#137), or null when it carries none. Names the escape hatch.
+ * carries a template expansion token whose output cannot be inspected before it
+ * lands (#137), or null when it carries none. Refuses on EITHER a Templater `<%`
+ * opener OR a core-Templates `{{` field opener — the whole expansion-token class,
+ * no carve-out. Names the escape hatch.
  */
 export function templateExpansionRefusal(content: string): string | null {
-  if (content.includes(TEMPLATER_EXPANSION_TOKEN)) {
+  if (content.includes(TEMPLATER_EXPANSION_TOKEN) || content.includes(CORE_TEMPLATE_FIELD_TOKEN)) {
     return (
-      "contains a Templater expansion token (`<% %>`) whose expanded output the guard cannot inspect before it lands — " +
+      "contains a template expansion token (Templater `<% %>` or a core-Templates `{{ }}` field) whose expanded output the guard cannot inspect before it lands — " +
       "expand it in Obsidian and retry, or use a template without expansion tokens"
     );
   }
@@ -264,9 +285,13 @@ export function templateExpansionRefusal(content: string): string | null {
  * The reason a create-from-template must be refused given the template's REAL
  * FILE BYTES, or null when it is clean. Two fail-closed checks, in order:
  *
- *  1. **Expansion tokens (#137)** — refuse ANY `<%`-opened Templater tag first:
- *     its expanded output is not the bytes the fence scan can see, so a clean
- *     scan is not a clean note. This is the fail-closed floor Nelson ruled.
+ *  1. **Expansion tokens (#137)** — refuse ANY `<%`-opened Templater tag OR any
+ *     `{{`-opened core-Templates field first: the expanded output is not the
+ *     bytes the fence scan can see, so a clean scan is not a clean note. Both
+ *     token families carry an arbitrary-emission facility (Templater's date
+ *     format and core Templates' `{{date:FMT}}` both honor moment's `[…]`
+ *     literal escape), so the whole class fails closed. This is the floor Nelson
+ *     ruled (Option 2).
  *  2. **The static accept-fence scan** — the same accepted-family rule direct
  *     content gets, over the raw file bytes (no CLI escape expansion: the
  *     `content=` un-escaping above would MANUFACTURE a fence out of prose
@@ -573,7 +598,7 @@ export function registerCliTools(
         `Dangerous commands (${DANGEROUS_LIST_DESC}) are blocked unless enabled in plugin settings. ` +
         `Opaque macro/code commands (${[...OPAQUE_ACCEPT_CLI_COMMANDS].join(", ")}) are DENIED by default — the acceptance guard cannot inspect what they execute — and return Error [cli_denied]; a human can re-enable a specific one in settings. ` +
         "Acceptance is human-only: a property:set or content write that would introduce acceptance-status: accepted (or accepted-by/accepted-on) is refused with Error [accept_forbidden] — agents write only acceptance-status: proposed. " +
-        "Template-drawing calls (create template=<name>, quickadd:run-template path=<p>) have the referenced template resolved and scanned with the same rule pre-exec; an acceptance-carrying, expansion-token-carrying (Templater <% %>, whose output cannot be inspected before it lands), OR unresolvable template refuses accept_forbidden (fail closed — use the template's exact name/path, or expand the template in Obsidian first). " +
+        "Template-drawing calls (create template=<name>, quickadd:run-template path=<p>) have the referenced template resolved and scanned with the same rule pre-exec; an acceptance-carrying, expansion-token-carrying (Templater <% %> OR a core-Templates {{ }} field, whose expanded output cannot be inspected before it lands), OR unresolvable template refuses accept_forbidden (fail closed — use the template's exact name/path, or expand the template in Obsidian first). " +
         "On timeout, the command may still have completed inside Obsidian (only the CLI forwarder is killed) — verify state before retrying a mutation. " +
         "Prefer a dedicated obsidian_* tool when one exists — those return structured data.",
       inputSchema: {
