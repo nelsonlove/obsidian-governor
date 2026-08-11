@@ -153,17 +153,19 @@ export class ModuleRegistry {
    *
    * `opts.gate` lets the CALLER refuse a registration too (the mount's
    * read-only-only rule): return a problem string to refuse, null to accept.
-   * It runs BEFORE the registration is recorded, so a gate-refused tool never
-   * appears in describe() and never reserves its name — the bookkeeping
-   * describes what actually reached the registrar, not what was attempted.
-   * (This is why the gate is an option here rather than a wrapper around
-   * `reg`: an outer wrapper refusing AFTER the fact would leave describe()
-   * claiming a tool that was never registered.)
+   * The contributing module's id is passed as the third argument so the gate
+   * can apply a PER-MODULE policy (the mount permits a mutating tool only from
+   * a module that declares `mutating`). It runs BEFORE the registration is
+   * recorded, so a gate-refused tool never appears in describe() and never
+   * reserves its name — the bookkeeping describes what actually reached the
+   * registrar, not what was attempted. (This is why the gate is an option here
+   * rather than a wrapper around `reg`: an outer wrapper refusing AFTER the
+   * fact would leave describe() claiming a tool that was never registered.)
    */
   registerAll(
     reg: ToolRegistrar,
     host: ModuleHostCtx,
-    opts: { gate?: (name: string, def: ToolDef) => string | null } = {},
+    opts: { gate?: (name: string, def: ToolDef, moduleId: string) => string | null } = {},
   ): void {
     this.contributed = new Map();
     this.runProblems = [];
@@ -196,7 +198,7 @@ export class ModuleRegistry {
           this.runProblems.push(`module '${m.id}' tried to register '${name}' — refused: name already registered`);
           return;
         }
-        const refusal = opts.gate?.(name, def) ?? null;
+        const refusal = opts.gate?.(name, def, m.id) ?? null;
         if (refusal !== null) {
           this.runProblems.push(`module '${m.id}' tried to register '${name}' — refused: ${refusal}`);
           return;

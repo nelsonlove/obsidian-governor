@@ -50,6 +50,8 @@ import { validateJdConfig, type JdConfig } from "../kernel/scheme/jd.js";
 import type { VocabInstanceSettings } from "../kernel/index.js";
 import { registerSchemeTools } from "./tools-scheme.js";
 import { registerVocabTools, type VocabSource, type VocabToolsCtx } from "./tools-vocab.js";
+import { registerSkillsTools, type SkillsBackend, type SkillsToolsCtx } from "./tools-skills.js";
+import { DEFAULT_SKILLS_CONFIG, validateSkillsConfig } from "../kernel/skills/index.js";
 
 // ── manifests (#81: config-host — see
 //    docs/superpowers/specs/2026-08-10-config-host-design.md) ──────────────
@@ -325,6 +327,80 @@ const VOCAB_MANIFEST: ModuleManifest = {
   },
 };
 
+// ── skills module manifest (#82: the vault-skills → vault-mcp fold) ─────────
+//
+// The FIRST mutating capability module. Its config is a NEW module (no
+// ConfigBinding): it lives at `modules.skills.config`, the default location,
+// so the manifest's flat field keys map straight through. Fields mirror the
+// standalone plugin's settings tab (minus the on-save trigger, which a
+// tool-driven module has no use for). The directory documents all SIX tools —
+// three read, three mutating — so they render in the config tab + capability
+// directory, and the drift checks pin the manifest to what actually registers.
+const SKILLS_CONFIG_FIELDS: ConfigField[] = [
+  { key: "outputDir", label: "Output plugin directory", type: "text", help: "Where vault_skills_export writes the generated Claude Code plugin (skills/ + agents/). ~ is expanded." },
+  { key: "pluginName", label: "Plugin name", type: "text", help: "Claude Code plugin name — also the command/subagent namespace." },
+  { key: "typeSource", label: "Type source", type: "select", options: ["frontmatter", "tags"], help: "How a note declares its kind: the `type` frontmatter field, or a kind tag." },
+  { key: "tagPrefix", label: "Tag prefix", type: "text", help: "Tags mode: kind tags are #{prefix}skill / #{prefix}agent / … (e.g. agent/ → #agent/skill)." },
+  { key: "fieldMode", label: "Frontmatter field mode", type: "select", options: ["prefix", "nested"], help: "How vault-skills fields are namespaced: prefix (bare/prefixed top-level fields) or nested (all under one key)." },
+  { key: "fieldPrefix", label: "Field prefix", type: "text", help: "prefix mode: prefixes each field, e.g. vs- → vs-type. Blank ⇒ bare top-level fields (type, parent, …)." },
+  { key: "fieldKey", label: "Field key", type: "text", help: "nested mode: nests every field under this one key, e.g. vault-skills." },
+  { key: "assetsRoot", label: "Supporting-files tree", type: "text", help: "Root of a parallel filesystem tree of skills' supporting files. Blank ⇒ none. ~ is expanded." },
+  { key: "releaseDir", label: "Release repo directory", type: "text", help: "A git checkout vault_skills_release targets. Blank ⇒ release disabled. ~ is expanded." },
+];
+
+const SKILLS_MANIFEST: ModuleManifest = {
+  summary:
+    "Compile the vault's skill / agent / policy / command notes into a Claude Code plugin and materialize it to " +
+    "disk. Read tools inspect and preview the compile; the mutating tools export to the configured output dir, " +
+    "package a versioned release into a repo, and mark a note's kind in its frontmatter. Mark can never write an " +
+    "acceptance field — like every write, it routes through the accept-forbidden guard.",
+  config: {
+    fields: SKILLS_CONFIG_FIELDS,
+    defaults: { ...DEFAULT_SKILLS_CONFIG } as Record<string, unknown>,
+    validate: validateSkillsConfig,
+  },
+  directory: {
+    tools: [
+      { name: "vault_skills_validate", purpose: "Collect skill/agent/policy/command notes and run the transform without writing; report errors, warnings, and counts.", readOnly: true },
+      { name: "vault_skills_tree", purpose: "Return the current agent/skill hierarchy (name, kind, parent, level, owned skills, children).", readOnly: true },
+      {
+        name: "vault_skills_preview",
+        purpose: "Run the transform without writing and diff it against the current export.",
+        readOnly: true,
+        options: [
+          { name: "name", what: "return one entry (by generated name, output path, or source note path) in full" },
+          { name: "content", what: "include full compiled content for every entry (large)" },
+        ],
+      },
+      { name: "vault_skills_export", purpose: "Write skills/agents to the configured output dir (then /reload-plugins in Claude Code).", readOnly: false },
+      {
+        name: "vault_skills_release",
+        purpose: "Export the full plugin into a git checkout and stamp a version into .claude-plugin/plugin.json (no commit/tag/push).",
+        readOnly: false,
+        options: [
+          { name: "version", what: "release version (semver, e.g. 1.2.0)" },
+          { name: "dir", what: "target repo directory; defaults to the release repo dir from config" },
+        ],
+      },
+      {
+        name: "vault_skills_mark",
+        purpose: "Mark an existing note skill/agent/policy/command in its frontmatter, honoring the detection + field mode.",
+        readOnly: false,
+        options: [
+          { name: "path", what: "vault-relative path of the note to mark" },
+          { name: "type", what: "skill / agent / policy / command" },
+          { name: "parent", what: "parent agent basename or [[wikilink]]; omit for root, ignored for commands" },
+          { name: "description", what: "written to the note's description field" },
+        ],
+        caveats: [
+          "Routes through the accept-forbidden write guard: it can never introduce or change an accepted / " +
+            "accepted-by / accepted-on field, nor set acceptance-status to an accepted value.",
+        ],
+      },
+    ],
+  },
+};
+
 /** What the mount needs from the live plugin (server.ts supplies the Obsidian
  * adapters; tests supply fakes). The same per-call freshness discipline as
  * the direct registrations it replaces: config the HANDLERS read (allowlist,
@@ -343,6 +419,9 @@ export interface MountDeps {
   schemeNotes: () => string[];
   /** The vocab module's injected vault reader (obsidianVocabSource live). */
   vocabSource: VocabSource;
+  /** The skills module's injected backend (obsidianSkillsBackend live) — the
+   * exporter read seam plus the mark write primitive. */
+  skillsSource: SkillsBackend;
 }
 
 /** The ModuleHostCtx modules receive — deliberately minimal (gate point 2).
@@ -391,6 +470,21 @@ export function builtinModules(deps: MountDeps): VaultModule[] {
         ...(deps.getVocabularies ? { getVocabularies: deps.getVocabularies } : {}),
       }),
     ),
+    // The skills module (#82): the first MUTATING capability module. It
+    // declares `mutating: true`, which the mount gate honors to let its three
+    // write tools (export / release / mark) register with `readOnlyHint:
+    // false` — still through the guard-patched registrar (read-only mode,
+    // allowlist, queue, journal) and, for mark, the accept-forbidden write
+    // guard. Default DISABLED: a newly-folded mutating surface stays off until
+    // a human turns it on in the config tab (this is acceptance-adjacent —
+    // flagged for review). Config lives at `modules.skills.config` (a new
+    // module, no ConfigBinding), so `config` here is that record merged over
+    // the manifest defaults.
+    moduleFromRegistrar(
+      { id: "skills", capabilities: ["compile", "export", "authoring"], enabled: false, mutating: true, manifest: SKILLS_MANIFEST },
+      (server: any, ctx: SkillsToolsCtx) => registerSkillsTools(server, deps.skillsSource, ctx),
+      (_host, config) => ({ config, getSettings: deps.getSettings }),
+    ),
   ];
 }
 
@@ -412,17 +506,25 @@ export function builtinModules(deps: MountDeps): VaultModule[] {
  * `describe()` and `problems`.
  */
 export function mountModules(registerTool: ToolRegistrar, deps: MountDeps): ModuleRegistry {
-  const registry = new ModuleRegistry(builtinModules(deps), deps.getSettings().modules ?? {});
+  const modules = builtinModules(deps);
+  const registry = new ModuleRegistry(modules, deps.getSettings().modules ?? {});
+  // The modules that have EARNED the right to contribute mutating tools (the
+  // skills module today), by declaring `mutating` — see VaultModule.mutating.
+  // Every other module is still held to read-only, so a mutating handler
+  // cannot drift into a read-only module unreviewed.
+  const mutatingModules = new Set(modules.filter((m) => m.mutating).map((m) => m.id));
   registry.registerAll(registerTool, mountHost(deps), {
     // The read-only-only rule rides registerAll's gate so a refused tool is
     // never recorded as contributed and never reserves its name — describe()
     // stays truthful and a later, legitimate same-name registration is not
-    // blackholed by a refusal.
-    gate: (name, def) =>
-      def?.annotations?.readOnlyHint === true
+    // blackholed by a refusal. A module that declares `mutating` is exempt (its
+    // write tools still go through the guard-patched registrar and, for a
+    // frontmatter write, the accept-forbidden guard).
+    gate: (name, def, moduleId) =>
+      def?.annotations?.readOnlyHint === true || mutatingModules.has(moduleId)
         ? null
-        : `not explicitly read-only — v1 capability modules are read-only by design (readOnlyHint: true); ` +
-          `a mutating module tool needs its own reachability review before mounting`,
+        : `not explicitly read-only — a read-only capability module (readOnlyHint: true) may not contribute a ` +
+          `mutating tool; a module needs to declare \`mutating\` (accept-reachability review) to do so`,
   });
   return registry;
 }

@@ -122,6 +122,22 @@ export interface VaultModule {
   capabilities: string[];
   /** Default enabled state. `ModuleSettings[id].enabled` overrides it. */
   enabled: boolean;
+  /**
+   * This module has passed the accept-reachability review that lets it
+   * contribute MUTATING tools (`readOnlyHint: false`). The mount's
+   * read-only-only registrar gate (mcp/modules-mount.ts) permits a mutating
+   * tool ONLY from a module that declares this — every other module is still
+   * held to read-only, so a mutating handler cannot drift in unreviewed.
+   *
+   * This is NOT a bypass of any write control: a mutating module tool still
+   * registers through the guard-patched registrar (read-only mode, allowlist,
+   * write queue, journal) and the accept-forbidden write guard binds at the
+   * write primitive as ever. The flag only lifts the mount's conservative
+   * "modules are read-only" default, and the accept/baseline NAME tripwire
+   * (module-registry.ts) refuses accept-shaped tools regardless of it.
+   * Absent ⇒ read-only-only, the v1 default.
+   */
+  mutating?: boolean;
   /** @deprecated grown into `manifest.config` — kept for one release so a
    * module that hasn't migrated yet still works. `ModuleRegistry` reads
    * `manifest.config` first and falls back to this when absent. */
