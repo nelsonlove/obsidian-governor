@@ -84,16 +84,25 @@ recognized-escape vocabulary — R1/R2/R3 all freeze it at `{\n, \r\n, \t}`, its
 binary, so a fourth reading R4 (a maximal decoder: R3 plus the numeric escapes
 `\xHH`/`\uHHHH`/`\u{…}`/octal decoded to their code points) brackets a CLI that honors a richer
 set — otherwise `\x2d`→`-` and `\x0a`→a real LF could encode a whole fence invisibly (found by
-this fix's independent review). `contentAcceptRefusal` expands under **all four** readings. Its
-property is therefore *no bracketed reading of these bytes asserts acceptance* — no reliance on
-modelling the external program correctly (#153, resolved via option 3; the recognized set is
-bracketed, not assumed — pinning the binary's real vocabulary empirically would let it be
-trimmed, but is not required for the guarantee). This is the reason the rule above is "decide
-over the honored bytes" rather than "never normalize": where normalization is unavoidable, the
-normalization itself becomes part of the guard's attack surface, so every bracketed normalization
-is decided over. The residual it leaves is a small, bounded false-positive surface (benign content
-that, under some reading, would form a fence asserting acceptance — which agents may not write
-anyway), pinned by `cli-tools.test.mjs`'s escape-semantics fixtures.
+this fix's independent review). `contentAcceptRefusal` expands under **all four** readings and
+refuses if any asserts acceptance in a fence. Its property is *no **bracketed** reading of these
+bytes asserts acceptance* — the recognized set is **bracketed, not assumed**. This is the reason
+the rule above is "decide over the honored bytes" rather than "never normalize": where
+normalization is unavoidable, the normalization itself becomes part of the guard's attack surface,
+so every bracketed normalization is decided over.
+
+**This narrows #153; it does not close it.** The reading set is a strict improvement — it brackets
+the common escape dialects (escaped-backslash, `\n`/`\r`/`\t`, hex/unicode/octal) that every
+standard un-escaper uses — but the shipped `obsidian` binary's *actual* escape vocabulary was
+never observed, and review showed the enumeration keeps sprouting sub-axes (e.g. a greedy `\x`
+that consumes all trailing hex, or surrogate-pair handling) that can slip a fence past a
+finite reading set. So a residual remains: an escape convention outside the bracketed set could
+still land acceptance on this path. That residual is **tracked in #153** and its durable fix is
+architectural/empirical (this outbound reconstruction is the *sole* guard on the CLI content
+path — the official CLI's `create` bypasses the plugin's app-side honored-byte guard), not
+one-more-reading. The false-positive surface the bracketing leaves is small and bounded (benign
+content that, under some reading, would form a fence asserting acceptance — which agents may not
+write anyway); it is pinned by `cli-tools.test.mjs`'s escape-semantics fixtures.
 
 The scanner then adds a deliberately **broader** second pass — embedded fences over a
 line-ending-folded copy — because appended content the note will carry cannot be read back
@@ -190,10 +199,11 @@ The complete set of CLI commands that write note content or frontmatter — all 
 - **Content writers** `create`, `append`, `prepend`, **`base:create`**, and the periodic-note
   variants `daily|weekly|monthly|quarterly|yearly:(create|append|prepend)`. Their
   caller-controlled `content=` is scanned for an acceptance-asserting frontmatter fence,
-  including one hidden behind the CLI's escape expansion — scanned under **every plausible
-  reading of that expansion** (#153; see the accept-guard section on the CLI reconstruction),
-  and including embedded (not just leading) fences. With no YAML parser injected the scan
-  **fails closed** on any fence at all.
+  including one hidden behind the CLI's escape expansion — scanned under a **bracketed set of
+  escape readings** (#153; see the accept-guard section on the CLI reconstruction, which
+  narrows this path but does not fully close it — the binary's true escape vocabulary is
+  unobserved), and including embedded (not just leading) fences. With no YAML parser injected
+  the scan **fails closed** on any fence at all.
 
 The refusal is a typed `Error [accept_forbidden]`, and nothing runs.
 

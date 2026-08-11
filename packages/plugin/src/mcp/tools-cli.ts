@@ -249,10 +249,17 @@ export function cliAcceptRefusal(
 //        numeric-escape family a refusal too.
 //
 // The recognized set is thus bracketed by {minimal: R1/R2/R3} and {maximal: R4}
-// rather than assumed; the exact set the shipped binary honors is still not
-// modelled — the point is that it no longer has to be. (Option 4 — pinning the
-// binary's real vocabulary empirically — would let this set be trimmed to a
-// proven-tight one, but is not required for the fail-closed guarantee.)
+// rather than assumed — a strict improvement that covers the common escape
+// dialects. But this NARROWS #153, it does not CLOSE it: the shipped binary's
+// actual escape vocabulary was never observed, and review showed the enumeration
+// keeps sprouting sub-axes (a greedy `\x` that eats all trailing hex, surrogate
+// pairs, …) a finite reading set can still miss. A residual therefore remains —
+// tracked in #153 — and its durable fix is architectural/empirical (this
+// reconstruction is the SOLE guard on the CLI content path: the official CLI's
+// `create` bypasses the plugin's app-side honored-byte guard), not one more
+// reading. (Option 4 — pinning the binary's real vocabulary empirically — would
+// let this set be trimmed to a proven-tight one; option 1 — modelling every
+// escape — reopens the class on the next binary change.)
 //
 // Unlike the template path, the raw caller bytes are NOT a plausible reading:
 // they are provably not what lands (the CLI un-escapes), so scanning them raw
