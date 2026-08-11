@@ -452,8 +452,71 @@ export function baselineRelFrom(env: Record<string, string | undefined>): string
 }
 const FENCE = "```ratchet-baseline";
 
+/**
+ * Env var that opts INTO the legacy upward `.obsidian`-ancestor walk (#157
+ * follow-up on #168). Never consulted implicitly — `rootDiscoveryRefusal`
+ * decides whether `discoverRoot`'s walk may run at all; the walk itself has
+ * no fallback of its own once that gate has passed.
+ */
+export const ALLOW_ROOT_DISCOVERY_ENV = "ASSENT_ALLOW_ROOT_DISCOVERY";
+
+/** The same opt-in, spelled as an argv flag for one-off interactive use
+ * without exporting an env var. Either form is sufficient. */
+export const DISCOVER_ROOT_FLAG = "--discover-root";
+
+function truthyEnv(v: string | undefined): boolean {
+  if (v === undefined) return false;
+  const s = v.trim().toLowerCase();
+  return s !== "" && s !== "0" && s !== "false";
+}
+
+/**
+ * The reason `runCli` may not fall back to `discoverRoot`'s upward filesystem
+ * walk, or null when it may proceed — either because `ASSENT_CONTENT_ROOT` is
+ * set (`discoverRoot` will use it directly and never walk), or because the
+ * walk itself has been explicitly opted into.
+ *
+ * The remaining half of #157: #168 made `buildSnapshot` refuse a root outside
+ * a declared boundary, but a caller that supplied NO root at all still
+ * reached `discoverRoot`, which walked upward from `process.cwd()` and
+ * quietly used whatever `.obsidian`-ancestor it found — or, finding none,
+ * `cwd` itself — as its OWN boundary (`runConformance` threads `boundary:
+ * opts.root`). That is a silent default wearing a boundary's clothes:
+ * nothing outside this function ever saw the absence of a declared root,
+ * because the walk manufactured one instead of saying so.
+ *
+ * `discoverRoot` is pre-existing dev convenience (walk up to find the vault
+ * you're standing inside, so a developer running the CLI from a subdirectory
+ * doesn't have to spell out `--root=`) and was NOT the vector that caused the
+ * #157 breach — that was a standalone script, not this CLI. So it is kept,
+ * not deleted, but demoted from silent default to an explicit opt-in:
+ * `--discover-root` or `ASSENT_ALLOW_ROOT_DISCOVERY=1`. Absent both, and
+ * absent `ASSENT_CONTENT_ROOT`, this refuses — naming every way to proceed
+ * rather than guessing one.
+ *
+ * A discovered root (opt-in path) is not a bypass of #168's guard: `runCli`
+ * still threads it into `buildSnapshot` as `boundary: opts.root`, exactly
+ * like an explicit `--root=`, so the deny-list (`~/obsidian-old`, `80-89`, a
+ * hold) and the boundary check apply to it identically — this function only
+ * gates whether the walk may run at all, never what it is allowed to find.
+ */
+export function rootDiscoveryRefusal(argv: string[], env: Record<string, string | undefined>): string | null {
+  if (env.ASSENT_CONTENT_ROOT) return null;
+  if (argv.includes(DISCOVER_ROOT_FLAG) || truthyEnv(env[ALLOW_ROOT_DISCOVERY_ENV])) return null;
+  return (
+    `refusing to run: no content root declared. Set ASSENT_CONTENT_ROOT=<path>, or pass --root=<path>, naming ` +
+    `the vault to run against. There is no default to $HOME, the current working directory, or any hardcoded ` +
+    `path. (Interactive dev convenience only: ${DISCOVER_ROOT_FLAG} or ${ALLOW_ROOT_DISCOVERY_ENV}=1 opts back ` +
+    `into walking upward from the current directory for a \`.obsidian\` ancestor — a root found this way is ` +
+    `still subject to the same deny-list and boundary checks as any other.)`
+  );
+}
+
 /** ASSENT_CONTENT_ROOT wins, else walk up from `start` to the `.obsidian`
- * ancestor (the same discovery the Python scripts use), else `start`. */
+ * ancestor (the same discovery the Python scripts use), else `start`. Only
+ * ever called after `rootDiscoveryRefusal` has returned null for the current
+ * argv/env — see that function for why the walk is no longer reached by
+ * default. */
 function discoverRoot(start: string): string {
   const env = process.env.ASSENT_CONTENT_ROOT;
   if (env) return resolve(env);
@@ -510,7 +573,18 @@ export function baselineMissingRefusal(baselinePath: string, exists: boolean, no
 export async function runCli(argv: string[]): Promise<void> {
   const rebaseline = argv.includes("--rebaseline");
   const rootArg = argv.find((a) => a.startsWith("--root="))?.slice("--root=".length);
-  const root = rootArg ? resolve(rootArg) : discoverRoot(process.cwd());
+  let root: string;
+  if (rootArg) {
+    root = resolve(rootArg);
+  } else {
+    // No --root=: either ASSENT_CONTENT_ROOT is set (discoverRoot uses it
+    // directly, no walk) or the caller opted into the upward walk. Absent
+    // both, refuse rather than let discoverRoot manufacture a boundary by
+    // guessing — see rootDiscoveryRefusal.
+    const discoveryRefusal = rootDiscoveryRefusal(argv, process.env);
+    if (discoveryRefusal) throw new Error(discoveryRefusal);
+    root = discoverRoot(process.cwd());
+  }
   const baselineArg = argv.find((a) => a.startsWith("--baseline="))?.slice("--baseline=".length);
   const baselineRel = baselineRelFrom(process.env);
   const baselinePath = baselineArg ? resolve(baselineArg) : join(root, baselineRel);
