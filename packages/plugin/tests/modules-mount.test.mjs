@@ -35,11 +35,25 @@ const vocabSource = {
   body: async () => null,
 };
 
+/** A no-op skills backend — the skills module registers over it without ever
+ * calling a handler in these tests (registration only), so an inert stub is
+ * all the mount needs. */
+const skillsSource = {
+  notes: async () => [],
+  resolveLink: () => null,
+  embed: async () => null,
+  basePath: () => null,
+  frontmatterOf: () => null,
+  exists: () => false,
+  applyFrontmatter: async () => {},
+};
+
 function deps(overrides = {}) {
   return {
     getSettings: () => ({ ...(overrides.settings ?? {}) }),
     schemeNotes: () => NOTES,
     vocabSource,
+    skillsSource,
     ...overrides.deps,
   };
 }
@@ -71,8 +85,19 @@ describe("mountModules: the two built-in modules register through the registry",
     }
     assert.deepEqual(registry.problems, []);
     const described = registry.describe();
-    assert.deepEqual(described.map((d) => d.id), ["scheme", "vocab"]);
-    assert.ok(described.every((d) => d.enabled && d.tools.length > 0));
+    // The skills module (#82) joins as the third built-in — but ships DISABLED
+    // (a mutating module a human turns on), so it contributes nothing here.
+    assert.deepEqual(described.map((d) => d.id), ["scheme", "vocab", "skills"]);
+    for (const d of described) {
+      if (d.id === "skills") {
+        assert.equal(d.enabled, false);
+        assert.deepEqual(d.tools, []);
+      } else {
+        assert.ok(d.enabled && d.tools.length > 0);
+      }
+    }
+    // No skills tool leaked onto the surface while the module is off.
+    assert.ok(!names.some((n) => n.startsWith("vault_skills_")));
   });
 
   test("settings-toggle: modules.scheme.enabled=false unmounts only the scheme surface", () => {
@@ -162,12 +187,15 @@ describe("mount gate 2: the host ctx handed to modules is minimal", () => {
     assert.deepEqual(host.visible(["Projects/a.md", "Archive/b.md"]), ["Projects/a.md"]);
   });
 
-  test("builtinModules declares exactly the two capability modules", () => {
+  test("builtinModules declares the three capability modules (skills mutating)", () => {
     const mods = builtinModules(deps());
     assert.deepEqual(mods.map((m) => [m.id, m.posture]), [
       ["scheme", "capability"],
       ["vocab", "capability"],
+      ["skills", "capability"],
     ]);
+    // skills is the one module that declares it may contribute mutating tools.
+    assert.deepEqual(mods.filter((m) => m.mutating).map((m) => m.id), ["skills"]);
   });
 });
 
@@ -227,7 +255,9 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
   });
 
   test("drift check: every ToolDoc names a tool the module ACTUALLY contributed on registerAll, and vice versa", () => {
-    const { registry } = mount();
+    // Enable skills so all three modules contribute — the drift check needs a
+    // contributed tool list to compare each manifest against.
+    const { registry } = mount({ settings: { modules: { skills: { enabled: true } } } });
     const described = registry.describe();
     for (const d of described) {
       const mod = builtinModules(deps()).find((m) => m.id === d.id);
@@ -237,7 +267,7 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
   });
 
   test("readOnly drift: every ToolDoc's readOnly matches the tool's real registered annotation", () => {
-    const { server } = mount();
+    const { server } = mount({ settings: { modules: { skills: { enabled: true } } } });
     const mods = builtinModules(deps());
     const annotationsByName = Object.fromEntries([...server.tools].map(([name, { def }]) => [name, def.annotations]));
     for (const mod of mods) {
@@ -308,11 +338,17 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
     const settings = { schemes: [{ id: "jd", provider: "johnny-decimal", config: { contentDecimalFloor: 20 } }], modules: {} };
     const mods = builtinModules(deps({ settings }));
     const hosted = collect(mods, settings.modules, settings);
-    assert.deepEqual(hosted.map((h) => h.id), ["scheme", "vocab"]);
+    assert.deepEqual(hosted.map((h) => h.id), ["scheme", "vocab", "skills"]);
     const scheme = hosted.find((h) => h.id === "scheme");
     assert.equal(scheme.fields.find((f) => f.key === "contentDecimalFloor").value, 20);
     const vocab = hosted.find((h) => h.id === "vocab");
     assert.deepEqual(vocab.fields, []);
     assert.ok(vocab.directory.tools.length > 0);
+    // The skills module renders its own config tab: nine config fields (default
+    // values from the manifest) plus a six-tool capability directory.
+    const skills = hosted.find((h) => h.id === "skills");
+    assert.equal(skills.fields.length, 9);
+    assert.equal(skills.fields.find((f) => f.key === "pluginName").value, "vault-skills");
+    assert.equal(skills.directory.tools.length, 6);
   });
 });
