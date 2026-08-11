@@ -42,7 +42,7 @@
 //  governance commands.
 // ============================================================================
 
-import { TFile, MarkdownView, Notice, WorkspaceLeaf, type Plugin, type DataAdapter } from "obsidian";
+import { TFile, MarkdownView, Notice, type WorkspaceLeaf, type Plugin, type DataAdapter } from "obsidian";
 import { BaselineStore, type BlobFs } from "../kernel/governance/baseline-store.js";
 import { parseJournal, recentAgentWrite, agentWritesSince, type JournalRecord } from "../kernel/governance/journal-reader.js";
 import { computeQueue, type PendingItem, type NoteSnapshot } from "../kernel/governance/queue.js";

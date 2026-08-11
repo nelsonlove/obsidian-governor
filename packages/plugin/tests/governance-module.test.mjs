@@ -1,34 +1,53 @@
 /**
- * governance-module.test.mjs — the governance (Acceptance) module (#83, cycle 1:
- * the Stewardship fold). Cycle 1 is deliberately MINIMAL and one-way:
+ * governance-module.test.mjs — the governance (Acceptance) module (#83). THE ACCEPT-
+ * UNREACHABILITY TRIPWIRE. Cycle 1 asserted this trivially (no accept surface existed yet);
+ * cycle 2 folds in the actual human-only Accept gesture + review pane, so this test is now
+ * LOAD-BEARING: it asserts, with the accept surface actually present in the source tree, that
+ * NONE of performAccept / setBaseline / runGuardedAdopt / setClassEnabled / stampAcceptance is
+ * reachable from any of:
+ *   - the governance module's MCP tool list (it contributes ZERO tools),
+ *   - the whole mounted MCP surface,
+ *   - the plugin instance (no instance method / no this.<member>),
+ *   - the view/tab instance (controller held in a module-private WeakMap),
+ *   - the mount host ctx handed to modules ({getSettings, visible} only),
+ *   - the MCP transport layer (server.ts + mcp/tools-*.ts never import/reference them),
+ * and that every pane Accept/Revert/Adopt/allowlist button is addEventListener-wired (so its
+ * `.onclick` stays null) and gates on isRealGesture. The DEFINITIVE proof is the deploy-time LIVE
+ * reachability walk (pane.ts/wiring.ts import the obsidian runtime, types-only in the test env, so
+ * the classes cannot be instantiated headlessly); this source-level tripwire is what catches a
+ * regression BEFORE that live check.
  *
- *   - the module mounts through the ModuleRegistry like scheme/vocab/skills,
- *     ships DISABLED, and — when enabled — contributes exactly ONE read-only
- *     surface, the reused obsidian_pending_review (#75);
- *   - it renders a config-tab section (directory-only, like vocab);
- *   - THE TRIPWIRE: no accept / baseline / adopt / setClassEnabled surface is
- *     reachable from the module's tool list, and the module receives no plugin
- *     instance / app / kernel / accept surface to reach one through. This is
- *     trivially true this cycle (none is added) — it is asserted anyway because
- *     it becomes load-bearing in cycle 2, when the accept gesture + pane fold in
- *     under their own reachability review. A regression there trips this test.
- *
- * Headless: modules-mount.ts imports nothing from `obsidian`; the pending-review
- * source arrives as a fake `{ read }`.
+ * Headless: modules-mount.ts imports nothing from `obsidian`.
  */
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { fakeServer } from "./fake-server.mjs";
 import { mountModules, mountHost, builtinModules } from "../src/mcp/modules-mount.ts";
 import { collect, ModuleRegistry } from "../src/kernel/modules/index.ts";
 
-/** The forbidden-surface matcher. DELIBERATELY BROADER than the registry's own
- * built-in tripwire (accept/approve/baseline): this also names `adopt` and
- * `setClassEnabled` — the cycle-2 accept-path verbs the registry's fragment list
- * does NOT catch (a read-only `obsidian_adopt_*` would sail past the registry's
- * check and its read-only gate). Asserting the governance module's ACTUAL surface
- * against THIS is what makes the tripwire load-bearing for cycle 2. */
+const here = path.dirname(fileURLToPath(import.meta.url));
+const srcDir = path.join(here, "..", "src");
+const readRaw = (rel) => fs.readFileSync(path.join(srcDir, rel), "utf8");
+// Strip comments so identifiers named only in the (extensive) invariant docs don't false-match.
+function code(rel) {
+  return readRaw(rel)
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/([^:])\/\/[^\n]*/g, "$1")
+    .replace(/^\/\/[^\n]*/gm, "");
+}
+function mcpToolFiles() {
+  const dir = path.join(srcDir, "mcp");
+  return fs.readdirSync(dir).filter((f) => f.startsWith("tools-") && f.endsWith(".ts")).map((f) => `mcp/${f}`);
+}
+
+/** The forbidden-surface matcher. DELIBERATELY BROADER than the registry's own built-in tripwire
+ * (accept/approve/baseline): it also names `adopt` and `setClassEnabled` — the cycle-2 accept-path
+ * verbs the registry's fragment list does NOT catch. Asserting the governance module's ACTUAL
+ * surface against THIS is what makes the tripwire load-bearing. */
 const FORBIDDEN = /accept|baseline|adopt|approve|setclassenabled|set_class_enabled/i;
 
 function deps(settings = {}) {
@@ -45,7 +64,6 @@ function deps(settings = {}) {
       exists: () => false,
       applyFrontmatter: async () => {},
     },
-    pendingReviewSource: { read: async () => null },
   };
 }
 
@@ -63,46 +81,41 @@ describe("governance module: shape + default-off", () => {
   test("declared as a read-only capability module, disabled by default, NOT mutating", () => {
     const gov = governanceModule();
     assert.ok(gov, "governance module is not declared");
-    // Posture is "capability", NOT "governance": the v1 registry refuses the
-    // governance posture outright (it would be inert), so the fold lands as an
-    // ordinary read-only capability module instead.
+    // Posture is "capability", NOT "governance": the v1 registry refuses the governance posture
+    // outright (it would be inert), so the fold lands as an ordinary capability module instead.
     assert.equal(gov.posture, "capability");
     assert.equal(gov.enabled, false);
-    assert.ok(!gov.mutating, "governance must NOT declare mutating — it is read-only");
+    assert.ok(!gov.mutating, "governance must NOT declare mutating — it contributes no MCP tool");
     assert.deepEqual(gov.capabilities, ["acceptance"]);
   });
 
-  test("disabled by default: obsidian_pending_review is NOT on the surface", () => {
+  test("disabled by default: the module contributes nothing", () => {
     const { server, registry } = mount();
-    assert.ok(!server.tools.has("obsidian_pending_review"));
     const gov = registry.describe().find((d) => d.id === "governance");
     assert.equal(gov.enabled, false);
     assert.deepEqual(gov.tools, []);
+    // obsidian_pending_review is always-on in server.ts, NOT a module tool — never on the mount.
+    assert.ok(!server.tools.has("obsidian_pending_review"));
   });
 });
 
-describe("governance module: registers its one read-only surface when enabled", () => {
-  test("enabling it contributes exactly obsidian_pending_review, read-only", () => {
+describe("governance module: contributes ZERO MCP tools when enabled", () => {
+  test("enabling it adds NO tool to the surface (the accept surface is an Obsidian pane)", () => {
     const { server, registry } = mount({ modules: { governance: { enabled: true } } });
     assert.deepEqual(registry.problems, []);
     const gov = registry.describe().find((d) => d.id === "governance");
-    assert.deepEqual(gov.tools, ["obsidian_pending_review"]);
-    const entry = server.tools.get("obsidian_pending_review");
-    assert.ok(entry, "obsidian_pending_review not registered");
-    assert.equal(entry.def.annotations?.readOnlyHint, true);
-  });
-
-  test("the registered handler answers read-only (empty queue over the fake source), never mutates", async () => {
-    const { server } = mount({ modules: { governance: { enabled: true } } });
-    const { handler } = server.tools.get("obsidian_pending_review");
-    const res = await handler({});
-    assert.equal(res.isError, undefined);
-    assert.deepEqual(res.structuredContent, { pending: [], count: 0 });
+    assert.equal(gov.enabled, true);
+    assert.deepEqual(gov.tools, []);
+    // Nothing forbidden — and specifically no accept tool — reached the transport.
+    for (const name of server.tools.keys()) {
+      assert.ok(!FORBIDDEN.test(name), `a forbidden-named tool reached the surface: ${name}`);
+    }
+    assert.ok(!server.tools.has("obsidian_pending_review"));
   });
 });
 
-describe("governance module: renders a config-tab section (directory-only, like vocab)", () => {
-  test("collect() gives it a section — no config fields, one read-only tool, disabled", () => {
+describe("governance module: renders a config-tab section (summary-only, empty directory)", () => {
+  test("collect() gives it a section — no config fields, no tools, disabled", () => {
     const settings = { modules: {} };
     const hosted = collect(builtinModules(deps(settings)), settings.modules, settings);
     const gov = hosted.find((h) => h.id === "governance");
@@ -110,16 +123,12 @@ describe("governance module: renders a config-tab section (directory-only, like 
     assert.ok(gov.summary.length > 0, "governance summary is empty");
     assert.deepEqual(gov.fields, []);
     assert.equal(gov.enabled, false);
-    assert.equal(gov.directory.tools.length, 1);
-    assert.equal(gov.directory.tools[0].name, "obsidian_pending_review");
-    assert.equal(gov.directory.tools[0].readOnly, true);
+    assert.equal(gov.directory.tools.length, 0);
   });
 });
 
-describe("governance module: THE TRIPWIRE — no accept/baseline/adopt/setClassEnabled surface", () => {
-  test("the matcher has teeth (it would catch the cycle-2 verbs, incl. ones the registry misses)", () => {
-    // Prove the regex is live before relying on it, the way the mount's source-scan
-    // test proves its pattern. These are the exact names cycle 2 must NOT add here.
+describe("governance module: THE TRIPWIRE — structural (module + registry)", () => {
+  test("the matcher has teeth (it would catch the accept verbs, incl. ones the registry misses)", () => {
     for (const bad of [
       "obsidian_accept_note",
       "obsidian_adopt_baseline",
@@ -132,53 +141,32 @@ describe("governance module: THE TRIPWIRE — no accept/baseline/adopt/setClassE
     assert.ok(!FORBIDDEN.test("obsidian_pending_review"));
   });
 
-  test("nothing forbidden is reachable from the module's contributed tool list", () => {
+  test("nothing forbidden is reachable from the module's contributed tool list or the whole surface", () => {
     const { server, registry } = mount({ modules: { governance: { enabled: true } } });
     const gov = registry.describe().find((d) => d.id === "governance");
-    // Every tool the module actually contributed…
-    for (const name of gov.tools) {
-      assert.ok(!FORBIDDEN.test(name), `governance contributed a forbidden-named tool: ${name}`);
-      // …and every one is read-only, so it cannot reach the write queue, the write
-      // primitive, or the accept-forbidden guard's territory (the guard routes ONLY
-      // readOnlyHint === false calls to the kernel's mutation path).
-      assert.equal(server.tools.get(name).def.annotations?.readOnlyHint, true);
-    }
-    // The whole mounted surface, too — governance added nothing forbidden to it.
-    for (const name of server.tools.keys()) {
-      assert.ok(!FORBIDDEN.test(name), `a forbidden-named tool reached the surface: ${name}`);
-    }
+    for (const name of gov.tools) assert.ok(!FORBIDDEN.test(name), `governance contributed a forbidden tool: ${name}`);
+    for (const name of server.tools.keys()) assert.ok(!FORBIDDEN.test(name), `a forbidden-named tool reached the surface: ${name}`);
   });
 
   test("nothing forbidden is declared in the module's manifest directory", () => {
     const gov = governanceModule();
     const dir = gov.manifest.directory ?? {};
-    for (const t of dir.tools ?? []) {
-      assert.ok(!FORBIDDEN.test(t.name), `manifest ToolDoc names a forbidden surface: ${t.name}`);
-      assert.equal(t.readOnly, true, `manifest ToolDoc ${t.name} must be read-only`);
-    }
-    // No non-tool surface (address form, rule pack, kernel arg) smuggles one either.
+    for (const t of dir.tools ?? []) assert.ok(!FORBIDDEN.test(t.name), `manifest ToolDoc names a forbidden surface: ${t.name}`);
     for (const s of [...(dir.addressForms ?? []), ...(dir.rulePacks ?? []), ...(dir.kernelArgs ?? [])]) {
       assert.ok(!FORBIDDEN.test(s.name), `manifest surface names a forbidden capability: ${s.name}`);
     }
   });
 
   test("the module reaches no plugin instance / app / kernel / accept surface to mutate through", () => {
-    // The ONLY context the governance module's register() receives is mountHost's
-    // ctx — exactly {getSettings, visible}. No `app`, no plugin instance, no kernel
-    // (queue/journal/locks), no baseline/accept surface. So even if a later edit
-    // slipped an accept-shaped call into a handler, it would have nothing to call it
-    // against. This is the "trivially true this cycle" half, asserted anyway because
-    // cycle 2 wires the accept gesture and this is where its blast radius is bounded.
+    // The ONLY context the governance module's register() receives is mountHost's ctx — exactly
+    // {getSettings, visible}. No `app`, no plugin instance, no kernel (queue/journal/locks), no
+    // baseline/accept surface. Even if a later edit slipped an accept-shaped call into a module
+    // handler, it would have nothing to call it against.
     const host = mountHost(deps());
     assert.deepEqual(Object.keys(host).sort(), ["getSettings", "visible"]);
   });
 
-  test("even so, the registry REFUSES a governance-shaped module that tries to add an accept/baseline tool", () => {
-    // Defense in depth: prove the tripwire path is not vacuous. A hostile module
-    // (governance's id/posture) attempting accept/baseline-named registrations is
-    // refused and reported by the registry's own name check — the tool never reaches
-    // the surface. (adopt/setClassEnabled are caught by THIS test file's FORBIDDEN
-    // assertions above, not the registry's narrower built-in list.)
+  test("the registry REFUSES a governance-shaped module that tries to add an accept/baseline tool", () => {
     const server = fakeServer();
     const hostile = {
       id: "governance",
@@ -196,5 +184,133 @@ describe("governance module: THE TRIPWIRE — no accept/baseline/adopt/setClassE
     assert.ok(!server.tools.has("obsidian_advance_baseline"));
     assert.equal(registry.problems.filter((p) => p.includes("refused")).length, 2);
     assert.deepEqual(registry.describe().find((d) => d.id === "governance").tools, []);
+  });
+});
+
+describe("governance module: THE TRIPWIRE — source reachability (accept surface present)", () => {
+  // A class METHOD is `<indent><modifiers?> name(` (inside a class body). A module function is
+  // `function name(` at column 0. This matcher fires ONLY on an instance method.
+  function isInstanceMethod(src, name) {
+    return new RegExp(
+      `(?:^|\\n)[ \\t]+(?:private |public |protected |readonly |static |get |set )*(?:async )?${name}\\s*\\(`,
+    ).test(src);
+  }
+  const referencesThisMember = (src, name) => new RegExp(`\\bthis\\.${name}\\b`).test(src);
+
+  // The accept-equivalent capabilities. None may be an instance method, a this.<member>, or an MCP
+  // reference. Each exists ONLY as a module-scope function / WeakMap value reached through a
+  // gesture-gated pane handler.
+  const ACCEPT_EQUIVALENT = [
+    "performAccept", "performRevert", "performAdopt", "setClassEnabled", "reconcile",
+    "getStore", "setBaseline", "acceptNote", "revertNote", "stampAcceptance",
+  ];
+
+  test("wiring.ts: the accept-equivalent capabilities are module-scope, not instance methods or this.<member>", () => {
+    const wiring = code("governance/wiring.ts");
+    for (const name of ACCEPT_EQUIVALENT) {
+      assert.ok(!isInstanceMethod(wiring, name), `${name} must NOT be an instance method`);
+      assert.ok(!referencesThisMember(wiring, name), `this.${name} must not exist (would be reachable from app)`);
+    }
+    // performAccept/performRevert/performAdopt/reconcile/setClassEnabled ARE declared as module-scope functions.
+    for (const fn of ["performAccept", "performRevert", "performAdopt", "reconcile", "setClassEnabled"]) {
+      assert.match(wiring, new RegExp(`\\n(?:async )?function ${fn}\\s*\\(`), `${fn} must be a module-scope function`);
+    }
+  });
+
+  test("wiring.ts: the baseline store lives in a module-private WeakMap, never this.store", () => {
+    const wiring = code("governance/wiring.ts");
+    assert.ok(!/\bthis\.store\b/.test(wiring), "store must not be this.store (would be reachable)");
+    assert.match(wiring, /const baselineStores = new WeakMap</, "the store must be held in a module-private WeakMap");
+  });
+
+  test("wiring.ts: registers ZERO commands (a command is agent-invokable via obsidian_run_command)", () => {
+    const wiring = code("governance/wiring.ts");
+    assert.ok(!/\baddCommand\b/.test(wiring), "the governance wiring must register no command");
+  });
+
+  test("pane.ts: the controller lives in a module-private WeakMap, never on the instance", () => {
+    const pane = code("governance/pane.ts");
+    assert.ok(!/\bthis\.controller\b/.test(pane), "no this.controller (would be reachable)");
+    assert.ok(!/(private|readonly)\s+controller\b/.test(pane), "no controller instance field on the view");
+    assert.match(pane, /const viewDeps = new WeakMap</, "deps held in a module-private WeakMap");
+    assert.match(pane, /viewDeps\.set\(this,/, "constructor stows deps in the WeakMap");
+  });
+
+  test("pane.ts: every accept-class button is addEventListener-wired, NEVER via .onclick = (so .onclick stays null)", () => {
+    const pane = code("governance/pane.ts");
+    for (const el of ["acceptBtn", "revertBtn", "adoptBtn", "checkbox", "confirm"]) {
+      assert.ok(!new RegExp(`\\b${el}\\.onclick\\s*=`).test(pane),
+        `${el}.onclick = … is the forgeable wiring — must use addEventListener`);
+    }
+    assert.match(pane, /acceptBtn\.addEventListener\(\s*["']click["']/, "accept via addEventListener");
+    assert.match(pane, /revertBtn\.addEventListener\(\s*["']click["']/, "revert via addEventListener");
+    assert.match(pane, /adoptBtn\.addEventListener\(\s*["']click["']/, "adopt via addEventListener");
+    assert.match(pane, /checkbox\.addEventListener\(\s*["']click["']/, "allowlist checkbox via addEventListener");
+    assert.match(pane, /confirm\.addEventListener\(\s*["']click["']/, "modal confirm via addEventListener");
+  });
+
+  test("pane.ts: every accept-class handler gates on isRealGesture (directly or via runGuardedAdopt)", () => {
+    const paneRaw = readRaw("governance/pane.ts");
+    assert.match(paneRaw, /isRealGesture/, "the pane must use the isRealGesture gate");
+    // accept/revert handlers gate directly on isRealGesture.
+    const lines = paneRaw.split("\n");
+    for (const el of ["acceptBtn", "revertBtn"]) {
+      let found = false;
+      for (let i = 0; i < lines.length; i++) {
+        if (new RegExp(`${el}\\.addEventListener\\(`).test(lines[i])) {
+          assert.match(lines.slice(i, i + 5).join("\n"), /isRealGesture/, `${el} handler must gate on isRealGesture`);
+          found = true;
+        }
+      }
+      assert.ok(found, `${el} must be wired with addEventListener`);
+    }
+    // adopt gates via runGuardedAdopt (which checks isRealGesture); the allowlist checkbox gates
+    // via deps.setClassEnabled (whose body checks isRealGesture — asserted below).
+    assert.match(paneRaw, /runGuardedAdopt/, "adopt must go through runGuardedAdopt");
+  });
+
+  test("wiring.ts: setClassEnabled (the auto-accept allowlist mutator) gates on isRealGesture", () => {
+    const wiringRaw = readRaw("governance/wiring.ts");
+    const m = /async function setClassEnabled\([^)]*\)[^{]*\{([\s\S]*?)\n\}/.exec(wiringRaw);
+    assert.ok(m, "setClassEnabled must be a module-scope function");
+    assert.match(m[1], /if \(!isRealGesture\(evt\)\) return false;/,
+      "setClassEnabled must refuse unless handed a real trusted gesture");
+  });
+
+  test("stampAcceptance (the one place that writes `accepted`) is reachable ONLY from the gesture path, never from MCP", () => {
+    // accept.ts (the gesture path) imports stampAcceptance; the MCP transport must NOT.
+    assert.match(readRaw("kernel/governance/accept.ts"), /import \{ stampAcceptance \}/,
+      "acceptNote is the sanctioned caller of stampAcceptance");
+    const mcpLayer = ["mcp/server.ts", ...mcpToolFiles()];
+    for (const rel of mcpLayer) {
+      const src = code(rel);
+      assert.ok(!/\bstampAcceptance\b/.test(src), `${rel} must not reference stampAcceptance`);
+      for (const name of ["performAccept", "performAdopt", "runGuardedAdopt", "setClassEnabled", "acceptNote", "revertNote"]) {
+        assert.ok(!new RegExp(`\\b${name}\\b`).test(src), `${rel} must not reference the accept-path fn ${name}`);
+      }
+    }
+  });
+
+  test("the MCP transport imports nothing from src/governance/ (the accept pane), and pending-review stays always-on read-only", () => {
+    for (const rel of ["mcp/server.ts", "mcp/modules-mount.ts", ...mcpToolFiles()]) {
+      assert.ok(!/from ["'][^"']*\/governance\/(pane|wiring)/.test(readRaw(rel)),
+        `${rel} must not import the governance pane/wiring`);
+    }
+    // obsidian_pending_review is registered always-on in server.ts (read-only), decoupled from the
+    // governance module toggle — the one MCP read surface, and it is not accept-shaped.
+    const server = code("mcp/server.ts");
+    assert.match(server, /registerPendingReviewTools\(server,/, "obsidian_pending_review must be registered always-on");
+    assert.ok(!FORBIDDEN.test("obsidian_pending_review"));
+  });
+
+  test("main.ts wires the pane ONLY via wireGovernance behind the module-enabled flag — no accept method/command/tool on the plugin", () => {
+    const main = code("main.ts");
+    assert.match(main, /wireGovernance\(this,/, "main.ts wires the pane via wireGovernance");
+    assert.match(main, /modules\?\.governance\?\.enabled === true/, "gated on the governance module enabled flag");
+    // The plugin exposes no accept-equivalent method and registers no accept command.
+    for (const name of ["performAccept", "performAdopt", "setBaseline", "acceptNote", "stampAcceptance"]) {
+      assert.ok(!isInstanceMethod(main, name), `${name} must not be a plugin instance method`);
+    }
+    assert.ok(!/addCommand\([^)]*accept/i.test(readRaw("main.ts")), "no accept command on the plugin");
   });
 });

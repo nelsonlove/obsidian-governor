@@ -23,7 +23,7 @@
 // reference to an accept-capable callable is inside each button's addEventListener('click')
 // closure, closed over the specific displayed row.
 
-import { ItemView, WorkspaceLeaf, Notice, Modal, TFile, type App } from "obsidian";
+import { ItemView, Notice, Modal, TFile, type WorkspaceLeaf, type App } from "obsidian";
 import { type PendingItem, groupByAgent } from "../kernel/governance/queue.js";
 import { diffNote, toHunks, type DiffLine, type HunkCollapsed } from "../kernel/governance/diff.js";
 import { isRealGesture, runGuardedAdopt } from "../kernel/governance/gesture.js";

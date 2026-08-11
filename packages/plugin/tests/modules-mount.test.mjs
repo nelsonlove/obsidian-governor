@@ -103,22 +103,23 @@ describe("mountModules: the two built-in modules register through the registry",
     }
     // No skills tool leaked onto the surface while the module is off.
     assert.ok(!names.some((n) => n.startsWith("vault_skills_")));
-    // And obsidian_pending_review is NOT on the default surface: it is the governance
-    // module's one tool, and that module ships disabled (the #83-cycle-1 move from
-    // an always-on registration to a toggleable module surface).
+    // obsidian_pending_review is NEVER on the MODULE surface (#83 cycle 2): it is
+    // registered always-on in server.ts, decoupled from the governance toggle, so the
+    // mount never contributes it whether governance is on or off.
     assert.ok(!names.includes("obsidian_pending_review"));
   });
 
-  test("governance ON: obsidian_pending_review is the module's one read-only surface", () => {
+  test("governance ON: contributes ZERO MCP tools (the accept surface is an Obsidian pane, not a tool)", () => {
     const { server, registry } = mount({ settings: { modules: { governance: { enabled: true } } } });
     const names = [...server.tools.keys()];
-    assert.ok(names.includes("obsidian_pending_review"));
+    // The governance module's capability is the review pane (wired in main.ts) — it puts
+    // NOTHING on the MCP transport. Enabling it adds no tool at all, and never the
+    // always-on-elsewhere obsidian_pending_review.
+    assert.ok(!names.includes("obsidian_pending_review"));
     assert.deepEqual(registry.problems, []);
     const gov = registry.describe().find((d) => d.id === "governance");
     assert.equal(gov.enabled, true);
-    assert.deepEqual(gov.tools, ["obsidian_pending_review"]);
-    // Read-only, and no other surface came with it.
-    assert.equal(server.tools.get("obsidian_pending_review").def.annotations?.readOnlyHint, true);
+    assert.deepEqual(gov.tools, []);
   });
 
   test("settings-toggle: modules.scheme.enabled=false unmounts only the scheme surface", () => {
@@ -375,14 +376,13 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
     assert.equal(skills.fields.length, 9);
     assert.equal(skills.fields.find((f) => f.key === "pluginName").value, "vault-skills");
     assert.equal(skills.directory.tools.length, 6);
-    // The governance module renders its section too — directory-only (like vocab):
-    // no config fields, one read-only tool in its capability directory, and it ships
-    // disabled (opt-in governance surface).
+    // The governance module renders its section too — summary-only (#83 cycle 2): no
+    // config fields, and an EMPTY capability directory, because its capability is the
+    // Obsidian review pane (wired in main.ts), not an MCP tool. It contributes nothing
+    // to the transport and ships disabled (opt-in accept pane).
     const governance = hosted.find((h) => h.id === "governance");
     assert.deepEqual(governance.fields, []);
     assert.equal(governance.enabled, false);
-    assert.equal(governance.directory.tools.length, 1);
-    assert.equal(governance.directory.tools[0].name, "obsidian_pending_review");
-    assert.equal(governance.directory.tools[0].readOnly, true);
+    assert.equal(governance.directory.tools.length, 0);
   });
 });
