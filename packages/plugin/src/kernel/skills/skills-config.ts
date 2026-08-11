@@ -6,9 +6,13 @@
 // In the STANDALONE vault-skills plugin this logic lived in `settings.ts`
 // (coupled to `PluginSettingTab`) and `paths.ts`. Here only the pure halves
 // come across: the settings-tab UI is replaced by the config-host's generic,
-// manifest-driven renderer (SKILLS_MANIFEST in mcp/modules-mount.ts), and the
-// on-save export trigger (`exportOnSave`) is dropped — a vault-mcp module is
-// tool-triggered, it has no vault-side save hook.
+// manifest-driven renderer (SKILLS_MANIFEST in mcp/modules-mount.ts).
+//
+// `exportOnSave` came BACK with the GUI fold (#82 GUI residuals): a vault-mcp
+// module has no vault-side save hook of its own, but the in-Obsidian skills GUI
+// (src/skills/) does — its debounced export-on-save trigger reads this flag.
+// It stays OFF by default (opt-in); the MCP tool surface never reads it, so a
+// tool-only deployment behaves exactly as before.
 
 import * as os from "node:os";
 import * as path from "node:path";
@@ -37,12 +41,16 @@ export interface SkillsConfig {
   assetsRoot: string;
   /** A git checkout `vault_skills_release` targets. Blank => release disabled. `~` expanded. */
   releaseDir: string;
+  /** GUI only: re-export automatically when a skill/agent/policy/command note
+   *  (or a transcluded source note) changes. Debounced; opt-in (default false).
+   *  The MCP tool surface never reads this — it is a human-GUI affordance. */
+  exportOnSave: boolean;
 }
 
 /** The module's config defaults — mirrors the standalone plugin's
- * DEFAULT_SETTINGS (minus `exportOnSave`). Fed to the manifest as
- * `config.defaults`, so the config tab renders them and `register()` receives
- * them merged under any user override. */
+ * DEFAULT_SETTINGS. Fed to the manifest as `config.defaults`, so the config tab
+ * renders them and `register()` receives them merged under any user override.
+ * `exportOnSave` defaults OFF: the GUI's on-save export is opt-in. */
 export const DEFAULT_SKILLS_CONFIG: SkillsConfig = {
   outputDir: "~/.claude/skills/vault-skills",
   pluginName: "vault-skills",
@@ -53,6 +61,7 @@ export const DEFAULT_SKILLS_CONFIG: SkillsConfig = {
   fieldKey: "vault-skills",
   assetsRoot: "",
   releaseDir: "",
+  exportOnSave: false,
 };
 
 /** Coerce a merged config record (defaults + user override, as `register()`
@@ -74,6 +83,8 @@ export function skillsConfigOf(config: Record<string, unknown>): SkillsConfig {
     fieldKey: str("fieldKey"),
     assetsRoot: str("assetsRoot"),
     releaseDir: str("releaseDir"),
+    // Only a literal `true` enables it; any other/missing value degrades to off.
+    exportOnSave: config.exportOnSave === true,
   };
 }
 
