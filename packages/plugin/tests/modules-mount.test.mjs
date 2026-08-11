@@ -48,12 +48,17 @@ const skillsSource = {
   applyFrontmatter: async () => {},
 };
 
+/** A no-op pending-review source for the governance module — the module registers
+ * obsidian_pending_review over it without ever calling the handler in these tests. */
+const pendingReviewSource = { read: async () => null };
+
 function deps(overrides = {}) {
   return {
     getSettings: () => ({ ...(overrides.settings ?? {}) }),
     schemeNotes: () => NOTES,
     vocabSource,
     skillsSource,
+    pendingReviewSource,
     ...overrides.deps,
   };
 }
@@ -85,11 +90,11 @@ describe("mountModules: the two built-in modules register through the registry",
     }
     assert.deepEqual(registry.problems, []);
     const described = registry.describe();
-    // The skills module (#82) joins as the third built-in — but ships DISABLED
-    // (a mutating module a human turns on), so it contributes nothing here.
-    assert.deepEqual(described.map((d) => d.id), ["scheme", "vocab", "skills"]);
+    // skills (#82) and governance (#83) both ship DISABLED (opt-in surfaces a human
+    // turns on), so they contribute nothing here — scheme + vocab are the live pair.
+    assert.deepEqual(described.map((d) => d.id), ["scheme", "vocab", "skills", "governance"]);
     for (const d of described) {
-      if (d.id === "skills") {
+      if (d.id === "skills" || d.id === "governance") {
         assert.equal(d.enabled, false);
         assert.deepEqual(d.tools, []);
       } else {
@@ -98,6 +103,22 @@ describe("mountModules: the two built-in modules register through the registry",
     }
     // No skills tool leaked onto the surface while the module is off.
     assert.ok(!names.some((n) => n.startsWith("vault_skills_")));
+    // And obsidian_pending_review is NOT on the default surface: it is the governance
+    // module's one tool, and that module ships disabled (the #83-cycle-1 move from
+    // an always-on registration to a toggleable module surface).
+    assert.ok(!names.includes("obsidian_pending_review"));
+  });
+
+  test("governance ON: obsidian_pending_review is the module's one read-only surface", () => {
+    const { server, registry } = mount({ settings: { modules: { governance: { enabled: true } } } });
+    const names = [...server.tools.keys()];
+    assert.ok(names.includes("obsidian_pending_review"));
+    assert.deepEqual(registry.problems, []);
+    const gov = registry.describe().find((d) => d.id === "governance");
+    assert.equal(gov.enabled, true);
+    assert.deepEqual(gov.tools, ["obsidian_pending_review"]);
+    // Read-only, and no other surface came with it.
+    assert.equal(server.tools.get("obsidian_pending_review").def.annotations?.readOnlyHint, true);
   });
 
   test("settings-toggle: modules.scheme.enabled=false unmounts only the scheme surface", () => {
@@ -187,14 +208,18 @@ describe("mount gate 2: the host ctx handed to modules is minimal", () => {
     assert.deepEqual(host.visible(["Projects/a.md", "Archive/b.md"]), ["Projects/a.md"]);
   });
 
-  test("builtinModules declares the three capability modules (skills mutating)", () => {
+  test("builtinModules declares the four capability modules (skills mutating; governance NOT)", () => {
     const mods = builtinModules(deps());
     assert.deepEqual(mods.map((m) => [m.id, m.posture]), [
       ["scheme", "capability"],
       ["vocab", "capability"],
       ["skills", "capability"],
+      // governance is posture "capability", NOT "governance" — the v1 registry refuses
+      // the governance posture (it is inert). It clears that gate by being read-only.
+      ["governance", "capability"],
     ]);
-    // skills is the one module that declares it may contribute mutating tools.
+    // skills is the one module that declares it may contribute mutating tools;
+    // governance is NOT mutating (read-only pending surface only).
     assert.deepEqual(mods.filter((m) => m.mutating).map((m) => m.id), ["skills"]);
   });
 });
@@ -255,9 +280,9 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
   });
 
   test("drift check: every ToolDoc names a tool the module ACTUALLY contributed on registerAll, and vice versa", () => {
-    // Enable skills so all three modules contribute — the drift check needs a
-    // contributed tool list to compare each manifest against.
-    const { registry } = mount({ settings: { modules: { skills: { enabled: true } } } });
+    // Enable skills AND governance so all four modules contribute — the drift check
+    // needs a contributed tool list to compare each manifest against.
+    const { registry } = mount({ settings: { modules: { skills: { enabled: true }, governance: { enabled: true } } } });
     const described = registry.describe();
     for (const d of described) {
       const mod = builtinModules(deps()).find((m) => m.id === d.id);
@@ -267,7 +292,7 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
   });
 
   test("readOnly drift: every ToolDoc's readOnly matches the tool's real registered annotation", () => {
-    const { server } = mount({ settings: { modules: { skills: { enabled: true } } } });
+    const { server } = mount({ settings: { modules: { skills: { enabled: true }, governance: { enabled: true } } } });
     const mods = builtinModules(deps());
     const annotationsByName = Object.fromEntries([...server.tools].map(([name, { def }]) => [name, def.annotations]));
     for (const mod of mods) {
@@ -338,7 +363,7 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
     const settings = { schemes: [{ id: "jd", provider: "johnny-decimal", config: { contentDecimalFloor: 20 } }], modules: {} };
     const mods = builtinModules(deps({ settings }));
     const hosted = collect(mods, settings.modules, settings);
-    assert.deepEqual(hosted.map((h) => h.id), ["scheme", "vocab", "skills"]);
+    assert.deepEqual(hosted.map((h) => h.id), ["scheme", "vocab", "skills", "governance"]);
     const scheme = hosted.find((h) => h.id === "scheme");
     assert.equal(scheme.fields.find((f) => f.key === "contentDecimalFloor").value, 20);
     const vocab = hosted.find((h) => h.id === "vocab");
@@ -350,5 +375,14 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
     assert.equal(skills.fields.length, 9);
     assert.equal(skills.fields.find((f) => f.key === "pluginName").value, "vault-skills");
     assert.equal(skills.directory.tools.length, 6);
+    // The governance module renders its section too — directory-only (like vocab):
+    // no config fields, one read-only tool in its capability directory, and it ships
+    // disabled (opt-in governance surface).
+    const governance = hosted.find((h) => h.id === "governance");
+    assert.deepEqual(governance.fields, []);
+    assert.equal(governance.enabled, false);
+    assert.equal(governance.directory.tools.length, 1);
+    assert.equal(governance.directory.tools[0].name, "obsidian_pending_review");
+    assert.equal(governance.directory.tools[0].readOnly, true);
   });
 });
