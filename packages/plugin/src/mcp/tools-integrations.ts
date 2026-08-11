@@ -188,7 +188,8 @@ export function registerIntegrationTools(server: McpServer, app: App, ctx: Serve
       {
         title: "Create note from Templater template",
         description:
-          "Create a new note at target_path by running a Templater template. Requires the Templater plugin. Returns { target_path, created: true }.",
+          "Create a new note at target_path by running a Templater template. Requires the Templater plugin. Returns { target_path, created: true }. " +
+          "Acceptance is human-only: the template is scanned pre-exec and refused if it carries an acceptance fence, or an expansion token — a Templater <% %> tag OR a core-Templates {{ }} field — whose expanded output cannot be inspected before it lands (expand it in Obsidian first, or use a template without expansion tokens); an unreadable template also fails closed.",
         inputSchema: {
           template_path: z.string().min(1).describe("Vault-relative path of the Templater template file, e.g. 'Templates/Daily Note.md'."),
           target_path:   z.string().min(1).describe("Vault-relative path for the new note to create, e.g. 'Notes/2026-06-26.md'."),
@@ -212,12 +213,22 @@ export function registerIntegrationTools(server: McpServer, app: App, ctx: Serve
             return fail(new Error(`template not found: ${template_path}`));
           }
 
-          // ── accept-forbidden guard, PRE-EXEC (issue #105 part 1) ──────────
+          // ── accept-forbidden guard, PRE-EXEC (issue #105 part 1, #137) ────
           // This tool calls Templater directly, so it reaches neither the CLI
           // template guard (#79, obsidian_cli only) nor ObsidianBackend's. #79
           // closed the CLI twin; the surface #105 was actually filed about —
           // this one — stayed ungated. Same rule, applied where the write
           // happens.
+          //
+          // `templateContentAcceptRefusal` fails closed on BOTH: (a) an
+          // expansion token (#137) — a Templater `<% %>` tag OR a core-Templates
+          // `{{ }}` field (e.g. `{{date:[…]}}`, whose moment literal-escape is an
+          // arbitrary-emission facility) can expand into an acceptance assertion
+          // AND its fence from a template containing neither, so a template the
+          // guard cannot inspect pre-render is refused, the whole class with no
+          // carve-out; and (b) a static accepted fence in the resolved bytes
+          // (#105 part 1). This is the SAME predicate the CLI twin uses, so the
+          // two surfaces cannot drift.
           //
           // An UNREADABLE template refuses rather than proceeding: the
           // precedent `templateAcceptRefusal` already sets ("an uninspectable
