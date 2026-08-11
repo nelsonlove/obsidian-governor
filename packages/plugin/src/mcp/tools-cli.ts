@@ -190,33 +190,117 @@ export function cliAcceptRefusal(
   return null;
 }
 
+// ── the CLI content path decides over EVERY plausible reading (#153) ──────────
+//
+// The CLI un-escapes a param value's backslash escapes before the vault sees
+// them, so — unlike every other accept-guard caller — this one cannot inspect
+// the bytes it was handed. It must RECONSTRUCT the document that will land, and
+// a reconstruction models another program's escape semantics. #146's review
+// found that model incomplete: it had no notion of an ESCAPED BACKSLASH (`\\`),
+// so a crafted payload could make the guard perceive the frontmatter fence
+// ending in a different place than the honored document has it — hiding an
+// acceptance assertion inside the real fence from the guard's view.
+//
+// Settling "which escape semantics does the shipped CLI use?" is a property of
+// an external binary and was left unsettled (#153). Rather than bet the crown-
+// jewel accept boundary on guessing right, we DO NOT PICK a reading. We enumerate
+// the plausible readings, expand under EACH, and REFUSE (fail closed) if ANY
+// reading yields an acceptance assertion inside a frontmatter fence. The guard's
+// property becomes: *no plausible reading of these bytes asserts acceptance* —
+// no reliance on modelling the external program correctly (issue #153, option 3).
+//
+// The escaped-backslash ambiguity leaves exactly three COHERENT readings. Two
+// binary choices generate them — (a) is `\\` an escaped escape? (b) is an
+// unrecognized `\X` kept literal or is its backslash dropped? — but the fourth
+// combination (drop `\X` yet NOT treat `\\` as an escape) is incoherent: dropping
+// the backslash on an arbitrary `\X` IS treating `\\`→`\` for X=`\`. So:
+//
+//   R1 — no escaped escape. Recognize only `\n`/`\r\n`/`\t`, greedily, anywhere;
+//        every other byte (a lone `\`, a `\\` pair) is literal. This is exactly
+//        what the shipped regex did, so R1 preserves every refusal main already
+//        made — it is kept verbatim, not re-derived. Note its artifact: in `\\n`
+//        the regex finds `\n` at the SECOND backslash, so R1 emits `\`+newline.
+//   R2 — escaped escape, unknown escape kept literal. `\\`→`\`, `\n`/`\r\n`→LF,
+//        `\t`→tab; any other `\X` stays the two bytes `\X` (JSON/shell-ish).
+//   R3 — escaped escape, unknown escape DROPPED. As R2 but `\X`→`X` (drop the
+//        backslash) — the reading under which `\-\-\-` collapses to a bare `---`
+//        fence and `accept\ed` to `accepted`, the escaped-escape family's sharp
+//        edge.
+//
+// R2 is a coherent plausible reading even where a given payload happens to be
+// caught only by R1 or R3 — the guarantee quantifies over ALL plausible
+// readings, not the one we guess is likeliest, so it is scanned regardless.
+// Unlike the template path, the raw caller bytes are NOT a plausible reading:
+// they are provably not what lands (the CLI un-escapes), so scanning them raw
+// would model a program the CLI is not.
+
+/**
+ * Expand a CLI param value under an escaped-backslash reading (R2/R3), left to
+ * right in a single pass: `\\`→`\` (escaped escape), `\r\n`/`\n`→LF, `\t`→tab.
+ * An unrecognized `\X` is kept as the literal two bytes `\X` when
+ * `unknownEscape` is "keep" (R2) or collapsed to `X` when "drop" (R3). Exported
+ * for the escape-semantics fixture suite. R1 is NOT expressed here — it is the
+ * verbatim shipped regex in `contentAcceptRefusal`, so its behavior cannot drift.
+ */
+export function expandCliEscapes(content: string, unknownEscape: "keep" | "drop"): string {
+  let out = "";
+  let i = 0;
+  const n = content.length;
+  while (i < n) {
+    const ch = content[i];
+    if (ch === "\\" && i + 1 < n) {
+      const next = content[i + 1];
+      // `\r\n` (four source bytes) before the two-byte escapes, so a CRLF escape
+      // folds to one LF rather than leaving a stray `\r` behind.
+      if (next === "r" && content[i + 2] === "\\" && content[i + 3] === "n") { out += "\n"; i += 4; continue; }
+      if (next === "\\") { out += "\\"; i += 2; continue; } // escaped escape — the byte R1 has no notion of
+      if (next === "n") { out += "\n"; i += 2; continue; }
+      if (next === "t") { out += "\t"; i += 2; continue; }
+      // unrecognized `\X`
+      if (unknownEscape === "drop") { out += next; i += 2; continue; }
+      out += ch; i += 1; continue; // keep the backslash literal; reconsider `next` normally
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
 /**
  * Scan written content for an acceptance-asserting frontmatter fence. The CLI
- * interprets `\n`/`\t` escapes in a param value, so they are expanded first — an
- * escaped fence must not slip the scan. Every `---`-delimited YAML block (leading
- * or embedded) is parsed and checked with the shared rule. `append` content is
- * not a note's leading frontmatter, but the resulting note cannot be read
- * pre-exec, so acceptance-carrying content is blocked conservatively — nobody
- * legitimately writes an accepted acceptance fence into a body. With no parser
- * injected, we fail CLOSED on any fence at all (defensive; production always
- * injects obsidian.parseYaml).
+ * interprets a param value's backslash escapes before the vault sees them, so
+ * the guard must decide over a RECONSTRUCTION of the honored document, not the
+ * bytes it was handed. Because the exact escape semantics of the external binary
+ * are unsettled, it expands under EVERY plausible reading (R1/R2/R3 above) and
+ * refuses if ANY of them yields an acceptance assertion inside a `---` fence —
+ * so no reading can smuggle acceptance past it (#153). Every `---`-delimited YAML
+ * block (leading or embedded) in each expansion is parsed and checked with the
+ * shared rule. `append` content is not a note's leading frontmatter, but the
+ * resulting note cannot be read pre-exec, so acceptance-carrying content is
+ * blocked conservatively — nobody legitimately writes an accepted acceptance
+ * fence into a body. With no parser injected, we fail CLOSED on any fence at all
+ * (defensive; production always injects obsidian.parseYaml).
  */
 export function contentAcceptRefusal(content: string, parseYaml?: (yaml: string) => unknown): string | null {
-  // The CLI un-escapes these before the vault sees them, so this expansion is
-  // the guard's best RECONSTRUCTION of the document that will be honored —
-  // and that reconstruction is what the leading-fence check decides over.
-  //
-  // Say "reconstruction", not "is": this models another program's escape
-  // semantics, and the model is known incomplete — it has no notion of an
-  // ESCAPED BACKSLASH, so a payload using one can make the guard see a fence
-  // end where the honored document has none. That residual is tracked (#153); it predates this code and is not closed here.
-  // Unlike the template path, the escapes cannot simply be left alone: the
-  // caller's bytes are NOT what lands, so scanning them raw would be a
-  // different — and larger — gap.
-  const honored = content
+  // R1 — the shipped model, kept byte-for-byte so no current refusal weakens.
+  const r1 = content
     .replace(/\\r\\n|\\n/g, "\n") // literal \n (and \r\n) escapes the CLI expands
     .replace(/\\t/g, "\t"); // literal \t escapes
-  return scanForAcceptFence(honored, parseYaml);
+  const readings = [
+    r1,
+    expandCliEscapes(content, "keep"), // R2 — escaped escape, unknown kept literal
+    expandCliEscapes(content, "drop"), // R3 — escaped escape, unknown dropped
+  ];
+  // Fail closed if ANY plausible reading asserts acceptance in a fence. Distinct
+  // expansions only (identical readings — the common escape-free case — scan once).
+  const seen = new Set<string>();
+  for (const honored of readings) {
+    if (seen.has(honored)) continue;
+    seen.add(honored);
+    const reason = scanForAcceptFence(honored, parseYaml);
+    if (reason) return reason;
+  }
+  return null;
 }
 
 // ── fail closed on a Templater expansion token (#137) ────────────────────────
