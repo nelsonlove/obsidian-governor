@@ -9,22 +9,32 @@ rather than there. The same note exists in `obsidian-vault-skills/TODO.md`.
 transform builds the agent hierarchy by walking that frontmatter tree
 (`docs/spec-frontmatter-tree.md`).
 
-**Wanted:** an agent note declares `skills:` — a list of the skills it composes. The edge
-points down instead of up.
+**Wanted:** an agent's effective skill set is
+
+    (skills visible up the agent's scope chain) ∪ (the agent's explicit `skills:` list)
+
+Skills are scoped like everything else in the vault, so the common case needs no
+declaration at all: a skill in the same bundle or scope as the agent is available to it
+automatically. A root-scoped skill is available to every agent — a standard library.
+`skills:` is the *additive* mechanism for reaching a skill outside that chain.
 
 **Why.** Containment cannot express sharing. A skill serving three agents must be listed by
 all three; under `parent:` it can name only one, and the other two attachments become
 invisible. This blocks a genuinely shared skill library.
 
 It also follows from a principle the vault has now adopted: geography is convenience, not
-semantics. A skill sitting inside `clipper.agent/` is a filing convenience — the agent's
-`skills:` list is the truth. `parent:` makes containment semantic through the back door.
+semantics. A skill sitting inside `clipper.agent/` is a filing convenience. `parent:` makes
+containment semantic through the back door.
 
-**Costs, both accepted:**
+**Consequences:**
 
-- A skill no agent lists becomes possible, where `parent:` prevented it structurally.
-  Orphan detection moves to the vault's conformance module (not yet built).
 - Migration for existing notes carrying `parent:`.
+- Orphaned skills largely cease to be a problem: a skill in scope is reachable whether or
+  not any agent names it.
+- An agent's capability surface is no longer readable from its own note, since most of it
+  arrives by scope. "What can this agent actually do?" becomes a computed report.
+- `skills:` is purely additive — there is no way for an agent to *narrow* what its scope
+  offers. If a restrictive form is wanted later it is a separate field, not an overload.
 
 **Open question for this repo specifically:** the vault is moving to *bundles* — scoped,
 self-contained folders of suffix-typed notes (`.agent.md`, `.skill.md`, `.policy.md`,
