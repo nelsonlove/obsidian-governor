@@ -64,7 +64,7 @@ Known-overstated section instead — see its header for the format.
 - **A value** *asserts* acceptance if — across **every value-type it can take** — it resolves to `accepted` / `accepted-*`:
 - **Move is not a content write.** `obsidian_move_note` / `obsidian_move_notes` rename through `app.fileManager.renameFile` and never touch note content, so a move cannot introduce acceptance and carries no content guard — the guarantee holds by construction there rather than by an added check.
 - So the CLI path grows its **own** accept-forbidden check (`cliAcceptRefusal` in `packages/plugin/src/mcp/tools-cli.ts`), run **before the command executes**, reusing the exact same `acceptForbiddenReason` rule — no fork of "accepted." A CLI write is always an *introduce* (the CLI path has no expression for "carry an existing human value forward"), so the introduce check is exactly right.
-- **post-scan expansion** on the template path, above — the honest statement is "closed against static accepted fences", never "closed";
+- So the template guard **fails closed on expansion tokens** (#137, Option 2): a template whose resolved bytes carry *any* Templater expansion token is **refused outright**, because its expanded output cannot be inspected before it lands (`templateExpansionRefusal` refuses on any `<%` opener, covering every Templater tag form).
 - The pattern connecting every one of these: **the guard must inspect the bytes that will be honored.** Each residual is a place where something else — an escape expansion, a template processor, another plugin's config — produces the honored bytes after the guard has looked.
 
 ## docs/agent-writes.md
