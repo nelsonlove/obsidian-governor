@@ -201,20 +201,37 @@ denies, and the CLI proxy bars its own param values from `.obsidian` territory
 it) and scans it with the same rule pre-exec; unresolvable fails closed. That closes the
 **static** case: a template carrying a literal accepted fence is refused.
 
-It does **not** close the path, and saying otherwise would be worse than the gap itself. The
-vault expands Templates variables *after* the guard has scanned — so the bytes inspected are
-not the bytes that land, which is the #126 defect shape one level up: an expansion can emit
-both an acceptance assertion and the fence characters around it from a template that literally
-contains neither. **The scan is a floor, not a proof.** The same limit applies to a re-enabled
-`quickadd:run-template path=<p>` (which is why it stays in the default-denied set).
+The scan alone would **not** close the path, and saying otherwise would be worse than the gap
+itself. The vault expands Templater `<% %>` tags *after* the guard has scanned — so the bytes
+inspected are not the bytes that land, which is the #126 defect shape one level up: an
+expansion can emit both an acceptance assertion and the fence characters around it from a
+template that literally contains neither (Templater's date-format facility honors moment's
+`[…]` literal escape, which is enough to synthesize arbitrary bytes). **A static scan is a
+floor, not a proof.**
+
+So the template guard **fails closed on expansion tokens** (#137, Option 2): a template whose resolved bytes carry *any* expansion token — a Templater `<%` opener **or** a core-Templates `{{ … }}` field — is **refused outright**, because its expanded output cannot be inspected before it lands (`templateExpansionRefusal` refuses on either opener as a substring, covering every Templater tag form and the whole core-Templates field class).
+The refusal names the escape hatch — expand
+the template in Obsidian first, or use a
+template without expansion tokens. Both create-from-template surfaces route through the one
+predicate (`templateContentAcceptRefusal` in `tools-cli.ts`): the CLI `create template=` /
+`quickadd:run-template path=` path **and** the MCP `obsidian_create_note_from_template` tool
+(`tools-integrations.ts`), so neither twin can be left unguarded. The core Templates plugin's
+`{{date:FORMAT}}`/`{{time:FORMAT}}` fields run FORMAT through moment, which honors the `[…]`
+literal escape and so can emit an acceptance assertion and its `---` fence from a template
+carrying neither — the same arbitrary-emission vector as Templater's date format, reached
+through the plain `create template=` path — which is why the whole `{{ … }}` class is refused
+rather than a carved-out "safe" subset (an earlier fix exempted these fields on a false "no
+arbitrary-emission facility" claim; that exemption *was* the #137 hole).
 
 What remains open, honestly named:
 
-- **post-scan expansion** on the template path, above — the honest statement is "closed
-  against static accepted fences", never "closed";
 - a **periodic create with no `content=`** draws its body from the Daily/Periodic Notes plugin
   config's template — no param names it; the same class as the documented
-  `obsidian_periodic_note` write residual.
+  `obsidian_periodic_note` write residual;
+- a re-enabled `quickadd:run-template path=<p>` still stays in the default-denied set: even
+  with its template file scanned and expansion-token-refused, QuickAdd's *own* format syntax
+  can compute frontmatter at run time from something no param names — a distinct opacity from
+  the template file's bytes.
 
 The pattern connecting every one of these: **the guard must inspect the bytes that will be
 honored.** Each residual is a place where something else — an escape expansion, a template
