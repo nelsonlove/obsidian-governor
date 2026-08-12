@@ -354,6 +354,43 @@ describe("accept guard — acceptance behind an unusual CLOSING fence is refused
     });
   }
 
+  /**
+   * A lone `\r` is a line break to Obsidian's FENCE SCAN — probed live:
+   * `---\nzz: 9\r---\n` parses as `{zz: 9}`, and so does an all-CR document.
+   * The guard required `\r?\n`, so it saw no frontmatter and wrote the note.
+   *
+   * Found by review of this change: the same class, one axis over from the
+   * closer shape. Worth stating why it hid — every earlier pass asked "is the
+   * closer's SHAPE right?" and none asked "what counts as the line it sits
+   * on?" A rule has as many boundaries as it has terms.
+   */
+  test("a lone CR before the closer does not hide an acceptance assertion", async () => {
+    const { backend, vaultRoot } = await freshBackend();
+    await assert.rejects(
+      () => backend.writeNote("note.md", "---\nacceptance-status: accepted\r---\nbody", false),
+      AcceptForbiddenError,
+      "Obsidian honors a lone CR as the fence's line break; a guard that requires \\n does not see this frontmatter at all",
+    );
+    await assert.rejects(() => readFile(join(vaultRoot, "note.md"), "utf8"));
+  });
+
+  test("an all-CR document asserting acceptance is refused", async () => {
+    const { backend } = await freshBackend();
+    await assert.rejects(
+      () => backend.writeNote("note.md", "---\racceptance-status: accepted\r---\rbody", false),
+      AcceptForbiddenError,
+    );
+  });
+
+  test("a lone CR still makes a block OPAQUE when it lands inside a value (#104 unchanged)", () => {
+    // Widening the fence must not widen what the subset parser silently
+    // accepts: a CR the parser cannot classify still fails closed.
+    assert.throws(
+      () => parseGuardFrontmatter("---\nacceptance-status: accepted\rXYZ\n---\nbody"),
+      (e: unknown) => e instanceof AcceptForbiddenError,
+    );
+  });
+
   test("an accepted-family KEY behind such a closer is refused too, not just the status value", async () => {
     const { backend } = await freshBackend();
     await assert.rejects(
