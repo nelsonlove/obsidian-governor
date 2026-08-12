@@ -15,6 +15,7 @@ export {
   acceptForbiddenReason,
   frontmatterOf,
   leadingFrontmatterBlock,
+  stripLeadingFrontmatter,
   parseGuardFrontmatter,
   stripLeadingBom,
   LEADING_FRONTMATTER_RE,
