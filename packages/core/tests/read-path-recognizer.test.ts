@@ -22,12 +22,18 @@
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseAllFrontmatter, parseOutlinks } from "../src/fs-backend/index-store.js";
+import {
+  parseAllFrontmatter,
+  parseOutlinks,
+} from "../src/fs-backend/index-store.js";
 import { FilesystemBackend } from "../src/fs-backend/filesystem-backend.js";
-import { stripLeadingFrontmatter, leadingFrontmatterBlock } from "../src/accept-guard.js";
+import {
+  stripLeadingFrontmatter,
+  leadingFrontmatterBlock,
+} from "../src/accept-guard.js";
 
 const BOM = "﻿";
 
@@ -38,15 +44,25 @@ function variants(fm: string, body: string): Array<[string, string]> {
     ["leading BOM", `${BOM}---\n${fm}\n---\n${body}`],
     ["CRLF", `---\r\n${fm.replace(/\n/g, "\r\n")}\r\n---\r\n${body}`],
     ["trailing fence whitespace", `--- \n${fm}\n--- \n${body}`],
-    ["BOM + CRLF", `${BOM}---\r\n${fm.replace(/\n/g, "\r\n")}\r\n---\r\n${body}`],
+    [
+      "BOM + CRLF",
+      `${BOM}---\r\n${fm.replace(/\n/g, "\r\n")}\r\n---\r\n${body}`,
+    ],
   ];
 }
 
 describe("#150 — parseAllFrontmatter reads odd-byte notes identically", () => {
-  for (const [name, text] of variants("title: Note\naliases: [A, B]", "body text\n")) {
+  for (const [name, text] of variants(
+    "title: Note\naliases: [A, B]",
+    "body text\n",
+  )) {
     test(`indexes frontmatter — ${name}`, () => {
       const fm = parseAllFrontmatter(text);
-      assert.equal(fm.title, "Note", "a note that indexes with no frontmatter is invisible to every frontmatter query");
+      assert.equal(
+        fm.title,
+        "Note",
+        "a note that indexes with no frontmatter is invisible to every frontmatter query",
+      );
       assert.deepEqual(fm.aliases, ["A", "B"]);
     });
   }
@@ -54,16 +70,24 @@ describe("#150 — parseAllFrontmatter reads odd-byte notes identically", () => 
   test("CRLF values carry no trailing \\r into the index", () => {
     // Recognizing a CRLF fence buys nothing if every value is then stored with
     // a stray \r — the lookup key would never match a caller's plain string.
-    const fm = parseAllFrontmatter("---\r\ntitle: Note\r\nuid: abc-123\r\n---\r\nbody");
+    const fm = parseAllFrontmatter(
+      "---\r\ntitle: Note\r\nuid: abc-123\r\n---\r\nbody",
+    );
     assert.equal(fm.title, "Note");
     assert.equal(fm.uid, "abc-123");
     for (const v of Object.values(fm)) {
-      if (typeof v === "string") assert.ok(!v.includes("\r"), `value carries a CR: ${JSON.stringify(v)}`);
+      if (typeof v === "string")
+        assert.ok(
+          !v.includes("\r"),
+          `value carries a CR: ${JSON.stringify(v)}`,
+        );
     }
   });
 
   test("block-array values survive CRLF", () => {
-    const fm = parseAllFrontmatter("---\r\naliases:\r\n  - One\r\n  - Two\r\n---\r\nbody");
+    const fm = parseAllFrontmatter(
+      "---\r\naliases:\r\n  - One\r\n  - Two\r\n---\r\nbody",
+    );
     assert.deepEqual(fm.aliases, ["One", "Two"]);
   });
 
@@ -74,10 +98,17 @@ describe("#150 — parseAllFrontmatter reads odd-byte notes identically", () => 
 });
 
 describe("#150 — parseOutlinks strips the fence it should", () => {
-  for (const [name, text] of variants("title: Note\nsource: \"[[Not A Body Link]]\"", "see [[Real Link]] here\n")) {
+  for (const [name, text] of variants(
+    'title: Note\nsource: "[[Not A Body Link]]"',
+    "see [[Real Link]] here\n",
+  )) {
     test(`indexes body links only — ${name}`, () => {
       const links = parseOutlinks(text);
-      assert.deepEqual(links, ["Real Link"], "a frontmatter link indexed as a body outlink is a fabricated edge");
+      assert.deepEqual(
+        links,
+        ["Real Link"],
+        "a frontmatter link indexed as a body outlink is a fabricated edge",
+      );
     });
   }
 
@@ -99,30 +130,52 @@ describe("#150 — findByTag sees the tags of odd-byte notes", () => {
 
   test("every spelling of the same tagged note is found", async () => {
     const root = await mkdtemp(join(tmpdir(), "read-path-tags-"));
-    const expected: string[] = [];
-    for (const [name, text] of variants("title: Note\ntags: [alpha, beta]", "body text\n")) {
-      const rel = `${name.replace(/[^a-z]+/gi, "-")}.md`;
-      await writeFile(join(root, rel), text, "utf8");
-      expected.push(rel);
-    }
-    // A note whose tags live elsewhere must NOT come back — otherwise a test
-    // that matched everything would pass just as well.
-    await writeFile(join(root, "untagged.md"), "---\ntitle: Other\n---\nno tags here\n", "utf8");
+    try {
+      const expected: string[] = [];
+      for (const [name, text] of variants(
+        "title: Note\ntags: [alpha, beta]",
+        "body text\n",
+      )) {
+        const rel = `${name.replace(/[^a-z]+/gi, "-")}.md`;
+        await writeFile(join(root, rel), text, "utf8");
+        expected.push(rel);
+      }
+      // A note whose tags live elsewhere must NOT come back — otherwise a test
+      // that matched everything would pass just as well.
+      await writeFile(
+        join(root, "untagged.md"),
+        "---\ntitle: Other\n---\nno tags here\n",
+        "utf8",
+      );
 
-    const backend = new FilesystemBackend(root);
-    const hits = await backend.findByTag("alpha", 50);
-    assert.deepEqual(
-      hits.map((h) => h.path).sort(),
-      expected.sort(),
-      "a note whose frontmatter fence went unrecognized drops out of every tag query",
-    );
+      const backend = new FilesystemBackend(root);
+      const hits = await backend.findByTag("alpha", 50);
+      assert.deepEqual(
+        hits.map((h) => h.path).sort(),
+        expected.sort(),
+        "a note whose frontmatter fence went unrecognized drops out of every tag query",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   test("block-list tags survive CRLF too", async () => {
     const root = await mkdtemp(join(tmpdir(), "read-path-tags-crlf-"));
-    await writeFile(join(root, "list.md"), "---\r\ntags:\r\n  - alpha\r\n  - beta\r\n---\r\nbody\r\n", "utf8");
-    const hits = await new FilesystemBackend(root).findByTag("beta", 50);
-    assert.deepEqual(hits.map((h) => h.path), ["list.md"]);
+    try {
+      await writeFile(
+        join(root, "list.md"),
+        "---\r\ntags:\r\n  - alpha\r\n  - beta\r\n---\r\nbody\r\n",
+        "utf8",
+      );
+      const hits = await new FilesystemBackend(root).findByTag("beta", 50);
+      assert.deepEqual(
+        hits.map((h) => h.path),
+        ["list.md"],
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -135,9 +188,16 @@ describe("#150 — stripLeadingFrontmatter is the reader's half of the one recog
 
   test("passes through text that has no leading fence", () => {
     assert.equal(stripLeadingFrontmatter("just prose"), "just prose");
-    assert.equal(stripLeadingFrontmatter(`${BOM}just prose`), "just prose", "the BOM is never body content");
+    assert.equal(
+      stripLeadingFrontmatter(`${BOM}just prose`),
+      "just prose",
+      "the BOM is never body content",
+    );
     // An embedded fence is not LEADING frontmatter and must survive.
-    assert.equal(stripLeadingFrontmatter("intro\n---\na: 1\n---\n"), "intro\n---\na: 1\n---\n");
+    assert.equal(
+      stripLeadingFrontmatter("intro\n---\na: 1\n---\n"),
+      "intro\n---\na: 1\n---\n",
+    );
   });
 
   test("agrees with leadingFrontmatterBlock on what counts as a fence", () => {

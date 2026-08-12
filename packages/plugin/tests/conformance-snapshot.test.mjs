@@ -92,6 +92,44 @@ describe("buildSnapshot CRLF", () => {
 });
 
 /**
+ * The two halves of splitNote must agree about where the body starts (#150).
+ *
+ * The failure this pins is not "the note is skipped" — it is worse, because it
+ * is invisible: the frontmatter parses fine through core while the body split
+ * misses the same fence, so the note is read with its own frontmatter STILL
+ * INSIDE its body. Every pack that greps the body then matches against YAML it
+ * was never supposed to see.
+ *
+ * Asserting `body.includes("body")` does NOT catch this — it passes either way.
+ * The assertion has to be that the frontmatter is ABSENT from the body.
+ */
+describe("buildSnapshot — frontmatter never leaks into the body", () => {
+  for (const [name, text] of [
+    ["BOM-prefixed", "﻿---\ntitle: B\nsecret-key: leaked\n---\n\nbody B\n"],
+    ["CRLF", "---\r\ntitle: B\r\nsecret-key: leaked\r\n---\r\n\r\nbody B\r\n"],
+    ["trailing fence whitespace", "--- \ntitle: B\nsecret-key: leaked\n--- \n\nbody B\n"],
+  ]) {
+    test(`${name} — body carries no frontmatter`, async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "conf-split-"));
+      try {
+        await mkdir(path.join(root, "N"), { recursive: true });
+        await writeFile(path.join(root, "N", "B.md"), text);
+        const snap = await buildSnapshot({ root, boundary: root });
+        const note = snap.notes.find((n) => n.path === "N/B.md");
+        assert.equal(note.frontmatter.title, "B", "frontmatter half must recognize the fence");
+        assert.ok(note.body.includes("body B"), "the real body must survive");
+        assert.ok(
+          !note.body.includes("secret-key"),
+          `the body half missed the fence the frontmatter half found: ${JSON.stringify(note.body)}`,
+        );
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+/**
  * buildSnapshot territory guard — #157.
  *
  * Filed against a real breach: a corpus measurement commissioned for #143
