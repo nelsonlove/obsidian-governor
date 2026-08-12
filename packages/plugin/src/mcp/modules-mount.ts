@@ -332,10 +332,12 @@ const VOCAB_MANIFEST: ModuleManifest = {
 // The FIRST mutating capability module. Its config is a NEW module (no
 // ConfigBinding): it lives at `modules.skills.config`, the default location,
 // so the manifest's flat field keys map straight through. Fields mirror the
-// standalone plugin's settings tab (minus the on-save trigger, which a
-// tool-driven module has no use for). The directory documents all SIX tools —
-// three read, three mutating — so they render in the config tab + capability
-// directory, and the drift checks pin the manifest to what actually registers.
+// standalone plugin's settings tab, INCLUDING `exportOnSave` (re-added with the
+// GUI fold — the in-Obsidian skills GUI has the vault-side save hook a tool-only
+// deployment lacked; opt-in, default off). The directory documents all SIX
+// tools — three read, three mutating — so they render in the config tab +
+// capability directory, and the drift checks pin the manifest to what actually
+// registers.
 const SKILLS_CONFIG_FIELDS: ConfigField[] = [
   { key: "outputDir", label: "Output plugin directory", type: "text", help: "Where vault_skills_export writes the generated Claude Code plugin (skills/ + agents/). ~ is expanded." },
   { key: "pluginName", label: "Plugin name", type: "text", help: "Claude Code plugin name — also the command/subagent namespace." },
@@ -346,6 +348,7 @@ const SKILLS_CONFIG_FIELDS: ConfigField[] = [
   { key: "fieldKey", label: "Field key", type: "text", help: "nested mode: nests every field under this one key, e.g. vault-skills." },
   { key: "assetsRoot", label: "Supporting-files tree", type: "text", help: "Root of a parallel filesystem tree of skills' supporting files. Blank ⇒ none. ~ is expanded." },
   { key: "releaseDir", label: "Release repo directory", type: "text", help: "A git checkout vault_skills_release targets. Blank ⇒ release disabled. ~ is expanded." },
+  { key: "exportOnSave", label: "Export on save (GUI)", type: "toggle", help: "When on, the in-Obsidian skills GUI re-exports automatically (debounced) whenever a skill/agent/policy/command note changes. Off ⇒ export only when you run it. Ignored by the MCP tool surface." },
 ];
 
 const SKILLS_MANIFEST: ModuleManifest = {

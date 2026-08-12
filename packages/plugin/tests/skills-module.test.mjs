@@ -72,16 +72,23 @@ describe("skills module: registration + config tab", () => {
     assert.ok(!names.some((n) => n.startsWith("vault_skills_")));
   });
 
-  test("collect() renders a skills config tab: summary, nine config fields with defaults, six-tool directory", () => {
+  test("collect() renders a skills config tab: summary, ten config fields with defaults, six-tool directory", () => {
     const mods = builtinModules(deps({}));
     const hosted = collect(mods, {}, {});
     const skills = hosted.find((h) => h.id === "skills");
     assert.ok(skills, "skills module not rendered");
     assert.ok(skills.summary.length > 0);
-    assert.equal(skills.fields.length, 9);
+    // Ten fields: the nine folded from the standalone settings tab plus exportOnSave,
+    // re-added with the GUI fold (#82 residuals) as an opt-in toggle.
+    assert.equal(skills.fields.length, 10);
     // Fields render their manifest defaults (blank until the user overrides).
     assert.equal(skills.fields.find((f) => f.key === "pluginName").value, "vault-skills");
     assert.equal(skills.fields.find((f) => f.key === "outputDir").value, "~/.claude/skills/vault-skills");
+    // exportOnSave is a toggle defaulting OFF — the GUI's on-save export is opt-in.
+    const eos = skills.fields.find((f) => f.key === "exportOnSave");
+    assert.ok(eos, "exportOnSave field not rendered");
+    assert.equal(eos.type, "toggle");
+    assert.equal(eos.value, false);
     // The capability directory documents every tool, read/write flags intact.
     assert.deepEqual(skills.directory.tools.map((t) => t.name).sort(), [...SKILLS_TOOLS].sort());
     for (const t of skills.directory.tools) {

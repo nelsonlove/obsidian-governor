@@ -11,6 +11,7 @@ import { Kernel, WriteQueue, WriteJournal, IdempotencyStore, LockStore, UidIndex
 import { obsidianProbe, obsidianServerIdentity, obsidianUidSource } from "./kernel/obsidian-probe.js";
 import { DEFAULT_SCHEMES, type SchemeInstanceConfig } from "./kernel/scheme/registry.js";
 import { wireGovernance } from "./governance/wiring.js";
+import { wireSkills } from "./skills/wiring.js";
 
 interface VaultMcpSettings {
   setupAcknowledged: boolean;
@@ -312,6 +313,24 @@ export default class VaultMcpPlugin extends Plugin {
       void wireGovernance(this, {
         getConfig: () => (this.settings.modules?.governance?.config ?? {}) as Record<string, unknown>,
       }).catch((e) => console.error("[vault-mcp] governance pane wiring failed", e));
+    }
+
+    // ── skills GUI (#82 residuals: the human affordances the fold left out) ────
+    // Wired ONLY when the skills module is enabled (default OFF — the module default is
+    // `enabled: false`, so an absent settings row means off). Same toggle that mounts the six
+    // MCP tools per connection: enabling the skills module turns on both its tools AND this
+    // in-Obsidian GUI (Preview pane, six commands, ribbon, opt-in export-on-save). The GUI is
+    // additive — the tool surface + compiler core are unchanged. Read once at onload like the
+    // governance pane; toggling it takes effect on plugin reload (the tools take effect on the
+    // next session connect). See src/skills/.
+    if (this.settings.modules?.skills?.enabled === true) {
+      try {
+        wireSkills(this, {
+          getConfig: () => (this.settings.modules?.skills?.config ?? {}) as Record<string, unknown>,
+        });
+      } catch (e) {
+        console.error("[vault-mcp] skills GUI wiring failed", e);
+      }
     }
 
     this.addCommand({
