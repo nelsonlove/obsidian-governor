@@ -13,6 +13,10 @@ import {
   buildCliArgs,
   registerCliTools,
   cliAcceptRefusal,
+  contentAcceptRefusal,
+  expandCliEscapes,
+  expandCliEscapesRich,
+  scanForAcceptFence,
   CLI_OPAQUE_ACCEPT_RESIDUAL,
 } from "../src/mcp/tools-cli.js";
 import { fakeServer } from "./fake-server.mjs";
@@ -287,6 +291,140 @@ describe("cliAcceptRefusal — content writes (create/append/prepend + periodic)
   test("fails CLOSED on a fence when no parser is injected", () => {
     assert.ok(cliAcceptRefusal("create", { content: fence("proposed") }, undefined));
   });
+});
+
+// ── #153: the CLI content path decides over EVERY plausible escape reading ────
+//
+// The guard reconstructs the honored document by un-escaping a param value, but
+// the exact escape semantics of the external CLI are unsettled. Rather than bet
+// the accept boundary on one reading, contentAcceptRefusal expands under all
+// three coherent readings (R1 shipped / R2 escaped-escape keep-unknown / R3
+// escaped-escape drop-unknown) and refuses if ANY asserts acceptance in a fence.
+// These fixtures PIN THE PROPERTY across the escape semantics, not one string:
+// each payload lands acceptance in a fence under at least one plausible reading
+// while the OLD single-reading (R1) reconstruction is blind to it — the exact
+// gap #153 closes — so the guard must refuse every one.
+
+describe("expandCliEscapes — the escaped-escape readings (R2/R3)", () => {
+  test("R2 keeps an unrecognized \\X literal; R3 drops the backslash", () => {
+    assert.equal(expandCliEscapes(String.raw`\-\-\-`, "keep"), String.raw`\-\-\-`);
+    assert.equal(expandCliEscapes(String.raw`\-\-\-`, "drop"), "---");
+  });
+  test("both collapse an escaped escape \\\\ to a single backslash", () => {
+    assert.equal(expandCliEscapes(String.raw`a\\b`, "keep"), String.raw`a\b`);
+    assert.equal(expandCliEscapes(String.raw`a\\b`, "drop"), String.raw`a\b`);
+  });
+  test("an even run before n stays literal under escaped-escape (no newline)", () => {
+    // `\\n` = escaped escape + literal n — the divergence from R1, which would
+    // emit `\`+newline by matching `\n` at the second backslash.
+    assert.equal(expandCliEscapes(String.raw`x\\ny`, "keep"), String.raw`x\ny`);
+    assert.equal(expandCliEscapes(String.raw`x\\ny`, "drop"), String.raw`x\ny`);
+  });
+  test("recognized escapes still expand (\\n, \\r\\n, \\t)", () => {
+    assert.equal(expandCliEscapes(String.raw`a\nb`, "keep"), "a\nb");
+    assert.equal(expandCliEscapes(String.raw`a\r\nb`, "keep"), "a\nb");
+    assert.equal(expandCliEscapes(String.raw`a\tb`, "drop"), "a\tb");
+  });
+});
+
+describe("expandCliEscapesRich — the maximal decoder reading (R4, #153 axis 2)", () => {
+  test("decodes \\xHH hex escapes to their code points", () => {
+    assert.equal(expandCliEscapesRich(String.raw`\x2d\x2d\x2d`), "---");
+    assert.equal(expandCliEscapesRich(String.raw`a\x0ab`), "a\nb");
+  });
+  test("decodes \\uHHHH and \\u{H…} unicode escapes", () => {
+    assert.equal(expandCliEscapesRich("\\u002d\\u002d"), "--"); // 4-digit \uHHHH branch
+    assert.equal(expandCliEscapesRich(String.raw`\u{2d}\u{2d}`), "--");
+  });
+  test("decodes octal \\NNN escapes", () => {
+    assert.equal(expandCliEscapesRich(String.raw`\55\55\55`), "---"); // \55 = 0o55 = '-'
+    assert.equal(expandCliEscapesRich(String.raw`a\12b`), "a\nb"); // \12 = 0o12 = LF
+  });
+  test("collapses an escaped escape and drops letter escapes exactly as R3 (R4 = R3 + numeric)", () => {
+    assert.equal(expandCliEscapesRich(String.raw`a\\b`), String.raw`a\b`);
+    // Ambiguous C letters drop to their letter, NOT to a control char (`\e`→e,
+    // not ESC), so R4 covers R3's letter-drop rather than opening a gap with it.
+    assert.equal(expandCliEscapesRich(String.raw`accept\ed`), "accepted");
+    assert.equal(expandCliEscapesRich(String.raw`\a\b\f\v`), "abfv");
+  });
+  test("a malformed numeric escape falls back to dropping the backslash", () => {
+    assert.equal(expandCliEscapesRich(String.raw`a\xZq`), "axZq");
+    assert.equal(expandCliEscapesRich(String.raw`a\u00zzb`), "au00zzb");
+  });
+});
+
+describe("contentAcceptRefusal — refuses under EVERY plausible reading (#153)", () => {
+  // Each payload is written with the escape sequences a CLI param would carry.
+  // `refuse` asserts BOTH the low-level predicate and the CLI-command wrapper,
+  // and PINS THE BLIND SPOT: the old single-reading (R1) reconstruction —
+  // expanding only the recognized `\n`/`\r\n`/`\t` escapes — does NOT assert
+  // acceptance, so it is the multi-reading logic (R2/R3), not R1, that catches
+  // these. That is exactly the gap #153 closes.
+  const refuse = (name, content) =>
+    test(`REFUSES: ${name}`, () => {
+      assert.ok(contentAcceptRefusal(content, parseYaml), `contentAcceptRefusal should refuse: ${content}`);
+      assert.ok(cliAcceptRefusal("create", { content }, parseYaml), `cliAcceptRefusal should refuse: ${content}`);
+      const r1 = content.replace(/\\r\\n|\\n/g, "\n").replace(/\\t/g, "\t");
+      assert.equal(scanForAcceptFence(r1, parseYaml), null,
+        `R1-only reconstruction should be blind (the #153 gap): ${JSON.stringify(r1)}`);
+    });
+
+  // R3 (drop unknown): `\-\-\-` collapses to a bare `---` fence.
+  refuse("escaped fence dashes (\\-\\-\\-) around an accepted status",
+    String.raw`\-\-\-\nacceptance-status: accepted\n\-\-\-`);
+  // R3: a dropped backslash inside the value spells `accepted`.
+  refuse("escaped char inside the accepted value (accept\\ed)",
+    String.raw`---\nacceptance-status: accept\ed\n---`);
+  // R3: a dropped backslash on the KEY spells `acceptance-status`.
+  refuse("escaped char on the acceptance-status key",
+    String.raw`---\n\acceptance-status: accepted\n---`);
+  // Mixed: escaped fence dashes + an accepted-by provenance key with a drop.
+  refuse("escaped fence dashes around an accepted-by provenance key",
+    String.raw`\-\-\-\naccepted-by: Nelson\n\-\-\-`);
+  // Triple-escape adversarial variant on the dashes.
+  refuse("triple-escaped dashes still collapse to a fence",
+    String.raw`\-\-\-\nacceptance-status: accepted\n\-\-\-\nbody`);
+  // Escaped-escape at a fence boundary combined with a dropped key backslash.
+  refuse("escaped-escape mixed with a dropped key backslash",
+    String.raw`\-\-\-\n\acceptance-status: accepted\n\-\-\-`);
+
+  // Axis 2 (#153, independent review): a CLI that decodes NUMERIC escapes can
+  // encode the whole fence — `\x2d`→'-', `\x0a`→a real LF — invisibly to
+  // R1/R2/R3. R4 (the maximal decoder) refuses these.
+  refuse("hex-escaped fence + status (\\x2d / \\x0a)",
+    String.raw`\x2d\x2d\x2d\x0aacceptance-status:\x20accepted\x0a\x2d\x2d\x2d`);
+  refuse("unicode-escaped fence + status (\\uHHHH)",
+    "\\u002d\\u002d\\u002d\\u000aacceptance-status:\\u0020accepted\\u000a\\u002d\\u002d\\u002d");
+  refuse("braced-unicode-escaped fence + status (\\u{H…})",
+    String.raw`\u{2d}\u{2d}\u{2d}\u{0a}acceptance-status: accepted\u{0a}\u{2d}\u{2d}\u{2d}`);
+  refuse("octal-escaped fence + status (\\NNN)",
+    String.raw`\55\55\55\12acceptance-status: accepted\12\55\55\55`);
+});
+
+describe("contentAcceptRefusal — benign escape-bearing content is NOT refused (#153 false-positive bound)", () => {
+  const allow = (name, content) =>
+    test(`ALLOWS: ${name}`, () =>
+      assert.equal(contentAcceptRefusal(content, parseYaml), null, `should allow: ${content}`));
+
+  // Escape sequences (\\, \-, \n, \t) but NO acceptance assertion anywhere.
+  allow("a Windows-style path with backslash sequences",
+    String.raw`---\nstatus: proposed\n---\nWindows path C:\Users\name and C:\temp\notes`);
+  allow("prose mentioning accepted, not in a fence",
+    String.raw`A note about accepted papers.\nSee C:\temp\notes`);
+  allow("escaped fence dashes but no acceptance assertion inside",
+    String.raw`\-\-\-\ntitle: some dashes \-\-\-\n\-\-\-\nbody`);
+  allow("escaped-escape sequences with the word accepted on a non-acceptance key",
+    String.raw`---\nnote: reviewed and accepted by hand\\nsee log\n---`);
+  allow("a proposed fence written with escape sequences",
+    String.raw`---\nacceptance-status: proposed\n---\nbody`);
+  allow("escaped escapes and drops that never form a fence + assertion together",
+    String.raw`Path: C:\\server\\share — status \accepted informally in chat`);
+  // Axis 2: numeric escape sequences (hex/unicode/octal) that decode under R4
+  // but never form a fence asserting acceptance — bounds R4's false-positive surface.
+  allow("hex and unicode escapes in prose, no acceptance fence",
+    String.raw`Color \x23ff0000, accent \u00e9, path C:\x2ftmp — reviewed and accepted informally`);
+  allow("a proposed fence alongside benign hex escapes",
+    String.raw`---\nstatus: proposed\n---\ncodes \x41\x42 and \u0043 are not acceptance`);
 });
 
 describe("cliAcceptRefusal — unrelated commands are clean", () => {

@@ -59,7 +59,7 @@ Known-overstated section instead — see its header for the format.
 
 ## docs/acceptance-model.md
 
-- That is a real residual (#153), and it is the reason the rule above is "decide over the honored bytes" rather than "never normalize": where normalization is unavoidable, the normalization itself becomes part of the guard's attack surface and has to be reasoned about explicitly.
+- This is the reason the rule above is "decide over the honored bytes" rather than "never normalize": where normalization is unavoidable, the normalization itself becomes part of the guard's attack surface, so every bracketed normalization is decided over.
 - Broader is fine; **narrower is the bypass.** The property is pinned by `tests/accept-fence-parity.test.mjs`, which asserts *write path would honor ⟹ guard refuses* across every tolerated fence variation, plus the normalization cases that motivated the second pass, plus the cost of the conservatism (prose between thematic breaks is refused — a chosen trade, pinned so it reads as a choice).
 - **A value** *asserts* acceptance if — across **every value-type it can take** — it resolves to `accepted` / `accepted-*`:
 - **Move is not a content write.** `obsidian_move_note` / `obsidian_move_notes` rename through `app.fileManager.renameFile` and never touch note content, so a move cannot introduce acceptance and carries no content guard — the guarantee holds by construction there rather than by an added check.
@@ -131,8 +131,10 @@ and narrow it) — this list is not meant to be permanent.
 
 - What it may **never** do is declare that a change has been **accepted**.
   tracked by: #137, #105, #107 — templated note creation and CLI flag-form arguments can
-  currently introduce acceptance without the guard seeing it; #153 is a narrower related gap
-  in the CLI's escape-reconstruction path.
+  currently introduce acceptance without the guard seeing it. (#153, the CLI escape-
+  reconstruction gap, is NARROWED but still open — the content path now decides over a
+  bracketed reading set, but the binary's true escape vocabulary is unobserved and a residual
+  remains, tracked in #153.)
 - And — the part that makes it a *guarantee* rather than a *convention* — an agent cannot smuggle acceptance in as **data** either, by writing `acceptance-status: accepted` (or `accepted-by`, `accepted-on`) into a note's frontmatter.
   tracked by: #137, #105, #107 (same residuals as above — this is the same claim restated).
 - The guarantee is enforced at the **shared write primitive** — the single point every filesystem-expressible write routes through — so it holds on **every write surface at once**, not tool by tool.
