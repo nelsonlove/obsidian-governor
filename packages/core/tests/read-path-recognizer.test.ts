@@ -183,7 +183,15 @@ describe("#150 — stripLeadingFrontmatter is the reader's half of the one recog
   test("removes the fence, and the BOM with it", () => {
     assert.equal(stripLeadingFrontmatter(`${BOM}---\na: 1\n---\nbody`), "body");
     assert.equal(stripLeadingFrontmatter("---\r\na: 1\r\n---\r\nbody"), "body");
-    assert.equal(stripLeadingFrontmatter("--- \na: 1\n--- \nbody"), "body");
+    // The vault does NOT trim the closer's trailing space — it is the body's
+    // first line (probed). Pinning "body" here would be convenient and wrong,
+    // and convenience about a boundary byte is how this whole class started.
+    assert.equal(stripLeadingFrontmatter("--- \na: 1\n--- \nbody"), " \nbody");
+    // A lone CR is a line break to the fence scan, and is consumed like any
+    // other terminator.
+    assert.equal(stripLeadingFrontmatter("---\na: 1\r---\rbody"), "body");
+    // Anything else on the closer line is content and must survive.
+    assert.equal(stripLeadingFrontmatter("---\na: 1\n----\nbody"), "-\nbody");
   });
 
   test("passes through text that has no leading fence", () => {
@@ -203,9 +211,13 @@ describe("#150 — stripLeadingFrontmatter is the reader's half of the one recog
   test("agrees with leadingFrontmatterBlock on what counts as a fence", () => {
     // The two halves must never disagree: if one sees a fence, the other must
     // remove exactly that fence.
-    for (const [, text] of variants("a: 1", "body")) {
+    for (const [name, text] of variants("a: 1", "body")) {
       assert.notEqual(leadingFrontmatterBlock(text), null);
-      assert.equal(stripLeadingFrontmatter(text), "body");
+      // The trailing-fence-whitespace variant closes with `--- `, and that
+      // space is body per the vault — so the two halves still agree about
+      // WHERE the fence ends even though the body is not bare "body".
+      const expected = name === "trailing fence whitespace" ? " \nbody" : "body";
+      assert.equal(stripLeadingFrontmatter(text), expected);
     }
     for (const text of ["just prose", `${BOM}prose`, "----\na: 1\n---\n"]) {
       assert.equal(leadingFrontmatterBlock(text), null);

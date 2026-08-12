@@ -154,11 +154,21 @@ export function leadingFrontmatterBlock(markdown: string): string | null {
  *
  * A leading BOM is dropped along with the fence: it is a byte-order mark, not
  * body text, and no reader wants it as content.
+ *
+ * The recognizer stops at the closing `---`, so the raw remainder still begins
+ * with whatever the vault treats as body — including anything sitting on the
+ * closer's own line. Exactly ONE line terminator is consumed here (`\r\n`,
+ * `\n`, or a lone `\r` — the same set the fence scan honors), which reproduces
+ * what Obsidian reports as a note's body: `---\na: 1\n---\nbody` reads as
+ * `body`, while `---\na: 1\n----\nbody` reads as `-\nbody`, the leftover dash
+ * being content. Consuming the whole closer line would silently delete a line
+ * the vault displays; consuming nothing would prefix every body with a blank
+ * line.
  */
 export function stripLeadingFrontmatter(markdown: string): string {
   const text = stripLeadingBom(markdown);
   const m = LEADING_FRONTMATTER_RE.exec(text);
-  return m ? text.slice(m[0].length) : text;
+  return m ? text.slice(m[0].length).replace(/^(?:\r\n|\n|\r)/, "") : text;
 }
 
 /** Extract & parse the leading YAML frontmatter of a markdown string; null when there is none. `parseYaml` injected. */
