@@ -190,33 +190,232 @@ export function cliAcceptRefusal(
   return null;
 }
 
+// ── the CLI content path decides over EVERY plausible reading (#153) ──────────
+//
+// The CLI un-escapes a param value's backslash escapes before the vault sees
+// them, so — unlike every other accept-guard caller — this one cannot inspect
+// the bytes it was handed. It must RECONSTRUCT the document that will land, and
+// a reconstruction models another program's escape semantics. #146's review
+// found that model incomplete: it had no notion of an ESCAPED BACKSLASH (`\\`),
+// so a crafted payload could make the guard perceive the frontmatter fence
+// ending in a different place than the honored document has it — hiding an
+// acceptance assertion inside the real fence from the guard's view.
+//
+// Settling "which escape semantics does the shipped CLI use?" is a property of
+// an external binary and was left unsettled (#153). Rather than bet the crown-
+// jewel accept boundary on guessing right, we DO NOT PICK a reading. We enumerate
+// the plausible readings, expand under EACH, and REFUSE (fail closed) if ANY
+// reading yields an acceptance assertion inside a frontmatter fence. The guard's
+// property becomes: *no bracketed reading of these bytes asserts acceptance* —
+// no reliance on modelling the external program correctly (issue #153, option 3).
+//
+// The plausible readings vary along TWO independent axes; the set below brackets
+// both, so any decoder between the extremes is dominated by one of the readings
+// (a union of readings can only ADD refusals — see contentAcceptRefusal — so a
+// bracketing reading is pure fail-closed insurance).
+//
+// AXIS 1 — the escaped-backslash treatment. Two binary choices — (a) is `\\` an
+// escaped escape? (b) is an unrecognized `\X` kept literal or is its backslash
+// dropped? — generate exactly three COHERENT readings (the fourth combination,
+// "drop `\X` yet NOT treat `\\` as an escape", is incoherent: dropping the
+// backslash on an arbitrary `\X` IS treating `\\`→`\` for X=`\`):
+//
+//   R1 — no escaped escape. Recognize only `\n`/`\r\n`/`\t`, greedily, anywhere;
+//        every other byte (a lone `\`, a `\\` pair) is literal. This is exactly
+//        what the shipped regex did, so R1 preserves every refusal main already
+//        made — it is kept verbatim, not re-derived. Note its artifact: in `\\n`
+//        the regex finds `\n` at the SECOND backslash, so R1 emits `\`+newline.
+//   R2 — escaped escape, unknown escape kept literal. `\\`→`\`, `\n`/`\r\n`→LF,
+//        `\t`→tab; any other `\X` stays the two bytes `\X` (JSON/shell-ish).
+//   R3 — escaped escape, unknown escape DROPPED. As R2 but `\X`→`X` (drop the
+//        backslash) — the reading under which `\-\-\-` collapses to a bare `---`
+//        fence and `accept\ed` to `accepted`, the escaped-escape family's sharp
+//        edge.
+//
+// AXIS 2 — the RECOGNIZED-ESCAPE VOCABULARY. R1/R2/R3 all freeze it at
+// `{\n, \r\n, \t}`, which is itself a bet on the binary: a richer decoder that
+// honors NUMERIC escapes (`\xHH`, `\uHHHH`, `\u{…}`, octal `\NNN`) or the rest of
+// the C letter set (`\a\b\f\v\e\0`) can encode the WHOLE fence — e.g. `\x2d`→`-`,
+// `\x0a`→a real LF — invisibly to all three, reopening #153 one notch over
+// (found by the independent review of this fix). So we add:
+//
+//   R4 — a MAXIMAL decoder: R3 (escaped escape, unknown letter escape dropped)
+//        PLUS the numeric escapes `\xHH`/`\uHHHH`/`\u{…}`/octal decoded to their
+//        code points. It is deliberately R3+numeric, not a full C decoder: a CLI
+//        that decodes `\x` but drops `\e`→`e` (rather than ESC) is coherent, so
+//        folding the ambiguous C letters `\a\b\e\f\v` to control codes would open
+//        a gap between R3 and R4; dropping them (as R3) closes it. This is the far
+//        corner of axis 2 and pure fail-closed insurance; it makes the
+//        numeric-escape family a refusal too.
+//
+// The recognized set is thus bracketed by {minimal: R1/R2/R3} and {maximal: R4}
+// rather than assumed — a strict improvement that covers the common escape
+// dialects. But this NARROWS #153, it does not CLOSE it: the shipped binary's
+// actual escape vocabulary was never observed, and review showed the enumeration
+// keeps sprouting sub-axes (a greedy `\x` that eats all trailing hex, surrogate
+// pairs, …) a finite reading set can still miss. A residual therefore remains —
+// tracked in #153 — and its durable fix is architectural/empirical (this
+// reconstruction is the SOLE guard on the CLI content path: the official CLI's
+// `create` bypasses the plugin's app-side honored-byte guard), not one more
+// reading. (Option 4 — pinning the binary's real vocabulary empirically — would
+// let this set be trimmed to a proven-tight one; option 1 — modelling every
+// escape — reopens the class on the next binary change.)
+//
+// Unlike the template path, the raw caller bytes are NOT a plausible reading:
+// they are provably not what lands (the CLI un-escapes), so scanning them raw
+// would model a program the CLI is not.
+
+/**
+ * Expand a CLI param value under an escaped-backslash reading (R2/R3), left to
+ * right in a single pass: `\\`→`\` (escaped escape), `\r\n`/`\n`→LF, `\t`→tab.
+ * An unrecognized `\X` is kept as the literal two bytes `\X` when
+ * `unknownEscape` is "keep" (R2) or collapsed to `X` when "drop" (R3). Exported
+ * for the escape-semantics fixture suite. R1 is NOT expressed here — it is the
+ * verbatim shipped regex in `contentAcceptRefusal`, so its behavior cannot drift.
+ */
+export function expandCliEscapes(content: string, unknownEscape: "keep" | "drop"): string {
+  let out = "";
+  let i = 0;
+  const n = content.length;
+  while (i < n) {
+    const ch = content[i];
+    if (ch === "\\" && i + 1 < n) {
+      const next = content[i + 1];
+      // `\r\n` (four source bytes) before the two-byte escapes, so a CRLF escape
+      // folds to one LF rather than leaving a stray `\r` behind.
+      if (next === "r" && content[i + 2] === "\\" && content[i + 3] === "n") { out += "\n"; i += 4; continue; }
+      if (next === "\\") { out += "\\"; i += 2; continue; } // escaped escape — the byte R1 has no notion of
+      if (next === "n") { out += "\n"; i += 2; continue; }
+      if (next === "t") { out += "\t"; i += 2; continue; }
+      // unrecognized `\X`
+      if (unknownEscape === "drop") { out += next; i += 2; continue; }
+      out += ch; i += 1; continue; // keep the backslash literal; reconsider `next` normally
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
+/** The STRUCTURAL escapes R4 decodes to whitespace (needed for fence structure).
+ * The ambiguous C LETTER escapes (`\a\b\e\f\v`) are DELIBERATELY not here: a CLI
+ * that decodes `\x`/`\u` but treats `\e` as a dropped letter (`\e`→`e`, not ESC)
+ * is a coherent decoder, so folding `\e`→ESC would MISS it while R3 (drop) misses
+ * the numeric half — a gap between the two readings. R4 therefore drops every
+ * non-structural, non-numeric letter escape exactly as R3 does, and only ADDS
+ * numeric decoding on top (so R4 = R3 + numeric). Digit-initial escapes (`\0`,
+ * `\012`) go through the octal branch, not here. */
+const RICH_STRUCTURAL_ESCAPES: Record<string, string> = { n: "\n", r: "\r", t: "\t" };
+
+/**
+ * Expand a CLI param value under the MAXIMAL decoder reading (R4): escaped escape
+ * (`\\`→`\`), the structural escapes `\n`/`\r`/`\t`, the NUMERIC escapes `\xHH`
+ * (2 hex), `\uHHHH` (4 hex), `\u{H…}` (braced code point) and octal `\NNN` (1–3
+ * octal digits) decoded to their code points; any OTHER `\X` has its backslash
+ * dropped (`\X`→`X`), exactly as R3. So R4 is "R3 plus numeric decoding" — it
+ * covers R3's letter-drop case AND the numeric-escape family R3 leaves literal. A
+ * malformed numeric escape (e.g. `\x` with <2 hex following) takes that same
+ * unknown-drop fallback. Exported for the escape-semantics fixture suite. This is
+ * fail-closed insurance for a CLI whose escape vocabulary is richer than
+ * `{\n,\r\n,\t}` (#153, axis 2).
+ */
+export function expandCliEscapesRich(content: string): string {
+  const isHex = (c: string | undefined) => c !== undefined && /[0-9a-fA-F]/.test(c);
+  const isOct = (c: string | undefined) => c !== undefined && c >= "0" && c <= "7";
+  let out = "";
+  let i = 0;
+  const n = content.length;
+  while (i < n) {
+    const ch = content[i];
+    if (ch === "\\" && i + 1 < n) {
+      const next = content[i + 1];
+      if (next === "\\") { out += "\\"; i += 2; continue; } // escaped escape
+      // `\xHH` — exactly two hex digits.
+      if (next === "x" && isHex(content[i + 2]) && isHex(content[i + 3])) {
+        out += String.fromCharCode(parseInt(content.slice(i + 2, i + 4), 16));
+        i += 4;
+        continue;
+      }
+      // `\u{H…}` — braced code point.
+      if (next === "u" && content[i + 2] === "{") {
+        const close = content.indexOf("}", i + 3);
+        const hex = close > i + 3 ? content.slice(i + 3, close) : "";
+        if (close > i + 3 && /^[0-9a-fA-F]+$/.test(hex)) {
+          const cp = parseInt(hex, 16);
+          if (cp <= 0x10ffff) {
+            out += String.fromCodePoint(cp);
+            i = close + 1;
+            continue;
+          }
+        }
+        // malformed → unknown-drop fallback below
+      }
+      // `\uHHHH` — exactly four hex digits.
+      if (next === "u" && isHex(content[i + 2]) && isHex(content[i + 3]) && isHex(content[i + 4]) && isHex(content[i + 5])) {
+        out += String.fromCharCode(parseInt(content.slice(i + 2, i + 6), 16));
+        i += 6;
+        continue;
+      }
+      // Octal `\NNN` — 1–3 octal digits (covers `\0`, `\012`, …).
+      if (isOct(next)) {
+        let j = i + 1;
+        while (j < n && j < i + 4 && isOct(content[j])) j++;
+        out += String.fromCharCode(parseInt(content.slice(i + 1, j), 8) & 0xff);
+        i = j;
+        continue;
+      }
+      // Structural escapes `\n`/`\r`/`\t` (letter escapes `\a\b\e\f\v` are NOT
+      // here — see RICH_STRUCTURAL_ESCAPES — they take the drop fallback below).
+      const c = RICH_STRUCTURAL_ESCAPES[next];
+      if (c !== undefined) { out += c; i += 2; continue; }
+      // Any other `\X` → drop the backslash (as R3), reconsidering nothing.
+      out += next;
+      i += 2;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
 /**
  * Scan written content for an acceptance-asserting frontmatter fence. The CLI
- * interprets `\n`/`\t` escapes in a param value, so they are expanded first — an
- * escaped fence must not slip the scan. Every `---`-delimited YAML block (leading
- * or embedded) is parsed and checked with the shared rule. `append` content is
- * not a note's leading frontmatter, but the resulting note cannot be read
- * pre-exec, so acceptance-carrying content is blocked conservatively — nobody
- * legitimately writes an accepted acceptance fence into a body. With no parser
- * injected, we fail CLOSED on any fence at all (defensive; production always
- * injects obsidian.parseYaml).
+ * interprets a param value's backslash escapes before the vault sees them, so
+ * the guard must decide over a RECONSTRUCTION of the honored document, not the
+ * bytes it was handed. Because the exact escape semantics of the external binary
+ * are unsettled, it expands under EVERY bracketed reading (R1/R2/R3/R4 above) and
+ * refuses if ANY of them yields an acceptance assertion inside a `---` fence —
+ * so no bracketed reading can smuggle acceptance past it (#153). Every
+ * `---`-delimited YAML block (leading or embedded) in each expansion is parsed
+ * and checked with the shared rule. `append` content is not a note's leading
+ * frontmatter, but the resulting note cannot be read pre-exec, so
+ * acceptance-carrying content is blocked conservatively — nobody legitimately
+ * writes an accepted acceptance fence into a body. With no parser injected, we
+ * fail CLOSED on any fence at all (defensive; production always injects
+ * obsidian.parseYaml).
  */
 export function contentAcceptRefusal(content: string, parseYaml?: (yaml: string) => unknown): string | null {
-  // The CLI un-escapes these before the vault sees them, so this expansion is
-  // the guard's best RECONSTRUCTION of the document that will be honored —
-  // and that reconstruction is what the leading-fence check decides over.
-  //
-  // Say "reconstruction", not "is": this models another program's escape
-  // semantics, and the model is known incomplete — it has no notion of an
-  // ESCAPED BACKSLASH, so a payload using one can make the guard see a fence
-  // end where the honored document has none. That residual is tracked (#153); it predates this code and is not closed here.
-  // Unlike the template path, the escapes cannot simply be left alone: the
-  // caller's bytes are NOT what lands, so scanning them raw would be a
-  // different — and larger — gap.
-  const honored = content
+  // R1 — the shipped model, kept byte-for-byte so no current refusal weakens.
+  const r1 = content
     .replace(/\\r\\n|\\n/g, "\n") // literal \n (and \r\n) escapes the CLI expands
     .replace(/\\t/g, "\t"); // literal \t escapes
-  return scanForAcceptFence(honored, parseYaml);
+  const readings = [
+    r1,
+    expandCliEscapes(content, "keep"), // R2 — escaped escape, unknown kept literal
+    expandCliEscapes(content, "drop"), // R3 — escaped escape, unknown dropped
+    expandCliEscapesRich(content), // R4 — maximal decoder (numeric + C escapes), axis 2
+  ];
+  // Fail closed if ANY plausible reading asserts acceptance in a fence. Distinct
+  // expansions only (identical readings — the common escape-free case — scan once).
+  const seen = new Set<string>();
+  for (const honored of readings) {
+    if (seen.has(honored)) continue;
+    seen.add(honored);
+    const reason = scanForAcceptFence(honored, parseYaml);
+    if (reason) return reason;
+  }
+  return null;
 }
 
 // ── fail closed on a Templater expansion token (#137) ────────────────────────
@@ -327,7 +526,7 @@ export function templateContentAcceptRefusal(content: string, parseYaml?: (yaml:
  *     acceptance-asserting block anywhere in written content is refused.
  *     Broader than the write path is fine; narrower is the bypass.
  */
-function scanForAcceptFence(honored: string, parseYaml?: (yaml: string) => unknown): string | null {
+export function scanForAcceptFence(honored: string, parseYaml?: (yaml: string) => unknown): string | null {
   const leading = leadingFrontmatterBlock(honored);
   if (leading !== null) {
     const reason = acceptReasonForBlock(leading, parseYaml);
