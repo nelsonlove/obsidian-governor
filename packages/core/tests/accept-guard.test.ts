@@ -12,7 +12,7 @@
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -309,6 +309,72 @@ describe("an acceptance assertion hidden inside a now-parsed construct is still 
     const { backend } = await freshBackend();
     assert.equal((await backend.writeNote("a.md", "---\n{}\n---\nbody", false)).created, true);
     assert.equal((await backend.writeNote("b.md", "---\n[]\n---\nbody", false)).created, true);
+  });
+});
+
+/**
+ * The closing fence is prefix-matched by the vault, and the guard must see
+ * what the vault sees.
+ *
+ * The recognizer used to demand the closer be `---` plus at most spaces/tabs
+ * before the line break. Obsidian closes on the first line whose first three
+ * bytes are `---`, whatever follows. So every note below carries frontmatter
+ * the vault parses and honors, while the guard saw no frontmatter at all and
+ * refused nothing — the #126 class (a guard narrower than the vault is a
+ * bypass, not caution) on the other fence.
+ *
+ * Each closer form is asserted twice on purpose: that the guard REFUSES the
+ * acceptance assertion hiding behind it, and that nothing was written. A test
+ * that only checked the throw would still pass if the write happened first.
+ */
+describe("accept guard — acceptance behind an unusual CLOSING fence is refused (perimeter)", () => {
+  const CLOSERS = [
+    ["four dashes", "----"],
+    ["adjacent text", "---x"],
+    ["spaced text", "--- x"],
+    ["trailing space", "--- "],
+    ["CRLF + four dashes", "----\r"],
+  ];
+
+  for (const [name, closer] of CLOSERS) {
+    test(`a NEW note asserting acceptance behind a \`${closer.replace(/\r/, "\\r")}\` closer is REFUSED — ${name}`, async () => {
+      const { backend, vaultRoot } = await freshBackend();
+      const eol = closer.endsWith("\r") ? "\r\n" : "\n";
+      const content = `---${eol}acceptance-status: accepted${eol}${closer}\nbody`;
+
+      await assert.rejects(
+        () => backend.writeNote("note.md", content, false),
+        AcceptForbiddenError,
+        `the vault honors this frontmatter; a guard that does not see it is a bypass (closer ${JSON.stringify(closer)})`,
+      );
+      await assert.rejects(
+        () => readFile(join(vaultRoot, "note.md"), "utf8"),
+        "the refusal must happen BEFORE the write, not after",
+      );
+    });
+  }
+
+  test("an accepted-family KEY behind such a closer is refused too, not just the status value", async () => {
+    const { backend } = await freshBackend();
+    await assert.rejects(
+      () => backend.writeNote("note.md", "---\naccepted-by: nelson\n----\nbody", false),
+      AcceptForbiddenError,
+    );
+  });
+
+  test("an ORDINARY note using such a closer still writes — the fix widens recognition, not refusal", async () => {
+    const { backend } = await freshBackend();
+    const result = await backend.writeNote("note.md", "---\ntitle: N\n----\nbody", false);
+    assert.equal(result.created, true);
+    // And the leftover dash is BODY, per the vault: it must survive verbatim.
+    assert.equal(await backend.readNote("note.md"), "---\ntitle: N\n----\nbody");
+  });
+
+  test("the frontmatter behind such a closer is actually PARSED, not merely refused by accident", () => {
+    // If this returned null the refusals above could be passing for the wrong
+    // reason (e.g. some unrelated opacity check), so pin the recognition too.
+    assert.deepEqual(parseGuardFrontmatter("---\ntitle: N\n----\nbody"), { title: "N" });
+    assert.deepEqual(parseGuardFrontmatter("---\ntitle: N\n--- x\nbody"), { title: "N" });
   });
 });
 

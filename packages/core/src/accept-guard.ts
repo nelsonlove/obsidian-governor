@@ -80,13 +80,35 @@ export function stripLeadingBom(text: string): string {
 }
 
 /**
- * The one definition of a note's leading frontmatter fence: `---` as the very
- * first line (after `stripLeadingBom`), CRLF-tolerant, trailing spaces/tabs on
- * the fence lines tolerated, closed by a matching `---` (EOF-terminated or
- * followed by a newline). Every recognizer/editor of leading frontmatter in
- * this package binds to this ONE pattern instead of re-deriving the shape.
+ * The one definition of a note's leading frontmatter fence.
+ *
+ * **The opener and the closer are not symmetric, and that asymmetry is the
+ * vault's, not a convenience.** Verified against a live Obsidian by writing
+ * probe notes and reading them back through its own parser:
+ *
+ *   - The OPENER must be exactly `---` (after `stripLeadingBom`, at byte 0),
+ *     with only spaces/tabs before the line break. `----` does not open a
+ *     block; neither does `--- yaml`.
+ *   - The CLOSER is the first later line whose first three bytes are `---`.
+ *     Whatever follows those three dashes on that line is **body**, not part
+ *     of the fence: `----` closes and leaves `-`, `---x` closes and leaves
+ *     `x`, `--- ` closes and leaves a line holding one space. An INDENTED
+ *     ` ---` does not close — the dashes must start the line.
+ *
+ * This pattern therefore ends immediately after the closing `---`, and callers
+ * that split on `match[0].length` get the vault's own body boundary. That is
+ * deliberate: the remainder of the closer line is content, and a pattern that
+ * swallowed it would make every reader drop a line the vault shows.
+ *
+ * The closer used to require `[ \t]*` and then a line break, which recognized
+ * LESS than the vault honors — the #126 class on the other fence. Content whose
+ * frontmatter asserted acceptance behind such a closer drew no refusal from the
+ * accept guard while Obsidian parsed and honored it. Do not re-narrow this
+ * without re-probing the vault; the oracle table in
+ * `packages/plugin/tests/frontmatter-boundary-oracle.test.mjs` is the spec and
+ * this regex is only the implementation.
  */
-export const LEADING_FRONTMATTER_RE = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/;
+export const LEADING_FRONTMATTER_RE = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---/;
 
 /**
  * The raw YAML text of `markdown`'s leading frontmatter, or null when it has

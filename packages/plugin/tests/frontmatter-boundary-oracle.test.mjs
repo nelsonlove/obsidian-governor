@@ -50,6 +50,20 @@ const ORACLE = [
   ["lone CR inside the block", "---\na:\rb\n---\nbody", "a:\rb", "a CR inside a scalar is CONTENT, not a line break — the byte the guard used to fold away"],
   ["--- inside the block body", "---\na: 1\n---\nbody\n---\nmore", "a: 1", "the FIRST closing fence ends it"],
 
+  // ── closer forms, probed against a live Obsidian ──────────────────────────
+  // The opener must be EXACTLY `---`; the closer is prefix-matched, and the
+  // remainder of that line is body. Every row below was verified by writing
+  // the note into a live vault and reading it back through Obsidian's own
+  // parser — not inferred from the opener's rule, which is different.
+  // Re-narrowing the closer reopens an accept-guard bypass; see the regex's
+  // docstring in packages/core/src/accept-guard.ts.
+  ["four-dash CLOSER", "---\na: 1\n----\nbody", "a: 1", "closes on the first three dashes; the vault puts the leftover `-` in the BODY (probed: body was \"-\\nbody\\n\")"],
+  ["closer with adjacent text", "---\na: 1\n---x\nbody", "a: 1", "probed: body was \"x\\nbody\\n\" — the closer is not required to be alone on its line"],
+  ["closer with spaced text", "---\na: 1\n--- x\nbody", "a: 1", "probed: body was \" x\\nbody\\n\""],
+  ["closer with trailing space", "---\na: 1\n--- \nbody", "a: 1", "probed: body was \" \\nbody\\n\" — the vault does NOT trim it, so the space is body, not fence"],
+  ["indented closer skipped, real closer found", "---\na: 1\n ---\nb: 2\n---\nbody", "a: 1\n ---\nb: 2", "probed: an indented ` ---` does not close, and Obsidian folded it into the value (frontmatter was {a: \"1 ---\", b: 2})"],
+  ["adjacent fences are NOT an empty block", "---\n---\nbody", null, "probed: frontmatter was null — with no line between them this is not a fence at all (contrast the `empty block` row, which has one)"],
+
   // ── NOT honored (the rows a loosening would break) ────────────────────────
   ["space before the fence", " ---\na: 1\n---\nbody", null, "frontmatter must start at byte 0 — this is the row that fails if the anchor is relaxed to ^[ \\t]*---"],
   ["tab before the fence", "\t---\na: 1\n---\nbody", null, "same"],

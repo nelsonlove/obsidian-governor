@@ -261,6 +261,39 @@ describe("locateFrontmatter parity — frontmatter-edit writes never duplicate a
     assert.match(after, /status: active/);
   });
 
+  // The tests above count fence markers, which proves the editor RECOGNIZED
+  // the fence but says nothing about where it decided the body starts. That
+  // boundary moved when the closer became prefix-matched, so it needs its own
+  // assertions: an editor that consumes one byte too many silently eats body
+  // text, and one that consumes too few silently inserts a line.
+
+  test("a frontmatter edit on a CRLF note does not insert a blank line before the body", async () => {
+    const crlf = "---\r\nname: N\r\n---\r\nbody line one\r\nbody line two\r\n";
+    await writeFile(path.join(tmpRoot, "crlf-body.md"), crlf, "utf8");
+    await vault.setFrontmatterField("crlf-body.md", "status", "active");
+    const after = await vault.readNote("crlf-body.md");
+    const body = after.slice(after.indexOf("---", 3) + 3).replace(/^\r?\n/, "");
+    assert.equal(
+      body,
+      "body line one\r\nbody line two\r\n",
+      "a \\n-only strip leaves the CR of the closer's line break behind as a line of its own",
+    );
+    assert.ok(!/\n\r\n/.test(after), `stray CR line inserted: ${JSON.stringify(after)}`);
+  });
+
+  test("a frontmatter edit preserves body text that sits on the CLOSING fence line", async () => {
+    // The vault closes on the first three dashes and treats the rest of that
+    // line as body (probed live). An editor that swallowed the remainder would
+    // delete content the note visibly has.
+    const odd = "---\nname: N\n----\nbody\n";
+    await writeFile(path.join(tmpRoot, "odd-closer.md"), odd, "utf8");
+    await vault.setFrontmatterField("odd-closer.md", "status", "active");
+    const after = await vault.readNote("odd-closer.md");
+    assert.match(after, /status: active/);
+    assert.match(after, /name: N/);
+    assert.ok(after.endsWith("-\nbody\n"), `the leftover dash is body and must survive: ${JSON.stringify(after)}`);
+  });
+
   test("setFrontmatterField on a note with trailing fence whitespace edits the EXISTING frontmatter, not a duplicate", async () => {
     const trailing = "--- \t\nname: N\n---\t\nbody";
     await writeFile(path.join(tmpRoot, "trailing.md"), trailing, "utf8");
