@@ -15,6 +15,7 @@ import {
   parseGuardFrontmatter,
   stripLeadingBom,
   LEADING_FRONTMATTER_RE,
+  leadingFrontmatterBlock,
 } from "../accept-guard.js";
 
 /**
@@ -811,9 +812,12 @@ class VaultImpl {
 
 function extractTags(text: string): Set<string> {
   const tags = new Set<string>();
-  const fmMatch = text.match(/^---\n([\s\S]*?)\n---/);
-  if (fmMatch) {
-    const fm = fmMatch[1];
+  // Shared recognizer (#150) — same reason as locateFrontmatter above: a
+  // narrower pattern reads a BOM/CRLF-fenced note as having no frontmatter,
+  // so its `tags:` are never seen and the note silently drops out of every
+  // tag query.
+  const fm = leadingFrontmatterBlock(text);
+  if (fm !== null) {
     const tagLine = fm.match(/^tags:\s*(.*)$/m);
     if (tagLine) {
       const inline = tagLine[1].trim();

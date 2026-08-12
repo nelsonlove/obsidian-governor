@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { vaultRoot } from "./vault.js";
 import type { FrontmatterValue, ResolveResult, OutlinkEntry } from "../vault-backend.js";
+import { leadingFrontmatterBlock, stripLeadingFrontmatter } from "../accept-guard.js";
 
 /**
  * In-memory index of the vault.
@@ -173,9 +174,14 @@ function coerceScalar(raw: string): FrontmatterValue {
  */
 export function parseAllFrontmatter(text: string): Record<string, FrontmatterValue> {
   const result: Record<string, FrontmatterValue> = {};
-  const match = text.match(/^---\n([\s\S]*?)\n---/);
-  if (!match) return result;
-  const lines = match[1].split("\n");
+  // The shared recognizer (#150) — a BOM/CRLF/trailing-whitespace fence is
+  // frontmatter to Obsidian and to the guard, so it must be frontmatter to the
+  // index too, or those notes index with no frontmatter at all.
+  const block = leadingFrontmatterBlock(text);
+  if (block === null) return result;
+  // Split CRLF-natively: recognizing a CRLF fence buys nothing if every value
+  // then carries a trailing \r into the index.
+  const lines = block.split(/\r?\n/);
 
   let i = 0;
   while (i < lines.length) {
@@ -290,7 +296,10 @@ export function deriveJdIdFromPath(relPath: string, basename: string): string | 
  * raw target strings (without alias/fragment); resolution happens later.
  */
 export function parseOutlinks(text: string): string[] {
-  const body = text.replace(/^---\n[\s\S]*?\n---\n?/, "");
+  // Shared recognizer (#150): with a narrower one, a BOM/CRLF fence is not
+  // stripped, so link extraction runs over the frontmatter as if it were prose
+  // — indexing any `[[…]]` inside the fence as a real outlink.
+  const body = stripLeadingFrontmatter(text);
   const cleaned = body
     .replace(/```[\s\S]*?```/g, "")
     .replace(/`[^`]*`/g, "");
