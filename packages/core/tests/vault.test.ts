@@ -189,6 +189,40 @@ describe("accept-forbidden guard — module-level singleton functions (issue #10
     const result = await vault.patchNote("note.md", { type: "block", value: "anchor" }, "prepend", "inserted");
     assert.equal(result.found, true);
   });
+
+  // patchNote is the SECOND consumer of the shared recognizer's match extent
+  // (`fmText = match[0]`, `body = slice(match[0].length)`), so the frontmatter
+  // /body boundary moving is felt here as much as in the frontmatter editor.
+  // It was untested against that boundary — review of the closer fix caught
+  // the omission, and caught the PR describing this function under a name
+  // that does not exist in the repo.
+  //
+  // The property is round-trip losslessness: `fmText` gives back exactly what
+  // `body` gives up, so an untouched note comes back byte-identical whatever
+  // the closer looks like.
+  for (const [name, input] of [
+    ["plain", "---\na: 1\n---\nsome text\n^anchor\nmore text\n"],
+    ["four-dash closer", "---\na: 1\n----\nsome text\n^anchor\nmore text\n"],
+    ["closer with adjacent text", "---\na: 1\n---x\nsome text\n^anchor\nmore text\n"],
+    ["CRLF", "---\r\na: 1\r\n---\r\nsome text\r\n^anchor\r\nmore text\r\n"],
+    ["BOM + four-dash closer", "﻿---\na: 1\n----\nsome text\n^anchor\nmore text\n"],
+  ]) {
+    test(`patchNote preserves the frontmatter/body boundary — ${name}`, async () => {
+      const file = `patch-${name.replace(/[^a-z]+/gi, "-")}.md`;
+      await writeFile(path.join(tmpRoot, file), input, "utf8");
+      const result = await vault.patchNote(file, { type: "block", value: "anchor" }, "prepend", "inserted");
+      assert.equal(result.found, true);
+      const after = await vault.readNote(file);
+      // The property is LOSSLESSNESS, not insertion position: removing the one
+      // inserted line must give back the original note byte for byte — closer
+      // leftovers, BOM, and CRLF included. (Where `prepend` lands legitimately
+      // varies: a closer leftover like `-` is body, so it joins the anchored
+      // block and the insertion goes ahead of it. Asserting the position would
+      // pin an unrelated decision.)
+      assert.ok(after.includes("inserted\n"), `insertion missing: ${JSON.stringify(after)}`);
+      assert.equal(after.replace("inserted\n", ""), input, "a body byte was lost or moved across the fence boundary");
+    });
+  }
 });
 
 // ── Recognition parity (issue #104 / #126 class) ────────────────────────────
@@ -260,6 +294,66 @@ describe("locateFrontmatter parity — frontmatter-edit writes never duplicate a
     assert.equal(fenceMarkerCount, 2, "exactly one frontmatter block — not a second block prepended");
     assert.match(after, /status: active/);
   });
+
+  // The tests above count fence markers, which proves the editor RECOGNIZED
+  // the fence but says nothing about where it decided the body starts. That
+  // boundary moved when the closer became prefix-matched, so it needs its own
+  // assertions: an editor that consumes one byte too many silently eats body
+  // text, and one that consumes too few silently inserts a line.
+
+  test("a frontmatter edit on a CRLF note does not insert a blank line before the body", async () => {
+    const crlf = "---\r\nname: N\r\n---\r\nbody line one\r\nbody line two\r\n";
+    await writeFile(path.join(tmpRoot, "crlf-body.md"), crlf, "utf8");
+    await vault.setFrontmatterField("crlf-body.md", "status", "active");
+    const after = await vault.readNote("crlf-body.md");
+    const body = after.slice(after.indexOf("---", 3) + 3).replace(/^\r?\n/, "");
+    assert.equal(
+      body,
+      "body line one\r\nbody line two\r\n",
+      "a \\n-only strip leaves the CR of the closer's line break behind as a line of its own",
+    );
+    assert.ok(!/\n\r\n/.test(after), `stray CR line inserted: ${JSON.stringify(after)}`);
+  });
+
+  // The vault closes on the first three dashes and treats the rest of that
+  // line as body (probed live). An editor that swallowed the remainder would
+  // silently delete content the note visibly has.
+  //
+  // These assert the WHOLE resulting file, not a suffix or a /match/. An
+  // earlier revision asserted `after.endsWith("-\nbody\n")` and was vacuous:
+  // the reassembled closing fence is `---`, which itself ends in `-`, so the
+  // assertion passed just as well when the leftover dash had been deleted.
+  // A partial assertion about a boundary tends to be satisfied by the fence
+  // sitting next to it — pin the bytes.
+  for (const [name, input, expected] of [
+    [
+      "four-dash closer",
+      "---\nname: N\n----\nbody\n",
+      "---\nname: N\nstatus: active\n---\n-\nbody\n",
+    ],
+    [
+      "closer with adjacent text",
+      "---\nname: N\n---x\nbody\n",
+      "---\nname: N\nstatus: active\n---\nx\nbody\n",
+    ],
+    [
+      "CRLF note whose closer carries text",
+      "---\r\nname: N\r\n---x\r\nbody\r\n",
+      "---\nname: N\nstatus: active\n---\nx\r\nbody\r\n",
+    ],
+    [
+      "ordinary closer (control)",
+      "---\nname: N\n---\nbody\n",
+      "---\nname: N\nstatus: active\n---\nbody\n",
+    ],
+  ]) {
+    test(`a frontmatter edit preserves body on the closing fence line — ${name}`, async () => {
+      const file = `${name.replace(/[^a-z]+/gi, "-")}.md`;
+      await writeFile(path.join(tmpRoot, file), input, "utf8");
+      await vault.setFrontmatterField(file, "status", "active");
+      assert.equal(await vault.readNote(file), expected);
+    });
+  }
 
   test("setFrontmatterField on a note with trailing fence whitespace edits the EXISTING frontmatter, not a duplicate", async () => {
     const trailing = "--- \t\nname: N\n---\t\nbody";

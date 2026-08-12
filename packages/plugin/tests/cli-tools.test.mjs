@@ -507,3 +507,37 @@ describe("registerCliTools — accept guard wired into the handler", () => {
     assert.equal(cliAcceptRefusal("quickadd", { choice: "Some Macro" }, parseYaml), null);
   });
 });
+
+/**
+ * The embedded-fence sweep is contractually the BROADER of the CLI guard's two
+ * halves ("Broader than the write path is fine; narrower is the bypass"). When
+ * the shared recognizer's closer became prefix-matched, this sweep kept the old
+ * `---`-alone-on-its-line closer and so inverted its own contract — it became
+ * the narrower half. Both reviewers of that change found it independently.
+ *
+ * These pin the contract directly rather than the implementation: whatever the
+ * leading recognizer honors, the sweep must also catch when it appears further
+ * down a written body.
+ */
+describe("scanForAcceptFence — the embedded sweep is never narrower than the recognizer", () => {
+  for (const [name, closer] of [
+    ["ordinary closer", "---"],
+    ["four dashes", "----"],
+    ["adjacent text", "---x"],
+    ["spaced text", "--- x"],
+    ["trailing space", "--- "],
+  ]) {
+    test(`catches an embedded accepted block closed by \`${closer}\` — ${name}`, () => {
+      const content = `intro\n\n---\nacceptance-status: accepted\n${closer}\nbody`;
+      assert.ok(
+        scanForAcceptFence(content, parseYaml),
+        `an embedded fence the vault would honor slipped the sweep: closer ${JSON.stringify(closer)}`,
+      );
+    });
+  }
+
+  test("ordinary embedded content is still allowed — the sweep widened, it did not become a blanket refusal", () => {
+    assert.equal(scanForAcceptFence("intro\n\n---\ntitle: fine\n----\nbody", parseYaml), null);
+    assert.equal(scanForAcceptFence("just prose with --- dashes\nand more", parseYaml), null);
+  });
+});

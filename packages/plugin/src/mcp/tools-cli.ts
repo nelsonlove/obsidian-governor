@@ -533,7 +533,14 @@ export function scanForAcceptFence(honored: string, parseYaml?: (yaml: string) =
     if (reason) return reason;
   }
   const folded = stripLeadingBom(honored).replace(/\r\n?/g, "\n");
-  const fenceRe = /(?:^|\n)---[ \t]*\n([\s\S]*?)\n---[ \t]*(?:\n|$)/g;
+  // The closer is prefix-matched, exactly as the shared recognizer now does
+  // (a line whose first three bytes are `---` closes the block, whatever
+  // follows). This sweep is contractually the BROADER of the two — narrower is
+  // the bypass — so leaving it on the old `---`-alone-on-its-line closer while
+  // the leading recognizer widened would have inverted its own contract.
+  // Refusal still requires an acceptance assertion INSIDE the block, so a
+  // wider notion of "block" costs nothing on ordinary content.
+  const fenceRe = /(?:^|\n)---[ \t]*\n([\s\S]*?)\n---/g;
   let m: RegExpExecArray | null;
   let sawFence = leading !== null;
   while ((m = fenceRe.exec(folded)) !== null) {
