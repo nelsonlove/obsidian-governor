@@ -22,7 +22,7 @@
 import { opendir, readFile } from "node:fs/promises";
 import { realpathSync, lstatSync, readlinkSync } from "node:fs";
 import { join, relative, resolve, dirname, basename, sep } from "node:path";
-import { parseAllFrontmatter } from "@vault-mcp/core";
+import { parseAllFrontmatter, stripLeadingFrontmatter } from "@vault-mcp/core";
 import type { VocabNote } from "../kernel/vocab/blueprint.js";
 import type { SourceFile, VaultSnapshot } from "./rule-pack.js";
 import { intendedRealPath, isInside } from "./path-identity.js";
@@ -207,17 +207,26 @@ function isExcluded(vaultPath: string, excluded: string[]): boolean {
   return excluded.some((e) => vaultPath === e || vaultPath.startsWith(e.replace(/\/$/, "") + "/"));
 }
 
-/** The `---\n…\n---` block's parsed frontmatter (via core) and the body after
- * it. CRLF is normalized to LF FIRST: both the body regex and core's
- * `parseAllFrontmatter` anchor on `---\n`, so a CRLF-authored note (`---\r\n`)
- * would otherwise parse to empty frontmatter and silently skip every vocab
- * check — exactly the silent zero the engine's sentinels exist to prevent. */
+/** The leading frontmatter block's parsed contents and the body after it.
+ *
+ * BOTH halves bind to core's shared recognizer (`parseAllFrontmatter` /
+ * `stripLeadingFrontmatter`, #150) rather than one of them re-deriving the
+ * fence locally. That is not tidiness: when the two disagree the note is
+ * neither skipped nor read correctly — it is read with its own frontmatter
+ * still inside the body, so every H2/vocab check runs over YAML as if it were
+ * prose. That split brain is precisely what a local copy of the pattern
+ * produces the moment the shared one is widened (a BOM-tolerant parser beside
+ * a BOM-blind body regex), which is how it nearly shipped here.
+ *
+ * The CRLF pre-normalization is kept because downstream checks index by line
+ * offsets into this body and expect LF; the recognizer itself is CRLF-native
+ * either way. */
 function splitNote(raw: string): { frontmatter: Record<string, unknown>; body: string } {
   const text = raw.replace(/\r\n/g, "\n");
-  const m = text.match(/^---\n[\s\S]*?\n---\n?/);
-  const frontmatter = parseAllFrontmatter(text) as Record<string, unknown>;
-  const body = m ? text.slice(m[0].length) : text;
-  return { frontmatter, body };
+  return {
+    frontmatter: parseAllFrontmatter(text) as Record<string, unknown>,
+    body: stripLeadingFrontmatter(text),
+  };
 }
 
 /** One directory's entries in RAW order (the OS `readdir`/`scandir` order), via

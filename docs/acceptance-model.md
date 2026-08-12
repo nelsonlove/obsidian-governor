@@ -70,10 +70,17 @@ is to ask the vault, not to reason from the half you already fixed.
 
 So the boundary is defined once, in `@vault-mcp/core`
 (`accept-guard.ts`: `stripLeadingBom`, `LEADING_FRONTMATTER_RE`,
-`leadingFrontmatterBlock`) — in **core** specifically, so both the Obsidian backend and the
-filesystem backend can bind to it rather than each re-deriving a boundary. `frontmatterOf`,
-`parseGuardFrontmatter` and the accept scanner's leading-fence check are all callers of that
-one recognizer, run against the raw honored bytes.
+`leadingFrontmatterBlock`, `stripLeadingFrontmatter`) — in **core** specifically, so both the
+Obsidian backend and the filesystem backend can bind to it rather than each re-deriving a
+boundary. `frontmatterOf`, `parseGuardFrontmatter` and the accept scanner's leading-fence check
+are all callers of that one recognizer, run against the raw honored bytes.
+
+`leadingFrontmatterBlock` and `stripLeadingFrontmatter` are the two halves of that one
+recognizer — "what is the frontmatter?" and "what is left after it?" — and they are deliberately
+a pair rather than two regexes that happen to agree. A caller that needs the *body* (an outlink
+scanner, a conformance snapshot) will otherwise re-derive the shape, and re-derivation is the
+thing this section exists to stop: when the halves disagree the note is neither skipped nor read
+correctly, it is read with its own frontmatter still inside its body (#150).
 
 **One caller cannot avoid normalizing, and is handled by not trusting a single normalization:**
 the CLI content path (`contentAcceptRefusal`) must expand the escapes the CLI itself expands
