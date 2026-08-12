@@ -370,10 +370,11 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
     const vocab = hosted.find((h) => h.id === "vocab");
     assert.deepEqual(vocab.fields, []);
     assert.ok(vocab.directory.tools.length > 0);
-    // The skills module renders its own config tab: nine config fields (default
-    // values from the manifest) plus a six-tool capability directory.
+    // The skills module renders its own config tab: ten config fields (default
+    // values from the manifest — the nine folded from the standalone settings tab
+    // plus the exportOnSave GUI toggle) plus a six-tool capability directory.
     const skills = hosted.find((h) => h.id === "skills");
-    assert.equal(skills.fields.length, 9);
+    assert.equal(skills.fields.length, 10);
     assert.equal(skills.fields.find((f) => f.key === "pluginName").value, "vault-skills");
     assert.equal(skills.directory.tools.length, 6);
     // The governance module renders its section too — summary-only (#83 cycle 2): no
