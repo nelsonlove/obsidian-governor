@@ -80,13 +80,45 @@ export function stripLeadingBom(text: string): string {
 }
 
 /**
- * The one definition of a note's leading frontmatter fence: `---` as the very
- * first line (after `stripLeadingBom`), CRLF-tolerant, trailing spaces/tabs on
- * the fence lines tolerated, closed by a matching `---` (EOF-terminated or
- * followed by a newline). Every recognizer/editor of leading frontmatter in
- * this package binds to this ONE pattern instead of re-deriving the shape.
+ * The one definition of a note's leading frontmatter fence.
+ *
+ * **The opener and the closer are not symmetric, and that asymmetry is the
+ * vault's, not a convenience.** Verified against a live Obsidian by writing
+ * probe notes and reading them back through its own parser:
+ *
+ *   - The OPENER must be exactly `---` (after `stripLeadingBom`, at byte 0),
+ *     with only spaces/tabs before the line break. `----` does not open a
+ *     block; neither does `--- yaml`.
+ *   - The CLOSER is the first later line whose first three bytes are `---`.
+ *     Whatever follows those three dashes on that line is **body**, not part
+ *     of the fence: `----` closes and leaves `-`, `---x` closes and leaves
+ *     `x`, `--- ` closes and leaves a line holding one space. An INDENTED
+ *     ` ---` does not close — the dashes must start the line.
+ *   - A LINE BREAK is `\r\n`, `\n`, **or a lone `\r`**. Obsidian's fence scan
+ *     honors a classic-Mac line ending on either fence: `---\nzz: 9\r---\n`
+ *     and an all-CR document both parse (probed). This is the one place where
+ *     the fence scan and the YAML parser genuinely disagree — a lone `\r`
+ *     *inside* a scalar stays content (`parseYaml` does not split on it), so
+ *     the same byte is a line break to the fence and content to the value.
+ *     That asymmetry is not ours to reconcile; it is the vault's, and both
+ *     halves are pinned in the oracle. `parseGuardFrontmatter` still REFUSES
+ *     a block carrying a lone `\r` it cannot classify (#104), so widening the
+ *     fence here does not widen what the subset parser will silently accept.
+ *
+ * This pattern therefore ends immediately after the closing `---`, and callers
+ * that split on `match[0].length` get the vault's own body boundary. That is
+ * deliberate: the remainder of the closer line is content, and a pattern that
+ * swallowed it would make every reader drop a line the vault shows.
+ *
+ * The closer used to require `[ \t]*` and then a line break, which recognized
+ * LESS than the vault honors — the #126 class on the other fence. Content whose
+ * frontmatter asserted acceptance behind such a closer drew no refusal from the
+ * accept guard while Obsidian parsed and honored it. Do not re-narrow this
+ * without re-probing the vault; the oracle table in
+ * `packages/plugin/tests/frontmatter-boundary-oracle.test.mjs` is the spec and
+ * this regex is only the implementation.
  */
-export const LEADING_FRONTMATTER_RE = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/;
+export const LEADING_FRONTMATTER_RE = /^---[ \t]*(?:\r\n|\n|\r)([\s\S]*?)(?:\r\n|\n|\r)---/;
 
 /**
  * The raw YAML text of `markdown`'s leading frontmatter, or null when it has
@@ -286,13 +318,30 @@ export function acceptForbiddenReason(fm: Record<string, unknown> | undefined | 
 //   • a multi-document marker (`...`)
 //   • an unparseable key line, or an unexpected indentation change
 //
-// Every one of those is verified absent from BOTH real vaults: after this
-// change the refusal rate is 0/1468 and 0/12072 (0.0%). The reader is also
+// Every one of those was verified absent from BOTH real vaults: at the time of
+// PR #143 the refusal rate was 0/1468 and 0/12072 (0.0%). The reader is also
 // differential-tested against PyYAML over the same 13,540 notes and agrees on
 // the full key structure, nesting included, for every note either can parse
 // (one note is invalid YAML that PyYAML itself rejects). Both bugs fixed here
 // — the unquoted mapping key and the refused document-root flow collection —
 // were found by that oracle, not by hand-written cases. See PR #143 / #104.
+//
+// Those counts were measured under the OLD, narrower fence recognizer, so
+// widening the closer could in principle change which blocks the strict reader
+// is handed. Re-measured on the live vault after the widening: 1517 notes,
+// 1510 with frontmatter, 0 refusals, and 0 notes where the old and new
+// recognizers disagree about the block. That corpus is far smaller than the
+// original 13,540, so read it as "no regression observed here", not as a
+// re-validation of the original figure.
+//
+// The widening does create a new refusal class — empirically absent from that
+// corpus, but real and verified by hand: a note whose body opens with a long
+// thematic rule directly under a fence (`---\nChapter one\n---------------\n`)
+// now has the rule recognized as its closer, and the resulting block refuses
+// as unclassifiable instead of being ignored. That is the safe direction —
+// refusing beats writing past a block the vault will honor — and it matches
+// what Obsidian does with the same bytes. But it is a behavior change on notes
+// that previously appeared to work.
 
 const FRONTMATTER_UNCLASSIFIABLE_REASON =
   "the frontmatter could not be confidently inspected for an acceptance assertion — it contains a YAML construct " +

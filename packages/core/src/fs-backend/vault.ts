@@ -105,7 +105,14 @@ function locateFrontmatter(text: string): FrontmatterRegion {
 }
 
 function reassemble(region: FrontmatterRegion, newBody: string): string {
-  const afterNorm = region.after.startsWith("\n") ? region.after.slice(1) : region.after;
+  // `region.after` begins at the vault's body boundary — immediately after the
+  // closing `---`, so it starts with the line break that ENDED the closer line
+  // (and only then the body), or, when the closer carried trailing content,
+  // with that content. Consume exactly one line terminator, CRLF included: a
+  // `\n`-only strip leaves the `\r` of a CRLF note behind as a line of its own,
+  // silently inserting a blank line on every frontmatter edit. A lone `\r` is a
+  // line break to the fence scan too (probed), so it is consumed here as well.
+  const afterNorm = region.after.replace(/^(?:\r\n|\n|\r)/, "");
   return `${region.before}---\n${newBody}\n---\n${afterNorm}`;
 }
 

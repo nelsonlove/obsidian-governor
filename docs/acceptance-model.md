@@ -57,6 +57,17 @@ document that lands; review of the first fix found the identical bug already re-
 different byte, because a lone `\r` is content to the write path and a line break to a folded
 scan.
 
+The class recurred a third time, on the **closing** fence, and the shape of that recurrence is
+worth keeping. Each earlier fix asked "does the guard see the same *opening* fence the vault
+does?" and the answer kept being made correct — while the closer went unexamined because it was
+assumed symmetric with the opener. It is not. Probing a live Obsidian shows the opener must be
+exactly `---`, whereas the closer is the first later line whose first three bytes are `---`,
+with the remainder of that line becoming body. So a note whose closer read `----` carried
+frontmatter the vault parsed and honored, and the guard saw no frontmatter at all and refused
+nothing. The lesson to carry: **"recognize what the vault honors" is a claim about every
+boundary of the construct, not just the one that failed last time** — and the way to settle it
+is to ask the vault, not to reason from the half you already fixed.
+
 So the boundary is defined once, in `@vault-mcp/core`
 (`accept-guard.ts`: `stripLeadingBom`, `LEADING_FRONTMATTER_RE`,
 `leadingFrontmatterBlock`, `stripLeadingFrontmatter`) — in **core** specifically, so both the
