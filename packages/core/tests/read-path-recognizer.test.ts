@@ -22,7 +22,11 @@
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parseAllFrontmatter, parseOutlinks } from "../src/fs-backend/index-store.js";
+import { FilesystemBackend } from "../src/fs-backend/filesystem-backend.js";
 import { stripLeadingFrontmatter, leadingFrontmatterBlock } from "../src/accept-guard.js";
 
 const BOM = "﻿";
@@ -84,6 +88,41 @@ describe("#150 — parseOutlinks strips the fence it should", () => {
   test("code fences are still excluded (pre-existing behavior preserved)", () => {
     const text = "---\ntitle: N\n---\nreal [[Kept]]\n\n```\n[[InCode]]\n```\n";
     assert.deepEqual(parseOutlinks(text), ["Kept"]);
+  });
+});
+
+describe("#150 — findByTag sees the tags of odd-byte notes", () => {
+  // extractTags is reached only through the vault, so this case is end-to-end:
+  // real files on disk, read through the real backend. The unit above proves
+  // the recognizer; this proves the tag query actually answers with the note.
+  // Nothing else pins extractTags, so without this the site is unguarded.
+
+  test("every spelling of the same tagged note is found", async () => {
+    const root = await mkdtemp(join(tmpdir(), "read-path-tags-"));
+    const expected: string[] = [];
+    for (const [name, text] of variants("title: Note\ntags: [alpha, beta]", "body text\n")) {
+      const rel = `${name.replace(/[^a-z]+/gi, "-")}.md`;
+      await writeFile(join(root, rel), text, "utf8");
+      expected.push(rel);
+    }
+    // A note whose tags live elsewhere must NOT come back — otherwise a test
+    // that matched everything would pass just as well.
+    await writeFile(join(root, "untagged.md"), "---\ntitle: Other\n---\nno tags here\n", "utf8");
+
+    const backend = new FilesystemBackend(root);
+    const hits = await backend.findByTag("alpha", 50);
+    assert.deepEqual(
+      hits.map((h) => h.path).sort(),
+      expected.sort(),
+      "a note whose frontmatter fence went unrecognized drops out of every tag query",
+    );
+  });
+
+  test("block-list tags survive CRLF too", async () => {
+    const root = await mkdtemp(join(tmpdir(), "read-path-tags-crlf-"));
+    await writeFile(join(root, "list.md"), "---\r\ntags:\r\n  - alpha\r\n  - beta\r\n---\r\nbody\r\n", "utf8");
+    const hits = await new FilesystemBackend(root).findByTag("beta", 50);
+    assert.deepEqual(hits.map((h) => h.path), ["list.md"]);
   });
 });
 
