@@ -52,6 +52,8 @@ import { registerSchemeTools } from "./tools-scheme.js";
 import { registerVocabTools, type VocabSource, type VocabToolsCtx } from "./tools-vocab.js";
 import { registerSkillsTools, type SkillsBackend, type SkillsToolsCtx } from "./tools-skills.js";
 import { DEFAULT_SKILLS_CONFIG, validateSkillsConfig } from "../kernel/skills/index.js";
+import { registerProvenanceTools, type ProvenanceToolsCtx } from "./tools-provenance.js";
+import { DEFAULT_PROVENANCE_CONFIG, validateProvenanceConfig, DEFAULT_NOTES_DIR, type ProvenanceBackend } from "../kernel/provenance/index.js";
 
 // ── manifests (#81: config-host — see
 //    docs/superpowers/specs/2026-08-10-config-host-design.md) ──────────────
@@ -404,6 +406,74 @@ const SKILLS_MANIFEST: ModuleManifest = {
   },
 };
 
+// ── provenance module manifest (the obsidian-provenance CLI fold) ──────────
+//
+// The SECOND mutating capability module (after skills). Ported from the
+// standalone `obsidian-provenance` Python CLI. Its config is a NEW module (no
+// ConfigBinding): it lives at `modules.provenance.config`, so the manifest's
+// flat field keys map straight through. One field today — the plugin-notes
+// directory the reconcile/regen audit scans, defaulting to the Python
+// `DEFAULT_NOTES_DIR`. The directory documents all THREE tools: two read
+// (check / reconcile) and one mutating (regen).
+//
+// DERIVATION ≠ ACCEPTANCE: the module stamps `derived-from` / `generated` /
+// `generator` / `derivation-mode` on the audit note it regenerates — provenance
+// metadata, orthogonal to acceptance. `provenance_regen`'s write routes through
+// the accept-forbidden guard like every write; it contributes no accept verb.
+const PROVENANCE_CONFIG_FIELDS: ConfigField[] = [
+  {
+    key: "notesDir",
+    label: "Plugin-notes directory",
+    type: "text",
+    help:
+      "Vault-relative folder holding the per-plugin notes the audit reconciles against installed/enabled plugins. " +
+      `The audit note itself is written here. Blank ⇒ the default (${DEFAULT_NOTES_DIR}).`,
+  },
+];
+
+const PROVENANCE_MANIFEST: ModuleManifest = {
+  summary:
+    "Derived-content provenance, ported from the obsidian-provenance CLI: check whether a note's `derived-from` " +
+    "sources changed after it was `generated` (freshness), audit installed vs enabled vs noted Obsidian plugins, and " +
+    "regenerate the plugin-audit note. Stamps DERIVATION metadata only (derived-from / generated / generator / " +
+    "derivation-mode) — orthogonal to acceptance; regen's write can never set an acceptance field, routing through " +
+    "the accept-forbidden guard like every write.",
+  config: {
+    fields: PROVENANCE_CONFIG_FIELDS,
+    defaults: { ...DEFAULT_PROVENANCE_CONFIG } as Record<string, unknown>,
+    validate: validateProvenanceConfig,
+  },
+  directory: {
+    tools: [
+      {
+        name: "provenance_check",
+        purpose: "Report whether a derived note is FRESH or STALE against its own `derived-from:` sources.",
+        readOnly: true,
+        options: [{ name: "path", what: "vault-relative path of the derived note to check" }],
+        caveats: ["A source file modified after the note's `generated:` timestamp marks it stale; a missing `derived-from` is an error."],
+      },
+      {
+        name: "provenance_reconcile",
+        purpose:
+          "Compare installed, enabled, and noted Obsidian plugins and report unnoted plugins and note-vs-manifest version drift.",
+        readOnly: true,
+        caveats: ["Reads .obsidian/plugins/*/manifest.json + .obsidian/community-plugins.json + the configured notes dir; runs over the whole notes dir (not allowlist-scoped)."],
+      },
+      {
+        name: "provenance_regen",
+        purpose: "Regenerate the plugin-audit note's text, preserving hand-written `<!-- human:start … -->` sections.",
+        readOnly: false,
+        options: [{ name: "write", what: "persist the regenerated audit note; omitted/false ⇒ dry-run (return text, write nothing)" }],
+        caveats: [
+          "DRY-RUN by default. The write routes through the accept-forbidden guard and the guard-patched registrar " +
+            "(queue, journal): it stamps DERIVATION metadata only and can never introduce or change an accepted / " +
+            "accepted-by / accepted-on field, nor set acceptance-status to an accepted value.",
+        ],
+      },
+    ],
+  },
+};
+
 // ── governance (Acceptance) module manifest (#83, cycle 2: the accept gesture + pane) ─
 //
 // The governance module's enabled-flag gates the Obsidian REVIEW PANE — the human-only
@@ -464,6 +534,9 @@ export interface MountDeps {
   /** The skills module's injected backend (obsidianSkillsBackend live) — the
    * exporter read seam plus the mark write primitive. */
   skillsSource: SkillsBackend;
+  /** The provenance module's injected backend (obsidianProvenanceBackend live)
+   * — the freshness/reconcile read seam plus the regen write primitive. */
+  provenanceSource: ProvenanceBackend;
 }
 
 /** The ModuleHostCtx modules receive — deliberately minimal (gate point 2).
@@ -525,6 +598,20 @@ export function builtinModules(deps: MountDeps): VaultModule[] {
     moduleFromRegistrar(
       { id: "skills", capabilities: ["compile", "export", "authoring"], enabled: false, mutating: true, manifest: SKILLS_MANIFEST },
       (server: any, ctx: SkillsToolsCtx) => registerSkillsTools(server, deps.skillsSource, ctx),
+      (_host, config) => ({ config, getSettings: deps.getSettings }),
+    ),
+    // The provenance module (the obsidian-provenance CLI fold): the SECOND
+    // mutating capability module. Like skills it declares `mutating: true`,
+    // which the mount gate honors to let its one write tool (regen) register
+    // with `readOnlyHint: false` — still through the guard-patched registrar
+    // (read-only mode, allowlist, queue, journal) and the accept-forbidden
+    // write guard. Default DISABLED: a newly-folded mutating surface stays off
+    // until a human turns it on in the config tab. Config lives at
+    // `modules.provenance.config` (a new module, no ConfigBinding), so `config`
+    // here is that record merged over the manifest defaults.
+    moduleFromRegistrar(
+      { id: "provenance", capabilities: ["freshness", "reconcile", "regen"], enabled: false, mutating: true, manifest: PROVENANCE_MANIFEST },
+      (server: any, ctx: ProvenanceToolsCtx) => registerProvenanceTools(server, deps.provenanceSource, ctx),
       (_host, config) => ({ config, getSettings: deps.getSettings }),
     ),
     // The governance (Acceptance) module (#83, cycle 2): the accept pane's toggle. It
