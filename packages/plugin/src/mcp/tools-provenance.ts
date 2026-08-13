@@ -82,7 +82,9 @@ function globSegmentRe(seg: string): RegExp {
       if (close === -1) {
         out += "\\[";
       } else {
-        out += "[" + seg.slice(i + 1, close).replace(/\\/g, "\\\\") + "]";
+        // A leading `!` negates a glob char class (`[!x]`); regex spells that `[^x]`.
+        const body = seg.slice(i + 1, close).replace(/\\/g, "\\\\");
+        out += "[" + (body.startsWith("!") ? "^" + body.slice(1) : body) + "]";
         i = close;
       }
     } else {

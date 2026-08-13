@@ -46,7 +46,13 @@ export const DEFAULT_PROVENANCE_CONFIG: ProvenanceConfig = {
  *  path would resolve the audit to the vault root, not what any user means. */
 export function provenanceConfigOf(config: Record<string, unknown>): ProvenanceConfig {
   const raw = config.notesDir;
-  const notesDir = typeof raw === "string" && raw.trim() !== "" ? raw : DEFAULT_PROVENANCE_CONFIG.notesDir;
+  const picked = typeof raw === "string" && raw.trim() !== "" ? raw : DEFAULT_PROVENANCE_CONFIG.notesDir;
+  // Strip trailing slash(es): a `Meta/Plugins/` config value would otherwise
+  // make `auditPath` interpolate `Meta/Plugins//Plugins.md`, which Obsidian's
+  // getAbstractFileByPath never matches (it stores the single-slash form) —
+  // silently breaking human-section preservation and the create-vs-modify
+  // branch on `provenance_regen --write`.
+  const notesDir = picked.replace(/\/+$/, "") || DEFAULT_PROVENANCE_CONFIG.notesDir;
   return { notesDir };
 }
 

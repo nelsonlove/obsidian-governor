@@ -210,6 +210,19 @@ describe("regenerateAudit: reports unnoted and preserves the human section", () 
     assert.equal(auditPath(), "08.10 Obsidian plugins/08.10 Obsidian plugins.md");
     assert.equal(auditPath("Meta/Plugins"), "Meta/Plugins/Plugins.md");
   });
+
+  test("regen uses the normalized (trailing-slash-stripped) audit path via the tool config", async () => {
+    // A `Meta/Plugins/` config value must not double-slash the audit path — the
+    // handler resolves notesDir through provenanceConfigOf, which strips it.
+    const backend = fakeBackend({
+      globs: { ".obsidian/plugins/*/manifest.json": [], "Meta/Plugins/*.md": [] },
+      files: { ".obsidian/community-plugins.json": JSON.stringify([]) },
+    });
+    const res = await tools(backend, { notesDir: "Meta/Plugins/" }).tools.get("provenance_regen").handler({ write: true });
+    assert.equal(res.isError, undefined);
+    assert.equal(res.structuredContent.written, "Meta/Plugins/Plugins.md");
+    assert.equal(backend._written[0].path, "Meta/Plugins/Plugins.md");
+  });
 });
 
 // ── 2. the accept-forbidden write guard (load-bearing) ──────────────────────
