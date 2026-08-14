@@ -48,10 +48,11 @@ Folders don't affect structure — pick the parent's folder or ask. Write `<vaul
 ```md
 ---
 type: <skill|agent|policy|command>
+name: <invocation-slug>               # skills, agents, commands; defaults to the filename slug
 parent: "[[<parent-agent>]]"          # omit to attach to the root; commands ignore it
 description: <trigger text>            # skills & agents (label for a command)
-# agent-only: name, tools: [Read, Grep], model, crosscutting: true, slot: ".01"
-# command-only: name, argument-hint, allowed-tools, model  (body = prompt template)
+# agent-only: tools: [Read, Grep], model, crosscutting: true, slot: ".01"
+# command-only: argument-hint, allowed-tools, model  (body = prompt template)
 ---
 
 <body — SKILL.md body / agent system prompt / policy context to inject>
