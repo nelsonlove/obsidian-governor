@@ -164,6 +164,27 @@ session connect.
 
 ---
 
+## Section 2c — module-mounted, default DISABLED (2)
+
+Registered through the module host like Section 2b, but these modules ship
+`enabled: false` — a human turns them on in the config tab, and the tools appear
+on the next session connect. (The `skills` and `provenance` modules also ship
+disabled, but their tools are named `vault_skills_*` / `provenance_*`, outside
+the `obsidian_*` family this inventory locks, so they are documented in their
+own module docs rather than here.)
+
+### `tools-health.ts` — `registerHealthTools` via the `health` module (2 tools)
+
+Read-only vault-health scanner, folded from the standalone `obsidian-vault-health`.
+Both tools are `readOnlyHint: true`; the module has no write path.
+
+| Tool name | Description |
+|---|---|
+| `obsidian_health` | Full tiered vault health scan → findings by fix risk (auto-safe repointable links / approval-gated empty notes + orphan attachments / report-only dangling links + duplicate groups + low-signal tags) plus summary counts. Read-only, whole-vault |
+| `obsidian_lint` | The same scan restricted to one folder or note (`scope`); link resolution + orphan inbound-set stay vault-wide, low-signal tags omitted |
+
+---
+
 ## Section 3 — live-only, conditional (up to 6)
 
 Registered only when the gating community plugin's instance is actually loaded
@@ -247,6 +268,7 @@ this historical snapshot.
 | `packages/plugin/src/mcp/tools-pending-review.ts` | `registerPendingReviewTools` | 1 always-live |
 | `packages/plugin/src/mcp/tools-scheme.ts` | `registerSchemeTools` (via `modules-mount.ts`) | 5 module-mounted |
 | `packages/plugin/src/mcp/tools-vocab.ts` | `registerVocabTools` (via `modules-mount.ts`) | 4 module-mounted |
+| `packages/plugin/src/mcp/tools-health.ts` | `registerHealthTools` (via `modules-mount.ts`) | 2 module-mounted (default-disabled) |
 | `packages/plugin/src/mcp/tools-integrations.ts` | `registerIntegrationTools` | up to 6 conditional |
 | `packages/plugin/src/mcp/tools-cli.ts` | `registerCliTools` | 1 conditional (CLI binary) |
 | `packages/plugin/src/mcp/tools-code-mode.ts` | `registerCodeModeTools` | 3 (alternative surface, uncounted) |
