@@ -35,6 +35,11 @@ const {
   addVocabInstance,
   removeVocabInstanceAt,
   updateVocabInstanceAt,
+  buildSettingsTabs,
+  resolveActiveTab,
+  moduleTabId,
+  STATIC_SETTINGS_TABS,
+  MODULE_TAB_PREFIX,
 } = await import("../src/connection-ui.ts");
 
 // ── parseCommaList (pre-existing, pinned here since it had no test file yet) ──
@@ -276,5 +281,79 @@ describe("vocab instance array mutations (pure)", () => {
     const before = [{ id: "a", provider: "glossary", root: "" }];
     const after = updateVocabInstanceAt(before, 0, { config: { termsRoot: "Assent" } });
     assert.deepEqual(after[0].config, { termsRoot: "Assent" });
+  });
+});
+
+// ── tabbed settings UI: the pure, DOM-free half ─────────────────────────────
+
+describe("buildSettingsTabs — data-driven tab derivation from the module set", () => {
+  test("the two fixed tabs lead, in order, before any module", () => {
+    const tabs = buildSettingsTabs([]);
+    assert.deepEqual(tabs, [
+      { id: "connection", name: "Connection" },
+      { id: "security", name: "Security" },
+    ]);
+  });
+
+  test("one tab per module follows the fixed tabs, in registry order", () => {
+    const tabs = buildSettingsTabs([{ id: "scheme" }, { id: "vocab" }, { id: "health" }]);
+    assert.deepEqual(
+      tabs.map((t) => t.id),
+      ["connection", "security", "module:scheme", "module:vocab", "module:health"],
+    );
+    // tab NAME is the module id (matching the section header the renderer uses)
+    assert.deepEqual(
+      tabs.slice(2).map((t) => t.name),
+      ["scheme", "vocab", "health"],
+    );
+  });
+
+  test("a NEW module automatically yields a NEW tab (no per-module code)", () => {
+    const before = buildSettingsTabs([{ id: "scheme" }]);
+    const after = buildSettingsTabs([{ id: "scheme" }, { id: "brandnew" }]);
+    assert.equal(after.length, before.length + 1);
+    assert.equal(after.at(-1).id, "module:brandnew");
+    assert.equal(after.at(-1).name, "brandnew");
+  });
+
+  test("module tab ids are prefixed so a module id can't collide with a static tab", () => {
+    const tabs = buildSettingsTabs([{ id: "connection" }, { id: "security" }]);
+    // The static tabs keep their bare ids; the same-named modules get prefixed ids.
+    assert.deepEqual(tabs.map((t) => t.id), [
+      "connection",
+      "security",
+      "module:connection",
+      "module:security",
+    ]);
+    assert.equal(moduleTabId("connection"), `${MODULE_TAB_PREFIX}connection`);
+  });
+
+  test("STATIC_SETTINGS_TABS is the leading two, unchanged", () => {
+    assert.deepEqual([...STATIC_SETTINGS_TABS], [
+      { id: "connection", name: "Connection" },
+      { id: "security", name: "Security" },
+    ]);
+  });
+});
+
+describe("resolveActiveTab — remember last, fall back to first", () => {
+  const tabs = buildSettingsTabs([{ id: "scheme" }, { id: "vocab" }]);
+
+  test("no remembered tab defaults to the first (Connection)", () => {
+    assert.equal(resolveActiveTab(tabs, undefined), "connection");
+  });
+
+  test("a remembered tab that still exists is kept", () => {
+    assert.equal(resolveActiveTab(tabs, "security"), "security");
+    assert.equal(resolveActiveTab(tabs, "module:vocab"), "module:vocab");
+  });
+
+  test("a remembered module tab that no longer exists falls back to the first", () => {
+    // e.g. the 'vocab' module was disabled/removed since the last render
+    assert.equal(resolveActiveTab(buildSettingsTabs([{ id: "scheme" }]), "module:vocab"), "connection");
+  });
+
+  test("an empty tab list yields undefined (never happens — static tabs always present)", () => {
+    assert.equal(resolveActiveTab([], "connection"), undefined);
   });
 });
