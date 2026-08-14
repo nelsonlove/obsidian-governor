@@ -319,6 +319,13 @@ export class VaultMcpSettingTab extends PluginSettingTab {
         exists: () => false,
         applyFrontmatter: async () => {},
       },
+      provenanceSource: {
+        noteFrontmatter: () => null,
+        read: async () => null,
+        stat: async () => null,
+        glob: async () => [],
+        writeNote: async () => {},
+      },
     });
   }
 
