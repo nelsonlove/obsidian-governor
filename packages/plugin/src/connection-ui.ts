@@ -20,6 +20,64 @@ import {
   isVocabProvider,
   type VocabInstanceSettings,
 } from "./kernel/vocab/registry.js";
+import { ensureSettingsStyles } from "./settings-styles.js";
+
+// ── tabbed settings UI: the pure, DOM-free half ─────────────────────────────
+//
+// The settings tab is one long scroll no more: it's split into a Connection
+// tab, a Security tab, and one tab PER registered module (generated from the
+// same module set the generic renderer already iterates, so a new module gets
+// a tab with zero extra code). The two functions below are the entire
+// non-DOM half — tab-list derivation from the module set, and active-tab
+// resolution — so they're exported and headless-tested; only the DOM wiring
+// and click-switching in `display()` is obsidian-coupled (verified by build +
+// reasoning, per the same boundary as every other field in this file).
+
+/** One tab in the settings UI: a stable `id` and the visible `name`. */
+export interface SettingsTab {
+  id: string;
+  name: string;
+}
+
+/** The two fixed leading tabs, in order, before the per-module tabs. */
+export const STATIC_SETTINGS_TABS: readonly SettingsTab[] = [
+  { id: "connection", name: "Connection" },
+  { id: "security", name: "Security" },
+];
+
+/** Prefix distinguishing a per-module tab id from a static one, so a module
+ * whose id happened to be "connection"/"security" could never collide. */
+export const MODULE_TAB_PREFIX = "module:";
+
+/** The tab id for a module — its registry id under the module prefix. */
+export function moduleTabId(moduleId: string): string {
+  return `${MODULE_TAB_PREFIX}${moduleId}`;
+}
+
+/** Derive the full ordered tab list from the module set: the fixed Connection
+ * and Security tabs, then one tab per module in registry order (id and name
+ * both the module's `id`, matching the section header the module renderer
+ * already uses). Pure — the derivation is data-driven off the module set, so
+ * a newly-registered module automatically yields a new tab. */
+export function buildSettingsTabs(modules: ReadonlyArray<{ id: string }>): SettingsTab[] {
+  return [
+    ...STATIC_SETTINGS_TABS,
+    ...modules.map((m) => ({ id: moduleTabId(m.id), name: m.id })),
+  ];
+}
+
+/** Resolve which tab is active: the `remembered` id if it still exists in the
+ * current tab list, else the first tab (the default). An empty tab list yields
+ * `undefined` (never happens in practice — the two static tabs are always
+ * present). Pure, so the "remember last, but fall back when a remembered
+ * module tab disappears" logic is headless-testable. */
+export function resolveActiveTab(
+  tabs: ReadonlyArray<SettingsTab>,
+  remembered: string | undefined,
+): string | undefined {
+  if (remembered !== undefined && tabs.some((t) => t.id === remembered)) return remembered;
+  return tabs.length > 0 ? tabs[0].id : undefined;
+}
 
 /** Parse a comma-separated text field into a trimmed, non-empty string list.
  * An all-blank input (or one that trims to nothing) yields `undefined` rather
@@ -250,9 +308,111 @@ export class ConnectionSetupModal extends Modal {
 
 export class VaultMcpSettingTab extends PluginSettingTab {
   constructor(app: App, private plugin: VaultMcpPlugin) { super(app, plugin); }
+
+  /** Last-selected tab id, remembered across re-renders on the tab INSTANCE
+   * (not persisted to settings — a deliberately lightweight persistence per
+   * the task). A remembered tab that no longer exists (module removed) falls
+   * back to the first tab, resolved by `resolveActiveTab`. */
+  private activeTab?: string;
+
   display() {
     const { containerEl } = this;
     containerEl.empty();
+    ensureSettingsStyles();
+
+    // Everything lives under a single plugin-scoped wrapper so the tab CSS
+    // (settings-styles.ts) can never leak to the rest of the app.
+    const wrapper = containerEl.createDiv({ cls: "vault-mcp-settings" });
+
+    // Data-driven tab set: the two fixed tabs plus one per registered module,
+    // derived from the SAME module list the generic renderer iterates — a new
+    // module yields a new tab with no extra code here.
+    const modules = this.moduleList();
+    const tabs = buildSettingsTabs(modules);
+    const active = resolveActiveTab(tabs, this.activeTab) ?? tabs[0]?.id;
+    this.activeTab = active;
+
+    // Toolbar with the horizontal, wrap-friendly tab-nav row.
+    const toolbar = wrapper.createDiv({ cls: "vault-mcp-settings__toolbar" });
+    const nav = toolbar.createDiv({ cls: "settings-tab-nav settings-view__tab-nav" });
+
+    const buttons = new Map<string, HTMLElement>();
+    const panes = new Map<string, HTMLElement>();
+
+    for (const tab of tabs) {
+      const btn = nav.createEl("button", {
+        text: tab.name,
+        cls: "settings-tab-button settings-view__tab-button vertical-tab-nav-item",
+      });
+      btn.id = `tab-button-${tab.id}`;
+      buttons.set(tab.id, btn);
+      const pane = wrapper.createDiv({ cls: "settings-tab-content settings-view__tab-content" });
+      panes.set(tab.id, pane);
+      btn.onclick = () => this.selectTab(tab.id, tabs, buttons, panes);
+    }
+
+    // Render each tab's content into its own pane. The Connection and Security
+    // panes are the former top-of-scroll and Security sections verbatim; the
+    // module panes are the same generic, manifest-driven sections as before —
+    // one per module instead of a single stacked list.
+    this.renderConnectionTab(panes.get("connection")!);
+    this.renderSecurityTab(panes.get("security")!);
+
+    const hosted = collect(modules, this.plugin.settings.modules, this.plugin.settings);
+    for (const tab of tabs) {
+      if (!tab.id.startsWith(MODULE_TAB_PREFIX)) continue;
+      const modId = tab.id.slice(MODULE_TAB_PREFIX.length);
+      const mod = modules.find((m) => m.id === modId);
+      const h = hosted.find((x) => x.id === modId);
+      if (mod && h) {
+        const pane = panes.get(tab.id)!;
+        this.renderModulesIntro(pane);
+        this.renderModuleSection(pane, mod, h);
+      }
+    }
+
+    this.applyActiveTab(active, tabs, buttons, panes);
+  }
+
+  /** Show only the `active` tab's pane and mark only its button active —
+   * toggling the TaskNotes-style `active`/`--active`/`is-active` classes on the
+   * buttons and `settings-tab-content--active` on the panes. */
+  private applyActiveTab(
+    active: string | undefined,
+    tabs: ReadonlyArray<SettingsTab>,
+    buttons: Map<string, HTMLElement>,
+    panes: Map<string, HTMLElement>,
+  ): void {
+    for (const tab of tabs) {
+      const on = tab.id === active;
+      const btn = buttons.get(tab.id);
+      const pane = panes.get(tab.id);
+      if (btn) {
+        btn.classList.toggle("active", on);
+        btn.classList.toggle("settings-view__tab-button--active", on);
+        btn.classList.toggle("is-active", on);
+      }
+      if (pane) pane.classList.toggle("settings-tab-content--active", on);
+    }
+  }
+
+  /** Remember and switch to `id`, updating the active classes in place (no full
+   * re-render, so a click never disturbs the other panes' field state). */
+  private selectTab(
+    id: string,
+    tabs: ReadonlyArray<SettingsTab>,
+    buttons: Map<string, HTMLElement>,
+    panes: Map<string, HTMLElement>,
+  ): void {
+    this.activeTab = id;
+    this.applyActiveTab(id, tabs, buttons, panes);
+  }
+
+  /** The Connection tab: registration status, connect/disconnect, the manual
+   * fallback command, and the socket enable/disable toggle. Verbatim the former
+   * top-of-scroll connection block plus the trailing "Socket enabled" control,
+   * only retargeted from `containerEl` to this tab's pane. */
+  private renderConnectionTab(containerEl: HTMLElement): void {
     containerEl.createEl("h3", { text: "Claude Code connection" });
 
     // Async status line: render placeholder then update after await.
@@ -291,7 +451,29 @@ export class VaultMcpSettingTab extends PluginSettingTab {
       .addButton((b) => b.setButtonText("Copy command").setCta().onClick(() => copyToClipboard(cmd)))
       .addButton((b) => b.setButtonText("Open setup popup").onClick(() => new ConnectionSetupModal(this.app).open()));
 
-    // Security settings.
+    new Setting(containerEl)
+      .setName("Socket enabled")
+      .setDesc(
+        this.plugin.settings.enabled
+          ? "The MCP socket is enabled. Toggle to disable (reload required)."
+          : "The MCP socket is disabled. Toggle to re-enable (reload required)."
+      )
+      .addButton((b) => {
+        b.setButtonText(this.plugin.settings.enabled ? "Disable socket" : "Enable socket");
+        b.onClick(async () => {
+          this.plugin.settings.enabled = !this.plugin.settings.enabled;
+          await this.plugin.saveSettings();
+          new Notice("vault-mcp: reload the plugin (or restart Obsidian) for this change to take effect.");
+          this.display();
+        });
+      });
+  }
+
+  /** The Security tab: read-only mode, dangerous-CLI toggle, the command
+   * policy (re-enabled opaque / denied), trusted read-only plugins, and the
+   * path allowlist. Verbatim the former Security section, retargeted to this
+   * tab's pane. */
+  private renderSecurityTab(containerEl: HTMLElement): void {
     containerEl.createEl("h3", { text: "Security" });
 
     new Setting(containerEl)
@@ -389,35 +571,6 @@ export class VaultMcpSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         });
       });
-
-    // Modules (#81: config-host). One generic, data-driven section per
-    // registered module — no per-module bespoke UI code. Each module's
-    // manifest (mcp/modules-mount.ts) supplies the enabled toggle's
-    // description, its config fields (if any), and its capability
-    // directory; this REPLACES the old hand-built "Modules" toggle-only
-    // loop and the hand-built "Schemes" section (JD's expanded areas/
-    // categories/floor/excludedRoots fields) — those are now the scheme
-    // module's generated section, byte-for-byte the same fields, driven by
-    // SCHEME_MANIFEST instead of hardcoded here. Registration is
-    // per-connection, so a toggle takes effect on the next session connect.
-    this.renderModules(containerEl);
-
-    new Setting(containerEl)
-      .setName("Socket enabled")
-      .setDesc(
-        this.plugin.settings.enabled
-          ? "The MCP socket is enabled. Toggle to disable (reload required)."
-          : "The MCP socket is disabled. Toggle to re-enable (reload required)."
-      )
-      .addButton((b) => {
-        b.setButtonText(this.plugin.settings.enabled ? "Disable socket" : "Enable socket");
-        b.onClick(async () => {
-          this.plugin.settings.enabled = !this.plugin.settings.enabled;
-          await this.plugin.saveSettings();
-          new Notice("vault-mcp: reload the plugin (or restart Obsidian) for this change to take effect.");
-          this.display();
-        });
-      });
   }
 
   // ── #81: the generic, manifest-driven module renderer ──────────────────
@@ -468,10 +621,12 @@ export class VaultMcpSettingTab extends PluginSettingTab {
     });
   }
 
-  private renderModules(containerEl: HTMLElement): void {
-    const modules = this.moduleList();
-    const hosted = collect(modules, this.plugin.settings.modules, this.plugin.settings);
-    containerEl.createEl("h3", { text: "Modules" });
+  /** The shared "what a module is" help text, rendered at the top of each
+   * module tab's pane. Verbatim the paragraph that headed the former single
+   * stacked "Modules" section — preserved (not reworded) now that each module
+   * has its own tab; the collective `<h3>Modules</h3>` heading it sat under is
+   * dropped because the tab nav now labels each module. */
+  private renderModulesIntro(containerEl: HTMLElement): void {
     containerEl.createEl("p", {
       cls: "setting-item-description",
       text:
@@ -479,10 +634,6 @@ export class VaultMcpSettingTab extends PluginSettingTab {
         "directory of what it does. Toggling a module off unmounts its whole tool surface on the next session " +
         "connect.",
     });
-    for (const h of hosted) {
-      const mod = modules.find((m) => m.id === h.id);
-      if (mod) this.renderModuleSection(containerEl, mod, h);
-    }
   }
 
   private renderModuleSection(containerEl: HTMLElement, mod: VaultModule, hosted: HostedModule): void {
