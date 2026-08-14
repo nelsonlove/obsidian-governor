@@ -30,8 +30,11 @@ interface VaultMcpSettings {
    * Controlled-vocabulary sources for the vocab tools (mcp/tools-vocab.ts):
    * `{ id, provider, root, config }` rows, mirroring the scheme settings
    * shape. Defaults to one registry-blueprint instance over the vault's
-   * registries slot plus one glossary instance. No settings-tab UI yet —
-   * hand-edit data.json (v1).
+   * registries slot plus one glossary instance. Edited in the settings tab via
+   * the vocab module's bespoke per-instance form (connection-ui.ts
+   * `renderVocabInstances`) — add / remove instances and edit id / provider /
+   * root / config there; edits land per-connection through the vocab tool
+   * layer's `getVocabularies` thunk.
    */
   vocabularies: VocabInstanceSettings[];
   /**
