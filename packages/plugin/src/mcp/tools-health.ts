@@ -98,7 +98,10 @@ export function obsidianHealthBackend(app: {
       for (const f of app.vault.getMarkdownFiles()) {
         const fm = app.metadataCache.getCache(f.path)?.frontmatter;
         if (!fm) continue;
-        const a = fm.aliases ?? fm.alias;
+        // `||` (not `??`), matching the standalone's alias extraction: a falsy
+        // `aliases:` (e.g. an empty string) falls through to the singular
+        // `alias`, rather than seeding a spurious `[""]` alias bucket.
+        const a = fm.aliases || fm.alias;
         if (a == null) continue;
         const xs = (Array.isArray(a) ? a : [a]).filter((x): x is string => typeof x === "string");
         if (xs.length) out[f.path] = xs;
