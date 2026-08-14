@@ -138,8 +138,8 @@ function validateSchemeManifestConfig(config: Record<string, unknown>): string[]
 const SCHEME_MANIFEST: ModuleManifest = {
   summary:
     "Scope resolution and address allocation over the configured scheme (Johnny Decimal today): resolve, allocate, " +
-    "and check placement. `jd:` addressing in path arguments is kernel-level and stays available even when this " +
-    "module is disabled.",
+    "validate a filename, and check placement. `jd:` addressing in path arguments is kernel-level and stays " +
+    "available even when this module is disabled.",
   config: {
     fields: SCHEME_CONFIG_FIELDS,
     validate: validateSchemeManifestConfig,
@@ -157,6 +157,21 @@ const SCHEME_MANIFEST: ModuleManifest = {
         caveats: [
           "A skipped (misconfigured) instance is listed bare — id and `available: false` only, no config or " +
             "problem detail, to avoid leaking why through a side channel.",
+        ],
+      },
+      {
+        name: "obsidian_validate_name",
+        purpose:
+          "Validate a single filename against the scheme grammar: malformed address token, a colon in the name, or " +
+          "trailing whitespace.",
+        readOnly: true,
+        options: [
+          { name: "name", what: 'a filename or basename to check, e.g. "06.11 Vault MCP.md"' },
+          { name: "scheme", what: "which configured instance's grammar to check against when more than one is configured" },
+        ],
+        caveats: [
+          "Pure grammar check — reads nothing from the vault and needs no allowlist; validates ONE name, not the " +
+            "whole vault (whole-vault scheme conformance is the rail's job).",
         ],
       },
       {

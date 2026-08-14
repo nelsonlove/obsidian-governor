@@ -98,6 +98,48 @@ describe("schemeFindings — malformed_name and unaddressed are mutually exclusi
   });
 });
 
+// The name-hygiene checks (name_colon / name_trailing_space, ported from
+// obsidian-jd-numbering's checkNote) are orthogonal to the address token, so
+// unlike malformed_name they must NOT suppress the unaddressed check: a note
+// that carries neither an address nor a clean name is legitimately both.
+describe("schemeFindings — name-hygiene checks", () => {
+  test("an addressed, correctly-filed note that has a trailing space is flagged name_trailing_space only", () => {
+    const notes = [
+      "00-09 System/06 Agent tooling/06.11 A.md", // clean control, establishes 06's folder
+      "00-09 System/06 Agent tooling/06.12 Bridge .md", // valid address, trailing space
+    ];
+    const findings = schemeFindings(instance, notes);
+    assert.deepEqual(
+      findings.map((f) => ({ path: f.path, code: f.code })),
+      [{ path: "00-09 System/06 Agent tooling/06.12 Bridge .md", code: "name_trailing_space" }],
+    );
+  });
+
+  test("an unaddressed note that also has a colon is flagged BOTH unaddressed and name_colon (hygiene does not suppress unaddressed)", () => {
+    const notes = [
+      "00-09 System/06 Agent tooling/06.11 A.md", // clean control
+      "00-09 System/06 Agent tooling/scratch: draft.md", // in-scope, no address, colon
+    ];
+    const codes = schemeFindings(instance, notes)
+      .filter((f) => f.path.endsWith("scratch: draft.md"))
+      .map((f) => f.code)
+      .sort();
+    assert.deepEqual(codes, ["name_colon", "unaddressed"]);
+  });
+
+  test("a malformed-address note with a trailing space is malformed_name + name_trailing_space, never unaddressed", () => {
+    const notes = [
+      "00-09 System/06 Agent tooling/06.11 A.md", // clean control
+      "00-09 System/06 Agent tooling/06.5 Bad .md", // malformed token + trailing space
+    ];
+    const codes = schemeFindings(instance, notes)
+      .filter((f) => f.path.endsWith("06.5 Bad .md"))
+      .map((f) => f.code)
+      .sort();
+    assert.deepEqual(codes, ["malformed_name", "name_trailing_space"]);
+  });
+});
+
 // expectedFolder's result depends only on the address's container token, so
 // findings.ts memoizes it per container token within one schemeFindings call
 // (jd.ts itself stays an unmemoized, always-fresh linear scan — see

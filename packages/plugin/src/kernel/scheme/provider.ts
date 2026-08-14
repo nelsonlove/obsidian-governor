@@ -67,9 +67,18 @@ export interface Member {
   address: string | null;
 }
 
-/** One thing wrong (or worth flagging) about how a note is filed or named. */
+/** One thing wrong (or worth flagging) about how a note is filed or named.
+ *
+ * The name-hygiene codes (`name_colon`, `name_trailing_space`) are the
+ * filename-in-isolation checks `validateName` emits ALONGSIDE `malformed_name`
+ * — ported from obsidian-jd-numbering's `checkNote` (its `colon-in-name` /
+ * `trailing-space` lint), the two of its checks scheme's model lacked and
+ * could express purely over a filename. Unlike `malformed_name` they say
+ * nothing about the address token; a name can be a perfectly valid address AND
+ * carry one (e.g. a trailing space before `.md`), so they never gate the
+ * `unaddressed`/address flow in findings.ts — see the code note there. */
 export interface SchemeFinding {
-  code: "misfiled" | "duplicate_address" | "malformed_name" | "unaddressed";
+  code: "misfiled" | "duplicate_address" | "malformed_name" | "unaddressed" | "name_colon" | "name_trailing_space";
   path: string;
   detail: string;
 }
@@ -93,8 +102,12 @@ export interface ScopeProvider {
    * Null when the name carries none. */
   addressOf(path: string): Address | null;
 
-  /** Findings about a filename in isolation (e.g. a leading token that looks
-   * like an address but does not parse). Does not require vault context. */
+  /** Findings about a filename in isolation, needing no vault context: a
+   * leading token that looks like an address but does not parse
+   * (`malformed_name`), plus name-hygiene issues that are independent of the
+   * address token (`name_colon`, `name_trailing_space`). A single filename can
+   * yield more than one (a valid address that still carries a trailing space).
+   * Empty ⇒ the name is clean. */
   validateName(filename: string): SchemeFinding[];
 
   /** The scope (area/category/…) a path lives under, independent of what its

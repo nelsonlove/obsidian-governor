@@ -170,6 +170,53 @@ describe("validateName", () => {
   });
 });
 
+// ── validateName: name-hygiene findings (ported from obsidian-jd-numbering) ───
+//
+// colon-in-name / trailing-space were jd-numbering's checkNote hygiene lint;
+// they are the two of its checks scheme lacked AND could express purely over a
+// filename. They are ORTHOGONAL to the address token: a valid address can
+// still carry a trailing space, so validateName can return more than one.
+
+describe("validateName — name hygiene", () => {
+  test("a colon anywhere in the name is name_colon", () => {
+    const findings = p.validateName("06.11 A: B.md");
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].code, "name_colon");
+    assert.match(findings[0].detail, /colon/);
+  });
+
+  test("a trailing space before the .md extension is name_trailing_space", () => {
+    const findings = p.validateName("06.11 Note .md");
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].code, "name_trailing_space");
+  });
+
+  test("a trailing space at the very end (no extension) is name_trailing_space", () => {
+    const findings = p.validateName("06.11 Note ");
+    assert.deepEqual(findings.map((f) => f.code), ["name_trailing_space"]);
+  });
+
+  test("hygiene coexists with a valid address — a valid id token does not suppress a hygiene finding", () => {
+    // "06.11" parses fine, but the name still has a trailing space.
+    const findings = p.validateName("06.11 Foo .md");
+    assert.deepEqual(findings.map((f) => f.code), ["name_trailing_space"]);
+  });
+
+  test("malformed_name keeps index 0 when a name is BOTH malformed and unhygienic", () => {
+    // Leading token "06.5" looks numeric but doesn't parse (malformed_name);
+    // the colon and the trailing space live in the TITLE, not the id token
+    // (a colon inside the leading token would instead defeat the numeric-look
+    // heuristic and yield no malformed_name at all).
+    const findings = p.validateName("06.5 bad: title .md");
+    assert.equal(findings[0].code, "malformed_name");
+    assert.deepEqual(findings.map((f) => f.code).sort(), ["malformed_name", "name_colon", "name_trailing_space"]);
+  });
+
+  test("a clean valid name has no hygiene findings", () => {
+    assert.deepEqual(p.validateName("06.11 Foo bar.md"), []);
+  });
+});
+
 // ── Task 2 methods: smoke-pinned live here; full coverage in scheme-jd-scopes.test.mjs ──
 
 describe("methods deferred to task 2 are live, not stubs", () => {

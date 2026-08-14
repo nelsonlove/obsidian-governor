@@ -109,14 +109,18 @@ describe("fs-expressible tool inventory (#25)", () => {
 
 // ── scope-provider read-only tools (Task 6) ─────────────────────────────────
 // A different flavor of drift guard than the FS_TOOLS invariants above: those
-// tools are defined in @vault-mcp/core and merely delegated to; these five are
+// tools are defined in @vault-mcp/core and merely delegated to; these are
 // defined in tools-scheme.ts itself, so the check is source-presence rather
 // than an imported constant. Also pins the not-a-tool ruling: an
-// obsidian_scheme_audit tool was considered and rejected (findings.ts is rail
-// material for a later task, not a tool) — this must never regress silently.
+// obsidian_scheme_audit tool was considered and rejected (the whole-vault
+// findings.ts rule pack is rail material for a later task, not a tool) — this
+// must never regress silently. obsidian_validate_name is the ONE-NAME
+// exposure of the provider's validateName, distinct from that whole-vault
+// rule pack, so it does not disturb the not-a-tool ruling.
 
 const EXPECTED_SCHEME_TOOL_NAMES = [
   "obsidian_schemes",
+  "obsidian_validate_name",
   "obsidian_resolve_address",
   "obsidian_next_address",
   "obsidian_list_scope",
@@ -206,7 +210,7 @@ async function collectSourceFiles(dir) {
 }
 
 describe("scope-provider read-only tools (#task-6)", () => {
-  test("tools-scheme.ts registers all five expected tool names, byte-for-byte", async () => {
+  test("tools-scheme.ts registers all expected scheme tool names, byte-for-byte", async () => {
     const path = resolve(HERE, "../src/mcp/tools-scheme.ts");
     const source = await readFile(path, "utf-8");
     for (const name of EXPECTED_SCHEME_TOOL_NAMES) {

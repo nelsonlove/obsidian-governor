@@ -1,6 +1,6 @@
 /**
- * scheme-tools.test.mjs — Task 6 of the scope-provider module: the five
- * read-only tools over the ScopeRegistry — obsidian_schemes,
+ * scheme-tools.test.mjs — Task 6 of the scope-provider module: the read-only
+ * tools over the ScopeRegistry — obsidian_schemes, obsidian_validate_name,
  * obsidian_resolve_address, obsidian_next_address, obsidian_list_scope,
  * obsidian_expected_location.
  *
@@ -46,7 +46,7 @@ const TWO_SCHEMES = [
 // ── registration shape ───────────────────────────────────────────────────────
 
 describe("registration", () => {
-  test("registers exactly the five expected tools, all read-only", () => {
+  test("registers exactly the six expected tools, all read-only", () => {
     const { server } = toolServer();
     assert.deepEqual(
       [...server.tools.keys()].sort(),
@@ -56,6 +56,7 @@ describe("registration", () => {
         "obsidian_next_address",
         "obsidian_resolve_address",
         "obsidian_schemes",
+        "obsidian_validate_name",
       ].sort(),
     );
     for (const [name, { def }] of server.tools) {
@@ -670,5 +671,76 @@ describe("obsidian_expected_location", () => {
     const { call } = toolServer({ settings: { readOnly: false, allowlist: ["00-09 System"] } });
     const res = await call("obsidian_expected_location", { path: "90-99 Projects/92021 Big thing/92021.10 Sub.md" });
     assert.deepEqual(res.structuredContent, { address: null, expected_folder: null, actual_folder: null, placed: null });
+  });
+});
+
+// ── obsidian_validate_name ────────────────────────────────────────────────────
+//
+// The per-filename validation surface — the read-only exposure of the fold of
+// obsidian-jd-numbering's name-hygiene lint (colon / trailing space) onto
+// scheme's own validateName. A pure grammar check: no vault read, no allowlist.
+
+describe("obsidian_validate_name", () => {
+  test("a clean valid name reports clean: true with no findings", async () => {
+    const { call } = toolServer();
+    const res = await call("obsidian_validate_name", { name: "06.11 Vault MCP.md" });
+    assert.deepEqual(res.structuredContent, { name: "06.11 Vault MCP.md", findings: [], clean: true });
+  });
+
+  test("a malformed address token is reported as malformed_name", async () => {
+    const { call } = toolServer();
+    const res = await call("obsidian_validate_name", { name: "10-29 Something.md" });
+    assert.equal(res.structuredContent.clean, false);
+    assert.deepEqual(res.structuredContent.findings.map((f) => f.code), ["malformed_name"]);
+  });
+
+  test("a colon in the name is reported as name_colon", async () => {
+    const { call } = toolServer();
+    const res = await call("obsidian_validate_name", { name: "06.11 A: B.md" });
+    assert.deepEqual(res.structuredContent.findings.map((f) => f.code), ["name_colon"]);
+  });
+
+  test("a trailing space before the extension is reported as name_trailing_space", async () => {
+    const { call } = toolServer();
+    const res = await call("obsidian_validate_name", { name: "06.11 Note .md" });
+    assert.deepEqual(res.structuredContent.findings.map((f) => f.code), ["name_trailing_space"]);
+  });
+
+  test("findings carry only {code, detail} — no leaked path", async () => {
+    const { call } = toolServer();
+    const res = await call("obsidian_validate_name", { name: "06.11 Note .md" });
+    assert.deepEqual(Object.keys(res.structuredContent.findings[0]).sort(), ["code", "detail"]);
+  });
+
+  test("a name string is validated verbatim — no vault access, so a hypothetical (nonexistent) name works", async () => {
+    const { call } = toolServer({ notes: [] });
+    const res = await call("obsidian_validate_name", { name: "06.5 Nope.md" });
+    assert.equal(res.structuredContent.clean, false);
+    assert.deepEqual(res.structuredContent.findings.map((f) => f.code), ["malformed_name"]);
+  });
+
+  test("with several schemes configured and no `scheme` arg, it refuses (needs disambiguation)", async () => {
+    const { call } = toolServer({ schemes: TWO_SCHEMES });
+    const res = await call("obsidian_validate_name", { name: "06.11 Foo.md" });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /multiple scheme instances/);
+  });
+
+  test("with several schemes configured, an explicit `scheme` selects the grammar", async () => {
+    const { call } = toolServer({ schemes: TWO_SCHEMES });
+    const res = await call("obsidian_validate_name", { name: "06.11 Foo.md", scheme: "jd2" });
+    assert.deepEqual(res.structuredContent, { name: "06.11 Foo.md", findings: [], clean: true });
+  });
+
+  test("a `scheme` naming a skipped id is a coded scheme_unavailable refusal", async () => {
+    const { call } = toolServer({
+      schemes: [
+        { id: "jd", provider: "johnny-decimal" },
+        { id: "broken", provider: "no-such-provider" },
+      ],
+    });
+    const res = await call("obsidian_validate_name", { name: "06.11 Foo.md", scheme: "broken" });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /scheme_unavailable/);
   });
 });
