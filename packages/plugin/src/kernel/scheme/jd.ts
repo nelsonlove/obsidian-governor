@@ -236,6 +236,13 @@ function basename(path: string): string {
  * used to distinguish "malformed address" from "simply not addressed". */
 const LOOKS_NUMERIC = /^[0-9][0-9.\-]*$/;
 
+/** Name-hygiene regexes, ported verbatim from obsidian-jd-numbering's
+ * src/lint.ts. `JD_NAME_COLON` flags a colon anywhere in the filename;
+ * `JD_NAME_TRAILING_SPACE` flags a space at the very end or right before the
+ * `.md` extension. Filename-in-isolation checks, so validateName's home. */
+const JD_NAME_COLON = /:/;
+const JD_NAME_TRAILING_SPACE = / \.md$| $/;
+
 /** A path's folder segments, top to bottom, with the filename dropped. */
 function folderSegments(path: string): string[] {
   const parts = path.split("/");
@@ -384,18 +391,38 @@ export function jdProvider(cfg: JdConfig): ScopeProvider {
     return parse(token);
   }
 
+  // Name-hygiene regexes ported VERBATIM from obsidian-jd-numbering's
+  // src/lint.ts (`RE_COLON` / `RE_TRAILING_SPACE`): a colon anywhere in the
+  // filename, and a trailing space either at the very end or immediately
+  // before the `.md` extension. These are the two of jd-numbering's checkNote
+  // lint checks scheme's model previously lacked AND could express purely over
+  // a filename (its remaining checks either duplicate scheme's own
+  // malformed/duplicate/misfiled/unaddressed, or depend on frontmatter/tags
+  // this path-canonical model deliberately does not read — see the fold PR).
+  // The REGEXES are verbatim; their APPLICATION SCOPE is intentionally broader
+  // — jd-numbering runs its hygiene checks only after a valid parsed
+  // frontmatter id (`if (!note.parsed) return`), whereas this checks every
+  // filename. That is the correct behavior for a filename-in-isolation check
+  // and a direct consequence of the path-canonical (no-frontmatter) model.
   function validateName(filename: string): SchemeFinding[] {
+    const findings: SchemeFinding[] = [];
     const token = idTokenFromName(filename);
+    // malformed_name FIRST, so it keeps index 0 for every caller that already
+    // relied on `validateName(...)[0]` being the address-token verdict.
     if (LOOKS_NUMERIC.test(token) && parseJdId(token, cfg) === null) {
-      return [
-        {
-          code: "malformed_name",
-          path: filename,
-          detail: `'${token}' looks like a Johnny Decimal id but does not parse`,
-        },
-      ];
+      findings.push({
+        code: "malformed_name",
+        path: filename,
+        detail: `'${token}' looks like a Johnny Decimal id but does not parse`,
+      });
     }
-    return [];
+    if (JD_NAME_COLON.test(filename)) {
+      findings.push({ code: "name_colon", path: filename, detail: "filename must not contain a colon" });
+    }
+    if (JD_NAME_TRAILING_SPACE.test(filename)) {
+      findings.push({ code: "name_trailing_space", path: filename, detail: "filename has a trailing space" });
+    }
+    return findings;
   }
 
   return {

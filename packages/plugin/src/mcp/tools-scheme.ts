@@ -1,8 +1,18 @@
-// The scope-provider module's read-only surface: five tools over the
+// The scope-provider module's read-only surface: six tools over the
 // ScopeRegistry (kernel/scheme/registry.ts) — list the configured schemes,
-// resolve an address in either direction, compute (never reserve) the next
-// free address in a scope, list a scope's members and open slots, and check
-// where an address (or a note) is expected to live.
+// validate a single filename against the scheme grammar, resolve an address in
+// either direction, compute (never reserve) the next free address in a scope,
+// list a scope's members and open slots, and check where an address (or a
+// note) is expected to live.
+//
+// `obsidian_validate_name` exposes the provider's per-filename `validateName`
+// (malformed-address-token plus the ported jd-numbering name-hygiene checks)
+// read-only. It is deliberately the ONE-NAME surface, NOT the whole-vault
+// `schemeFindings` rule pack (kernel/scheme/findings.ts), which stays rail
+// material per the Conformance README's "capabilities arrive as rule packs,
+// never as new surface" — same discipline that keeps findings.ts out of this
+// module. Validating a supplied name reads nothing from the vault, so it needs
+// no allowlist filtering (unlike the address/scope tools below).
 //
 // Nothing here mutates anything. `obsidian_next_address` in particular only
 // COMPUTES — the actual exclusivity story is `obsidian_claim_scope`
@@ -284,6 +294,43 @@ export function registerSchemeTools(server: McpServer, ctx: SchemeToolsCtx): voi
         // unavailable.
         const skippedEntries = [...registry.skipped().keys()].map((id) => ({ id, available: false as const }));
         return ok({ schemes: [...schemes, ...skippedEntries] });
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  // ── obsidian_validate_name ──────────────────────────────────────────────
+  server.registerTool(
+    "obsidian_validate_name",
+    {
+      title: "Validate a filename against the scheme grammar",
+      description:
+        "Check a single filename against the scheme's naming rules and report any findings: a leading token that " +
+        "looks like a scheme address but does not parse (`malformed_name`), a colon in the name (`name_colon`), or " +
+        "trailing whitespace (`name_trailing_space`). Pure grammar check — it takes a name string, reads NOTHING from " +
+        "the vault and needs no allowlist, so it is safe to call on a hypothetical name before creating a note. " +
+        "Returns `clean: true` with no findings when the name is fine. Pass `scheme` to pick a grammar when several " +
+        "schemes are configured. Read-only. (This validates one name; whole-vault scheme conformance is the rail's " +
+        "job, not a tool.)",
+      inputSchema: {
+        name: z.string().min(1).describe('A filename or basename to check, e.g. "06.11 Vault MCP.md".'),
+        scheme: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Which configured scheme instance's grammar to check against. Defaults to the single configured instance."),
+      },
+      annotations: RO,
+    },
+    async (args) => {
+      try {
+        const registry = ctx.registry();
+        const pick = pickInstance(registry, args.scheme);
+        if ("unavailable" in pick) return codedError("scheme_unavailable", pick.unavailable);
+        if ("error" in pick) return fail(new Error(pick.error));
+        const findings = pick.instance.provider.validateName(args.name).map((f) => ({ code: f.code, detail: f.detail }));
+        return ok({ name: args.name, findings, clean: findings.length === 0 });
       } catch (e) {
         return fail(e);
       }

@@ -16,9 +16,9 @@ other, never both).
 Cross-check: the observed live set with Dataview + Templater + Metadata Menu
 loaded (but NOT Omnisearch, no CLI binary) reported 44 tools — an observation
 that PREDATES the kernel-v0 tools (locks ×4, uid ×1, links ×1), the vocab
-module (×4), the scheme module (×5), `obsidian_write_notes` and
+module (×4), the scheme module (×6), `obsidian_write_notes` and
 `obsidian_pending_review`; the same plugin set today registers
-17 + 30 + 9 + 5 = **61**.
+17 + 30 + 9 + 6 = **62**.
 
 ---
 
@@ -143,11 +143,12 @@ the module's own `enabled: true`).  Both modules ship default-ON, so these 9
 are present on a stock connection; a settings toggle takes effect on the next
 session connect.
 
-### `tools-scheme.ts` — `registerSchemeTools` via the `scheme` module (5 tools)
+### `tools-scheme.ts` — `registerSchemeTools` via the `scheme` module (6 tools)
 
 | Tool name | Description |
 |---|---|
 | `obsidian_schemes` | Enumerate scheme instances: capabilities, config, grammar examples (skipped instances appear as `{id, available: false}`) |
+| `obsidian_validate_name` | Validate one filename against the scheme grammar: malformed address token, colon in the name, or trailing whitespace (pure grammar check — no vault read, no allowlist) |
 | `obsidian_resolve_address` | Address → path(s), or path → address; duplicates reported, never picked |
 | `obsidian_next_address` | Compute the next free address in a scope (computes only — reserves nothing) |
 | `obsidian_list_scope` | Members of a scope in address order, plus up to 20 open slots |
@@ -266,7 +267,7 @@ this historical snapshot.
 | `packages/plugin/src/mcp/tools-links.ts` | `registerLinkTools` | 1 always-live |
 | `packages/plugin/src/mcp/tools-write-notes.ts` | `registerWriteNotesTool` | 1 always-live |
 | `packages/plugin/src/mcp/tools-pending-review.ts` | `registerPendingReviewTools` | 1 always-live |
-| `packages/plugin/src/mcp/tools-scheme.ts` | `registerSchemeTools` (via `modules-mount.ts`) | 5 module-mounted |
+| `packages/plugin/src/mcp/tools-scheme.ts` | `registerSchemeTools` (via `modules-mount.ts`) | 6 module-mounted |
 | `packages/plugin/src/mcp/tools-vocab.ts` | `registerVocabTools` (via `modules-mount.ts`) | 4 module-mounted |
 | `packages/plugin/src/mcp/tools-health.ts` | `registerHealthTools` (via `modules-mount.ts`) | 2 module-mounted (default-disabled) |
 | `packages/plugin/src/mcp/tools-integrations.ts` | `registerIntegrationTools` | up to 6 conditional |

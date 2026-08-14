@@ -47,14 +47,17 @@ function makeExpectedFolderCache(provider: ScopeProvider, notes: string[]) {
  * Conformance findings over `notes`, per `instance`'s provider. Four rule
  * classes, each delegating its judgment to the provider:
  *
- *   - malformed_name: `provider.validateName(basename)` per note — findings
- *     from a note in isolation, no vault context needed. Runs first because
- *     it decides whether a note's addressOf-null-ness is a BROKEN address
- *     attempt (malformed_name) or no attempt at all (unaddressed, below) —
- *     the two are mutually exclusive per note: a note already flagged
- *     malformed_name is not also flagged unaddressed, since the provider's
- *     own numeric-looking-token heuristic (not this module) is what decides
- *     "attempted" vs "absent".
+ *   - malformed_name / name_colon / name_trailing_space:
+ *     `provider.validateName(basename)` per note — findings from a note in
+ *     isolation, no vault context needed. Runs first because malformed_name
+ *     decides whether a note's addressOf-null-ness is a BROKEN address attempt
+ *     (malformed_name) or no attempt at all (unaddressed, below): those two
+ *     are mutually exclusive per note, keyed on malformed_name SPECIFICALLY
+ *     (the provider's numeric-looking-token heuristic), not on validateName
+ *     returning anything. The name-hygiene findings (name_colon /
+ *     name_trailing_space — ported from obsidian-jd-numbering's checkNote) are
+ *     orthogonal to the address token and do NOT suppress unaddressed: a note
+ *     can be both unaddressed and carry a trailing space.
  *   - unaddressed: `scopeOf(path)` non-null, `addressOf(path)` null, and not
  *     already malformed_name. Scratch/index conventions are NOT
  *     special-cased in v1 — the rail's ratchet baselines them.
@@ -84,13 +87,21 @@ export function schemeFindings(instance: SchemeInstance, notes: string[]): Schem
   const expectedFolderOf = makeExpectedFolderCache(provider, visible);
 
   for (const path of visible) {
-    const malformed = provider.validateName(basenameOf(path)).map((f) => ({ ...f, path }));
-    findings.push(...malformed);
+    const nameFindings = provider.validateName(basenameOf(path)).map((f) => ({ ...f, path }));
+    findings.push(...nameFindings);
 
     const addr = provider.addressOf(path);
 
     if (addr === null) {
-      if (malformed.length === 0) {
+      // Gate `unaddressed` on the ADDRESS-attempt verdict specifically
+      // (`malformed_name`), not on `validateName` returning ANYTHING: a
+      // name-hygiene finding (`name_colon` / `name_trailing_space`) is
+      // orthogonal to whether the name attempted an address, so it must not
+      // suppress `unaddressed` the way a broken address attempt does. A note
+      // that both fails to carry an address AND (say) has a trailing space is
+      // legitimately both `unaddressed` and `name_trailing_space`.
+      const attemptedAddress = nameFindings.some((f) => f.code === "malformed_name");
+      if (!attemptedAddress) {
         const scope = provider.scopeOf(path);
         if (scope !== null) {
           findings.push({
