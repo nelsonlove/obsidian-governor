@@ -14,6 +14,7 @@ import { registerPendingReviewTools, obsidianPendingReviewSource } from "./tools
 import { registerLinkTools, obsidianLinkSource } from "./tools-links.js";
 import { obsidianVocabSource } from "./tools-vocab.js";
 import { obsidianSkillsBackend } from "./tools-skills.js";
+import { obsidianProvenanceBackend } from "./tools-provenance.js";
 import { mountModules } from "./modules-mount.js";
 import { registerCodeModeTools, makeCaptureRegister, type CapturedRegistry } from "./tools-code-mode.js";
 import { makeGuarded, resolveGuardedPath, withKernelArgs } from "./guarded.js";
@@ -186,6 +187,7 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
     schemeNotes: () => app.vault.getMarkdownFiles().map((f) => f.path),
     vocabSource: obsidianVocabSource(app),
     skillsSource: obsidianSkillsBackend(app),
+    provenanceSource: obsidianProvenanceBackend(app),
   });
   // Skip-and-report only reports if someone reads the report: every mount
   // defect (unknown module id in settings, a gate-refused tool, a config
