@@ -1,6 +1,6 @@
 {
   "name": "obsidian-vault-mcp-plugin",
-  "version": "0.8.5",
+  "version": "0.8.6",
   "description": "Obsidian plugin embedding an in-renderer MCP server with direct app.* access, reached via Unix socket + bundled stdio bridge.",
   "type": "module",
   "scripts": {
