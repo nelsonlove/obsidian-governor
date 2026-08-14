@@ -62,6 +62,18 @@ const provenanceSource = {
   writeNote: async () => {},
 };
 
+/** A no-op health source — the (read-only) health module registers its tools over
+ * it without ever calling a handler in these registration-only tests. */
+const healthSource = {
+  resolvedLinks: () => ({}),
+  unresolvedLinks: () => ({}),
+  tags: () => ({}),
+  markdownFiles: () => [],
+  allFiles: () => [],
+  aliases: () => ({}),
+  noteBody: async () => null,
+};
+
 function deps(overrides = {}) {
   return {
     getSettings: () => ({ ...(overrides.settings ?? {}) }),
@@ -70,6 +82,7 @@ function deps(overrides = {}) {
     skillsSource,
     pendingReviewSource,
     provenanceSource,
+    healthSource,
     ...overrides.deps,
   };
 }
@@ -101,21 +114,23 @@ describe("mountModules: the two built-in modules register through the registry",
     }
     assert.deepEqual(registry.problems, []);
     const described = registry.describe();
-    // skills (#82), provenance (the obsidian-provenance fold), and governance (#83) all
-    // ship DISABLED (opt-in surfaces a human turns on), so they contribute nothing here
-    // — scheme + vocab are the live pair.
-    assert.deepEqual(described.map((d) => d.id), ["scheme", "vocab", "skills", "provenance", "governance"]);
+    // skills (#82), provenance (the obsidian-provenance fold), health (the
+    // obsidian-vault-health fold), and governance (#83) all ship DISABLED (opt-in
+    // surfaces a human turns on), so they contribute nothing here — scheme + vocab
+    // are the live pair.
+    assert.deepEqual(described.map((d) => d.id), ["scheme", "vocab", "skills", "provenance", "health", "governance"]);
     for (const d of described) {
-      if (d.id === "skills" || d.id === "provenance" || d.id === "governance") {
+      if (d.id === "skills" || d.id === "provenance" || d.id === "health" || d.id === "governance") {
         assert.equal(d.enabled, false);
         assert.deepEqual(d.tools, []);
       } else {
         assert.ok(d.enabled && d.tools.length > 0);
       }
     }
-    // No skills/provenance tool leaked onto the surface while the modules are off.
+    // No skills/provenance/health tool leaked onto the surface while the modules are off.
     assert.ok(!names.some((n) => n.startsWith("vault_skills_")));
     assert.ok(!names.some((n) => n.startsWith("provenance_")));
+    assert.ok(!names.includes("obsidian_health") && !names.includes("obsidian_lint"));
     // obsidian_pending_review is NEVER on the MODULE surface (#83 cycle 2): it is
     // registered always-on in server.ts, decoupled from the governance toggle, so the
     // mount never contributes it whether governance is on or off.
@@ -222,19 +237,22 @@ describe("mount gate 2: the host ctx handed to modules is minimal", () => {
     assert.deepEqual(host.visible(["Projects/a.md", "Archive/b.md"]), ["Projects/a.md"]);
   });
 
-  test("builtinModules declares the five capability modules (skills + provenance mutating; governance NOT)", () => {
+  test("builtinModules declares the six capability modules (skills + provenance mutating; health/governance NOT)", () => {
     const mods = builtinModules(deps());
     assert.deepEqual(mods.map((m) => [m.id, m.posture]), [
       ["scheme", "capability"],
       ["vocab", "capability"],
       ["skills", "capability"],
       ["provenance", "capability"],
+      // health (the obsidian-vault-health fold) is a READ-ONLY capability module —
+      // no `mutating` flag, both tools readOnlyHint:true.
+      ["health", "capability"],
       // governance is posture "capability", NOT "governance" — the v1 registry refuses
       // the governance posture (it is inert). It clears that gate by being read-only.
       ["governance", "capability"],
     ]);
     // skills and provenance are the modules that declare they may contribute mutating
-    // tools; governance is NOT mutating (read-only pending surface only).
+    // tools; health and governance are NOT mutating (read-only surfaces only).
     assert.deepEqual(mods.filter((m) => m.mutating).map((m) => m.id), ["skills", "provenance"]);
   });
 });
@@ -297,7 +315,7 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
   test("drift check: every ToolDoc names a tool the module ACTUALLY contributed on registerAll, and vice versa", () => {
     // Enable skills AND governance so all four modules contribute — the drift check
     // needs a contributed tool list to compare each manifest against.
-    const { registry } = mount({ settings: { modules: { skills: { enabled: true }, provenance: { enabled: true }, governance: { enabled: true } } } });
+    const { registry } = mount({ settings: { modules: { skills: { enabled: true }, provenance: { enabled: true }, health: { enabled: true }, governance: { enabled: true } } } });
     const described = registry.describe();
     for (const d of described) {
       const mod = builtinModules(deps()).find((m) => m.id === d.id);
@@ -307,7 +325,7 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
   });
 
   test("readOnly drift: every ToolDoc's readOnly matches the tool's real registered annotation", () => {
-    const { server } = mount({ settings: { modules: { skills: { enabled: true }, provenance: { enabled: true }, governance: { enabled: true } } } });
+    const { server } = mount({ settings: { modules: { skills: { enabled: true }, provenance: { enabled: true }, health: { enabled: true }, governance: { enabled: true } } } });
     const mods = builtinModules(deps());
     const annotationsByName = Object.fromEntries([...server.tools].map(([name, { def }]) => [name, def.annotations]));
     for (const mod of mods) {
@@ -378,7 +396,7 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
     const settings = { schemes: [{ id: "jd", provider: "johnny-decimal", config: { contentDecimalFloor: 20 } }], modules: {} };
     const mods = builtinModules(deps({ settings }));
     const hosted = collect(mods, settings.modules, settings);
-    assert.deepEqual(hosted.map((h) => h.id), ["scheme", "vocab", "skills", "provenance", "governance"]);
+    assert.deepEqual(hosted.map((h) => h.id), ["scheme", "vocab", "skills", "provenance", "health", "governance"]);
     const scheme = hosted.find((h) => h.id === "scheme");
     assert.equal(scheme.fields.find((f) => f.key === "contentDecimalFloor").value, 20);
     const vocab = hosted.find((h) => h.id === "vocab");
@@ -399,5 +417,14 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
     assert.deepEqual(governance.fields, []);
     assert.equal(governance.enabled, false);
     assert.equal(governance.directory.tools.length, 0);
+    // The health module (obsidian-vault-health fold) renders its own config tab:
+    // one config field (the empty-note char threshold, default 40) plus a
+    // two-tool read-only capability directory. Ships disabled (opt-in scanner).
+    const health = hosted.find((h) => h.id === "health");
+    assert.equal(health.fields.length, 1);
+    assert.equal(health.fields.find((f) => f.key === "emptyChars").value, 40);
+    assert.equal(health.enabled, false);
+    assert.equal(health.directory.tools.length, 2);
+    assert.ok(health.directory.tools.every((t) => t.readOnly === true));
   });
 });

@@ -54,6 +54,8 @@ import { registerSkillsTools, type SkillsBackend, type SkillsToolsCtx } from "./
 import { DEFAULT_SKILLS_CONFIG, validateSkillsConfig } from "../kernel/skills/index.js";
 import { registerProvenanceTools, type ProvenanceToolsCtx } from "./tools-provenance.js";
 import { DEFAULT_PROVENANCE_CONFIG, validateProvenanceConfig, DEFAULT_NOTES_DIR, type ProvenanceBackend } from "../kernel/provenance/index.js";
+import { registerHealthTools, type HealthToolsCtx } from "./tools-health.js";
+import { DEFAULT_HEALTH_CONFIG, validateHealthConfig, DEFAULT_EMPTY_CHARS, type HealthSource } from "../kernel/health/index.js";
 
 // ── manifests (#81: config-host — see
 //    docs/superpowers/specs/2026-08-10-config-host-design.md) ──────────────
@@ -474,6 +476,72 @@ const PROVENANCE_MANIFEST: ModuleManifest = {
   },
 };
 
+// ── health module manifest (the obsidian-vault-health scanner fold) ────────
+//
+// A READ-ONLY capability module (unlike skills/provenance, which are mutating).
+// Ported from the standalone `obsidian-vault-health` Bash+eval scanner. It emits
+// tiered findings and NEVER mutates — the fixing is a separate skill, out of
+// scope — so both its tools register `readOnlyHint: true`, it declares NO
+// `mutating` flag, and it needs no ConfigBinding: config lives at
+// `modules.health.config`, so the manifest's flat field keys map straight
+// through. One field today — the empty-note char threshold (the Python
+// `VAULT_HEALTH_EMPTY_CHARS`, default 40). The directory documents both tools.
+//
+// Default DISABLED (opt-in): a newly-folded scan surface stays off until a human
+// turns it on in the config tab.
+const HEALTH_CONFIG_FIELDS: ConfigField[] = [
+  {
+    key: "emptyChars",
+    label: "Empty-note character threshold",
+    type: "number",
+    help:
+      "Body characters (frontmatter excluded) at/under which a note is reported as empty / near-empty. Also the floor " +
+      `below which identical stubs are skipped from duplicate grouping. Blank ⇒ the default (${DEFAULT_EMPTY_CHARS}).`,
+  },
+];
+
+const HEALTH_MANIFEST: ModuleManifest = {
+  summary:
+    "Vault health scan, ported from the obsidian-vault-health scanner: report maintenance issues TIERED BY FIX RISK — " +
+    "auto-safe (broken links that uniquely resolve to one existing note), approval-gated (empty / near-empty notes; " +
+    "orphan attachments), and report-only (dangling links, duplicate note groups, low-signal tags). READ-ONLY — it " +
+    "only emits findings and never mutates the vault; the fixing is a separate skill.",
+  config: {
+    fields: HEALTH_CONFIG_FIELDS,
+    defaults: { ...DEFAULT_HEALTH_CONFIG } as Record<string, unknown>,
+    validate: validateHealthConfig,
+  },
+  directory: {
+    tools: [
+      {
+        name: "obsidian_health",
+        purpose: "Full tiered vault health scan → structured findings (auto-safe / approval-gated / report-only) plus summary counts.",
+        readOnly: true,
+        caveats: [
+          "Auto-safe repointable links: a unique-basename match is NOT proof a link should be repointed — a " +
+            "`[[core.el]]`-style reference in a vendored / knowledge-base / template tree can coincidentally match an " +
+            "unrelated note. Scope auto-safe repoints to authored areas.",
+          "Orphan attachments include files referenced ONLY via frontmatter or CSS (those references are not in " +
+            "Obsidian's resolvedLinks). Verify before trashing, and protect sensitive trees.",
+          "Runs over the whole vault (not allowlist-scoped) — a partial health report would misreport orphans and " +
+            "duplicates.",
+        ],
+      },
+      {
+        name: "obsidian_lint",
+        purpose: "The same health scan restricted to one folder or note.",
+        readOnly: true,
+        options: [{ name: "scope", what: 'a vault-relative folder or note path to restrict findings to, e.g. "Projects"' }],
+        caveats: [
+          "Link resolution and the orphan inbound-set are still computed vault-wide, so an attachment referenced from " +
+            "outside the scope is correctly not reported as orphaned.",
+          "Low-signal tags are omitted from a scoped lint (tags are vault-wide and cannot be attributed to a folder).",
+        ],
+      },
+    ],
+  },
+};
+
 // ── governance (Acceptance) module manifest (#83, cycle 2: the accept gesture + pane) ─
 //
 // The governance module's enabled-flag gates the Obsidian REVIEW PANE — the human-only
@@ -537,6 +605,9 @@ export interface MountDeps {
   /** The provenance module's injected backend (obsidianProvenanceBackend live)
    * — the freshness/reconcile read seam plus the regen write primitive. */
   provenanceSource: ProvenanceBackend;
+  /** The health module's injected source (obsidianHealthBackend live) — the
+   * read-only resolver + on-disk-body seam the tiered scan runs over. */
+  healthSource: HealthSource;
 }
 
 /** The ModuleHostCtx modules receive — deliberately minimal (gate point 2).
@@ -612,6 +683,20 @@ export function builtinModules(deps: MountDeps): VaultModule[] {
     moduleFromRegistrar(
       { id: "provenance", capabilities: ["freshness", "reconcile", "regen"], enabled: false, mutating: true, manifest: PROVENANCE_MANIFEST },
       (server: any, ctx: ProvenanceToolsCtx) => registerProvenanceTools(server, deps.provenanceSource, ctx),
+      (_host, config) => ({ config, getSettings: deps.getSettings }),
+    ),
+    // The health module (the obsidian-vault-health scanner fold): a READ-ONLY
+    // capability module. Unlike skills/provenance it declares NO `mutating` flag
+    // — both its tools (obsidian_health / obsidian_lint) register with
+    // `readOnlyHint: true`, so the mount's read-only-only registrar gate passes
+    // them without any exemption, and there is no write tool, write guard, or
+    // accept verb anywhere in the module. Default DISABLED (opt-in): the scan
+    // surface stays off until a human turns it on in the config tab. Config lives
+    // at `modules.health.config` (a new module, no ConfigBinding), so `config`
+    // here is that record merged over the manifest defaults.
+    moduleFromRegistrar(
+      { id: "health", capabilities: ["health"], enabled: false, manifest: HEALTH_MANIFEST },
+      (server: any, ctx: HealthToolsCtx) => registerHealthTools(server, deps.healthSource, ctx),
       (_host, config) => ({ config, getSettings: deps.getSettings }),
     ),
     // The governance (Acceptance) module (#83, cycle 2): the accept pane's toggle. It
