@@ -17,6 +17,16 @@ import { blueprintProvider, type VocabNote } from "./blueprint.js";
 import { glossaryProvider, DEFAULT_GLOSSARY_CONFIG } from "./glossary.js";
 import type { VocabularyProvider } from "./provider.js";
 
+/** The provider names a vocabulary instance may name — the single source of
+ * truth for both the registry's skip-unknown check and the settings-tab
+ * provider dropdown (connection-ui.ts), so the two cannot drift. */
+export const VOCAB_PROVIDERS = ["blueprint", "glossary"] as const;
+export type VocabProviderName = (typeof VOCAB_PROVIDERS)[number];
+
+export function isVocabProvider(name: unknown): name is VocabProviderName {
+  return typeof name === "string" && (VOCAB_PROVIDERS as readonly string[]).includes(name);
+}
+
 export interface VocabInstanceSettings {
   id: string;
   /** Provider name: "blueprint" (registry grammar) or "glossary" (terms). */
@@ -65,7 +75,7 @@ export class VocabRegistry {
       // its id, so a later reuse reports as the duplicate it is (the sibling
       // module registry's review found exactly this gap — ef94556).
       seen.add(row.id);
-      if (row.provider !== "blueprint" && row.provider !== "glossary") {
+      if (!isVocabProvider(row.provider)) {
         this.problems.push(`unknown vocabulary provider '${row.provider}' (id '${row.id}') — skipped`);
         continue;
       }
