@@ -376,7 +376,11 @@ export class VaultMcpSettingTab extends PluginSettingTab {
 
   /** Show only the `active` tab's pane and mark only its button active —
    * toggling the TaskNotes-style `active`/`--active`/`is-active` classes on the
-   * buttons and `settings-tab-content--active` on the panes. */
+   * buttons and both `settings-tab-content--active` (the base variant) and
+   * `settings-view__tab-content--active` (the variant the stylesheet keys the
+   * `display: block` flip on) on the panes. Both are added so the DOM carries
+   * the base BEM class AND the CSS's `view__` selector matches — mirroring how
+   * the buttons carry a stack of active classes. */
   private applyActiveTab(
     active: string | undefined,
     tabs: ReadonlyArray<SettingsTab>,
@@ -392,7 +396,10 @@ export class VaultMcpSettingTab extends PluginSettingTab {
         btn.classList.toggle("settings-view__tab-button--active", on);
         btn.classList.toggle("is-active", on);
       }
-      if (pane) pane.classList.toggle("settings-tab-content--active", on);
+      if (pane) {
+        pane.classList.toggle("settings-tab-content--active", on);
+        pane.classList.toggle("settings-view__tab-content--active", on);
+      }
     }
   }
 
