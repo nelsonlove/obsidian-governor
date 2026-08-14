@@ -399,6 +399,11 @@ export function jdProvider(cfg: JdConfig): ScopeProvider {
   // a filename (its remaining checks either duplicate scheme's own
   // malformed/duplicate/misfiled/unaddressed, or depend on frontmatter/tags
   // this path-canonical model deliberately does not read — see the fold PR).
+  // The REGEXES are verbatim; their APPLICATION SCOPE is intentionally broader
+  // — jd-numbering runs its hygiene checks only after a valid parsed
+  // frontmatter id (`if (!note.parsed) return`), whereas this checks every
+  // filename. That is the correct behavior for a filename-in-isolation check
+  // and a direct consequence of the path-canonical (no-frontmatter) model.
   function validateName(filename: string): SchemeFinding[] {
     const findings: SchemeFinding[] = [];
     const token = idTokenFromName(filename);
