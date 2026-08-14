@@ -56,6 +56,7 @@ import { registerProvenanceTools, type ProvenanceToolsCtx } from "./tools-proven
 import { DEFAULT_PROVENANCE_CONFIG, validateProvenanceConfig, DEFAULT_NOTES_DIR, type ProvenanceBackend } from "../kernel/provenance/index.js";
 import { registerHealthTools, type HealthToolsCtx } from "./tools-health.js";
 import { DEFAULT_HEALTH_CONFIG, validateHealthConfig, DEFAULT_EMPTY_CHARS, type HealthSource } from "../kernel/health/index.js";
+import { DEFAULT_GOVERNANCE_SETTINGS } from "../kernel/governance/settings.js";
 
 // ── manifests (#81: config-host — see
 //    docs/superpowers/specs/2026-08-10-config-host-design.md) ──────────────
@@ -65,12 +66,16 @@ import { DEFAULT_HEALTH_CONFIG, validateHealthConfig, DEFAULT_EMPTY_CHARS, type 
 // `settings.modules.scheme.config`) — `schemeBinding` below resolves the
 // manifest's flat field keys against that existing shape, per design §3
 // ("no data migration in v1"). The vocab module gets a manifest too, but
-// deliberately NO `config` block: it has no settings-tab UI today (two
-// instances, `{id, provider, root, config}` each — a per-instance dynamic
-// form is out of scope for this PR, YAGNI until a real UI need shows up),
-// so its manifest is a capability-directory-only subscription. This is the
-// real-code instance of "a module with no config fields must still render"
-// the renderer/tests are built to handle, not a synthetic test fixture.
+// deliberately NO manifest `config` block: its settings are a LIST of
+// structured instances (`settings.vocabularies`, `{id, provider, root,
+// config}` each), which the scalar manifest-field renderer cannot express.
+// Its per-instance settings UI is instead a BESPOKE form in connection-ui's
+// vocab section (`renderVocabInstances`) — like the top-level allowlist/deny
+// textareas — writing straight to `settings.vocabularies` (read
+// per-connection by the vocab tool layer's `getVocabularies` thunk). The
+// manifest stays a capability-directory-only subscription, so this is also
+// the real-code instance of "a module with no config fields must still
+// render" the renderer/tests are built to handle.
 
 const SCHEME_CONFIG_FIELDS: ConfigField[] = [
   {
@@ -285,11 +290,15 @@ const VOCAB_MANIFEST: ModuleManifest = {
   summary:
     "Controlled-vocabulary validation and resolution over the configured registries: tags, properties, types, and " +
     "glossary terms. Report-only — nothing here writes to a note.",
-  // No `config` block: today's two default instances (registry + glossary,
-  // each `{id, provider, root, config}`) have no settings-tab UI at all
-  // (see VaultMcpSettings.vocabularies's own doc comment) — a per-instance
-  // dynamic form is future work, not this PR's scope. The module still
-  // renders fully from its capability directory alone.
+  // No manifest `config` block: the vocab settings are a LIST of structured
+  // instances (registry + glossary, each `{id, provider, root, config}`),
+  // which the scalar manifest-field renderer cannot express. The per-instance
+  // settings UI now ships as a BESPOKE form in connection-ui's vocab section
+  // (`renderVocabInstances`) — id / provider / root / config editors plus
+  // add- and remove-instance controls, writing straight to
+  // `settings.vocabularies`. The module still renders its enable toggle +
+  // capability directory generically from this manifest; the bespoke form is
+  // appended to that section for this one module.
   directory: {
     tools: [
       {
@@ -560,6 +569,34 @@ const HEALTH_MANIFEST: ModuleManifest = {
 // the whole accept pane is opt-in; a human turns it on in the config tab. Because the module
 // contributes nothing to MCP, the tripwire's "no accept-shaped tool reaches the surface" holds
 // trivially — the accept path lives entirely behind gesture-gated pane buttons.
+//
+// The two config fields below are the accept pane's ONLY MCP-side knobs — badge-DISPLAY prefs, not
+// accept capabilities. They live at `modules.governance.config.{showRibbonBadge,showViewTabBadge}`,
+// the exact keys the pane wiring reads through `governanceDisplaySettings` (kernel/governance/
+// settings.ts): the ribbon-icon pending-count badge and the review-pane tab-icon badge. Both default
+// ON (DEFAULT_GOVERNANCE_SETTINGS), matching the pane's own default-on coercion of an absent config,
+// so the toggles render ON out of the box and flipping one OFF stores a `false` the pane honors on
+// the next pane wire. Toggling these confers NO accept/revert/adopt capability (see the pane's
+// SECURITY note); the human-only accept controls remain gesture-gated pane buttons, never settings.
+const GOVERNANCE_CONFIG_FIELDS: ConfigField[] = [
+  {
+    key: "showRibbonBadge",
+    label: "Ribbon pending-count badge",
+    type: "toggle",
+    help:
+      "Show the pending-review count as a badge on the governance ribbon icon. Off ⇒ the ribbon icon still " +
+      "opens the pane, just without the count badge. Takes effect on the next pane wire (plugin reload).",
+  },
+  {
+    key: "showViewTabBadge",
+    label: "Pane tab pending-count badge",
+    type: "toggle",
+    help:
+      "Show the pending-review count as a badge overlaid on the review pane's tab-header icon. Off ⇒ no tab " +
+      "badge; the ribbon badge above is independent. Takes effect on the next pane wire (plugin reload).",
+  },
+];
+
 const GOVERNANCE_MANIFEST: ModuleManifest = {
   summary:
     "Governance (Acceptance): the human-only review pane. When enabled, vault-mcp registers an Obsidian " +
@@ -568,10 +605,15 @@ const GOVERNANCE_MANIFEST: ModuleManifest = {
     "gesture in the pane — never a command, never an MCP tool, never a method on any object reachable " +
     "from `app`. This module contributes ZERO tools to the MCP transport: the read-only obsidian_pending_review " +
     "view is always available regardless of this toggle. Ships disabled — a human enables the accept pane here.",
-  // No `config` block with typed fields today: the accept pane has no MCP-side knobs (badge
-  // display prefs live in `modules.governance.config` and are read by the pane wiring, defaulting
-  // ON). Like the vocab module, this manifest renders its section from summary + directory alone;
-  // the section's enable/disable toggle IS its config tab.
+  // The `config` block ships two badge-DISPLAY toggles (GOVERNANCE_CONFIG_FIELDS) — the accept
+  // pane's only MCP-side knobs, read at pane-wire time from `modules.governance.config` (no
+  // ConfigBinding — the default location, exactly where the pane wiring reads them). Default ON,
+  // and they confer NO accept capability. The auto-accept ALLOWLIST is deliberately NOT a settings
+  // field: it stays a gesture-gated pane control (human-only-mutable), never surfaced here.
+  config: {
+    fields: GOVERNANCE_CONFIG_FIELDS,
+    defaults: { ...DEFAULT_GOVERNANCE_SETTINGS } as Record<string, unknown>,
+  },
   //
   // The directory is deliberately EMPTY — the module adds no MCP tool, address form, rule pack, or
   // kernel arg. The capability it provides (the review pane) is an Obsidian UI surface, described

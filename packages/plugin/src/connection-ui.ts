@@ -15,6 +15,11 @@ import {
   type HostedModule,
   type VaultModule,
 } from "./kernel/modules/index.js";
+import {
+  VOCAB_PROVIDERS,
+  isVocabProvider,
+  type VocabInstanceSettings,
+} from "./kernel/vocab/registry.js";
 
 /** Parse a comma-separated text field into a trimmed, non-empty string list.
  * An all-blank input (or one that trims to nothing) yields `undefined` rather
@@ -76,6 +81,131 @@ export function numberFieldProblem(label: string, value: string): string | null 
     return `${label}: "${trimmed}" is not a number — not saved; the previous value is kept.`;
   }
   return null;
+}
+
+// ── vocab instance settings (Gap B) ─────────────────────────────────────────
+//
+// The vocab module's settings are a LIST of `{id, provider, root, config}` rows
+// (settings.vocabularies), which the scalar manifest-field renderer cannot
+// express — so this small set of PURE helpers plus a bespoke per-instance form
+// (VaultMcpSettingTab.renderVocabInstances) provide the UI, exactly the way the
+// top-level allowlist textareas are bespoke. The logic below is exported and
+// headless-testable; only the DOM wiring in renderVocabInstances is
+// obsidian-coupled.
+
+/** Result of parsing a config-textarea value. A blank textarea persists NO
+ * config key (`config: undefined`); non-object or unparseable JSON is a LOUD
+ * problem the form refuses to save — never a silent coerce, matching the
+ * number-field discipline above. */
+export type VocabConfigParse =
+  | { ok: true; config: Record<string, unknown> | undefined }
+  | { ok: false; error: string };
+
+export function parseVocabConfig(text: string): VocabConfigParse {
+  const trimmed = text.trim();
+  if (trimmed === "") return { ok: true, config: undefined };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch (e) {
+    return { ok: false, error: `Config is not valid JSON: ${(e as Error).message}` };
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ok: false, error: 'Config must be a JSON object, e.g. {"termsRoot": "Assent"}.' };
+  }
+  return { ok: true, config: parsed as Record<string, unknown> };
+}
+
+/** Render an instance's `config` object as pretty JSON for the textarea; an
+ * absent or empty config is the empty string (the "no config" case). */
+export function stringifyVocabConfig(config: Record<string, unknown> | undefined): string {
+  if (!config || Object.keys(config).length === 0) return "";
+  return JSON.stringify(config, null, 2);
+}
+
+/** Coerce hand-edited `settings.vocabularies` into a safe array the form can
+ * render — NEVER throws on malformed data.json (the degrade-gracefully
+ * requirement). A non-array becomes `[]`; each entry is coerced field-by-field
+ * with string fallbacks; a non-object `config` is dropped. An unknown provider
+ * (or blank id/root) is PRESERVED verbatim so the form shows it and
+ * `validateVocabInstances` flags it — coercion never hides a problem by
+ * rewriting it, it only prevents a crash. Non-object entries are dropped. */
+export function coerceVocabInstances(raw: unknown): VocabInstanceSettings[] {
+  if (!Array.isArray(raw)) return [];
+  const out: VocabInstanceSettings[] = [];
+  for (const entry of raw) {
+    if (entry === null || typeof entry !== "object") continue;
+    const e = entry as Record<string, unknown>;
+    const inst: VocabInstanceSettings = {
+      id: typeof e.id === "string" ? e.id : "",
+      provider: typeof e.provider === "string" ? e.provider : "",
+      root: typeof e.root === "string" ? e.root : "",
+    };
+    if (e.config !== null && typeof e.config === "object" && !Array.isArray(e.config)) {
+      inst.config = e.config as Record<string, unknown>;
+    }
+    out.push(inst);
+  }
+  return out;
+}
+
+/** Human-readable validation problems for the current instance list — empty ⇒
+ * valid. Mirrors VocabRegistry's own skip-and-report rules (unknown provider,
+ * duplicate id) so the form warns about exactly what the runtime would skip,
+ * plus the ones the form can prevent (blank id; whitespace-only root). NOTE on
+ * root: `""` is a FIRST-CLASS value meaning "whole vault" (the shipping
+ * glossary default uses it), so root is NOT required non-empty — only a
+ * whitespace-ONLY root (neither "" nor a real path) is flagged. */
+export function validateVocabInstances(list: VocabInstanceSettings[]): string[] {
+  const problems: string[] = [];
+  const seen = new Set<string>();
+  list.forEach((inst, i) => {
+    const label = `Instance ${i + 1}`;
+    if (inst.id.trim() === "") {
+      problems.push(`${label}: id is required.`);
+    } else if (seen.has(inst.id)) {
+      problems.push(`${label}: duplicate id '${inst.id}' — the first wins; later duplicates are skipped at runtime.`);
+    } else {
+      seen.add(inst.id);
+    }
+    if (!isVocabProvider(inst.provider)) {
+      problems.push(
+        `${label}: unknown provider '${inst.provider}' — must be one of ${VOCAB_PROVIDERS.join(", ")}; skipped at runtime.`,
+      );
+    }
+    if (inst.root !== "" && inst.root.trim() === "") {
+      problems.push(`${label}: root is whitespace-only — use blank for the whole vault, or a real vault-relative path.`);
+    }
+  });
+  return problems;
+}
+
+/** Append a new, blank instance (first provider preselected). Pure. */
+export function addVocabInstance(list: VocabInstanceSettings[]): VocabInstanceSettings[] {
+  return [...list, { id: "", provider: VOCAB_PROVIDERS[0], root: "" }];
+}
+
+/** Remove the instance at `index`. Pure; out-of-range index is a no-op copy. */
+export function removeVocabInstanceAt(list: VocabInstanceSettings[], index: number): VocabInstanceSettings[] {
+  return list.filter((_, i) => i !== index);
+}
+
+/** Apply `patch` to the instance at `index`, returning a NEW array. A patch
+ * value of `undefined` REMOVES that key (the "blank config means no config key"
+ * convention, matching the manifest fields' delete-on-undefined). Pure. */
+export function updateVocabInstanceAt(
+  list: VocabInstanceSettings[],
+  index: number,
+  patch: Partial<VocabInstanceSettings>,
+): VocabInstanceSettings[] {
+  return list.map((inst, i) => {
+    if (i !== index) return inst;
+    const next: VocabInstanceSettings = { ...inst, ...patch };
+    for (const k of Object.keys(patch) as Array<keyof VocabInstanceSettings>) {
+      if (patch[k] === undefined) delete next[k];
+    }
+    return next;
+  });
 }
 
 export function registerCommandFor(app: App): string {
@@ -386,6 +516,13 @@ export class VaultMcpSettingTab extends PluginSettingTab {
       this.renderConfigField(section, mod, field, renderProblems);
     }
 
+    // Gap B: the vocab module's settings are a LIST of structured instances
+    // (settings.vocabularies), which the generic scalar-field renderer above
+    // cannot express — so the vocab section gets a bespoke per-instance form
+    // appended here. This is the ONE module-specific branch in the otherwise
+    // generic renderer; every other module renders from its manifest alone.
+    if (mod.id === "vocab") this.renderVocabInstances(section);
+
     const dir = hosted.directory;
     if (dir.tools.length > 0) {
       section.createEl("h5", { text: "Tools" });
@@ -414,6 +551,145 @@ export class VaultMcpSettingTab extends PluginSettingTab {
         li.appendText(` — ${d.purpose}`);
       }
     }
+  }
+
+  // ── Gap B: the vocab module's bespoke per-instance form ─────────────────
+  //
+  // Renders settings.vocabularies as an editable list — each row an
+  // id / provider / root / config editor — plus add- and remove-instance
+  // controls, writing straight to settings.vocabularies (read per-connection by
+  // the vocab tool layer's getVocabularies thunk, so edits land on the next
+  // session connect like every other module config). All state derives from
+  // settings.vocabularies through coerceVocabInstances, so malformed
+  // hand-edited data.json degrades gracefully (renders what it can, drops
+  // non-object garbage) instead of throwing and taking the tab down. Only this
+  // DOM wiring is obsidian-coupled; the parse/validate/coerce/mutation logic is
+  // the exported pure helpers above (headless-tested).
+  private renderVocabInstances(section: HTMLElement): void {
+    section.createEl("h5", { text: "Vocabulary instances" });
+    section.createEl("p", {
+      cls: "setting-item-description",
+      text:
+        "Each row is a controlled-vocabulary source the vocab tools read. Edits take effect on the next " +
+        "session connect. A row with a blank id, an unknown provider, or a duplicate id is skipped at runtime " +
+        "(the warnings below say which).",
+    });
+    const listEl = section.createDiv({ cls: "vault-mcp-vocab-list" });
+    const problemsEl = section.createEl("p", { cls: "mod-warning" });
+
+    const current = (): VocabInstanceSettings[] => coerceVocabInstances(this.plugin.settings.vocabularies);
+    const persist = async (next: VocabInstanceSettings[]): Promise<void> => {
+      this.plugin.settings.vocabularies = next;
+      await this.plugin.saveSettings();
+    };
+    const renderProblems = (): void => {
+      const problems = validateVocabInstances(current());
+      problemsEl.setText(problems.length === 0 ? "" : problems.join(" "));
+    };
+    const paint = (): void => {
+      listEl.empty();
+      const instances = current();
+      if (instances.length === 0) {
+        listEl.createDiv({
+          cls: "setting-item-description",
+          text: "No vocabulary instances configured — the vocab tools fall back to the built-in defaults. Add one below to override.",
+        });
+      }
+      instances.forEach((inst, index) =>
+        this.renderVocabInstanceRow(listEl, inst, index, current, persist, renderProblems, paint),
+      );
+      renderProblems();
+    };
+
+    paint();
+
+    new Setting(section)
+      .setName("Add vocabulary instance")
+      .setDesc("Append a new, blank vocabulary source to configure.")
+      .addButton((b) =>
+        b.setButtonText("Add instance").setCta().onClick(async () => {
+          await persist(addVocabInstance(current()));
+          paint();
+        }),
+      );
+  }
+
+  private renderVocabInstanceRow(
+    listEl: HTMLElement,
+    inst: VocabInstanceSettings,
+    index: number,
+    current: () => VocabInstanceSettings[],
+    persist: (next: VocabInstanceSettings[]) => Promise<void>,
+    renderProblems: () => void,
+    paint: () => void,
+  ): void {
+    const row = listEl.createDiv({ cls: "vault-mcp-vocab-instance" });
+    row.createEl("h6", { text: `Instance ${index + 1}${inst.id ? `: ${inst.id}` : ""}` });
+
+    // Field edits patch just this instance and re-derive the warning list in
+    // place — no full repaint, so typing keeps focus (the manifest fields'
+    // convention). Add/remove DO repaint (a button click, not mid-edit).
+    const commit = async (patch: Partial<VocabInstanceSettings>): Promise<void> => {
+      await persist(updateVocabInstanceAt(current(), index, patch));
+      renderProblems();
+    };
+
+    new Setting(row)
+      .setName("Id")
+      .setDesc("Unique identifier for this source (shown by obsidian_vocabularies). Required.")
+      .addText((t) => {
+        t.setValue(inst.id);
+        t.onChange((value) => commit({ id: value }));
+      });
+
+    new Setting(row)
+      .setName("Provider")
+      .setDesc("blueprint = registry grammar (tags / properties / types); glossary = ## Terms definitions.")
+      .addDropdown((d) => {
+        for (const p of VOCAB_PROVIDERS) d.addOption(p, p);
+        // Only preselect a recognized provider — an unknown (hand-edited) value
+        // leaves the dropdown at its native default rather than fabricating a
+        // selection, the same discipline the generic select field uses.
+        if (isVocabProvider(inst.provider)) d.setValue(inst.provider);
+        d.onChange((value) => commit({ provider: value }));
+      });
+
+    new Setting(row)
+      .setName("Root")
+      .setDesc("Vault-relative path prefix this vocabulary reads from. Blank = the whole vault.")
+      .addText((t) => {
+        t.setValue(inst.root);
+        t.onChange((value) => commit({ root: value }));
+      });
+
+    const configProblemEl = row.createEl("p", { cls: "mod-warning" });
+    new Setting(row)
+      .setName("Config (JSON)")
+      .setDesc('Provider-specific options as a JSON object, e.g. {"termsRoot": "Assent"}. Blank = none.')
+      .addTextArea((t) => {
+        t.setValue(stringifyVocabConfig(inst.config));
+        t.inputEl.rows = 3;
+        t.inputEl.style.width = "100%";
+        t.onChange(async (value) => {
+          const parsed = parseVocabConfig(value);
+          // Loud refusal on unparseable / non-object JSON — the bad value is
+          // NOT saved (the previous good config survives), matching the
+          // number-field contract. A valid parse (or blank ⇒ remove) commits.
+          if (!parsed.ok) {
+            configProblemEl.setText(parsed.error);
+            return;
+          }
+          configProblemEl.setText("");
+          await commit({ config: parsed.config });
+        });
+      });
+
+    new Setting(row).addButton((b) =>
+      b.setButtonText("Remove instance").setWarning().onClick(async () => {
+        await persist(removeVocabInstanceAt(current(), index));
+        paint();
+      }),
+    );
   }
 
   private renderConfigField(

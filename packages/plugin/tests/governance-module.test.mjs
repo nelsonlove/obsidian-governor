@@ -114,16 +114,52 @@ describe("governance module: contributes ZERO MCP tools when enabled", () => {
   });
 });
 
-describe("governance module: renders a config-tab section (summary-only, empty directory)", () => {
-  test("collect() gives it a section — no config fields, no tools, disabled", () => {
+describe("governance module: renders a config-tab section (two badge toggles, empty directory)", () => {
+  test("collect() gives it a section — two badge-display toggles, default ON, no tools, disabled", () => {
     const settings = { modules: {} };
     const hosted = collect(builtinModules(deps(settings)), settings.modules, settings);
     const gov = hosted.find((h) => h.id === "governance");
     assert.ok(gov, "governance not rendered by collect()");
     assert.ok(gov.summary.length > 0, "governance summary is empty");
-    assert.deepEqual(gov.fields, []);
+    // Gap A: the two badge-display toggles (ribbon + pane-tab), matching the exact keys the pane
+    // wiring reads through governanceDisplaySettings, both defaulting ON.
+    assert.deepEqual(gov.fields.map((f) => f.key), ["showRibbonBadge", "showViewTabBadge"]);
+    for (const f of gov.fields) {
+      assert.equal(f.type, "toggle");
+      assert.equal(f.value, true, `${f.key} should default ON`);
+    }
     assert.equal(gov.enabled, false);
     assert.equal(gov.directory.tools.length, 0);
+  });
+
+  test("a stored `false` overrides the default-on toggle (the pane honors it)", () => {
+    const settings = { modules: { governance: { config: { showRibbonBadge: false } } } };
+    const hosted = collect(builtinModules(deps(settings)), settings.modules, settings);
+    const gov = hosted.find((h) => h.id === "governance");
+    const ribbon = gov.fields.find((f) => f.key === "showRibbonBadge");
+    const tab = gov.fields.find((f) => f.key === "showViewTabBadge");
+    assert.equal(ribbon.value, false, "stored false must override the default-on");
+    assert.equal(tab.value, true, "the untouched toggle stays default-on");
+  });
+});
+
+describe("governance module: badge config keys match what the pane actually reads", () => {
+  test("the two field keys ARE the governanceDisplaySettings keys (toggling flips the badge)", async () => {
+    const { governanceDisplaySettings, DEFAULT_GOVERNANCE_SETTINGS } = await import(
+      "../src/kernel/governance/settings.ts"
+    );
+    const gov = governanceModule();
+    const keys = gov.manifest.config.fields.map((f) => f.key).sort();
+    // The pane derives its two booleans from exactly these keys — so a field key that drifted from
+    // them would render a toggle that controls nothing.
+    assert.deepEqual(keys, Object.keys(DEFAULT_GOVERNANCE_SETTINGS).sort());
+    // And the manifest defaults ARE the pane's defaults (both ON), so an untouched config renders
+    // the same state the pane would show.
+    assert.deepEqual(gov.manifest.config.defaults, DEFAULT_GOVERNANCE_SETTINGS);
+    // End-to-end: a config of {showRibbonBadge:false} the field would persist is read back by the
+    // pane's own coercion as showRibbonBadge:false.
+    assert.equal(governanceDisplaySettings({ showRibbonBadge: false }).showRibbonBadge, false);
+    assert.equal(governanceDisplaySettings({ showRibbonBadge: false }).showViewTabBadge, true);
   });
 });
 

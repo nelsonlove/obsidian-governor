@@ -409,12 +409,13 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
     assert.equal(skills.fields.length, 10);
     assert.equal(skills.fields.find((f) => f.key === "pluginName").value, "vault-skills");
     assert.equal(skills.directory.tools.length, 6);
-    // The governance module renders its section too — summary-only (#83 cycle 2): no
-    // config fields, and an EMPTY capability directory, because its capability is the
-    // Obsidian review pane (wired in main.ts), not an MCP tool. It contributes nothing
-    // to the transport and ships disabled (opt-in accept pane).
+    // The governance module renders its section too — two badge-display toggles
+    // (ribbon + pane-tab, default ON) and an EMPTY capability directory, because its
+    // capability is the Obsidian review pane (wired in main.ts), not an MCP tool. It
+    // contributes nothing to the transport and ships disabled (opt-in accept pane).
     const governance = hosted.find((h) => h.id === "governance");
-    assert.deepEqual(governance.fields, []);
+    assert.deepEqual(governance.fields.map((f) => f.key), ["showRibbonBadge", "showViewTabBadge"]);
+    assert.ok(governance.fields.every((f) => f.type === "toggle" && f.value === true));
     assert.equal(governance.enabled, false);
     assert.equal(governance.directory.tools.length, 0);
     // The health module (obsidian-vault-health fold) renders its own config tab:
