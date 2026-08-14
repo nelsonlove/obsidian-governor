@@ -326,6 +326,15 @@ export class VaultMcpSettingTab extends PluginSettingTab {
         glob: async () => [],
         writeNote: async () => {},
       },
+      healthSource: {
+        resolvedLinks: () => ({}),
+        unresolvedLinks: () => ({}),
+        tags: () => ({}),
+        markdownFiles: () => [],
+        allFiles: () => [],
+        aliases: () => ({}),
+        noteBody: async () => null,
+      },
     });
   }
 
