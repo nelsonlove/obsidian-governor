@@ -111,6 +111,86 @@ export function confirmAdopt(app: App): Promise<boolean> {
   });
 }
 
+// ── SINGLE-SOURCED accept-class control text + wiring ─────────────────────────
+// The two accept-equivalent controls (adopt-baseline + the auto-accept allowlist) appear in TWO
+// human surfaces now — the review pane AND the settings tab (governance/wiring.ts
+// renderGovernanceSettings). To keep them from drifting, both their descriptive copy and their
+// gesture-gated wiring live here as ONE implementation each; both surfaces import these.
+
+// The auto-accept allowlist description. FULLER than a one-liner on purpose — it must state that
+// everything non-mechanical stays PENDING FOR REVIEW and that this is a human setup action, never
+// a command / never agent-invokable (the acceptance perimeter, restated at the control). Shared by
+// renderAllowlist (below) so the pane and the settings tab render the identical text.
+export const AUTO_ACCEPT_DESC =
+  "Auto-accept advances a note's baseline WITHOUT a human click, but ONLY for changes that are " +
+  "provably mechanical and belong to a class enabled below. Everything else stays pending for " +
+  "review. Disabling a class makes its changes stay pending. This is a human setup action — " +
+  "never a command, never agent-invokable.";
+
+// The adopt-baseline description, shared by the settings tab (which shows it as a paragraph) and
+// referenced by the pane (as the adopt button's tooltip) so the two cannot drift.
+export const ADOPT_BASELINE_DESC =
+  "Adopt current state as baseline: snapshots all current content as the reviewed baseline and " +
+  "clears the review queue. This is a human setup action — never a command, never agent-invokable.";
+
+// The subset of the controller the allowlist section needs: the frozen universe of classes, each
+// one's current enabled state, and the ONE gesture-gated mutator. NO accept/revert/adopt here —
+// this is deliberately narrow so a settings-tab caller hands over only allowlist authority (itself
+// gesture-gated), never the full accept-capable controller.
+export interface AllowlistDeps {
+  authorizedClasses(): ReadonlyArray<ClassSpec>;
+  isClassEnabled(id: ClassId): boolean;
+  setClassEnabled(id: ClassId, on: boolean, evt: unknown): Promise<boolean>;
+}
+
+// The ONE auto-accept allowlist renderer — HUMAN-ONLY-MUTABLE. Each checkbox is gesture-gated:
+// wired via addEventListener (its `.onclick` stays null → the handler is unreachable to
+// renderer-JS) whose handler refuses unless the click is a genuine trusted gesture
+// (deps.setClassEnabled → isRealGesture). A synthesized/forged click is rejected and the checkbox
+// reverts to the real enabled state. The universe of classes is the frozen AUTHORIZED_CLASSES —
+// this UI can only enable/disable among them, never add a new class. Called by BOTH the review
+// pane and the settings tab, so there is one implementation, not two that can drift.
+export function renderAllowlist(root: HTMLElement, deps: AllowlistDeps): void {
+  const section = root.createDiv({ cls: "governance-allowlist" });
+  section.createDiv({ cls: "governance-allowlist-title", text: "Auto-accept (mechanical changes)" });
+  section.createDiv({ cls: "governance-allowlist-desc", text: AUTO_ACCEPT_DESC });
+  for (const spec of deps.authorizedClasses()) {
+    const row = section.createDiv({ cls: "governance-allowlist-row" });
+    const label = row.createEl("label", { cls: "governance-allowlist-label" });
+    const checkbox = label.createEl("input", { type: "checkbox", cls: "governance-allowlist-check" });
+    checkbox.checked = deps.isClassEnabled(spec.id);
+    label.createSpan({ cls: "governance-allowlist-name", text: ` ${spec.id}` });
+    row.createDiv({ cls: "governance-allowlist-why", text: spec.railNeutralBecause });
+    // Gesture-gated: only a genuine trusted click mutates the allowlist. A forged/synthesized
+    // click is refused and the checkbox is reverted to the real enabled state.
+    checkbox.addEventListener("click", async (evt) => {
+      const want = checkbox.checked;
+      const applied = await deps.setClassEnabled(spec.id, want, evt);
+      if (!applied) {
+        evt.preventDefault();
+        checkbox.checked = deps.isClassEnabled(spec.id); // revert to real state
+      }
+    });
+  }
+}
+
+// The ONE adopt-baseline button wiring — gesture- AND confirmation-gated. The button is wired via
+// addEventListener (its `.onclick` stays null → unreachable to renderer-JS); the handler runs the
+// action ONLY when runGuardedAdopt reports "done" (a real trusted gesture AND a human confirm).
+// `onDone` fires on success only (Notice + rerender in the pane; Notice in the settings tab).
+// Called by BOTH surfaces, so the gesture+confirm gate is one implementation, not two.
+export function wireAdoptButton(
+  btn: HTMLElement,
+  confirm: () => Promise<boolean>,
+  adopt: () => Promise<void>,
+  onDone: () => void | Promise<void>,
+): void {
+  btn.addEventListener("click", async (evt) => {
+    const outcome = await runGuardedAdopt(evt, confirm, adopt);
+    if (outcome === "done") await onDone();
+  });
+}
+
 // Module-private store of each view's controller. Not reachable by walking the view object:
 // `viewDeps` is a module-local binding, and WeakMap entries cannot be enumerated. This is
 // what keeps accept/revert/adopt/setClassEnabled off the app-reachable object graph.
@@ -199,60 +279,27 @@ export class GovernanceReviewView extends ItemView {
     // null → the function is unreachable to renderer-JS) and is gesture-gated AND confirmation-
     // gated, since adopting silences the whole queue.
     const adoptBtn = header.createEl("button", { cls: "governance-adopt", text: "Adopt baseline" });
-    adoptBtn.addEventListener("click", async (evt) => {
-      const outcome = await runGuardedAdopt(
-        evt,
-        () => confirmAdopt(this.app),
-        () => deps.adopt(),
-      );
-      if (outcome === "done") {
+    adoptBtn.title = ADOPT_BASELINE_DESC; // same single-sourced copy the settings tab shows
+    // Gesture- AND confirmation-gated via the shared wireAdoptButton (one implementation, shared
+    // with the settings tab). onDone fires only on a confirmed real gesture.
+    wireAdoptButton(
+      adoptBtn,
+      () => confirmAdopt(this.app),
+      () => deps.adopt(),
+      async () => {
         new Notice("vault-mcp governance: baseline adopted — the vault is now reviewable.");
         await this.rerender();
-      }
-    });
+      },
+    );
 
     if (this.selected && pending.some((p) => p.path === this.selected)) {
       await this.renderDetail(root, pending.find((p) => p.path === this.selected)!);
     } else {
       this.selected = null;
       this.renderList(root, pending);
-      this.renderAllowlist(root, deps);
-    }
-  }
-
-  // The auto-accept allowlist section — HUMAN-ONLY-MUTABLE. Each checkbox is gesture-gated
-  // EXACTLY like adopt-baseline: a raw checkbox wired via addEventListener (its `.onclick` stays
-  // null → the handler is unreachable to renderer-JS) whose handler refuses unless the click is a
-  // genuine trusted gesture (deps.setClassEnabled → isRealGesture). An agent cannot flip it: a
-  // synthesized/forged click is rejected and the checkbox reverts. The universe of classes is the
-  // frozen AUTHORIZED_CLASSES — this UI can only enable/disable among them, never add a new class.
-  private renderAllowlist(root: HTMLElement, deps: ReviewController): void {
-    const section = root.createDiv({ cls: "governance-allowlist" });
-    section.createDiv({ cls: "governance-allowlist-title", text: "Auto-accept (mechanical changes)" });
-    section.createDiv({
-      cls: "governance-allowlist-desc",
-      text:
-        "Auto-accept advances a note's baseline WITHOUT a human click, but ONLY for changes that " +
-        "are provably mechanical and belong to a class enabled below. Everything else stays " +
-        "pending. Disabling a class makes its changes stay pending.",
-    });
-    for (const spec of deps.authorizedClasses()) {
-      const row = section.createDiv({ cls: "governance-allowlist-row" });
-      const label = row.createEl("label", { cls: "governance-allowlist-label" });
-      const checkbox = label.createEl("input", { type: "checkbox", cls: "governance-allowlist-check" });
-      checkbox.checked = deps.isClassEnabled(spec.id);
-      label.createSpan({ cls: "governance-allowlist-name", text: ` ${spec.id}` });
-      row.createDiv({ cls: "governance-allowlist-why", text: spec.railNeutralBecause });
-      // Gesture-gated: only a genuine trusted click mutates the allowlist. A forged/synthesized
-      // click is refused and the checkbox is reverted to the real enabled state.
-      checkbox.addEventListener("click", async (evt) => {
-        const want = checkbox.checked;
-        const applied = await deps.setClassEnabled(spec.id, want, evt);
-        if (!applied) {
-          evt.preventDefault();
-          checkbox.checked = deps.isClassEnabled(spec.id); // revert to real state
-        }
-      });
+      // The auto-accept allowlist section — HUMAN-ONLY-MUTABLE, gesture-gated. Rendered via the
+      // shared renderAllowlist (one implementation, shared with the settings tab).
+      renderAllowlist(root, deps);
     }
   }
 

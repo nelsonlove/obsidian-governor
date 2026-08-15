@@ -6,6 +6,7 @@ import { findClaudeBinary, claudeIsRegistered } from "./claude-cli.js";
 import { DANGEROUS_LIST_DESC } from "./mcp/tools-cli.js";
 import { OPAQUE_ACCEPT_CLI_COMMANDS, OPAQUE_ACCEPT_COMMAND_IDS } from "./mcp/cli-policy.js";
 import { builtinModules } from "./mcp/modules-mount.js";
+import { renderGovernanceSettings } from "./governance/wiring.js";
 import {
   ModuleRegistry,
   collect,
@@ -668,6 +669,11 @@ export class VaultMcpSettingTab extends PluginSettingTab {
           // Let modules whose in-app surface follows this toggle mount/unmount live (governance's
           // pane + ribbon). Tool-only modules are unaffected — they take effect on the next connect.
           await this.plugin.onModuleEnabledChanged(mod.id, value);
+          // Governance's live mount also decides whether its settings-tab section (adopt-baseline +
+          // auto-accept) can render its gesture-gated controls vs. a hint — so re-render the tab now
+          // that the mount has settled, mirroring the socket-toggle re-render. (Other modules are
+          // tool-only: nothing in their section changes on toggle, so no re-render is needed.)
+          if (mod.id === "governance") this.display();
         })
       );
 
@@ -690,6 +696,13 @@ export class VaultMcpSettingTab extends PluginSettingTab {
     // appended here. This is the ONE module-specific branch in the otherwise
     // generic renderer; every other module renders from its manifest alone.
     if (mod.id === "vocab") this.renderVocabInstances(section);
+
+    // Governance's second bespoke branch: the module EXPOSES a render function that builds its
+    // gesture-gated adopt-baseline + auto-accept controls internally, from its own module-private
+    // accept-capable controller. We only hand it a container — connection-ui never receives, holds,
+    // or can walk the accept-capable deps (that is what keeps the accept boundary intact across
+    // this new surface). It renders the live controls only when governance is mounted, else a hint.
+    if (mod.id === "governance") renderGovernanceSettings(this.plugin, section);
 
     const dir = hosted.directory;
     if (dir.tools.length > 0) {

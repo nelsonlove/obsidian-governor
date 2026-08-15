@@ -297,7 +297,13 @@ describe("governance module: THE TRIPWIRE — source reachability (accept surfac
     }
     assert.match(pane, /acceptBtn\.addEventListener\(\s*["']click["']/, "accept via addEventListener");
     assert.match(pane, /revertBtn\.addEventListener\(\s*["']click["']/, "revert via addEventListener");
-    assert.match(pane, /adoptBtn\.addEventListener\(\s*["']click["']/, "adopt via addEventListener");
+    // Adopt is now wired by the SHARED wireAdoptButton helper (one implementation, shared with the
+    // settings-tab render). That helper wires via `btn.addEventListener('click', …)` — never
+    // `.onclick =` — and the pane hands it `adoptBtn`. Both facts are asserted so the adopt wiring
+    // stays addEventListener-only across the refactor.
+    assert.match(pane, /export function wireAdoptButton\(/, "wireAdoptButton is the shared adopt wiring");
+    assert.match(pane, /btn\.addEventListener\(\s*["']click["']/, "wireAdoptButton wires via addEventListener");
+    assert.match(pane, /wireAdoptButton\(\s*\n?\s*adoptBtn/, "the pane wires its adopt button via wireAdoptButton");
     assert.match(pane, /checkbox\.addEventListener\(\s*["']click["']/, "allowlist checkbox via addEventListener");
     assert.match(pane, /confirm\.addEventListener\(\s*["']click["']/, "modal confirm via addEventListener");
   });
@@ -365,5 +371,84 @@ describe("governance module: THE TRIPWIRE — source reachability (accept surfac
       assert.ok(!isInstanceMethod(main, name), `${name} must not be a plugin instance method`);
     }
     assert.ok(!/addCommand\([^)]*accept/i.test(readRaw("main.ts")), "no accept command on the plugin");
+  });
+});
+
+describe("governance settings-tab surface: the accept path stays module-private across the NEW home", () => {
+  // The settings tab is a SECOND gesture-gated home for adopt-baseline + the auto-accept allowlist.
+  // The invariant is unchanged: connection-ui.ts (the settings tab) must never hold, receive, or be
+  // able to walk an accept-capable callable. It does so by calling a render function the governance
+  // module EXPOSES, handing it only a container — the controls are built INSIDE the module from its
+  // own module-private controller. These tests pin that arrangement at the source level.
+
+  test("wiring.ts exposes renderGovernanceSettings as a module-scope function (not an accept export)", () => {
+    const wiring = code("governance/wiring.ts");
+    assert.match(wiring, /export function renderGovernanceSettings\(\s*plugin[^,]*,\s*containerEl/,
+      "renderGovernanceSettings(plugin, containerEl) must be the exposed entry point");
+    // The accept-capable controller + its callables must NOT be exported — only the render fn and
+    // the mount-state predicate leave the module. An `export` of any accept verb would let the
+    // settings tab (or anything importing wiring) hold an accept callable directly.
+    for (const name of ["buildController", "performAdopt", "performAccept", "performRevert", "setClassEnabled", "getStore"]) {
+      assert.ok(!new RegExp(`export\\s+(?:async\\s+)?function\\s+${name}\\b`).test(wiring),
+        `${name} must NOT be exported from wiring.ts (it would escape the module boundary)`);
+      assert.ok(!new RegExp(`export\\s+\\{[^}]*\\b${name}\\b`).test(wiring),
+        `${name} must NOT be re-exported from wiring.ts`);
+    }
+  });
+
+  test("renderGovernanceSettings builds its accept controls via the SHARED gesture-gated helpers", () => {
+    const wiring = code("governance/wiring.ts");
+    // It uses wireAdoptButton + renderAllowlist (the one addEventListener-gated implementation),
+    // never a second inline `.addEventListener('click')` accept path or an `.onclick =` handler.
+    assert.match(wiring, /wireAdoptButton\(/, "adopt must go through the shared wireAdoptButton");
+    assert.match(wiring, /renderAllowlist\(/, "the allowlist must go through the shared renderAllowlist");
+    assert.ok(!/\.onclick\s*=/.test(wiring), "wiring.ts must wire no forgeable .onclick accept handler");
+    // The adopt confirm is the shared confirmAdopt (gesture- + confirmation-gated), and the allowlist
+    // hands renderAllowlist only the three narrow module-scope thunks — never a full controller.
+    assert.match(wiring, /confirmAdopt\(plugin\.app\)/, "adopt confirmation uses the shared confirmAdopt");
+    assert.match(wiring, /setClassEnabled:\s*\(id,\s*on,\s*evt\)\s*=>\s*setClassEnabled\(plugin,/,
+      "the allowlist mutator thunk forwards the event to the gesture-gated module-scope setClassEnabled");
+  });
+
+  test("renderGovernanceSettings renders only when governance is MOUNTED, else a hint (no live accept controls)", () => {
+    const wiring = code("governance/wiring.ts");
+    assert.match(wiring, /if\s*\(!isGovernanceMounted\(plugin\)\)/,
+      "must gate the controls on the live-mount predicate");
+    // The mount flag is a plain WeakSet membership — it holds NO callable, so it cannot itself be an
+    // accept gadget, and it is deleted on the mount's teardown so a disabled module shows the hint.
+    assert.match(wiring, /const mountedPlugins = new WeakSet</, "mount state is a module-private WeakSet");
+    assert.match(wiring, /mountedPlugins\.delete\(plugin\)/, "the mount flag is dropped on teardown");
+  });
+
+  test("connection-ui.ts renders governance by handing the module a CONTAINER, receiving nothing back", () => {
+    const ui = code("connection-ui.ts");
+    // It calls the module's render fn with (this.plugin, section) — a container — and does NOT
+    // capture a return value (renderGovernanceSettings returns void; there is nothing to capture).
+    assert.match(ui, /if\s*\(mod\.id === "governance"\)\s*renderGovernanceSettings\(this\.plugin,\s*\w+\)/,
+      "the governance branch passes only a container, mirroring the vocab branch");
+    assert.ok(!/=\s*renderGovernanceSettings\(/.test(ui),
+      "connection-ui must not assign renderGovernanceSettings' result to anything");
+    // And it never references any accept-equivalent callable directly (its only governance touch is
+    // the render fn + the module-enabled toggle).
+    for (const name of ["performAccept", "performAdopt", "runGuardedAdopt", "setClassEnabled", "acceptNote", "revertNote", "buildController", "confirmAdopt"]) {
+      assert.ok(!new RegExp(`\\b${name}\\b`).test(ui), `connection-ui must not reference the accept-path fn ${name}`);
+    }
+  });
+
+  test("the fuller auto-accept text is a SHARED constant (both surfaces render the same one, not two literals)", () => {
+    const pane = code("governance/pane.ts");
+    // The constant exists and the pane's allowlist renderer uses it (not an inline string that a
+    // settings-tab copy could drift from).
+    assert.match(pane, /export const AUTO_ACCEPT_DESC\s*=/, "AUTO_ACCEPT_DESC must be exported from pane.ts");
+    assert.match(pane, /governance-allowlist-desc["'],\s*text:\s*AUTO_ACCEPT_DESC/,
+      "renderAllowlist must render AUTO_ACCEPT_DESC, not an inline string");
+    // The settings tab reaches the same text THROUGH renderAllowlist (shared) — so there is exactly
+    // one definition. The RUNTIME value's fuller phrasing (spanning the source's string-concat
+    // boundary) is pinned behaviorally in governance-settings-tab.test.mjs against the imported
+    // constant; here we only pin the single-source STRUCTURE.
+    // The adopt description is likewise a shared constant the settings tab imports.
+    assert.match(pane, /export const ADOPT_BASELINE_DESC\s*=/, "ADOPT_BASELINE_DESC must be exported from pane.ts");
+    const wiring = code("governance/wiring.ts");
+    assert.match(wiring, /ADOPT_BASELINE_DESC/, "the settings tab must reference the shared ADOPT_BASELINE_DESC");
   });
 });

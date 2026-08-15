@@ -69,7 +69,15 @@ import type { RenameIndex } from "../kernel/governance/auto-accept/detectors.js"
 import { badgeVisible } from "../kernel/governance/badge.js";
 import { governanceDisplaySettings } from "../kernel/governance/settings.js";
 import { isRealGesture } from "../kernel/governance/gesture.js";
-import { GovernanceReviewView, VIEW_TYPE_GOVERNANCE, confirmAdopt, type ReviewController } from "./pane.js";
+import {
+  GovernanceReviewView,
+  VIEW_TYPE_GOVERNANCE,
+  confirmAdopt,
+  renderAllowlist,
+  wireAdoptButton,
+  ADOPT_BASELINE_DESC,
+  type ReviewController,
+} from "./pane.js";
 
 // Top-level areas the plugin must never review or touch (guarded territories / hold zones — they
 // are archival, not live governed content).
@@ -97,6 +105,17 @@ function getStore(plugin: Plugin): BaselineStore {
   const s = baselineStores.get(plugin);
   if (!s) throw new Error("vault-mcp governance: baseline store not initialised");
   return s;
+}
+
+// Whether governance is CURRENTLY mounted for this plugin (the accept path is live). Added on a
+// successful wireGovernance, deleted on the mount's Component teardown — so it is a definitive
+// "is the accept path live" signal, unlike `baselineStores` (whose entry survives an unmount as a
+// stale store). The settings-tab render (renderGovernanceSettings) reads it to decide between the
+// gesture-gated controls and a short "enable governance" hint. Module-private, never reachable
+// from `app`, and it holds no callable — a plain membership flag.
+const mountedPlugins = new WeakSet<Plugin>();
+export function isGovernanceMounted(plugin: Plugin): boolean {
+  return mountedPlugins.has(plugin);
 }
 
 interface PluginPaths {
@@ -751,6 +770,10 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
   let disposed = false;
   component.register(() => {
     disposed = true;
+    // Drop the "mounted" flag so the settings-tab render falls back to its hint once this mount is
+    // torn down (a disable, or plugin unload) — baselineStores keeps its stale entry, so this flag
+    // is the accurate live-mount signal.
+    mountedPlugins.delete(plugin);
     const timers = silentTimers.get(plugin);
     if (timers) { for (const t of timers.values()) clearTimeout(t); timers.clear(); }
   });
@@ -775,5 +798,65 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
     component.registerInterval(window.setInterval(() => void pollJournal(plugin), JOURNAL_POLL_MS));
   });
 
+  // Mark the mount live LAST — every await and registration above has succeeded, so the flag is
+  // true only for a fully-wired mount (the settings-tab render can now show its controls). The
+  // teardown hook deletes it.
+  mountedPlugins.add(plugin);
+
   return component;
+}
+
+// ── settings-tab render (a SECOND gesture-gated home for adopt + auto-accept) ──
+// The governance module EXPOSES this render function; connection-ui.ts calls it with a container
+// and receives NOTHING back. This is what keeps the accept-capable controller module-private
+// across the new surface: the controls are built HERE, inside the governance module, closing over
+// the module-scope performAdopt / setClassEnabled / isClassEnabled — none of which is ever handed
+// to connection-ui as a value it holds. connection-ui only ever passes a container element in.
+//
+// Same acceptance perimeter as the pane: the adopt button and each allowlist checkbox are wired
+// via the SHARED wireAdoptButton / renderAllowlist (addEventListener only — `.onclick` stays null;
+// gesture-gated via runGuardedAdopt / setClassEnabled → isRealGesture; adopt additionally
+// confirmation-gated). Renders only when governance is MOUNTED (the controller/baseline store are
+// live); when disabled/unmounted it renders a short hint and no controls.
+export function renderGovernanceSettings(plugin: Plugin, containerEl: HTMLElement): void {
+  if (!isGovernanceMounted(plugin)) {
+    containerEl.createEl("p", {
+      cls: "setting-item-description",
+      text: "Enable governance (toggle above) to configure adopt-baseline and the auto-accept allowlist.",
+    });
+    return;
+  }
+
+  // Adopt-baseline — the same gesture- + confirmation-gated action as the pane's Adopt button,
+  // shown here with its fuller description. The button holds no accept capability; wireAdoptButton
+  // closes over the module-scope performAdopt, reached only when runGuardedAdopt reports "done".
+  containerEl.createEl("h4", { text: "Adopt current state as baseline" });
+  containerEl.createEl("p", { cls: "setting-item-description", text: ADOPT_BASELINE_DESC });
+  const adoptBtn = containerEl.createEl("button", {
+    cls: "mod-cta governance-adopt",
+    text: "Adopt current state as baseline",
+  });
+  let adoptedCount = 0;
+  wireAdoptButton(
+    adoptBtn,
+    () => confirmAdopt(plugin.app),
+    async () => { adoptedCount = await performAdopt(plugin); },
+    () => { new Notice(`vault-mcp governance: adopted baseline for ${adoptedCount} note(s).`); },
+  );
+
+  // Auto-accept allowlist — the SAME gesture-gated section the pane renders, built from the
+  // module-scope allowlist state. setClassEnabled refuses any non-trusted click, so a forged /
+  // synthesized click cannot flip a class (the checkbox reverts). No accept-capable object is
+  // exposed: renderAllowlist receives only these three narrow module-scope thunks.
+  renderGovernanceAllowlistSection(containerEl, plugin);
+}
+
+// The allowlist section for the settings tab — a thin adapter that hands the shared renderAllowlist
+// only the three narrow, module-private thunks (never a controller, never an accept callable).
+function renderGovernanceAllowlistSection(containerEl: HTMLElement, plugin: Plugin): void {
+  renderAllowlist(containerEl, {
+    authorizedClasses: () => AUTHORIZED_CLASSES,
+    isClassEnabled: (id) => isClassEnabled(plugin, id),
+    setClassEnabled: (id, on, evt) => setClassEnabled(plugin, id, on, evt),
+  });
 }

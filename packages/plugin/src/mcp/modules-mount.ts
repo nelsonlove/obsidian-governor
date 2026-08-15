@@ -762,8 +762,11 @@ const GOVERNANCE_MANIFEST: ModuleManifest = {
   // The `config` block ships two badge-DISPLAY toggles (GOVERNANCE_CONFIG_FIELDS) — the accept
   // pane's only MCP-side knobs, read at pane-wire time from `modules.governance.config` (no
   // ConfigBinding — the default location, exactly where the pane wiring reads them). Default ON,
-  // and they confer NO accept capability. The auto-accept ALLOWLIST is deliberately NOT a settings
-  // field: it stays a gesture-gated pane control (human-only-mutable), never surfaced here.
+  // and they confer NO accept capability. The auto-accept ALLOWLIST and adopt-baseline are NOT
+  // manifest config fields (they are not scalar knobs) — they are gesture-gated, human-only-mutable
+  // controls the governance module RENDERS itself, into BOTH the review pane and the settings tab
+  // (connection-ui.ts calls the module's renderGovernanceSettings, which builds them from its own
+  // module-private accept-capable controller — never surfaced as data here).
   config: {
     fields: GOVERNANCE_CONFIG_FIELDS,
     defaults: { ...DEFAULT_GOVERNANCE_SETTINGS } as Record<string, unknown>,
