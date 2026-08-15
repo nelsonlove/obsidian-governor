@@ -56,6 +56,7 @@ import { registerProvenanceTools, type ProvenanceToolsCtx } from "./tools-proven
 import { DEFAULT_PROVENANCE_CONFIG, validateProvenanceConfig, DEFAULT_NOTES_DIR, type ProvenanceBackend } from "../kernel/provenance/index.js";
 import { registerHealthTools, type HealthToolsCtx } from "./tools-health.js";
 import { DEFAULT_HEALTH_CONFIG, validateHealthConfig, DEFAULT_EMPTY_CHARS, type HealthSource } from "../kernel/health/index.js";
+import { registerFileclassTools, type FileclassToolsCtx } from "./tools-fileclass.js";
 import { DEFAULT_GOVERNANCE_SETTINGS } from "../kernel/governance/settings.js";
 
 // ── manifests (#81: config-host — see
@@ -566,6 +567,142 @@ const HEALTH_MANIFEST: ModuleManifest = {
   },
 };
 
+// ── fileclass module manifest (#188: the fileclass CLI fold) ───────────────
+//
+// A MUTATING capability module that proxies the standalone `fileclass` CLI
+// (github.com/mdelobelle/fileclass-cli — the terminal for the Fileclass
+// typed-frontmatter plugin). Unlike skills/provenance, its tools mount ONLY when
+// the Fileclass plugin is LOADED and the CLI binary is present — the module's
+// registrar (registerFileclassTools) gates on both and registers nothing when
+// either is absent, so it degrades cleanly to absent (issue #188). It shells out
+// to the CLI via execFile, the obsidian_cli proxy precedent — see
+// tools-fileclass.ts's header for why proxy over engine-integration.
+//
+// Six read tools (readOnlyHint: true) and two write tools (readOnlyHint: false):
+// fileclass_set / fileclass_set_where write typed frontmatter, so they route
+// through the accept-forbidden guard (a field-write can never assert acceptance)
+// and the guard-patched registrar (read-only mode, queue, journal, if_rev,
+// path allowlist). set-where is DRY-RUN by default. Default DISABLED (opt-in),
+// consistent with skills/provenance/health — a newly-folded surface stays off
+// until a human turns it on in the config tab.
+//
+// One config field: an explicit `binaryPath` override for the `fileclass` CLI
+// (blank ⇒ auto-detect on the standard install paths). The vault is pinned to
+// THIS vault by the tool layer (`--vault <name>`), so there is deliberately no
+// vault-targeting config field — a session can never cross into another vault.
+const FILECLASS_CONFIG_FIELDS: ConfigField[] = [
+  {
+    key: "binaryPath",
+    label: "fileclass CLI path",
+    type: "text",
+    help:
+      "Absolute path to the `fileclass` CLI binary. Blank ⇒ auto-detect on the standard install paths " +
+      "(/usr/local/bin, /opt/homebrew/bin, ~/.local/bin, ~/.npm-global/bin, /usr/bin). The tools mount only when " +
+      "BOTH the Fileclass plugin is installed+enabled AND this binary is found.",
+  },
+];
+
+export const DEFAULT_FILECLASS_CONFIG: Record<string, unknown> = { binaryPath: "" };
+
+/** Validate the fileclass module config: `binaryPath`, when present, must be a
+ * string. (An empty string is the documented "auto-detect" value.) */
+export function validateFileclassConfig(config: Record<string, unknown>): string[] {
+  const problems: string[] = [];
+  if (config.binaryPath !== undefined && typeof config.binaryPath !== "string") {
+    problems.push("binaryPath must be a string (an absolute path, or blank to auto-detect)");
+  }
+  return problems;
+}
+
+const FILECLASS_MANIFEST: ModuleManifest = {
+  summary:
+    "Typed-frontmatter (fileClass) reads and validated writes, proxied from the standalone `fileclass` CLI (the " +
+    "terminal for the Fileclass plugin). Read tools list fileClasses, dump a schema, explain a note's fields, query " +
+    "rows, get a value, and validate schema violations; the two write tools set a validated field on one note or " +
+    "bulk-set across a fileClass (DRY-RUN by default, apply: true to commit). MOUNTS ONLY when the Fileclass plugin " +
+    "is installed+enabled and the `fileclass` CLI binary is present — absent either, the tools do not register. " +
+    "Writes route through the accept-forbidden guard: a field-write can never introduce or change an accepted / " +
+    "accepted-by / accepted-on field, nor set acceptance-status to an accepted value.",
+  config: {
+    fields: FILECLASS_CONFIG_FIELDS,
+    defaults: { ...DEFAULT_FILECLASS_CONFIG },
+    validate: validateFileclassConfig,
+  },
+  directory: {
+    tools: [
+      { name: "fileclass_list", purpose: "List every fileClass (name, extends, field count, has-Base).", readOnly: true },
+      {
+        name: "fileclass_schema",
+        purpose: "A fileClass's options and resolved fields, with ancestry from extends.",
+        readOnly: true,
+        options: [{ name: "fileclass", what: "the fileClass name, e.g. 'Book'" }],
+      },
+      {
+        name: "fileclass_explain",
+        purpose: "A note's fileClasses, ancestry, and resolved field values.",
+        readOnly: true,
+        options: [{ name: "path", what: "vault-relative note path" }],
+      },
+      {
+        name: "fileclass_query",
+        purpose: "Rows for a fileClass, optionally filtered / columned / limited.",
+        readOnly: true,
+        options: [
+          { name: "fileclass", what: "the fileClass name" },
+          { name: "where", what: "a filter expression, e.g. 'status is unread'" },
+          { name: "columns", what: "comma-separated columns, e.g. 'title,author'" },
+          { name: "limit", what: "maximum rows to return" },
+        ],
+      },
+      {
+        name: "fileclass_get",
+        purpose: "One field's value on a note.",
+        readOnly: true,
+        options: [
+          { name: "path", what: "vault-relative note path" },
+          { name: "field", what: "the field name" },
+        ],
+      },
+      {
+        name: "fileclass_validate",
+        purpose: "Report schema violations across the vault or one fileClass (exit 1 = violations, returned not errored).",
+        readOnly: true,
+        options: [{ name: "fileclass", what: "restrict validation to one fileClass" }],
+      },
+      {
+        name: "fileclass_set",
+        purpose: "Write one validated field value on a note (the engine validates before writing).",
+        readOnly: false,
+        options: [
+          { name: "path", what: "vault-relative note path" },
+          { name: "field", what: "the field name" },
+          { name: "value", what: "the value to set" },
+        ],
+        caveats: [
+          "Routes through the accept-forbidden write guard: it can never introduce or change an accepted / " +
+            "accepted-by / accepted-on field, nor set acceptance-status to an accepted value.",
+        ],
+      },
+      {
+        name: "fileclass_set_where",
+        purpose: "Bulk-set a validated field on every matching note of a fileClass. DRY-RUN by default.",
+        readOnly: false,
+        options: [
+          { name: "fileclass", what: "the fileClass name" },
+          { name: "field", what: "the field name" },
+          { name: "value", what: "the value to set" },
+          { name: "where", what: "a filter expression, e.g. 'status isEmpty'" },
+          { name: "apply", what: "commit the change; omit/false ⇒ dry-run (report only, write nothing)" },
+        ],
+        caveats: [
+          "DRY-RUN by default — writes nothing until apply: true.",
+          "Routes through the accept-forbidden write guard like fileclass_set.",
+        ],
+      },
+    ],
+  },
+};
+
 // ── governance (Acceptance) module manifest (#83, cycle 2: the accept gesture + pane) ─
 //
 // The governance module's enabled-flag gates the Obsidian REVIEW PANE — the human-only
@@ -665,6 +802,19 @@ export interface MountDeps {
   /** The health module's injected source (obsidianHealthBackend live) — the
    * read-only resolver + on-disk-body seam the tiered scan runs over. */
   healthSource: HealthSource;
+  /** This vault's name — pinned into every fileclass CLI call via `--vault`.
+   * Optional so the settings-UI's stand-in deps and pre-fileclass callers still
+   * satisfy MountDeps (the fileclass module only reads it when it registers). */
+  vaultName?: string;
+  /** Whether the Fileclass plugin is LOADED (`app.plugins.plugins.fileclass`).
+   * Absent ⇒ treated as not present, so the fileclass module registers nothing
+   * (the settings UI passes no probe and never calls register()). */
+  fileclassPresent?: () => boolean;
+  /** Injected exec for the fileclass CLI (tests). Absent ⇒ the production execFile. */
+  fileclassExec?: FileclassToolsCtx["exec"];
+  /** Injected fileclass CLI binary (tests / explicit override). Absent ⇒ the
+   * registrar resolves from config.binaryPath, else probes the filesystem. */
+  fileclassBinary?: string | null;
 }
 
 /** The ModuleHostCtx modules receive — deliberately minimal (gate point 2).
@@ -755,6 +905,31 @@ export function builtinModules(deps: MountDeps): VaultModule[] {
       { id: "health", capabilities: ["health"], enabled: false, manifest: HEALTH_MANIFEST },
       (server: any, ctx: HealthToolsCtx) => registerHealthTools(server, deps.healthSource, ctx),
       (_host, config) => ({ config, getSettings: deps.getSettings }),
+    ),
+    // The fileclass module (#188: the fileclass CLI fold): a MUTATING capability
+    // module that PROXIES the standalone `fileclass` CLI (execFile, the
+    // obsidian_cli precedent). Like skills/provenance it declares `mutating:
+    // true`, so its two write tools (set / set_where) register with
+    // `readOnlyHint: false` — through the guard-patched registrar (read-only
+    // mode, path allowlist, queue, journal, if_rev) and the accept-forbidden
+    // guard applied in the tool layer. UNIQUELY among the modules, its registrar
+    // ALSO gates on the Fileclass plugin being LOADED and the CLI binary being
+    // present: `present()`/`binary` absent ⇒ it registers zero tools (degrades
+    // cleanly to absent), so an enabled module with the plugin uninstalled is a
+    // no-op rather than a broken surface. Default DISABLED (opt-in). Config lives
+    // at `modules.fileclass.config` (a new module, no ConfigBinding), so `config`
+    // here is that record merged over the manifest defaults.
+    moduleFromRegistrar(
+      { id: "fileclass", capabilities: ["fileclass"], enabled: false, mutating: true, manifest: FILECLASS_MANIFEST },
+      (server: any, ctx: FileclassToolsCtx) => registerFileclassTools(server, ctx),
+      (_host, config) => ({
+        config,
+        getSettings: deps.getSettings,
+        vaultName: deps.vaultName ?? "",
+        present: deps.fileclassPresent ?? (() => false),
+        ...(deps.fileclassExec ? { exec: deps.fileclassExec } : {}),
+        ...(deps.fileclassBinary !== undefined ? { binary: deps.fileclassBinary } : {}),
+      }),
     ),
     // The governance (Acceptance) module (#83, cycle 2): the accept pane's toggle. It
     // contributes ZERO MCP tools — its registrar is a NO-OP on the transport. Its

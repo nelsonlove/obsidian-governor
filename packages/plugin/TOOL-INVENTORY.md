@@ -11,7 +11,10 @@ fails (the fs-expressible and scheme sub-locks from #25/task-6 still apply).
 6 conditional integration tools and 1 CLI-conditional tool (`obsidian_cli`)
 = **up to 63 total**.  The 3 Code Mode meta-tools are an alternative
 per-connection surface and are not counted (a session sees one surface or the
-other, never both).
+other, never both).  Not counted here (outside the locked `obsidian_*` family,
+default-disabled modules): the `skills` (`vault_skills_*`), `provenance`
+(`provenance_*`), and `fileclass` (`fileclass_*`, 8 tools, plugin+binary-gated)
+module surfaces — see Section 2c and their own module docs.
 
 Cross-check: the observed live set with Dataview + Templater + Metadata Menu
 loaded (but NOT Omnisearch, no CLI binary) reported 44 tools — an observation
@@ -169,10 +172,11 @@ session connect.
 
 Registered through the module host like Section 2b, but these modules ship
 `enabled: false` — a human turns them on in the config tab, and the tools appear
-on the next session connect. (The `skills` and `provenance` modules also ship
-disabled, but their tools are named `vault_skills_*` / `provenance_*`, outside
-the `obsidian_*` family this inventory locks, so they are documented in their
-own module docs rather than here.)
+on the next session connect. (The `skills`, `provenance` and `fileclass` modules
+also ship disabled, but their tools are named `vault_skills_*` / `provenance_*` /
+`fileclass_*`, outside the `obsidian_*` family this inventory locks, so the first
+two are documented in their own module docs; `fileclass` is documented just below
+because it is also plugin-gated.)
 
 ### `tools-health.ts` — `registerHealthTools` via the `health` module (2 tools)
 
@@ -183,6 +187,37 @@ Both tools are `readOnlyHint: true`; the module has no write path.
 |---|---|
 | `obsidian_health` | Full tiered vault health scan → findings by fix risk (auto-safe repointable links / approval-gated empty notes + orphan attachments / report-only dangling links + duplicate groups + low-signal tags) plus summary counts. Read-only, whole-vault |
 | `obsidian_lint` | The same scan restricted to one folder or note (`scope`); link resolution + orphan inbound-set stay vault-wide, low-signal tags omitted |
+
+### `tools-fileclass.ts` — `registerFileclassTools` via the `fileclass` module (8 tools)
+
+Folded from the standalone `fileclass` CLI (github.com/mdelobelle/fileclass-cli —
+the terminal for the **Fileclass** typed-frontmatter plugin, successor to Metadata
+Menu). A **proxy** module: it shells out to the `fileclass` CLI binary via
+`execFile` (the `obsidian_cli` precedent), passing `--json` and pinning the vault
+with `--vault <name>`. **Doubly gated** — the tools register only when the module
+is enabled AND the Fileclass plugin is LOADED (`app.plugins.plugins.fileclass`)
+AND the `fileclass` CLI binary is found (config `binaryPath`, else the standard
+install paths); absent any of these, none register. Disabled while a path
+allowlist is active (the CLI runs over the whole vault through its engine, so its
+output cannot be path-scoped — the `obsidian_cli` / Dataview precedent).
+
+The two write tools (`fileclass_set` / `fileclass_set_where`) register
+`readOnlyHint: false`, so they ride the guard-patched registrar (read-only mode,
+path allowlist on the note path, serialized queue, journal, if_rev/idempotency)
+AND the accept-forbidden guard: a field-write can never introduce or change an
+`accepted` / `accepted-by` / `accepted-on` field, nor set `acceptance-status` to
+an accepted value (`Error [accept_forbidden]`, refused before the CLI runs).
+
+| Tool name | R/W | Description |
+|---|---|---|
+| `fileclass_list` | R | Every fileClass (name, extends, field count, has-Base) — CLI `fileclasses` |
+| `fileclass_schema` | R | A fileClass's options + resolved fields (with ancestry) — CLI `schema <name>` |
+| `fileclass_explain` | R | A note's fileClasses, ancestry, resolved field values — CLI `explain <path>` |
+| `fileclass_query` | R | Rows for a fileClass, `where`/`columns`/`limit` — CLI `list <class>` |
+| `fileclass_get` | R | One field's value on a note — CLI `get <path> <field>` |
+| `fileclass_validate` | R | Schema violations vault-wide or per fileClass; exit 1 (violations) is returned, not errored — CLI `validate` |
+| `fileclass_set` | W | Validated single-note field write; accept-guarded — CLI `set <path> <field> <value>` |
+| `fileclass_set_where` | W | Validated bulk write; **dry-run by default**, `apply: true` to commit; accept-guarded — CLI `set-where <class> <field> <value>` |
 
 ---
 
