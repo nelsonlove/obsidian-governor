@@ -293,6 +293,53 @@ describe("cliAcceptRefusal — content writes (create/append/prepend + periodic)
   });
 });
 
+// ── #107: flag-form arguments come under the accept rule too ──────────────────
+//
+// buildCliArgs pushes `flags` verbatim into argv, so a guarded key expressed in
+// flag form (`--name=acceptance-status --value=accepted`, `--content=<fence>`)
+// once reached the CLI having been inspected only in `params`. cliAcceptRefusal
+// now takes `flags` and, for the guarded families, (a) fails closed on a guarded
+// key carried as a VALUELESS flag and (b) folds every --key=value flag into the
+// same predicate the params take. Ordinary flags (`--json`) stay clean.
+
+describe("cliAcceptRefusal — flag-form arguments (#107)", () => {
+  test("REJECTS property:set acceptance in name=/value= flag form", () => {
+    assert.ok(cliAcceptRefusal("property:set", undefined, parseYaml, ["--name=acceptance-status", "--value=accepted"]));
+  });
+  test("REJECTS property:set acceptance in direct shorthand flag form", () => {
+    assert.ok(cliAcceptRefusal("property:set", undefined, parseYaml, ["--acceptance-status=accepted"]));
+  });
+  test("REJECTS an accepted-provenance key as a value-bearing flag", () => {
+    assert.ok(cliAcceptRefusal("property:set", undefined, parseYaml, ["--accepted-by=Nelson"]));
+  });
+  test("REJECTS acceptance split ACROSS params and flags (name in params, value in flag)", () => {
+    assert.ok(cliAcceptRefusal("property:set", { name: "acceptance-status" }, parseYaml, ["--value=accepted"]));
+  });
+  test("REJECTS acceptance split the other way (value in params, name in flag)", () => {
+    assert.ok(cliAcceptRefusal("property:set", { value: "accepted" }, parseYaml, ["--name=acceptance-status"]));
+  });
+  test("REJECTS content-write acceptance carried in a --content flag", () => {
+    assert.ok(cliAcceptRefusal("create", undefined, parseYaml, ["--content=---\\nacceptance-status: accepted\\n---\\nbody"]));
+  });
+  // ── fail closed on the uninspectable valueless form ──
+  for (const key of ["name", "value", "content", "acceptance-status", "acceptance_status", "accepted-by", "accepted-on"]) {
+    test(`REJECTS a valueless guarded flag --${key} (its value could arrive as a following argv token)`, () => {
+      assert.ok(cliAcceptRefusal("property:set", undefined, parseYaml, [`--${key}`]));
+    });
+  }
+  // ── ordinary flags stay clean ──
+  test("ALLOWS an ordinary --json flag on a guarded family", () => {
+    assert.equal(cliAcceptRefusal("property:set", { name: "foo", value: "bar" }, parseYaml, ["--json"]), null);
+    assert.equal(cliAcceptRefusal("create", { content: "# Hi" }, parseYaml, ["--json"]), null);
+  });
+  test("ALLOWS name=/value= flags that set a non-acceptance property", () => {
+    assert.equal(cliAcceptRefusal("property:set", undefined, parseYaml, ["--name=status", "--value=accepted"]), null);
+  });
+  test("ALLOWS a valueless flag on an UNGUARDED command (no accept scope)", () => {
+    assert.equal(cliAcceptRefusal("read", undefined, parseYaml, ["--content", "--name"]), null);
+  });
+});
+
 // ── #153: the CLI content path decides over EVERY plausible escape reading ────
 //
 // The guard reconstructs the honored document by un-escaping a param value, but
@@ -492,6 +539,29 @@ describe("registerCliTools — accept guard wired into the handler", () => {
   test("a normal content write runs", async () => {
     const { handler, calls } = recordingServer();
     const res = await handler({ command: "create", params: { name: "N", content: "# Hello" } });
+    assert.notEqual(res.isError, true);
+    assert.equal(calls.length, 1);
+  });
+
+  test("property:set acceptance in FLAG form is refused and NOT executed (#107)", async () => {
+    const { handler, calls } = recordingServer();
+    const res = await handler({ command: "property:set", flags: ["--name=acceptance-status", "--value=accepted"] });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /Error \[accept_forbidden\]/);
+    assert.equal(calls.length, 0);
+  });
+
+  test("a valueless guarded flag on a guarded family is refused and NOT executed (#107)", async () => {
+    const { handler, calls } = recordingServer();
+    const res = await handler({ command: "property:set", flags: ["--acceptance-status"] });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /Error \[accept_forbidden\]/);
+    assert.equal(calls.length, 0);
+  });
+
+  test("an ordinary --json flag on a guarded family still runs (#107)", async () => {
+    const { handler, calls } = recordingServer();
+    const res = await handler({ command: "property:set", params: { name: "foo", value: "bar" }, flags: ["--json"] });
     assert.notEqual(res.isError, true);
     assert.equal(calls.length, 1);
   });

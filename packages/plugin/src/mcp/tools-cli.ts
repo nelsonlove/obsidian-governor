@@ -38,7 +38,12 @@ import type { ServerCtx } from "./tools-core.js";
 // second definition of "accepted" on the CLI path (see cliAcceptRefusal below).
 import { acceptForbiddenReason } from "./write-notes-compose.js";
 import { leadingFrontmatterBlock, stripLeadingBom } from "@vault-mcp/core";
-import { cliCommandRefusal, configPathRefusal, OPAQUE_ACCEPT_CLI_COMMANDS } from "./cli-policy.js";
+import {
+  cliCommandRefusal,
+  configPathRefusal,
+  OPAQUE_ACCEPT_CLI_COMMANDS,
+  UNINSPECTABLE_WRITE_CLI_COMMANDS,
+} from "./cli-policy.js";
 
 // Mutating + can reach outside the vault (plugin installs fetch the network).
 const CLI_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };
@@ -153,40 +158,119 @@ const CONTENT_WRITE_RE =
 // — the scan is belt, the opacity is real.
 export const CLI_OPAQUE_ACCEPT_RESIDUAL: readonly string[] = OPAQUE_ACCEPT_CLI_COMMANDS;
 
+// ── #107: flag-form arguments come under the accept rule too ──────────────────
+//
+// buildCliArgs forwards `flags` VERBATIM into argv (`--key=value`), so a guarded
+// key expressed in flag form — `property:set --name=acceptance-status
+// --value=accepted`, `create --content=<accepted fence>` — reached the CLI
+// having been inspected only in `params`. `configPathRefusal` already scans
+// flags; the accept path was the lone family skipping them. We close it in two
+// ways, both fail-closed since the external binary's flag parsing is unsettled:
+//   (a) a guarded family carrying a guarded key as a VALUELESS flag (`--name`,
+//       `--value`, `--content`, `--acceptance-status`, `--accepted-by`, …) is
+//       REFUSED — its value would arrive as a following argv token the CLI may
+//       pair with it, which no `--key=value` normalization here can see; and
+//   (b) every `--key=value` flag is folded into the SAME predicate the params
+//       take (merged with params, so a name in params + value in a flag, or the
+//       reverse, is still caught), leaving ordinary flags like `--json` alone.
+
+/** Split a CLI flag into its key (leading dashes stripped) and, if present, its
+ * `=`-delimited value. `--json` → {key:"json"}; `--name=x` → {key:"name", value:"x"}. */
+function parseFlag(flag: string): { key: string; value?: string } {
+  const body = flag.replace(/^--?/, "");
+  const eq = body.indexOf("=");
+  if (eq < 0) return { key: body };
+  return { key: body.slice(0, eq), value: body.slice(eq + 1) };
+}
+
+/** A flag key that steers a guarded write: the structural keys a property/content
+ * write is built from, or any acceptance-provenance key. Carried as a VALUELESS
+ * flag, these are the uninspectable form we fail closed on. */
+function isGuardedFlagKey(key: string): boolean {
+  const k = key.trim().toLowerCase();
+  if (k === "name" || k === "value" || k === "content") return true;
+  if (k === "acceptance-status" || k === "acceptance_status") return true;
+  // Reuse the shared accepted-family recognizer for provenance keys
+  // (accepted / accepted-by / accepted-on / accepted_*) — no fork of "accepted".
+  // acceptForbiddenReason flags an accepted-family KEY regardless of value.
+  return acceptForbiddenReason({ [k]: "" }) !== null;
+}
+
+/**
+ * Scan a guarded family's flags: return a refusal reason for the first guarded
+ * key carried in the uninspectable valueless form, plus a map of every
+ * `--key=value` flag's value to fold into the accept predicate. Non-guarded
+ * valueless flags (`--json`, `--silent`) are left alone.
+ */
+function scanGuardedFlags(flags: string[] | undefined): {
+  reject: string | null;
+  values: Record<string, string>;
+} {
+  const values: Record<string, string> = {};
+  for (const flag of flags ?? []) {
+    const { key, value } = parseFlag(flag);
+    if (value === undefined) {
+      if (isGuardedFlagKey(key)) {
+        return {
+          reject:
+            `carries the guarded key '${key}' as a valueless flag ('--${key}'), whose value the CLI's flag ` +
+            `parsing may take from a following argument this guard cannot inspect — refused (fail closed). ` +
+            `Pass it as a param or a --key=value flag so acceptance can be inspected`,
+          values,
+        };
+      }
+      continue;
+    }
+    values[key] = value;
+  }
+  return { reject: null, values };
+}
+
 /**
  * The reason a CLI invocation would introduce acceptance, or null when it is
  * clean. Reuses the shared accepted-family rule (`acceptForbiddenReason`) — no
  * fork of "accepted". Covers property sets (the property + value the call names)
  * and content writes (any acceptance-asserting frontmatter fence in the written
- * content). Every unrelated command is clean, so legitimate CLI use is untouched.
+ * content), inspecting BOTH params and flag-form arguments (#107). Every
+ * unrelated command is clean, so legitimate CLI use is untouched.
  */
 export function cliAcceptRefusal(
   command: string,
   params: Record<string, string | number | boolean> | undefined,
-  parseYaml?: (yaml: string) => unknown
+  parseYaml?: (yaml: string) => unknown,
+  flags?: string[]
 ): string | null {
   const cmd = command.trim();
+  const isProperty = PROPERTY_SET_RE.test(cmd);
+  const isContent = CONTENT_WRITE_RE.test(cmd);
+  if (!isProperty && !isContent) return null;
 
-  if (PROPERTY_SET_RE.test(cmd)) {
+  // Flags for the guarded families: fail closed on the uninspectable valueless
+  // form, and collect the --key=value values for the predicate below.
+  const { reject, values: flagValues } = scanGuardedFlags(flags);
+  if (reject) return reject;
+
+  if (isProperty) {
     // Both param shapes at once: the documented `name=<prop> value=<val>` form
     // (synthesize {prop: val}) AND a direct `acceptance-status=accepted`
     // shorthand (every param keyed as itself). Structural keys (file/path/name/
     // value/type/silent) are not accepted-family, so they never false-positive —
     // e.g. `property:set name=status value=accepted` is a property literally
     // called "status", NOT the acceptance field, and is allowed, matching the
-    // MCP write path (which keys only on acceptance-status / accepted-*).
-    const fm: Record<string, unknown> = { ...(params ?? {}) };
-    if (typeof params?.name === "string") fm[params.name] = params.value;
+    // MCP write path (which keys only on acceptance-status / accepted-*). Flag
+    // values are merged in so name/value split across params and flags is caught.
+    const merged: Record<string, string | number | boolean> = { ...(params ?? {}), ...flagValues };
+    const fm: Record<string, unknown> = { ...merged };
+    if (typeof merged.name === "string") fm[merged.name] = merged.value;
     return acceptForbiddenReason(fm);
   }
 
-  if (CONTENT_WRITE_RE.test(cmd)) {
-    const content = params?.content;
-    if (typeof content !== "string" || content.length === 0) return null;
+  // Content writes: scan the content whether it arrived as a param or a flag.
+  for (const content of [params?.content, flagValues.content]) {
+    if (typeof content !== "string" || content.length === 0) continue;
     const reason = contentAcceptRefusal(content, parseYaml);
-    return reason ? `content ${reason}` : null;
+    if (reason) return `content ${reason}`;
   }
-
   return null;
 }
 
@@ -803,6 +887,7 @@ export function registerCliTools(
         "Requires the Obsidian CLI feature (Settings → General → Command line interface). " +
         `Dangerous commands (${DANGEROUS_LIST_DESC}) are blocked unless enabled in plugin settings. ` +
         `Opaque macro/code commands (${[...OPAQUE_ACCEPT_CLI_COMMANDS].join(", ")}) are DENIED by default — the acceptance guard cannot inspect what they execute — and return Error [cli_denied]; a human can re-enable a specific one in settings. ` +
+        `Uninspectable-write commands (${[...UNINSPECTABLE_WRITE_CLI_COMMANDS].join(", ")}) are DENIED by default too — restoring a prior version can reinstate an accepted value a human revoked, and the restored bytes cannot be scanned pre-exec — re-enabled the same way. ` +
         "Acceptance is human-only: a property:set or content write that would introduce acceptance-status: accepted (or accepted-by/accepted-on) is refused with Error [accept_forbidden] — agents write only acceptance-status: proposed. " +
         "Template-drawing calls (create template=<name>, quickadd:run-template path=<p>) have the referenced template resolved and scanned with the same rule pre-exec; an acceptance-carrying, expansion-token-carrying (Templater <% %> OR a core-Templates {{ }} field, whose expanded output cannot be inspected before it lands), OR unresolvable template refuses accept_forbidden (fail closed — use the template's exact name/path, or expand the template in Obsidian first). " +
         "On timeout, the command may still have completed inside Obsidian (only the CLI forwarder is killed) — verify state before retrying a mutation. " +
@@ -852,7 +937,7 @@ export function registerCliTools(
         // Accept-forbidden guard — the scar "the accept verb goes in no API",
         // enforced on the CLI path with the SAME accepted-family rule as the MCP
         // write primitive. Refused BEFORE the command runs, so nothing executes.
-        const acceptReason = cliAcceptRefusal(command, args.params, parseYaml);
+        const acceptReason = cliAcceptRefusal(command, args.params, parseYaml, args.flags);
         if (acceptReason) {
           return codedError(
             "accept_forbidden",
