@@ -1,8 +1,9 @@
 // The governance (Acceptance) Obsidian-UI wiring — the module-scope accept path and the
 // pane/ribbon/event registration. Ported from obsidian-stewardship/src/main.ts as part of the
-// governance module fold (#83, cycle 2). `wireGovernance(plugin, deps)` is called ONCE from the
-// vault-mcp plugin's onload, ONLY when the governance module is enabled in settings — the exact
-// counterpart to `wireUidIndex`, gated on a settings flag.
+// governance module fold (#83, cycle 2). `wireGovernance(plugin, deps)` mounts the pane whenever
+// the governance module is enabled — at onload if enabled, AND live the moment a human flips the
+// module's enable toggle in settings (main.ts `setGovernanceMounted`), with NO plugin reload. It
+// registers everything on a CHILD Component it returns, so an unmount is `plugin.removeChild(it)`.
 //
 // ============================================================================
 //  REACHABILITY — the baseline-advance bug CLASS (read before touching this file)
@@ -42,7 +43,7 @@
 //  governance commands.
 // ============================================================================
 
-import { TFile, MarkdownView, Notice, type WorkspaceLeaf, type Plugin, type DataAdapter } from "obsidian";
+import { Component, TFile, MarkdownView, Notice, type WorkspaceLeaf, type Plugin, type DataAdapter } from "obsidian";
 import { BaselineStore, type BlobFs } from "../kernel/governance/baseline-store.js";
 import { parseJournal, recentAgentWrite, agentWritesSince, type JournalRecord } from "../kernel/governance/journal-reader.js";
 import { computeQueue, type PendingItem, type NoteSnapshot } from "../kernel/governance/queue.js";
@@ -555,7 +556,7 @@ async function activateView(plugin: Plugin): Promise<void> {
   await refresh(plugin);
 }
 
-function injectStyles(plugin: Plugin): void {
+function injectStyles(component: Component): void {
   const css = `
   .governance-badge{position:absolute;top:2px;right:2px;min-width:16px;height:16px;
     padding:0 4px;border-radius:8px;background:var(--color-red,#e5484d);color:#fff;
@@ -628,18 +629,37 @@ function injectStyles(plugin: Plugin): void {
   style.id = "vault-mcp-governance-styles";
   style.textContent = css;
   document.head.appendChild(style);
-  plugin.register(() => style.remove());
+  component.register(() => style.remove());
+}
+
+/** Best-effort access to Obsidian's internal view registry — the ONE thing `plugin.registerView`
+ * only tears down at plugin unload, so a LIVE unmount must unregister the type itself (its public
+ * wrapper offers no un-register). Shape-typed, guarded at every call: an Obsidian build without it
+ * degrades to "leave the type registered", handled by the reuse-on-duplicate path in wireGovernance. */
+function viewRegistryOf(plugin: Plugin): { unregisterView(type: string): void } | undefined {
+  const vr = (plugin.app as unknown as { viewRegistry?: { unregisterView?: (type: string) => void } }).viewRegistry;
+  return typeof vr?.unregisterView === "function" ? (vr as { unregisterView(type: string): void }) : undefined;
 }
 
 /**
- * Wire the governance review pane + accept path into the host plugin. Called ONCE from onload,
- * ONLY when the governance module is enabled (a human turned it on in settings). Everything it
- * registers is torn down by Obsidian's own registerX cleanup on unload; the debounce timers are
- * cleared by a `plugin.register` hook. Adds NO accept surface to the plugin instance, the MCP
- * transport, or any command — the accept path is entirely closures behind gesture-gated pane
- * buttons (see the REACHABILITY block at the top of this file).
+ * Wire the governance review pane + accept path into the host plugin. Called on mount — at onload
+ * when the governance module is enabled, AND live when a human flips the module's enable toggle in
+ * settings (main.ts `setGovernanceMounted`), with NO plugin reload. Everything it registers lands
+ * on a CHILD Component (`plugin.addChild`) it returns, so a live unmount is `plugin.removeChild(it)`:
+ * that runs every registered cleanup — detach open governance leaves + unregister the view type,
+ * remove the ribbon element, detach the vault/DOM events, cancel the poll interval, clear the
+ * debounce timers, and flip the `disposed` flag — exactly the machinery unload already used, now
+ * scoped to a unit the plugin can dispose on demand. When the PLUGIN unloads it unloads its
+ * children too, so the mounted case still tears down on unload as before.
+ *
+ * Adds NO accept surface to the plugin instance, the MCP transport, or any command — the accept
+ * path is entirely closures behind gesture-gated pane buttons (see the REACHABILITY block at the
+ * top of this file). Live mount/unmount changes only WHEN the pane exists, never HOW its controls
+ * are reached: the accept-capable controller still lives only in the view's module-private WeakMap
+ * (pane.ts `viewDeps`), so detaching the leaf on unmount drops the sole reference to it and no
+ * dangling accept path survives.
  */
-export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): Promise<void> {
+export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): Promise<Component> {
   const pluginDir = plugin.manifest.dir ?? `${plugin.app.vault.configDir}/plugins/${plugin.manifest.id}`;
   const govDir = `${pluginDir}/governance`;
   pluginPaths.set(plugin, {
@@ -655,22 +675,47 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
 
   const store = new BaselineStore(new AdapterBlobFs(plugin.app.vault.adapter), paths(plugin).baseDir);
   baselineStores.set(plugin, store);
+  // All awaits happen BEFORE any registration below: if the store fails to load, nothing has been
+  // registered and the caller (which never received a Component) has nothing to unmount.
   await store.load();
 
   await loadAllowlist(plugin);
 
-  injectStyles(plugin);
+  // The lifecycle scope for this mount. Every registration below lands on `component`, so
+  // `plugin.removeChild(component)` is a complete, on-demand teardown. `addChild` also links it to
+  // the plugin, so a plugin unload unloads it too.
+  const component = new Component();
+  plugin.addChild(component);
+
+  injectStyles(component);
 
   // The review view. buildController() carries accept/revert/adopt/setClassEnabled; it is passed
   // straight into the view (which keeps it in a module-private WeakMap) and never stored on the
-  // plugin.
-  plugin.registerView(VIEW_TYPE_GOVERNANCE, (leaf) => new GovernanceReviewView(leaf, buildController(plugin)));
+  // plugin. `registerView` THROWS on a duplicate type, so on a re-mount whose prior unmount could
+  // not unregister (an Obsidian build without viewRegistry.unregisterView) we REUSE the existing
+  // registration — its factory reads live WeakMap state, so the pane still works.
+  try {
+    plugin.registerView(VIEW_TYPE_GOVERNANCE, (leaf) => new GovernanceReviewView(leaf, buildController(plugin)));
+  } catch (e) {
+    console.warn("vault-mcp governance: review view type already registered — reusing it", e);
+  }
+  // Live-unmount teardown of the view: detach any open governance leaves (drops the sole reference
+  // to their accept-capable controller) and unregister the type so a later re-mount can register
+  // afresh. `plugin.registerView` also installs its own plugin-unload cleanup doing the same — a
+  // harmless redundant no-op on the already-gone type at unload.
+  component.register(() => {
+    for (const leaf of plugin.app.workspace.getLeavesOfType(VIEW_TYPE_GOVERNANCE)) leaf.detach();
+    try { viewRegistryOf(plugin)?.unregisterView(VIEW_TYPE_GOVERNANCE); }
+    catch (e) { console.warn("vault-mcp governance: view unregister failed", e); }
+  });
 
   // Ribbon icon + badge. The ribbon only OPENS the pane (read-only navigation); it advances no
-  // baseline.
+  // baseline. `addRibbonIcon` removes the element on plugin unload; we ALSO remove it on live
+  // unmount via the component so a disable makes the gavel disappear without a reload.
   const ribbonEl = plugin.addRibbonIcon("gavel", "Governance review", async () => {
     await activateView(plugin);
   });
+  component.register(() => ribbonEl.remove());
   ribbonEls.set(plugin, ribbonEl);
   const badgeEl = ribbonEl.createSpan({ cls: "governance-badge" });
   badgeEl.hide();
@@ -680,31 +725,31 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
   // record a timestamp ONLY on real (isTrusted) browser input events (beforeinput/paste) on the
   // editor, attributed to the focused Markdown file. Programmatic vault.process/vault.modify writes
   // (how agents mutate notes over MCP) dispatch NO DOM input event, so an agent write never records
-  // here. Registered via registerDomEvent so both listeners are torn down on unload.
+  // here. Registered via registerDomEvent so both listeners are torn down on unmount/unload.
   const onHumanInput = (evt: Event): void => {
     if (!evt.isTrusted) return;
     recordHumanInput(plugin);
   };
-  plugin.registerDomEvent(document, "beforeinput", onHumanInput, { capture: true });
-  plugin.registerDomEvent(document, "paste", onHumanInput, { capture: true });
+  component.registerDomEvent(document, "beforeinput", onHumanInput, { capture: true });
+  component.registerDomEvent(document, "paste", onHumanInput, { capture: true });
 
   // Human-vs-agent edit reconciliation (silent human-edit baseline advance). The event closure
   // only schedules the module-scope reconcile; no reconcile method exists on the instance.
-  plugin.registerEvent(plugin.app.vault.on("modify", (file) => {
+  component.registerEvent(plugin.app.vault.on("modify", (file) => {
     if (file instanceof TFile && file.extension === "md") scheduleReconcile(plugin, file);
   }));
 
   // CONFIRMED-rename capture — the link-heal detector's oracle. Records are plain data in a
   // module-private WeakMap; this confers no accept capability.
-  plugin.registerEvent(plugin.app.vault.on("rename", (file, oldPath) => {
+  component.registerEvent(plugin.app.vault.on("rename", (file, oldPath) => {
     if (file instanceof TFile) recordRename(plugin, file.path, oldPath);
   }));
 
-  // Clear the debounce timers on unload (Obsidian tears down views/events/dom-events/ribbon
+  // Clear the debounce timers on unmount/unload (Obsidian tears down views/events/dom-events/ribbon
   // automatically; the setTimeout handles are ours to clear). The same hook flips the disposed
   // flag below.
   let disposed = false;
-  plugin.register(() => {
+  component.register(() => {
     disposed = true;
     const timers = silentTimers.get(plugin);
     if (timers) { for (const t of timers.values()) clearTimeout(t); timers.clear(); }
@@ -715,18 +760,20 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
   // Refresh click. The poll only STATS the journal each tick and only calls refresh() when the
   // journal actually grew; refresh() is read-only.
   //
-  // `onLayoutReady` takes a plain callback and returns no EventRef, so `plugin.register` cannot
-  // detach it — and a plugin unloaded in the onload→layout-ready window has ALREADY flushed its
-  // register-cleanups, so an interval created here afterward would never be cleared: a leaked 2.5s
-  // poll that keeps running pollJournal → sweepAutoAccept → setBaseline (advancing baselines) on a
-  // disposed instance. So the callback is gated on the `disposed` flag the cleanup hook flips —
-  // the exact guard `wireUidIndex` uses for the same reason. If disposed, do nothing (no refresh,
+  // `onLayoutReady` takes a plain callback and returns no EventRef, so `component.register` cannot
+  // detach it. When mounting live (layout long ready) it runs immediately; when mounting at onload
+  // before layout, an unmount in that window has already flushed the cleanups, so an interval
+  // created afterward would leak: a 2.5s poll running pollJournal → sweepAutoAccept → setBaseline
+  // (advancing baselines) on a torn-down mount. So the callback is gated on the `disposed` flag the
+  // cleanup hook flips — the exact guard `wireUidIndex` uses. If disposed, do nothing (no refresh,
   // no interval).
   plugin.app.workspace.onLayoutReady(async () => {
     if (disposed) return;
     await refresh(plugin);
     try { pollState(plugin).lastSig = await journalSignature(plugin); } catch { /* first poll will refresh */ }
-    if (disposed) return; // an unload may have landed during the awaited refresh above
-    plugin.registerInterval(window.setInterval(() => void pollJournal(plugin), JOURNAL_POLL_MS));
+    if (disposed) return; // an unmount/unload may have landed during the awaited refresh above
+    component.registerInterval(window.setInterval(() => void pollJournal(plugin), JOURNAL_POLL_MS));
   });
+
+  return component;
 }
