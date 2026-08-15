@@ -17,6 +17,7 @@ import { obsidianSkillsBackend } from "./tools-skills.js";
 import { obsidianProvenanceBackend } from "./tools-provenance.js";
 import { obsidianHealthBackend } from "./tools-health.js";
 import { mountModules } from "./modules-mount.js";
+import { FILECLASS_PLUGIN_ID } from "./tools-fileclass.js";
 import { registerCodeModeTools, makeCaptureRegister, type CapturedRegistry } from "./tools-code-mode.js";
 import { makeGuarded, resolveGuardedPath, withKernelArgs } from "./guarded.js";
 import { sealUnguardedRegistration } from "./seal-registration.js";
@@ -190,6 +191,12 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
     skillsSource: obsidianSkillsBackend(app),
     provenanceSource: obsidianProvenanceBackend(app),
     healthSource: obsidianHealthBackend(app),
+    // The fileclass module (#188) pins the CLI to THIS vault and gates on the
+    // Fileclass plugin being LOADED (the instance, not enabledPlugins — a
+    // configured-but-uninstalled plugin lingers there, per the plugin-gated-tools
+    // locked decision).
+    vaultName: ctx.vaultName,
+    fileclassPresent: () => !!(app as any).plugins?.plugins?.[FILECLASS_PLUGIN_ID],
   });
   // Skip-and-report only reports if someone reads the report: every mount
   // defect (unknown module id in settings, a gate-refused tool, a config
