@@ -19,6 +19,7 @@ import { fakeServer } from "./fake-server.mjs";
 import {
   OPAQUE_ACCEPT_CLI_COMMANDS,
   OPAQUE_ACCEPT_COMMAND_IDS,
+  UNINSPECTABLE_WRITE_CLI_COMMANDS,
   cliCommandRefusal,
   configPathRefusal,
   matchesCommandPattern,
@@ -80,6 +81,37 @@ describe("cliCommandRefusal: the opaque-accept default", () => {
     assert.ok(cliCommandRefusal("history:restore", policy));
     assert.ok(cliCommandRefusal("theme:set", policy));
     assert.equal(cliCommandRefusal("history:list", policy), null);
+  });
+});
+
+describe("cliCommandRefusal: history:restore uninspectable-write default-deny (#110)", () => {
+  test("history:restore is denied by default (no policy / empty policy)", () => {
+    assert.ok(cliCommandRefusal("history:restore"), "denied with no policy");
+    assert.ok(cliCommandRefusal("history:restore", {}), "denied with an empty policy");
+    // The exported set is exactly this one command.
+    assert.deepEqual([...UNINSPECTABLE_WRITE_CLI_COMMANDS], ["history:restore"]);
+  });
+
+  test("the refusal names the restore/revoked-acceptance reason", () => {
+    const reason = cliCommandRefusal("history:restore");
+    assert.match(reason, /restores note content/);
+    assert.match(reason, /reintroduce an accepted value a human revoked/);
+  });
+
+  test("sibling history commands stay allowed", () => {
+    for (const cmd of ["history", "history:list", "diff"]) {
+      assert.equal(cliCommandRefusal(cmd, {}), null, cmd);
+    }
+  });
+
+  test("a human re-enables it per-command via allowOpaque; deny still beats allow", () => {
+    assert.equal(cliCommandRefusal("history:restore", { allowOpaque: ["history:restore"] }), null);
+    assert.ok(cliCommandRefusal("history:restore", { deny: ["history:restore"], allowOpaque: ["history:restore"] }));
+  });
+
+  test("re-enabling history:restore does not re-enable the opaque-accept set", () => {
+    const policy = { allowOpaque: ["history:restore"] };
+    for (const cmd of OPAQUE_ACCEPT_CLI_COMMANDS) assert.ok(cliCommandRefusal(cmd, policy), cmd);
   });
 });
 
@@ -258,12 +290,30 @@ describe("obsidian_cli handler: policy wiring", () => {
   });
 
   test("settings deny list blocks an otherwise-ordinary command", async () => {
-    const { handler, calls } = cliServer({ cliPolicy: { deny: ["history:restore"], allowOpaque: [] } });
-    const res = await handler({ command: "history:restore", params: { file: "A.md" } });
+    const { handler, calls } = cliServer({ cliPolicy: { deny: ["theme:set"], allowOpaque: [] } });
+    const res = await handler({ command: "theme:set", params: { name: "Nord" } });
     assert.equal(res.isError, true);
     assert.match(res.content[0].text, /cli_denied/);
     assert.equal(calls.length, 0);
     const fine = await handler({ command: "history:list", params: { file: "A.md" } });
     assert.notEqual(fine.isError, true);
+  });
+
+  test("history:restore is refused typed cli_denied by default and never executes (#110)", async () => {
+    const { handler, calls } = cliServer({});
+    const res = await handler({ command: "history:restore", params: { file: "A.md", version: "3" } });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[cli_denied\]/);
+    assert.equal(calls.length, 0);
+  });
+
+  test("a human re-enabling history:restore via allowOpaque lets it run (#110)", async () => {
+    const { handler, calls } = cliServer({ cliPolicy: { deny: [], allowOpaque: ["history:restore"] } });
+    const res = await handler({ command: "history:restore", params: { file: "A.md", version: "3" } });
+    assert.notEqual(res.isError, true);
+    assert.equal(calls.length, 1);
+    // history:list is unaffected either way.
+    const list = await handler({ command: "history:list", params: { file: "A.md" } });
+    assert.notEqual(list.isError, true);
   });
 });

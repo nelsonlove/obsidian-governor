@@ -1,10 +1,43 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type App, TFile, getAllTags } from "obsidian";
+import { AcceptForbiddenError, acceptTransitionReason, parseGuardFrontmatter } from "@vault-mcp/core";
 import { ok, fail, codedError } from "./helpers.js";
 import { visiblePaths } from "../guard.js";
 import type { ServerCtx } from "./tools-core.js";
 import { runCommandRefusal } from "./cli-policy.js";
+
+// ── accept-forbidden guard for obsidian_append_at_heading (#109) ──────────────
+//
+// This tool writes via raw app.vault.modify/append/create — OUTSIDE the shared
+// write primitive (ObsidianBackend.writeNote / VaultImpl.guardWrittenContent),
+// so the accept-forbidden check the primitive enforces never ran here. It is
+// safe today only by accident (it writes body content under a heading, never
+// leading frontmatter), but a future change could let it introduce acceptance.
+// So route the RESULTING full-note content through the SAME transition
+// predicate the primitive uses — no second definition of "accepted".
+//
+// Mirrors ObsidianBackend.guardWrittenContent exactly: parse the resulting
+// frontmatter first (a construct the guard cannot classify throws
+// AcceptForbiddenError → the write refuses), and only when the result asserts
+// acceptance at all read the BEFORE frontmatter so a legitimate edit carrying
+// an existing human-granted accepted value forward UNCHANGED is allowed.
+function guardAppendResult(beforeText: string | null, resultingContent: string): void {
+  const after = parseGuardFrontmatter(resultingContent);
+  if (!after || !acceptTransitionReason(null, after)) return;
+  let before: Record<string, unknown> | null = null;
+  if (beforeText !== null) {
+    // A before that itself cannot be parsed is treated as no prior acceptance
+    // (fail closed on the transition), matching the backend's diskFrontmatter.
+    try {
+      before = parseGuardFrontmatter(beforeText);
+    } catch {
+      before = null;
+    }
+  }
+  const reason = acceptTransitionReason(before, after);
+  if (reason) throw new AcceptForbiddenError(reason);
+}
 
 const RO = { readOnlyHint: true,  destructiveHint: false, idempotentHint: true,  openWorldHint: false };
 const RW = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
@@ -107,6 +140,7 @@ export function registerComplementaryTools(server: McpServer, app: App, ctx: Ser
           }
           // Create note with the heading + content
           const newContent = `# ${heading}\n\n${content}\n`;
+          guardAppendResult(null, newContent);
           await app.vault.create(p, newContent);
           return ok({ path: p, found: false, inserted: true, created_note: true });
         }
@@ -120,7 +154,10 @@ export function registerComplementaryTools(server: McpServer, app: App, ctx: Ser
             return ok({ path: p, found: false, inserted: false });
           }
           // Append heading + content to file
-          await app.vault.append(file, `\n## ${heading}\n\n${content}\n`);
+          const before = await app.vault.read(file);
+          const appended = `\n## ${heading}\n\n${content}\n`;
+          guardAppendResult(before, before + appended);
+          await app.vault.append(file, appended);
           return ok({ path: p, found: false, inserted: true, created_heading: true });
         }
 
@@ -140,6 +177,7 @@ export function registerComplementaryTools(server: McpServer, app: App, ctx: Ser
         const sep = tail.length === 0 || tail.startsWith("\n") ? "\n" : "\n\n";
         const next = head + content + sep + tail;
 
+        guardAppendResult(text, next);
         await app.vault.modify(file, next);
         return ok({ path: p, found: true, inserted: true });
       } catch (e) { return fail(e); }

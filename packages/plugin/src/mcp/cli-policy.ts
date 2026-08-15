@@ -53,6 +53,16 @@ export const OPAQUE_ACCEPT_CLI_COMMANDS = [
  * is bounded by the plugin that registered it and stays allowed. */
 export const OPAQUE_ACCEPT_COMMAND_IDS = ["quickadd:*"] as const;
 
+/** Commands that WRITE note content the acceptance guard cannot inspect before
+ * it lands. `history:restore` reinstates a prior version of a note, which can
+ * reintroduce an `accepted` value a human deliberately revoked — and the CLI
+ * cannot surface the to-be-restored bytes pre-exec, so the accept guard (which
+ * scans `property:set` and content-write payloads) has nothing to look at here.
+ * Same "uninspectable ⇒ refuse" discipline as the opaque-accept set: DENIED by
+ * default, re-enabled only per-command through the human-only `allowOpaque`
+ * setting. (#110) */
+export const UNINSPECTABLE_WRITE_CLI_COMMANDS = ["history:restore"] as const;
+
 /** The `cliPolicy` settings row. Absent/empty ⇒ the defaults: opaque-accept
  * set denied, everything else allowed. */
 export interface CliCommandPolicy {
@@ -86,28 +96,49 @@ function allowedOpaque(name: string, policy: CliCommandPolicy | undefined): bool
   return (policy?.allowOpaque ?? []).some((p) => p.trim() === name);
 }
 
+/** A built-in default-deny set plus the phrasing for WHY its members are denied
+ * (they share the human-only `allowOpaque` re-enable path). */
+interface DefaultDenySet {
+  patterns: readonly string[];
+  /** The clause after "…is " — the reason this family is uninspectable. */
+  reason: string;
+}
+
+const OPAQUE_ACCEPT_DENY: DefaultDenySet = {
+  patterns: OPAQUE_ACCEPT_CLI_COMMANDS,
+  reason: "executes opaque macros/code that the acceptance guard cannot inspect",
+};
+const UNINSPECTABLE_WRITE_DENY: DefaultDenySet = {
+  patterns: UNINSPECTABLE_WRITE_CLI_COMMANDS,
+  reason:
+    "restores note content the acceptance guard cannot inspect before it lands (a restored version can " +
+    "reintroduce an accepted value a human revoked)",
+};
+
 function refusal(
   name: string,
   policy: CliCommandPolicy | undefined,
-  opaqueSet: readonly string[],
+  denySets: readonly DefaultDenySet[],
   surface: string,
 ): string | null {
   if (matchesAny(name, policy?.deny)) {
     return `${surface} '${name}' is denied by the vault-mcp command policy (settings › Security › "Denied commands").`;
   }
-  if (matchesAny(name, opaqueSet) && !allowedOpaque(name, policy)) {
-    return (
-      `${surface} '${name}' executes opaque macros/code that the acceptance guard cannot inspect, and is ` +
-      `denied by default (fail closed). A human can re-enable this specific command in the vault-mcp ` +
-      `settings (Security › "Re-enabled opaque commands") — there is no agent-writable path to that setting.`
-    );
+  for (const set of denySets) {
+    if (matchesAny(name, set.patterns) && !allowedOpaque(name, policy)) {
+      return (
+        `${surface} '${name}' ${set.reason}, and is denied by default (fail closed). A human can re-enable ` +
+        `this specific command in the vault-mcp settings (Security › "Re-enabled opaque commands") — there ` +
+        `is no agent-writable path to that setting.`
+      );
+    }
   }
   return null;
 }
 
 /** The reason an `obsidian_cli` command is refused by policy, or null. */
 export function cliCommandRefusal(command: string, policy?: CliCommandPolicy): string | null {
-  return refusal(command.trim(), policy, OPAQUE_ACCEPT_CLI_COMMANDS, "CLI command");
+  return refusal(command.trim(), policy, [OPAQUE_ACCEPT_DENY, UNINSPECTABLE_WRITE_DENY], "CLI command");
 }
 
 /**
@@ -166,5 +197,5 @@ function pathValueRefusal(label: string, value: string): string | null {
 
 /** The reason an `obsidian_run_command` id is refused by policy, or null. */
 export function runCommandRefusal(commandId: string, policy?: CliCommandPolicy): string | null {
-  return refusal(commandId.trim(), policy, OPAQUE_ACCEPT_COMMAND_IDS, "command id");
+  return refusal(commandId.trim(), policy, [{ patterns: OPAQUE_ACCEPT_COMMAND_IDS, reason: "executes opaque macros/code that the acceptance guard cannot inspect" }], "command id");
 }
