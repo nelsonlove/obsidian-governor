@@ -650,7 +650,14 @@ export class VaultMcpSettingTab extends PluginSettingTab {
 
     new Setting(section)
       .setName("Enabled")
-      .setDesc("Takes effect on the next session connect.")
+      // Governance's Obsidian surface (review pane + gavel ribbon) mounts/unmounts LIVE from this
+      // toggle — no reload. Every other module is tool-only: its surface mounts per connection, so
+      // its toggle takes effect on the next session connect.
+      .setDesc(
+        mod.id === "governance"
+          ? "Mounts or unmounts the review pane and gavel ribbon live — no plugin reload needed."
+          : "Takes effect on the next session connect."
+      )
       .addToggle((t) =>
         t.setValue(hosted.enabled).onChange(async (value) => {
           this.plugin.settings.modules = {
@@ -658,6 +665,9 @@ export class VaultMcpSettingTab extends PluginSettingTab {
             [mod.id]: { ...this.plugin.settings.modules[mod.id], enabled: value },
           };
           await this.plugin.saveSettings();
+          // Let modules whose in-app surface follows this toggle mount/unmount live (governance's
+          // pane + ribbon). Tool-only modules are unaffected — they take effect on the next connect.
+          await this.plugin.onModuleEnabledChanged(mod.id, value);
         })
       );
 

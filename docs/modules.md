@@ -124,6 +124,13 @@ type ModuleSettings = Record<string, { enabled?: boolean; config?: Record<string
   tool count from 56 to 51 on the next connect (the 5 scheme tools gone, vocab intact), and
   re-enabling restored it — while `jd:` addressing kept resolving at the kernel level even with
   the module off.
+  - **Exception — the governance module's Obsidian surface mounts LIVE.** Governance contributes
+    zero MCP tools; its `enabled` flag gates an in-Obsidian *review pane + gavel ribbon*, not a
+    tool surface. That pane now **mounts/unmounts the moment the toggle flips, with no plugin
+    reload** (`main.ts setGovernanceMounted` → `wireGovernance` returns a child `Component` the
+    plugin `removeChild`s on disable). Its badge-display config is still read live per refresh.
+    The always-on read-only `obsidian_pending_review` MCP view is unaffected by the toggle either
+    way. This live behavior is scoped to governance; every other module stays next-connect.
 
 ## The two built-in modules
 
