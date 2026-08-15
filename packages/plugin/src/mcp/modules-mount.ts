@@ -600,7 +600,8 @@ const GOVERNANCE_CONFIG_FIELDS: ConfigField[] = [
     type: "toggle",
     help:
       "Show the pending-review count as a badge on the governance ribbon icon. Off ⇒ the ribbon icon still " +
-      "opens the pane, just without the count badge. Takes effect on the next pane wire (plugin reload).",
+      "opens the pane, just without the count badge. Takes effect on the next queue refresh (the badge prefs " +
+      "are read live).",
   },
   {
     key: "showViewTabBadge",
@@ -608,7 +609,8 @@ const GOVERNANCE_CONFIG_FIELDS: ConfigField[] = [
     type: "toggle",
     help:
       "Show the pending-review count as a badge overlaid on the review pane's tab-header icon. Off ⇒ no tab " +
-      "badge; the ribbon badge above is independent. Takes effect on the next pane wire (plugin reload).",
+      "badge; the ribbon badge above is independent. Takes effect on the next queue refresh (the badge prefs " +
+      "are read live).",
   },
 ];
 

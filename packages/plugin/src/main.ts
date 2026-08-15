@@ -1,4 +1,4 @@
-import { Plugin, FileSystemAdapter, Modal, Notice } from "obsidian";
+import { Plugin, FileSystemAdapter, Modal, Notice, type Component } from "obsidian";
 import * as fs from "node:fs";
 import { UnixSocketListener } from "./socket-transport.js";
 import { buildMcpServer } from "./mcp/server.js";
@@ -11,6 +11,7 @@ import { Kernel, WriteQueue, WriteJournal, IdempotencyStore, LockStore, UidIndex
 import { obsidianProbe, obsidianServerIdentity, obsidianUidSource } from "./kernel/obsidian-probe.js";
 import { DEFAULT_SCHEMES, type SchemeInstanceConfig } from "./kernel/scheme/registry.js";
 import { wireGovernance } from "./governance/wiring.js";
+import { mountAction } from "./governance/mount-state.js";
 import { wireSkills } from "./skills/wiring.js";
 
 interface VaultMcpSettings {
@@ -99,6 +100,12 @@ export default class VaultMcpPlugin extends Plugin {
   private slug = "";
   declare settings: VaultMcpSettings;
   private externalRegistry = new ExternalToolRegistry();
+  // The governance review pane's live-mount handle: the child Component wireGovernance registers
+  // its view/ribbon/events/interval on, or null when the pane is unmounted. Non-null ⇔ mounted, so
+  // it doubles as the idempotency state. `governanceReconcile` serializes mount/unmount so a rapid
+  // enable→disable can't interleave a half-finished mount with a teardown.
+  private governanceComponent: Component | null = null;
+  private governanceReconcile: Promise<void> = Promise.resolve();
   // Public plugin-to-plugin API: app.plugins.plugins['vault-mcp'].api
   api: VaultMcpApi = {
     apiVersion: 1,
@@ -304,18 +311,20 @@ export default class VaultMcpPlugin extends Plugin {
     this.addSettingTab(new VaultMcpSettingTab(this.app, this));
 
     // ── governance (Acceptance) review pane (#83, cycle 2) ─────────────────────
-    // Wired ONLY when the governance module is enabled (default OFF — the module
-    // default is `enabled: false`, so an absent settings row means off). This is
-    // the human-only Accept surface: an Obsidian review pane whose Accept / Revert
-    // / Adopt / auto-accept-allowlist controls are gesture-gated closures — NEVER a
-    // command, an MCP tool, or a method on this plugin instance. It is independent
-    // of the MCP socket (`settings.enabled`): a human can review even with the
-    // transport off. The read-only obsidian_pending_review MCP view is registered
-    // always-on in server.ts, separate from this toggle. See src/governance/.
+    // Mounted when the governance module is enabled (default OFF — the module default is
+    // `enabled: false`, so an absent settings row means off). This is the human-only Accept
+    // surface: an Obsidian review pane whose Accept / Revert / Adopt / auto-accept-allowlist
+    // controls are gesture-gated closures — NEVER a command, an MCP tool, or a method on this
+    // plugin instance. It is independent of the MCP socket (`settings.enabled`): a human can review
+    // even with the transport off. The read-only obsidian_pending_review MCP view is registered
+    // always-on in server.ts, separate from this toggle.
+    //
+    // The mount FOLLOWS the toggle LIVE: flipping the governance-enabled toggle in the settings tab
+    // mounts or unmounts the pane + gavel ribbon immediately, with NO plugin reload (see
+    // `setGovernanceMounted` and connection-ui.ts's per-module enable hook). Here at onload we mount
+    // it once if it starts enabled. See src/governance/.
     if (this.settings.modules?.governance?.enabled === true) {
-      void wireGovernance(this, {
-        getConfig: () => (this.settings.modules?.governance?.config ?? {}) as Record<string, unknown>,
-      }).catch((e) => console.error("[vault-mcp] governance pane wiring failed", e));
+      void this.setGovernanceMounted(true);
     }
 
     // ── skills GUI (#82 residuals: the human affordances the fold left out) ────
@@ -362,6 +371,53 @@ export default class VaultMcpPlugin extends Plugin {
 
     // Signal publishers (vault-mcp-api SDK) that the api is (re-)available.
     this.app.workspace.trigger("vault-mcp:ready", this.api);
+  }
+
+  /**
+   * The settings tab calls this when a module's enable toggle flips (connection-ui.ts's per-module
+   * "Enabled" toggle). Governance is the ONE module whose Obsidian surface — the review pane + gavel
+   * ribbon — mounts/unmounts LIVE from here, with no plugin reload. Every other module is tool-only:
+   * its MCP surface mounts per connection, so its toggle still takes effect on the next session
+   * connect (unchanged semantics) and there is nothing to mount or unmount in-app.
+   */
+  async onModuleEnabledChanged(moduleId: string, enabled: boolean): Promise<void> {
+    if (moduleId === "governance") await this.setGovernanceMounted(enabled);
+  }
+
+  /**
+   * Drive the governance pane's mount state to `enabled`, live, without a plugin reload. Idempotent
+   * (enabling when already mounted, or disabling when already unmounted, is a no-op) and serialized
+   * so a rapid enable→disable can't interleave a mount with a teardown. Mount runs the full
+   * wireGovernance registration (view + ribbon + events + poll interval, all on a child Component);
+   * unmount is `removeChild`, which runs every cleanup that Component registered — detaching open
+   * governance leaves (dropping the sole reference to the accept-capable controller), unregistering
+   * the view type, removing the ribbon, cancelling the interval, clearing the debounce timers, and
+   * flipping the disposed flag. The accept boundary is preserved across the cycle: mount/unmount
+   * changes only WHETHER the pane exists, never HOW its gesture-gated controls are reached.
+   */
+  async setGovernanceMounted(enabled: boolean): Promise<void> {
+    const next = this.governanceReconcile.then(() => this.applyGovernanceMount(enabled));
+    // Keep the chain alive even if one step rejected, so a later toggle still reconciles.
+    this.governanceReconcile = next.catch(() => {});
+    await next;
+  }
+
+  private async applyGovernanceMount(enabled: boolean): Promise<void> {
+    const action = mountAction(this.governanceComponent !== null, enabled);
+    if (action === "none") return; // already in the desired state — idempotent no-op
+    if (action === "mount") {
+      try {
+        this.governanceComponent = await wireGovernance(this, {
+          getConfig: () => (this.settings.modules?.governance?.config ?? {}) as Record<string, unknown>,
+        });
+      } catch (e) {
+        console.error("[vault-mcp] governance pane wiring failed", e);
+        this.governanceComponent = null;
+      }
+    } else {
+      this.removeChild(this.governanceComponent!);
+      this.governanceComponent = null;
+    }
   }
 
   async onunload() {
