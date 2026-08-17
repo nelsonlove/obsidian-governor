@@ -82,6 +82,13 @@ Known-overstated section instead — see its header for the format.
 ## docs/conformance.md
 
 - An explicit `--baseline=` fixture path is always allowed; the guard flips once the port set is complete and the cutover rebaseline is reviewed.
+- Frontmatter is a `generated`/`generator` derivation stamp, never an acceptance field (accept-guard-checked before every write).
+  substantiated 2026-08-17: `renderDebtRegister` emits a fixed two-key frontmatter block
+  (nothing from the sidecar reaches frontmatter), and BOTH write paths —
+  `obsidian_conformance_debt_render` (tools-conformance-debt.ts) and the CLI's
+  `renderRegisterTo` (conformance/cli.ts) — call `registerAcceptRefusal` (the shared
+  `parseGuardFrontmatter` + `acceptForbiddenReason` predicate) over the rendered text
+  before writing; pinned by tests/conformance-debt-register.test.mjs.
 
 ## docs/identity-and-links.md
 
