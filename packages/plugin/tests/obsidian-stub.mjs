@@ -86,6 +86,20 @@ export class Notice {
 }
 
 /**
+ * Same reason as Modal/PluginSettingTab above: connection-ui.ts → command-
+ * suggest.ts, whose `class CommandSuggest extends AbstractInputSuggest` only
+ * needs the base class to EXIST at module-eval time. The real suggester
+ * behavior (getSuggestions/renderSuggestion/selectSuggestion) is DOM-driven
+ * and untested headlessly, same boundary as display()/onOpen() above.
+ */
+export class AbstractInputSuggest {
+  constructor(app, inputEl) {
+    this.app = app;
+    this.inputEl = inputEl;
+  }
+}
+
+/**
  * Obsidian's own getAllTags flattens a file cache's inline tags and its
  * frontmatter `tags` into one `#tag` list. The stub reads the same two places,
  * so a fake cache drives findByTag / obsidian_tags_list realistically; a cache
