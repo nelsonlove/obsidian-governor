@@ -6,10 +6,10 @@ The FULL set is locked by `tests/tool-inventory.test.mjs`: the names documented
 here must equal the names registered in source, both directions, or the suite
 fails (the fs-expressible and scheme sub-locks from #25/task-6 still apply).
 
-**Count summary:** 17 fs-expressible + 30 always-live + 9 module-mounted
-(default enabled, settings-toggleable) = **56 base** tools, plus up to
+**Count summary:** 17 fs-expressible + 33 always-live + 9 module-mounted
+(default enabled, settings-toggleable) = **59 base** tools, plus up to
 6 conditional integration tools and 1 CLI-conditional tool (`obsidian_cli`)
-= **up to 63 total**.  The 3 Code Mode meta-tools are an alternative
+= **up to 66 total**.  The 3 Code Mode meta-tools are an alternative
 per-connection surface and are not counted (a session sees one surface or the
 other, never both).  Not counted here (outside the locked `obsidian_*` family,
 default-disabled modules): the `skills` (`vault_skills_*`), `provenance`
@@ -19,9 +19,10 @@ module surfaces — see Section 2c and their own module docs.
 Cross-check: the observed live set with Dataview + Templater + Metadata Menu
 loaded (but NOT Omnisearch, no CLI binary) reported 44 tools — an observation
 that PREDATES the kernel-v0 tools (locks ×4, uid ×1, links ×1), the vocab
-module (×4), the scheme module (×6), `obsidian_write_notes` and
-`obsidian_pending_review`; the same plugin set today registers
-17 + 30 + 9 + 6 = **62**.
+module (×4), the scheme module (×6), `obsidian_write_notes`,
+`obsidian_pending_review`, and the scheme write surface (`obsidian_assign_address`,
+`obsidian_refile_address`, `obsidian_renumber_address`); the same plugin set
+today registers 17 + 33 + 9 + 6 = **65**.
 
 ---
 
@@ -54,7 +55,7 @@ against its `FilesystemBackend`.
 
 ---
 
-## Section 2 — live-only, always registered (30)
+## Section 2 — live-only, always registered (33)
 
 These tools depend on live Obsidian `app.*` state and cannot be expressed on the
 filesystem.  They are unconditionally registered on every `buildMcpServer` call,
@@ -73,6 +74,21 @@ regardless of which community plugins are installed.
 |---|---|
 | `obsidian_move_notes` | Batch move/rename (live-only — not in the shared 17) |
 | `obsidian_repoint_link` | Repoint every `[[link_name]]` at `target_path`, vault-wide (live-only; fixes broken links that rename-based rewrite can't touch). Flags: `dry_run`, `unresolved_only` (skip still-resolving links), `drop_echo_alias` (drop [[x\|x]] echo aliases) |
+
+### `tools-scheme-write.ts` — `registerSchemeWriteTools` (3 tools)
+
+Registered directly in `server.ts`, immediately after `registerVaultWriteTools`
+— NOT through the module host (`modules-mount.ts`'s `registerAll` gate refuses
+any tool whose `readOnlyHint !== true`, and these three mutate by design).
+Plans via the pure `kernel/scheme/mutate.ts` core, applies via
+`tools-vault-write.ts`'s `moveOne`. Allowlist-filtered like `tools-scheme.ts`'s
+read tools; `dry_run` never mutates.
+
+| Tool name | Description |
+|---|---|
+| `obsidian_assign_address` | Assign a note the next free address in a scope, then move it there |
+| `obsidian_refile_address` | Move a note back to the folder its own address says it belongs in |
+| `obsidian_renumber_address` | Move a note to a specific target address, optionally displacing (`on_occupied`: `auto`/`manual`/`fail`) whatever already occupies it |
 
 ### `tools-write-notes.ts` — `registerWriteNotesTool` (1 tool, kernel B1)
 
@@ -274,13 +290,13 @@ The 44-tool set observed with Dataview + Templater + Metadata Menu loaded
 it stood then:
 
 - 17 fs-expressible ✓
-- 22 always-live at the time ✓ (now 30 + 9 module-mounted — see Sections 2/2b)
+- 22 always-live at the time ✓ (now 33 + 9 module-mounted — see Sections 2/2b)
 - 5 integration (Dataview×2 + Templater×1 + Metadata Menu×2) ✓
 - `obsidian_omnisearch` absent — Omnisearch plugin not loaded ✓
 - (`obsidian_cli` additionally registers when the CLI binary is installed)
 
 **No tool in the observed-44 list was unaccounted for in source.**  Under the
-same plugin set the current surface registers 61 (see the count summary); the
+same plugin set the current surface registers 64 (see the count summary); the
 source↔doc lock in `tests/tool-inventory.test.mjs` keeps this file current, and
 any future live observation should be checked against that lock rather than
 this historical snapshot.
@@ -295,6 +311,7 @@ this historical snapshot.
 | `packages/plugin/src/mcp/server.ts` | `registerFsTools` | 17 fs-expressible |
 | `packages/plugin/src/mcp/tools-core.ts` | `registerCoreTools` | 2 always-live |
 | `packages/plugin/src/mcp/tools-vault-write.ts` | `registerVaultWriteTools` | 2 always-live |
+| `packages/plugin/src/mcp/tools-scheme-write.ts` | `registerSchemeWriteTools` | 3 always-live |
 | `packages/plugin/src/mcp/tools-complementary.ts` | `registerComplementaryTools` | 9 always-live |
 | `packages/plugin/src/mcp/tools-nav.ts` | `registerNavTools` | 9 always-live |
 | `packages/plugin/src/mcp/tools-locks.ts` | `registerLockTools` | 4 always-live |
