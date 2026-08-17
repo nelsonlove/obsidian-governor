@@ -178,7 +178,9 @@ One vault-relative prefix per line, empty for the whole vault. It is checked aft
 | `obsidian_fileclass_schema` | the fileClass key set is bounded, so the "available"/"ambiguous" messages can't enumerate folders |
 | `obsidian_check_links`, `obsidian_resolve_uid`, `obsidian_repoint_link` | filtered as described in [Link health](#link-health) and [Addressing notes by uid](#addressing-notes-by-uid) |
 | `obsidian_resolve_address`, `obsidian_next_address`, `obsidian_list_scope`, `obsidian_expected_location` | resolved and computed over visible notes only, as described in [Scheme addressing](#scheme-addressing) — a hidden note's address never resolves, and never occupies a slot these tools call free |
-| `obsidian_dataview_list_query`, `obsidian_dataview_table_query`, `obsidian_cli` | **refused** with `Error [out_of_allowlist]` — a Dataview query runs over Dataview's own index and returns values it selects for itself, and CLI arguments can't be path-scoped, so neither can be bounded honestly |
+| `obsidian_dataview_list_query`, `obsidian_dataview_table_query`, `obsidian_cli` | **refused** with `Error [out_of_allowlist]` — a Dataview query runs over Dataview's own index and returns values it selects for itself, and the raw proxy's free-text CLI arguments can't be path-scoped, so neither can be bounded honestly |
+| `obsidian_note_history`, `obsidian_note_diff` | scoped like any path-taking read: the `path` argument is checked against the allowlist (this is part of what the dedicated CLI tools buy over the raw proxy) |
+| `obsidian_base_create`, `obsidian_plugin_install`, `obsidian_plugin_uninstall`, `obsidian_snippet_write`, `obsidian_snippet_toggle` | **refused** — a base item's landing folder is decided by the base's own config, and plugin/snippet management is vault-global, so none can be path-scoped honestly |
 
 With no allowlist configured, every one of these behaves exactly as it always did.
 

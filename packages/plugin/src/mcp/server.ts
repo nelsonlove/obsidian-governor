@@ -8,6 +8,8 @@ import { registerComplementaryTools } from "./tools-complementary.js";
 import { registerNavTools } from "./tools-nav.js";
 import { registerIntegrationTools } from "./tools-integrations.js";
 import { registerCliTools, obsidianTemplateReader } from "./tools-cli.js";
+import { registerCliDedicatedTools } from "./tools-cli-dedicated.js";
+import { registerSnippetTools, obsidianSnippetSource } from "./tools-snippets.js";
 import { registerExternalTools } from "./external-tools.js";
 import { registerLockTools } from "./tools-locks.js";
 import { registerUidTools } from "./tools-uid.js";
@@ -260,11 +262,24 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   registerConformanceDebtTools(server, debtSource, debtCtx);
   registerConformanceDebtRenderTool(server, debtSource, debtCtx);
   // ── official-CLI proxy — conditional on the CLI binary being installed ──────
+  // AND on the default-OFF "Raw CLI proxy" setting (Security tab): the
+  // dedicated pinned-subcommand tools below cover the real usage, so the
+  // free-text proxy is a surface a human opts back into.
   // parseYaml is injected for the accept-forbidden guard's content-fence scan;
   // readTemplate for the template guard (create template= / quickadd:run-
   // template path= draw content from a vault note the params only NAME).
   // Both injected so tools-cli.ts stays obsidian-free for headless tests.
   registerCliTools(server, ctx, { parseYaml, readTemplate: obsidianTemplateReader(app) });
+  // ── dedicated pinned-subcommand CLI tools (the obsidian_cli decomposition) ──
+  // Same transport machinery (vault pinning, exec seam, deny list), one PINNED
+  // subcommand per tool with typed args — conditional on the CLI binary only,
+  // not on the raw-proxy setting. history:restore is deliberately not among
+  // them (#110).
+  registerCliDedicatedTools(server, ctx, { parseYaml });
+  // ── CSS snippet tools — live app API (app.customCss), always registered ─────
+  // The considered `.obsidian` exception: scoped to `.obsidian/snippets/*.css`
+  // and nothing else (see tools-snippets.ts's header).
+  registerSnippetTools(server, ctx, { source: obsidianSnippetSource(app as any) });
   // ── externally-published tools (other Obsidian plugins via plugin.api) ─────
   registerExternalTools(server, app, ctx);
 

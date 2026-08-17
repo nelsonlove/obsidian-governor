@@ -66,6 +66,13 @@ Known-overstated section instead — see its header for the format.
 - So the CLI path grows its **own** accept-forbidden check (`cliAcceptRefusal` in `packages/plugin/src/mcp/tools-cli.ts`), run **before the command executes**, reusing the exact same `acceptForbiddenReason` rule — no fork of "accepted." A CLI write is always an *introduce* (the CLI path has no expression for "carry an existing human value forward"), so the introduce check is exactly right.
 - So the template guard **fails closed on expansion tokens** (#137, Option 2): a template whose resolved bytes carry *any* expansion token — a Templater `<%` opener **or** a core-Templates `{{ … }}` field — is **refused outright**, because its expanded output cannot be inspected before it lands (`templateExpansionRefusal` refuses on either opener as a substring, covering every Templater tag form and the whole core-Templates field class).
 - The pattern connecting every one of these: **the guard must inspect the bytes that will be honored.** Each residual is a place where something else — an escape expansion, a template processor, another plugin's config — produces the honored bytes after the guard has looked.
+- `history:restore` is deliberately not promoted to a dedicated tool: restoring a prior version can reinstate an accepted value a human revoked, and the restored bytes cannot be scanned pre-exec (#110) — it stays in the proxy's default-denied uninspectable-write set.
+  substantiated 2026-08-17 (CLI decomposition PR): `DEDICATED_CLI_COMMANDS` in
+  tools-cli-dedicated.ts pins history/diff/base:create/plugin:install/plugin:uninstall and
+  nothing else — cli-dedicated.test.mjs asserts the registered set exactly and that no
+  source pins "history:restore" — and the command stays in cli-policy.ts's
+  UNINSPECTABLE_WRITE_CLI_COMMANDS default-deny set, whose rationale (#110) this sentence
+  restates.
 
 ## docs/agent-writes.md
 
