@@ -160,12 +160,25 @@ function isStandardZero(id: ParsedId): boolean {
 }
 
 /**
+ * The full leading "decorated token" of a filename — everything up to the
+ * first space, e.g. "43.11+2024" out of "43.11+2024 Foo.md", or "06.11" out
+ * of "06.11 Foo.md" (no Extend-the-End suffix to carry). This is the span
+ * idTokenFromName further strips a `+YYYY` suffix FROM, and it is ALSO the
+ * span titleOf must strip in full — the address token plus any Extend-the-End
+ * decoration immediately following it, not just the bare address token — to
+ * avoid leaving a dangling "+2024" glued onto the returned title.
+ */
+function leadingDecoratedToken(name: string): string {
+  return name.split(" ")[0];
+}
+
+/**
  * Strip an Extend-the-End suffix (e.g. "43.11+2024 Foo" -> "43.11") and a
  * trailing title, returning just the leading id token of a filename.
  * Returns the raw token (still needs parseJdId to validate).
  */
 function idTokenFromName(name: string): string {
-  const token = name.split(" ")[0];
+  const token = leadingDecoratedToken(name);
   const plus = token.indexOf("+");
   return plus === -1 ? token : token.slice(0, plus);
 }
@@ -650,6 +663,30 @@ export function jdProvider(cfg: JdConfig): ScopeProvider {
 
     allocatable(scope: Scope) {
       return allocatabilityOf(scope, cfg);
+    },
+
+    occupantOf(addr: Address, notes: string[]): Member | null {
+      const target = format(addr);
+      for (const path of notes) {
+        const p = parsedFromPath(path, cfg);
+        if (p && format(toAddress(p)) === target) return { path, address: target };
+      }
+      return null;
+    },
+
+    titleOf(path: string): string {
+      const name = basename(path).replace(/\.md$/, "");
+      const token = idTokenFromName(basename(path));
+      if (token && parseJdId(token, cfg)) {
+        // Strip the FULL leading decorated token (address + optional +YYYY
+        // Extend-the-End suffix), not just the bare address `token` — a
+        // "43.11+2024 Foo" name's decorated span is "43.11+2024" (10 chars),
+        // longer than the 5-char address token alone, and slicing off only
+        // the shorter span would leave "+2024" dangling in front of the
+        // title (the bug this comment fixes).
+        return name.slice(leadingDecoratedToken(name).length).trimStart();
+      }
+      return name;
     },
   };
 }

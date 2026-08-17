@@ -13,7 +13,7 @@ import { ok, fail, okError, validateMoves } from "./helpers.js";
 import { repointLinksInText } from "./repoint.js";
 import { visiblePaths, type GuardSettings } from "../guard.js";
 
-const RW = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
+export const RW = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
 
 export interface VaultWriteToolsCtx {
   /**
@@ -40,7 +40,7 @@ async function ensureParentFolders(app: App, filePath: string): Promise<void> {
   }
 }
 
-async function moveOne(app: App, from: string, to: string, overwrite: boolean): Promise<void> {
+export async function moveOne(app: App, from: string, to: string, overwrite: boolean): Promise<void> {
   if (!from.endsWith(".md")) throw new Error("source must end in .md");
   if (!to.endsWith(".md")) throw new Error("destination must end in .md");
   if (from === to) throw new Error("from and to are the same path");

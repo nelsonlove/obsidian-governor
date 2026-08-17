@@ -59,6 +59,14 @@ Five read-only tools cover the scheme's own view of the vault — none of them m
 
 Under an allowlist, or an instance configured with `excludedRoots`, a hidden or excluded note can hold a slot these tools report as free — the same visibility rule that keeps addressing from being a sandbox bypass also means "next free" is only ever free among what your session can see and what the instance speaks for.
 
+Three mutating tools complete the module's write half (`mcp/tools-scheme-write.ts`), each a thin plan-then-apply shell over a pure planning core (`kernel/scheme/mutate.ts`) that reuses `obsidian_move_notes`'s own `moveOne` primitive rather than re-implementing it, so a move made through these inherits the same link-healing guarantee. `dry_run` is mandatory (no default) on all three:
+
+- **`obsidian_assign_address`** — `{path, scope, scheme?, dry_run}` → moves the note into `scope`, assigning it the next free address the scope's own grammar computes (the same answer `obsidian_next_address` would give for that scope right now); never overwrites, since planning always targets a free address.
+- **`obsidian_refile_address`** — `{path, dry_run}` → moves the note to the folder its own address says it belongs in — the fix for `obsidian_expected_location`'s `placed: false`; already-correct reports `already_correct: true` with no move.
+- **`obsidian_renumber_address`** — `{path, to_address, scheme?, dry_run, on_occupied, displace_to_address?}` → moves the note to a specific target address `to_address`; if occupied, `on_occupied` (`"fail"` default / `"auto"` / `"manual"`) decides whether to refuse or displace the occupant (to its own scope's next free slot, or to `displace_to_address`) — the occupant's move always runs before the source note's own.
+
+These three cannot register through the [module registry](modules.md) (its gate refuses any tool whose `readOnlyHint !== true`), so — like `obsidian_move_notes`/`obsidian_repoint_link` — they register directly in `server.ts`. They share the same allowlist discipline as the read tools above: a hidden note can be neither read as "what's there" nor written to.
+
 ## Link health
 
 Links are handled in two places, and the split is deliberate.
