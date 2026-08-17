@@ -84,6 +84,14 @@ describe("snippetNameRefusal", () => {
     "back`tick",
     "nul\u0000byte",
     "x".repeat(120),
+    // Windows reserved device names — CON.css targets a device on Windows,
+    // even with the extension, so the containment claim would crack there.
+    "CON",
+    "con",
+    "con.dark",
+    "NUL",
+    "com1",
+    "LPT9",
   ];
   for (const name of REFUSED) {
     test(`REFUSES ${JSON.stringify(name)}`, () => {

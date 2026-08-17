@@ -22,6 +22,16 @@
 //     vault-global config territory, not a note path the allowlist could scope.
 //     The read tools stay available (snippet CSS is not note content and names
 //     no note paths, so there is no note-tree oracle to leak).
+//   - DECIDED, not unnoticed: a session that wrote a snippet may also ENABLE it
+//     (write + toggle, no human gate between them). Enabled CSS shapes what the
+//     app renders and can reference remote resources (url(...) in
+//     @font-face/background-image), which is a different surface from a note
+//     write. Under this repo's threat model (agents are fallible, not
+//     adversarial — the rails catch honest mistakes) that is an accepted trade
+//     for a working styling workflow: both calls are journaled, read-only mode
+//     blocks both, and a human can disable any snippet in Settings → Appearance
+//     at a glance. If a deployment wants a human gate here, read-only mode or
+//     the path allowlist (which refuses both mutators) already provide one.
 //
 // Preferred over the CLI's snippet:enable/snippet:disable because we ARE inside
 // Obsidian: the app API is direct, structured, and needs no subprocess. API
@@ -51,6 +61,12 @@ const RW_TOGGLE = { readOnlyHint: false, destructiveHint: false, idempotentHint:
 // a ".." SEGMENT would need a separator, which the grammar excludes).
 const SNIPPET_NAME_RE = /^[A-Za-z0-9_-][A-Za-z0-9 ._-]{0,99}$/;
 
+// Windows reserved device names: on Windows, `CON.css` (the reservation holds
+// even with an extension) targets a device, not a file in the snippets folder —
+// a crack in "confined to .obsidian/snippets/<name>.css" on that platform. The
+// check is on the name's first dot-segment, case-insensitive.
+const WINDOWS_RESERVED_RE = /^(con|prn|aux|nul|com\d|lpt\d)$/i;
+
 /**
  * The reason a snippet name is refused, or null when it is safe. Fail closed:
  * the name becomes the filename `<snippets folder>/<name>.css`, so anything
@@ -74,6 +90,9 @@ export function snippetNameRefusal(name: string): string | null {
   }
   if (name.toLowerCase().endsWith(".css")) {
     return `snippet name '${name}' should not carry the .css extension — it is added automatically`;
+  }
+  if (WINDOWS_RESERVED_RE.test(name.split(".")[0])) {
+    return `snippet name '${name}' is a reserved device name on Windows — pick another name`;
   }
   return null;
 }

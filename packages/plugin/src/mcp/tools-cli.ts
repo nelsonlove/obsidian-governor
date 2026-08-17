@@ -897,8 +897,8 @@ export function registerCliTools(
         "obsidian_base_create (bases), obsidian_snippets_list / obsidian_snippet_read / obsidian_snippet_write / " +
         "obsidian_snippet_toggle (CSS snippets), obsidian_plugin_install / obsidian_plugin_uninstall (plugin management) — " +
         "they take typed arguments, return structured data, and are path-scopable where this proxy is not. " +
-        "Covers everything the CLI exposes that has no dedicated obsidian_* tool: file history (history, history:list, history:restore, diff), " +
-        "themes (themes, theme:set, theme:install), snippets, plugin management (plugin:install, plugin:uninstall), bases, publish, and more. " +
+        "This proxy covers the LONG TAIL the dedicated tools don't: themes (themes, theme:set, theme:install), " +
+        "history:list (files with history), history:restore (default-denied — see below), publish, sync, tasks, tabs, and more. " +
         "Discover commands with {command:'help'}; get a command's parameters with {command:'help', params:{command:'<name>'}}. " +
         "Params become key=value CLI arguments; flags are passed verbatim (e.g. ['--json']). " +
         "Output is the CLI's raw stdout/stderr plus exit_code — non-zero exits return isError with the same structure. " +

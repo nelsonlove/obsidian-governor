@@ -263,6 +263,10 @@ export function registerCliDedicatedTools(
             "obsidian_plugin_install is disabled while a path allowlist is active: a plugin install cannot be path-scoped."
           );
         }
+        // Deny list before the danger gate — the proxy's ordering, so a command
+        // both policy-denied and dangerous refuses identically on both surfaces.
+        const denied = cliCommandRefusal(DEDICATED_CLI_COMMANDS.obsidian_plugin_install, settings.cliPolicy);
+        if (denied) return codedError("cli_denied", denied);
         if (!settings.allowDangerousCli) return dangerRefusal(DEDICATED_CLI_COMMANDS.obsidian_plugin_install);
         return await runPinned(
           DEDICATED_CLI_COMMANDS.obsidian_plugin_install,
@@ -299,6 +303,9 @@ export function registerCliDedicatedTools(
             "obsidian_plugin_uninstall is disabled while a path allowlist is active: a plugin uninstall cannot be path-scoped."
           );
         }
+        // Deny list before the danger gate — the proxy's ordering (see install).
+        const denied = cliCommandRefusal(DEDICATED_CLI_COMMANDS.obsidian_plugin_uninstall, settings.cliPolicy);
+        if (denied) return codedError("cli_denied", denied);
         if (!settings.allowDangerousCli) return dangerRefusal(DEDICATED_CLI_COMMANDS.obsidian_plugin_uninstall);
         // Same self-preservation rule as obsidian_plugin_toggle's disable
         // branch: removing vault-mcp would sever every connected session.

@@ -208,6 +208,17 @@ describe("dedicated tools — command policy deny list", () => {
     assert.match(res.content[0].text, /cli_denied/);
     assert.equal(calls.length, 0);
   });
+
+  test("deny beats the danger gate — same ordering as the proxy", async () => {
+    // Danger gate CLOSED and the command denied: the refusal must be the
+    // policy's cli_denied, exactly as the raw proxy orders its checks.
+    const { server, calls } = build({ cliPolicy: { deny: ["plugin:uninstall"], allowOpaque: [] } });
+    const res = await server.tools.get("obsidian_plugin_uninstall").handler({ plugin_id: "dataview" });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /Error \[cli_denied\]/);
+    assert.ok(!/dangerous/.test(res.content[0].text));
+    assert.equal(calls.length, 0);
+  });
 });
 
 // ── .obsidian / traversal territory stays unreachable ─────────────────────────

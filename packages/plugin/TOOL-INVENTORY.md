@@ -168,7 +168,10 @@ is sanitized so it cannot escape that folder; enable/disable goes through the
 app API, never by editing config files). The two mutating tools refuse while a
 path allowlist is active (a snippet is vault-global config and cannot be
 path-scoped) and ride the guarded registrar (read-only mode, queue, journal).
-CSS is not frontmatter, so there is no accept surface here.
+CSS is not frontmatter, so there is no accept surface here. A session may
+write a snippet AND enable it (no human gate between the two) — a decided
+trade under the fallible-not-adversarial threat model: both calls are
+journaled, and read-only mode or an allowlist blocks both mutators.
 
 | Tool name | R/W | Description |
 |---|---|---|
