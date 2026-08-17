@@ -425,4 +425,24 @@ describe("runCli --rebaseline: writes sidecar + appends trend", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  test("a corrupt existing sidecar ABORTS the rebaseline before the baseline is rewritten", async () => {
+    const root = await vault();
+    const baselinePath = path.join(root, "baseline.md");
+    await writeFile(baselinePath, "# Conformance baseline\n");
+    const before = await readFile(baselinePath, "utf8");
+    // Plant a corrupt sidecar next to the baseline.
+    await writeFile(sidecarPathFor(baselinePath), "{ not valid json");
+    try {
+      await withCleanEnv(async () => {
+        await assert.rejects(
+          runCli([`--root=${root}`, `--baseline=${baselinePath}`, "--no-legacy-packs", "--rebaseline"]),
+        );
+        // The baseline note must be untouched — the strict parse runs first.
+        assert.equal(await readFile(baselinePath, "utf8"), before);
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
