@@ -23,7 +23,7 @@ import { runEngine, ENGINE_ID } from "./engine.js";
 import { vocabPack, schemePack, structurePack, portPack, stePack, driftPack } from "./packs/index.js";
 import { vaultConventionsFrom } from "./vault-conventions.js";
 import { parseBaseline, renderBaseline, ratchet, type RatchetResult } from "./ratchet.js";
-import type { Finding } from "./finding.js";
+import { parseKey, type Finding } from "./finding.js";
 import type { RulePack } from "./rule-pack.js";
 
 export interface RunOpts {
@@ -175,7 +175,10 @@ export function excludedRootRefusal(baselineKeys: Set<string>, excludedRoots: st
   if (!excludedRoots.length) return null;
   const stranded: string[] = [];
   for (const key of baselineKeys) {
-    const target = key.split("|")[2] ?? "";
+    // Split on UNescaped separators and unescape the target — a note path can
+    // legitimately hold a `|` (finding.ts escapes it), which a raw `.split("|")`
+    // would mis-field. `parseKey` is the exact inverse of `findingKey`.
+    const target = parseKey(key).target;
     for (const root of excludedRoots) {
       const r = root.replace(/\/$/, "");
       if (target === r || target.startsWith(r + "/")) {
@@ -208,6 +211,9 @@ export function excludedRootRefusal(baselineKeys: Set<string>, excludedRoots: st
 export function baselinePackIds(baselineKeys: Set<string>): Set<string> {
   const ids = new Set<string>();
   for (const key of baselineKeys) {
+    // Field 0 (the pack id / `script`) is a fixed pack constant — it never
+    // holds a `|` or the `\` escape — so a raw split on the first separator is
+    // already the unescaped value; no `parseKey` needed here.
     const id = key.split("|")[0];
     if (id) ids.add(id);
   }
