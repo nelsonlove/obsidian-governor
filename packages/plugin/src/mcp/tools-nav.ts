@@ -43,10 +43,16 @@ function own(map: unknown, key: string): unknown {
  * A plain adapter read, so the tool stays read-only — no `loadManifests()`,
  * which would mutate host state from inside a `readOnlyHint: true` handler.
  */
-async function diskManifestVersion(app: App, dir: unknown): Promise<string | null> {
-  if (typeof dir !== "string" || !dir) return null;
+async function diskManifestVersion(app: App, id: string, dir: unknown): Promise<string | null> {
+  // `dir` is vault-relative (".obsidian/plugins/<folder>") and the folder need
+  // not equal the id — BRAT installs and hand-renamed folders diverge — so the
+  // manifest's own dir is authoritative. It is optional in the typings, and the
+  // fallback matches main.ts's loadInstallId: without one, an unset dir would
+  // make installed_version null for EVERY plugin and stale permanently false,
+  // which is the quiet no-op this whole change exists to remove.
+  const folder = typeof dir === "string" && dir ? dir : `${app.vault.configDir}/plugins/${id}`;
   try {
-    const raw = await app.vault.adapter.read(`${dir}/manifest.json`);
+    const raw = await app.vault.adapter.read(`${folder}/manifest.json`);
     const v = JSON.parse(raw)?.version;
     return typeof v === "string" ? v : null;
   } catch {
@@ -81,7 +87,7 @@ async function pluginState(app: App, id: string) {
   const instance = (own(plugins?.plugins, id) ?? null) as any;
   const running: string | null = instance?.manifest?.version ?? null;
   const cached: string | null = manifest?.version ?? null;
-  const installed: string | null = await diskManifestVersion(app, manifest?.dir);
+  const installed: string | null = await diskManifestVersion(app, id, manifest?.dir);
   return {
     id,
     name: manifest?.name ?? instance?.manifest?.name ?? id,
@@ -483,7 +489,8 @@ export function registerNavTools(server: McpServer, app: App, ctx: ServerCtx) {
 
   // ── obsidian_plugin_info ────────────────────────────────────────────────────
   // Answers "what is actually RUNNING", which `obsidian_environment_info` cannot:
-  // that reports Obsidian's cached manifests. The two disagree for as long as a
+  // that returns an id list (`enabledPlugins`) with no versions in it at all.
+  // Running and on-disk disagree for as long as a
   // rebuilt plugin sits unloaded — and a symlinked dev build never touches the
   // folder Obsidian watches, so nothing closes the gap on its own. Exposing the
   // gap is the point of the tool; `obsidian_plugin_reload` below is how you
@@ -492,15 +499,16 @@ export function registerNavTools(server: McpServer, app: App, ctx: ServerCtx) {
   server.registerTool(
     "obsidian_plugin_info",
     {
-      title: "Community plugin state: loaded vs installed",
+      title: "Community plugin state: running vs on-disk vs cached",
       description:
         "Report community plugin state. With plugin_id, one plugin; without it, every installed plugin. " +
         "Each entry is {id, name, enabled, loaded, version, installed_version, cached_version, stale, author, description, dir}. " +
         "Three versions that can disagree: `version` is what the loaded instance is RUNNING (null when not loaded), " +
         "`installed_version` is read from manifest.json ON DISK, and `cached_version` is Obsidian's in-memory manifest " +
         "(what its own updater compares against until a restart). `stale` is true when running and on-disk disagree — " +
-        "a rebuild not yet reloaded. Caveat: stale is VERSION-based, so a rebuild that does not bump the version " +
-        "(the usual dev-loop case, and always the case for a symlinked build) is invisible to it.",
+        "a rebuild not yet reloaded. Two caveats: stale is VERSION-based, so a rebuild that does not bump the version " +
+        "(the usual dev-loop case, and always the case for a symlinked build) is invisible to it; and an unreadable or " +
+        "malformed manifest.json also reads as stale:false, so check installed_version is non-null before trusting it.",
       inputSchema: {
         plugin_id: z.string().min(1).optional()
           .describe("Community plugin ID, e.g. 'dataview'. Omit to report every installed plugin."),

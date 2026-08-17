@@ -52,8 +52,14 @@ function fakeApp(specs = {}, { enableFails = false, enableThrows = false, unload
   const loaded = {};
   const enabledPlugins = new Set();
   for (const [id, spec] of Object.entries(specs)) {
+    // `folder` defaults to the id but is settable apart from it: a BRAT install
+    // or a hand-renamed folder makes them diverge, and the manifest's own `dir`
+    // is what must be used. A fake that hard-wired the id would let a refactor
+    // rebuilding the path from the id pass every test and return null in
+    // production for every mismatched folder.
     manifests[id] = { id, name: spec.name ?? id, version: spec.installed, author: spec.author ?? null,
-                      description: spec.description ?? null, dir: `.obsidian/plugins/${id}` };
+                      description: spec.description ?? null,
+                      dir: spec.dir === null ? undefined : (spec.dir ?? `.obsidian/plugins/${spec.folder ?? id}`) };
     if (spec.enabled !== false) enabledPlugins.add(id);
     if (spec.running !== undefined) {
       loaded[id] = { manifest: { id, name: spec.name ?? id, version: spec.running } };
@@ -98,15 +104,20 @@ function fakeApp(specs = {}, { enableFails = false, enableThrows = false, unload
   // manifest.json.
   const adapter = {
     async read(p) {
-      const id = Object.keys(specs).find((k) => p === `.obsidian/plugins/${k}/manifest.json`);
-      if (id === undefined) throw new Error("ENOENT");
+      // Resolve by the manifest's own dir — the same lookup production makes —
+      // plus the configDir fallback for a manifest carrying no dir.
+      const id = Object.keys(specs).find((k) => {
+        const dir = manifests[k]?.dir ?? `.obsidian/plugins/${k}`;
+        return p === `${dir}/manifest.json`;
+      });
+      if (id === undefined) throw new Error(`ENOENT: ${p}`);
       const spec = specs[id];
       if (spec.diskUnreadable) throw new Error("ENOENT");
       if (spec.diskMalformed) return "{not json";
       return JSON.stringify({ id, version: spec.disk ?? spec.installed });
     },
   };
-  return { app: { plugins, vault: { adapter } }, calls };
+  return { app: { plugins, vault: { adapter, configDir: ".obsidian" } }, calls };
 }
 
 function nav(app) {
@@ -203,6 +214,31 @@ describe("obsidian_plugin_info", () => {
     assert.equal(p.installed_version, "0.6.5-nl.1", "read from disk, not from the cache");
     assert.equal(p.cached_version, "0.6.5", "what Obsidian's own updater still compares against");
     assert.equal(p.stale, true, "computing this from cached_version would have said false");
+  });
+
+  test("the folder need not be named after the plugin id — the manifest's own dir wins", async () => {
+    // BRAT installs and hand-renamed folders diverge from the id. Rebuilding the
+    // path from the id would return null here while passing every other test.
+    const { app } = fakeApp({ tw: { installed: "1.0.0", running: "1.0.0", folder: "tag-wrangler-beta", disk: "1.1.0" } });
+    const res = await nav(app).call("obsidian_plugin_info", { plugin_id: "tw" });
+
+    const p = res.structuredContent.plugin;
+    assert.equal(p.dir, ".obsidian/plugins/tag-wrangler-beta");
+    assert.equal(p.installed_version, "1.1.0", "read from the folder dir NAMES, not from the id");
+    assert.equal(p.stale, true);
+  });
+
+  test("a manifest with no dir falls back to configDir/plugins/<id> rather than giving up", async () => {
+    // dir is optional in the Obsidian typings. Returning null instead of falling
+    // back would make installed_version null for EVERY plugin and stale
+    // permanently false — the quiet no-op this change exists to remove.
+    const { app } = fakeApp({ mb: { installed: "1.0.0", running: "1.0.0", dir: null, disk: "2.0.0" } });
+    const res = await nav(app).call("obsidian_plugin_info", { plugin_id: "mb" });
+
+    const p = res.structuredContent.plugin;
+    assert.equal(p.dir, null, "nothing to report — the manifest had none");
+    assert.equal(p.installed_version, "2.0.0", "but the disk was still read, via the fallback path");
+    assert.equal(p.stale, true);
   });
 
   test("an unreadable manifest.json is absent, never guessed — and absent is not stale", async () => {
