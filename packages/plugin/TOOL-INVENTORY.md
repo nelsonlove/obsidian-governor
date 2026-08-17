@@ -6,10 +6,10 @@ The FULL set is locked by `tests/tool-inventory.test.mjs`: the names documented
 here must equal the names registered in source, both directions, or the suite
 fails (the fs-expressible and scheme sub-locks from #25/task-6 still apply).
 
-**Count summary:** 17 fs-expressible + 35 always-live + 10 module-mounted
-(default enabled, settings-toggleable) = **62 base** tools, plus up to
+**Count summary:** 17 fs-expressible + 37 always-live + 10 module-mounted
+(default enabled, settings-toggleable) = **64 base** tools, plus up to
 6 conditional integration tools and 1 CLI-conditional tool (`obsidian_cli`)
-= **up to 69 total**.  The 3 Code Mode meta-tools are an alternative
+= **up to 71 total**.  The 3 Code Mode meta-tools are an alternative
 per-connection surface and are not counted (a session sees one surface or the
 other, never both).  Not counted here (outside the locked `obsidian_*` family,
 default-disabled modules): the `skills` (`vault_skills_*`), `provenance`
@@ -18,11 +18,13 @@ module surfaces — see Section 2c and their own module docs.
 
 Cross-check: the observed live set with Dataview + Templater + Metadata Menu
 loaded (but NOT Omnisearch, no CLI binary) reported 44 tools — an observation
+that PREDATES the kernel-v0 tools (locks ×4, uid ×1, links ×1), the vocab
 module (×4), the scheme module (×6), `obsidian_write_notes`,
 `obsidian_pending_review`, `obsidian_plugin_info`, `obsidian_plugin_reload`,
-and the scheme write surface (`obsidian_assign_address`,
-`obsidian_refile_address`, `obsidian_renumber_address`); the same plugin set
-today registers 17 + 35 + 10 + 6 = **68**.
+the scheme write surface (`obsidian_assign_address`,
+`obsidian_refile_address`, `obsidian_renumber_address`), and subsequent
+`main` additions (in-Obsidian dev tool-runner, conformance debt register);
+the same plugin set today registers 17 + 37 + 10 + 6 = **70**.
 
 ---
 
@@ -55,7 +57,7 @@ against its `FilesystemBackend`.
 
 ---
 
-## Section 2 — live-only, always registered (35)
+## Section 2 — live-only, always registered (37)
 
 These tools depend on live Obsidian `app.*` state and cannot be expressed on the
 filesystem.  They are unconditionally registered on every `buildMcpServer` call,
@@ -126,7 +128,7 @@ read tools; `dry_run` never mutates.
 | `obsidian_open_bookmark` | Open a bookmark by title |
 | `obsidian_open_workspace` | Load a named workspace layout |
 | `obsidian_periodic_note` | Open/create daily-weekly-monthly note |
-| `obsidian_plugin_info` | Community plugin state: loaded version vs installed manifest |
+| `obsidian_plugin_info` | Community plugin state: running vs on-disk vs Obsidian's cached manifest version |
 | `obsidian_plugin_reload` | Reload one community plugin (disable + enable) so a rebuild takes effect |
 | `obsidian_plugin_toggle` | Enable or disable a community plugin |
 | `obsidian_save_workspace` | Save the current layout as a named workspace |
@@ -152,6 +154,13 @@ read tools; `dry_run` never mutates.
 | Tool name | Description |
 |---|---|
 | `obsidian_check_links` | Dangling links + duplicated uids + uid coverage, report-only |
+
+### `tools-conformance-debt.ts` — `registerConformanceDebtTools` + `registerConformanceDebtRenderTool` (2 tools, issue #211)
+
+| Tool name | Description |
+|---|---|
+| `obsidian_conformance_debt` | Accepted conformance-debt register: carried items (script/check/target/kind + sidecar metadata + ageDays) with burn-down counts (carried/cleared/new), a stale list, and a budget status; filter by folder/pack/check/kind and group counts. Read-only, whole-vault; never mints acceptance (that is the human-run `--rebaseline`) |
+| `obsidian_conformance_debt_render` | Materialize the debt report as a generated register note (`Conformance debt.md`, default beside the baseline): summary header, carried-debt table (each row wikilinked to the offending note, stale + high-priority first), and a cleared/prune section. Mutating (queue/journal via the guarded registrar); frontmatter is a `generated`/`generator` derivation stamp only — the accept-guard is run over the rendered text; refuses under an active path allowlist unless the register path is inside it |
 
 ---
 
@@ -298,7 +307,7 @@ it stood then:
 - (`obsidian_cli` additionally registers when the CLI binary is installed)
 
 **No tool in the observed-44 list was unaccounted for in source.**  Under the
-same plugin set the current surface registers 67 (see the count summary); the
+same plugin set the current surface registers 69 (see the count summary); the
 source↔doc lock in `tests/tool-inventory.test.mjs` keeps this file current, and
 any future live observation should be checked against that lock rather than
 this historical snapshot.
@@ -319,6 +328,7 @@ this historical snapshot.
 | `packages/plugin/src/mcp/tools-locks.ts` | `registerLockTools` | 4 always-live |
 | `packages/plugin/src/mcp/tools-uid.ts` | `registerUidTools` | 1 always-live |
 | `packages/plugin/src/mcp/tools-links.ts` | `registerLinkTools` | 1 always-live |
+| `packages/plugin/src/mcp/tools-conformance-debt.ts` | `registerConformanceDebtTools` + `registerConformanceDebtRenderTool` | 2 always-live |
 | `packages/plugin/src/mcp/tools-write-notes.ts` | `registerWriteNotesTool` | 1 always-live |
 | `packages/plugin/src/mcp/tools-pending-review.ts` | `registerPendingReviewTools` | 1 always-live |
 | `packages/plugin/src/mcp/tools-scheme.ts` | `registerSchemeTools` (via `modules-mount.ts`) | 6 module-mounted |

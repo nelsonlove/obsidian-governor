@@ -99,6 +99,33 @@ export function describeTool(registry: CapturedRegistry, name: string) {
 }
 
 /**
+ * Invoke a captured tool by name: validate the args against the captured zod
+ * shape, then run the GUARDED handler (the guard/queue/journal wrapper travels
+ * with the captured handler — see makeCaptureRegister). This is the single
+ * invocation path over a captured registry: `obsidian_call_tool` delegates
+ * here, and the in-Obsidian dev tool-runner (src/tool-runner.ts) calls it
+ * directly — so a runner call takes byte-for-byte the same route an MCP
+ * code-mode call takes, guard included.
+ */
+export async function callCapturedTool(
+  registry: CapturedRegistry,
+  name: string,
+  args: Record<string, unknown> | undefined,
+  extra: unknown
+): Promise<any> {
+  const t = registry.get(name);
+  if (!t) return fail(new Error(`unknown tool '${name}' — use obsidian_search_tools to list available tools`));
+  const parsed = z.object(t.def.inputSchema ?? {}).safeParse(args ?? {});
+  if (!parsed.success) {
+    const issues = parsed.error.issues
+      .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
+      .join("; ");
+    return fail(new Error(`invalid args for '${name}': ${issues} — see obsidian_describe_tool`));
+  }
+  return t.handler(parsed.data, extra);
+}
+
+/**
  * Register the three meta-tools. `register` defaults to server.registerTool
  * but buildMcpServer passes the ORIGINAL (pre-monkey-patch) registerTool so
  * the meta-tools bypass both the guard wrapper and the capture registry —
@@ -161,17 +188,7 @@ export function registerCodeModeTools(
       // meta-tool itself is a dispatcher, honestly annotated as possibly-mutating.
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     },
-    async (args: { name: string; args?: Record<string, unknown> }, extra: unknown) => {
-      const t = registry.get(args.name);
-      if (!t) return fail(new Error(`unknown tool '${args.name}' — use obsidian_search_tools to list available tools`));
-      const parsed = z.object(t.def.inputSchema ?? {}).safeParse(args.args ?? {});
-      if (!parsed.success) {
-        const issues = parsed.error.issues
-          .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
-          .join("; ");
-        return fail(new Error(`invalid args for '${args.name}': ${issues} — see obsidian_describe_tool`));
-      }
-      return t.handler(parsed.data, extra);
-    }
+    async (args: { name: string; args?: Record<string, unknown> }, extra: unknown) =>
+      callCapturedTool(registry, args.name, args.args, extra)
   );
 }
