@@ -60,6 +60,15 @@ export interface SchemeWriteToolsCtx {
   getSettings?: () => GuardSettings & { schemes?: SchemeInstanceConfig[] };
 }
 
+// Intentionally-duplicated one-liner: `@vault-mcp/core`'s `fail()` does this
+// same `err instanceof Error ? err.message : String(err)` extraction
+// internally, but doesn't export it standalone — it's folded straight into
+// building fail()'s own response shape. This helper needs just the bare
+// message text to INTERPOLATE into the "vault is in an inconsistent state"
+// error below, not a whole response object, so reusing fail() here isn't a
+// fit; exporting a new standalone helper from core for one call site in one
+// other package isn't worth the cross-package churn. Kept as its own
+// (trivially small) copy rather than left unexplained.
 function moveErrorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
@@ -79,7 +88,7 @@ export function registerSchemeWriteTools(server: McpServer, app: App, ctx: Schem
   // read-side reporting: a read can afford to just say so, but a write must
   // refuse outright rather than operate on territory the instance disclaims.
   const excludedFromInstance = (path: string, instance: SchemeInstance) =>
-    fail(new Error(`note '${path}' is excluded from scheme instance "${instance.id}"'s territory (excludedRoots)`));
+    codedError("excluded_root", `note '${path}' is excluded from scheme instance "${instance.id}"'s territory (excludedRoots)`);
   /** First path in `paths` that fails `isVisible`, or null if all pass. */
   const firstHidden = (paths: string[]): string | null => {
     for (const p of paths) {
@@ -87,6 +96,16 @@ export function registerSchemeWriteTools(server: McpServer, app: App, ctx: Schem
     }
     return null;
   };
+  // Static, argument-only check — matches obsidian_move_notes's precedent
+  // (validateMoves in helpers.ts rejects a non-.md batch item BEFORE any move
+  // logic runs). Without this, `titleOf` only strips a trailing `.md$` and
+  // does nothing for any other extension, so a call on e.g. "Foo.txt" would
+  // silently compute a nonsensical double-extension destination
+  // ("… Foo.txt.md") instead of refusing outright — and on `dry_run: false`
+  // the problem would only surface later, deep inside `moveOne`, as an
+  // inconsistent "source must end in .md" throw. Run this FIRST, right after
+  // argument parsing, before any allowlist/instance/planning logic.
+  const notMd = (path: string) => (path.endsWith(".md") ? null : fail(new Error("path must end in .md")));
 
   // ── obsidian_assign_address ─────────────────────────────────────────────
   server.registerTool(
@@ -113,6 +132,9 @@ export function registerSchemeWriteTools(server: McpServer, app: App, ctx: Schem
     },
     async ({ path, scope, scheme, dry_run }) => {
       try {
+        const mdError = notMd(path);
+        if (mdError) return mdError;
+
         const registry = ctx.registry();
         const pick = pickInstance(registry, scheme);
         if ("unavailable" in pick) return codedError("scheme_unavailable", pick.unavailable);
@@ -172,6 +194,9 @@ export function registerSchemeWriteTools(server: McpServer, app: App, ctx: Schem
     },
     async ({ path, dry_run }) => {
       try {
+        const mdError = notMd(path);
+        if (mdError) return mdError;
+
         if (visible([path]).length === 0) return outOfAllowlist(path);
 
         const registry = ctx.registry();
@@ -181,17 +206,37 @@ export function registerSchemeWriteTools(server: McpServer, app: App, ctx: Schem
         // looking for a non-excluding instance instead, and remember that at
         // least one instance turned it away so the eventual refusal (if no
         // instance claims it) can say why.
-        let instance = null;
+        //
+        // Unlike that fall-through, this tool does NOT stop at the first
+        // non-excluding match: it collects EVERY non-excluding instance that
+        // recognizes the address, because this tool (unlike
+        // obsidian_resolve_address/obsidian_expected_location) takes no
+        // `scheme` argument to disambiguate a genuine multi-instance overlap
+        // — silently picking whichever instance iterated first would compute
+        // the move against the wrong instance's config with no way for the
+        // caller to say otherwise. Matches the discipline
+        // resolveBareOrRef/resolveAddressAndInstance (tools-scheme.ts) already
+        // apply to the `address` argument direction.
         let excludedByAny = false;
+        const matches: SchemeInstance[] = [];
         for (const inst of registry.instances()) {
           if (!inst.provider.addressOf(path)) continue;
           if (excludeRoots([path], inst.excludedRoots).length === 0) {
             excludedByAny = true;
             continue;
           }
-          instance = inst;
-          break;
+          matches.push(inst);
         }
+        if (matches.length > 1) {
+          return codedError(
+            "scheme_ambiguous",
+            `note's address is recognized by ${matches.length} scheme instances (${matches
+              .map((i) => i.id)
+              .join(", ")}) — obsidian_refile_address takes no \`scheme\` argument to disambiguate; use ` +
+              "obsidian_renumber_address with an explicit `scheme` instead"
+          );
+        }
+        const instance = matches[0] ?? null;
         if (!instance) {
           return fail(
             new Error(
@@ -273,6 +318,9 @@ export function registerSchemeWriteTools(server: McpServer, app: App, ctx: Schem
     },
     async ({ path, to_address, scheme, dry_run, on_occupied, displace_to_address }) => {
       try {
+        const mdError = notMd(path);
+        if (mdError) return mdError;
+
         const registry = ctx.registry();
         const pick = pickInstance(registry, scheme);
         if ("unavailable" in pick) return codedError("scheme_unavailable", pick.unavailable);
@@ -304,7 +352,7 @@ export function registerSchemeWriteTools(server: McpServer, app: App, ctx: Schem
           on_occupied as OnOccupied,
           parsedDisplaceTo
         );
-        if (!outcome.ok) return fail(new Error(outcome.error));
+        if (!outcome.ok) return outcome.code ? codedError(outcome.code, outcome.error) : fail(new Error(outcome.error));
         const { result } = outcome;
 
         // Every computed path — each step's `to`, plus (for a displaced
