@@ -6,10 +6,13 @@ The FULL set is locked by `tests/tool-inventory.test.mjs`: the names documented
 here must equal the names registered in source, both directions, or the suite
 fails (the fs-expressible and scheme sub-locks from #25/task-6 still apply).
 
-**Count summary:** 17 fs-expressible + 37 always-live + 10 module-mounted
-(default enabled, settings-toggleable) = **64 base** tools, plus up to
-6 conditional integration tools and 1 CLI-conditional tool (`obsidian_cli`)
-= **up to 71 total**.  The 3 Code Mode meta-tools are an alternative
+**Count summary:** 17 fs-expressible + 41 always-live + 10 module-mounted
+(default enabled, settings-toggleable) = **68 base** tools, plus up to
+6 conditional integration tools, 5 CLI-binary-conditional dedicated tools
+(`obsidian_note_history`, `obsidian_note_diff`, `obsidian_base_create`,
+`obsidian_plugin_install`, `obsidian_plugin_uninstall`), and 1 settings-gated
+CLI-conditional tool (`obsidian_cli`, default OFF)
+= **up to 80 total**.  The 3 Code Mode meta-tools are an alternative
 per-connection surface and are not counted (a session sees one surface or the
 other, never both).  Not counted here (outside the locked `obsidian_*` family,
 default-disabled modules): the `skills` (`vault_skills_*`), `provenance`
@@ -23,8 +26,9 @@ module (×4), the scheme module (×6), `obsidian_write_notes`,
 `obsidian_pending_review`, `obsidian_plugin_info`, `obsidian_plugin_reload`,
 the scheme write surface (`obsidian_assign_address`,
 `obsidian_refile_address`, `obsidian_renumber_address`), and subsequent
-`main` additions (in-Obsidian dev tool-runner, conformance debt register);
-the same plugin set today registers 17 + 37 + 10 + 6 = **70**.
+`main` additions (in-Obsidian dev tool-runner, conformance debt register,
+the snippet tools);
+the same plugin set today registers 17 + 41 + 10 + 6 = **74**.
 
 ---
 
@@ -57,7 +61,7 @@ against its `FilesystemBackend`.
 
 ---
 
-## Section 2 — live-only, always registered (37)
+## Section 2 — live-only, always registered (41)
 
 These tools depend on live Obsidian `app.*` state and cannot be expressed on the
 filesystem.  They are unconditionally registered on every `buildMcpServer` call,
@@ -154,6 +158,24 @@ read tools; `dry_run` never mutates.
 | Tool name | Description |
 |---|---|
 | `obsidian_check_links` | Dangling links + duplicated uids + uid coverage, report-only |
+
+### `tools-snippets.ts` — `registerSnippetTools` (4 tools)
+
+CSS snippet management over the live `app.customCss` API — the one CONSIDERED
+exception to the rule that agent surfaces never touch `.obsidian` territory,
+scoped to exactly `.obsidian/snippets/*.css` and nothing else (the snippet name
+is sanitized so it cannot escape that folder; enable/disable goes through the
+app API, never by editing config files). The two mutating tools refuse while a
+path allowlist is active (a snippet is vault-global config and cannot be
+path-scoped) and ride the guarded registrar (read-only mode, queue, journal).
+CSS is not frontmatter, so there is no accept surface here.
+
+| Tool name | R/W | Description |
+|---|---|---|
+| `obsidian_snippets_list` | R | Snippets with enabled state, from the live customCss registry |
+| `obsidian_snippet_read` | R | One snippet's CSS text |
+| `obsidian_snippet_write` | W | Create/overwrite `.obsidian/snippets/<name>.css` (name sanitized; new snippets start disabled) |
+| `obsidian_snippet_toggle` | W | Enable/disable one snippet via `customCss.setCssEnabledStatus` |
 
 ### `tools-conformance-debt.ts` — `registerConformanceDebtTools` + `registerConformanceDebtRenderTool` (2 tools, issue #211)
 
@@ -263,12 +285,35 @@ list stale/uninstalled entries).  New tools appear on session reconnect.
 | `obsidian_fileclass_schema` | Metadata Menu | `metadata-menu` |
 | `obsidian_fileclass_insert_fields` | Metadata Menu | `metadata-menu` |
 
-### Conditional on the official Obsidian CLI binary (1)
+### Conditional on the official Obsidian CLI binary (5)
 
-`tools-cli.ts` — `registerCliTools`. Registered only when the official
-Obsidian CLI binary is installed (`/usr/local/bin/obsidian`,
-`/opt/homebrew/bin/obsidian`, or `/usr/bin/obsidian`); `obsidian_doctor`
-reports the detected path as `cli_binary`.
+`tools-cli-dedicated.ts` — `registerCliDedicatedTools`. Dedicated tools over
+PINNED CLI subcommands (the `obsidian_cli` decomposition): typed args, the
+same transport machinery (vault pinned via `buildCliArgs`, shared exec seam,
+settings deny list via `cliCommandRefusal`, `.obsidian`/`..` param refusal).
+Registered only when the official Obsidian CLI binary is installed
+(`/usr/local/bin/obsidian`, `/opt/homebrew/bin/obsidian`, or
+`/usr/bin/obsidian`); `obsidian_doctor` reports the detected path as
+`cli_binary`. `history:restore` is deliberately NOT promoted to a tool —
+restoring a prior version can reinstate an accepted value a human revoked, and
+the restored bytes cannot be scanned pre-exec (#110).
+
+| Tool name | R/W | Pinned subcommand | Description |
+|---|---|---|---|
+| `obsidian_note_history` | R | `history` | One note's File Recovery version list; `path` is allowlist-scoped |
+| `obsidian_note_diff` | R | `diff` | List/diff local/sync versions of one note (`from`/`to`/`filter`); `path` is allowlist-scoped |
+| `obsidian_base_create` | W | `base:create` | Create an item in a Bases file; content runs the standard accept scan; refuses under an active allowlist (the landing folder is the base's config, not an argument) |
+| `obsidian_plugin_install` | W | `plugin:install` | DANGEROUS — gated behind "Allow dangerous CLI commands" exactly like the proxy; `openWorldHint: true` (network fetch); installs without enabling |
+| `obsidian_plugin_uninstall` | W | `plugin:uninstall` | DANGEROUS + `destructiveHint: true` — same gate; refuses to uninstall vault-mcp itself |
+
+### Settings-gated raw proxy — conditional on the CLI binary AND the "Raw CLI proxy" setting (1, default OFF)
+
+`tools-cli.ts` — `registerCliTools`. The free-text proxy is DEMOTED behind the
+default-OFF Security › "Raw CLI proxy" toggle: the dedicated tools above cover
+the observed real usage, and the proxy's free-text command string is the root
+of the guard-complexity family (#76/#79/#107/#110/#137/#153). When enabled it
+behaves exactly as before — command policy, danger gate, accept guard and deny
+sets all intact; a toggle takes effect on the next session connect.
 
 | Tool name | Description |
 |---|---|
@@ -304,10 +349,12 @@ it stood then:
 - 22 always-live at the time ✓ (now 33 + 9 module-mounted — see Sections 2/2b)
 - 5 integration (Dataview×2 + Templater×1 + Metadata Menu×2) ✓
 - `obsidian_omnisearch` absent — Omnisearch plugin not loaded ✓
-- (`obsidian_cli` additionally registers when the CLI binary is installed)
+- (the dedicated CLI tools additionally register when the CLI binary is
+  installed, and `obsidian_cli` when the binary is installed AND the
+  default-off "Raw CLI proxy" setting is on)
 
 **No tool in the observed-44 list was unaccounted for in source.**  Under the
-same plugin set the current surface registers 69 (see the count summary); the
+same plugin set the current surface registers 74 (see the count summary); the
 source↔doc lock in `tests/tool-inventory.test.mjs` keeps this file current, and
 any future live observation should be checked against that lock rather than
 this historical snapshot.
@@ -334,6 +381,8 @@ this historical snapshot.
 | `packages/plugin/src/mcp/tools-scheme.ts` | `registerSchemeTools` (via `modules-mount.ts`) | 6 module-mounted |
 | `packages/plugin/src/mcp/tools-vocab.ts` | `registerVocabTools` (via `modules-mount.ts`) | 4 module-mounted |
 | `packages/plugin/src/mcp/tools-health.ts` | `registerHealthTools` (via `modules-mount.ts`) | 2 module-mounted (default-disabled) |
+| `packages/plugin/src/mcp/tools-snippets.ts` | `registerSnippetTools` | 4 always-live |
 | `packages/plugin/src/mcp/tools-integrations.ts` | `registerIntegrationTools` | up to 6 conditional |
-| `packages/plugin/src/mcp/tools-cli.ts` | `registerCliTools` | 1 conditional (CLI binary) |
+| `packages/plugin/src/mcp/tools-cli-dedicated.ts` | `registerCliDedicatedTools` | 5 conditional (CLI binary) |
+| `packages/plugin/src/mcp/tools-cli.ts` | `registerCliTools` | 1 conditional (CLI binary + "Raw CLI proxy" setting, default off) |
 | `packages/plugin/src/mcp/tools-code-mode.ts` | `registerCodeModeTools` | 3 (alternative surface, uncounted) |
