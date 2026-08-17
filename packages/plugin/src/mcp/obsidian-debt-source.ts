@@ -7,9 +7,9 @@
 // feeds is fully unit-tested.
 
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import type { App } from "obsidian";
-import type { DebtSource } from "./tools-conformance-debt.js";
+import type { DebtSource, DebtRegisterSource } from "./tools-conformance-debt.js";
 import type { Finding } from "../conformance/finding.js";
 import { parseSidecar, sidecarPathFor, type DebtSidecar } from "../conformance/debt-sidecar.js";
 import { runConformance, baselineRelFrom, excludedRootsFrom } from "../conformance/cli.js";
@@ -63,6 +63,48 @@ export function obsidianDebtSource(app: App): DebtSource {
     },
     async sidecar(): Promise<DebtSidecar> {
       return parseSidecar(await readOrNull(sidecarPathFor(baselinePath)));
+    },
+  };
+}
+
+/**
+ * The Obsidian `DebtRegisterSource` (issue #211, Part B): the read seams above
+ * plus the register render's write half. Writes go through the VAULT API
+ * (modify/create, the provenance-regen pattern) rather than node:fs, so
+ * Obsidian sees the change immediately and the write behaves like every other
+ * in-band note write. The default register dir is the baseline's own folder —
+ * the sidecar and trend log already live there, and the baseline itself is
+ * never touched.
+ */
+export function obsidianDebtRenderSource(app: App): DebtRegisterSource {
+  const baselineRel = baselineRelFrom(process.env);
+  const dir = posix.dirname(baselineRel);
+  const vault = app.vault as unknown as {
+    getAbstractFileByPath(path: string): unknown;
+    modify(file: unknown, data: string): Promise<void>;
+    create(path: string, data: string): Promise<unknown>;
+    createFolder(path: string): Promise<unknown>;
+  };
+  return {
+    ...obsidianDebtSource(app),
+    defaultRegisterDir(): string {
+      return dir === "." ? "" : dir;
+    },
+    async writeNote(path: string, text: string): Promise<void> {
+      const existing = vault.getAbstractFileByPath(path);
+      if (existing) {
+        await vault.modify(existing, text);
+        return;
+      }
+      const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+      if (parent && !vault.getAbstractFileByPath(parent)) {
+        try {
+          await vault.createFolder(parent);
+        } catch {
+          /* already exists / race — proceed to create */
+        }
+      }
+      await vault.create(path, text);
     },
   };
 }

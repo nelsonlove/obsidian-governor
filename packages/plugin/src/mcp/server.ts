@@ -12,8 +12,8 @@ import { registerLockTools } from "./tools-locks.js";
 import { registerUidTools } from "./tools-uid.js";
 import { registerPendingReviewTools, obsidianPendingReviewSource } from "./tools-pending-review.js";
 import { registerLinkTools, obsidianLinkSource } from "./tools-links.js";
-import { registerConformanceDebtTools } from "./tools-conformance-debt.js";
-import { obsidianDebtSource } from "./obsidian-debt-source.js";
+import { registerConformanceDebtTools, registerConformanceDebtRenderTool } from "./tools-conformance-debt.js";
+import { obsidianDebtRenderSource } from "./obsidian-debt-source.js";
 import { obsidianVocabSource } from "./tools-vocab.js";
 import { obsidianSkillsBackend } from "./tools-skills.js";
 import { obsidianProvenanceBackend } from "./tools-provenance.js";
@@ -210,15 +210,23 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   // Read-only by construction: moves already heal their own links through
   // fileManager.renameFile, so this reports the drift that came from OUTSIDE.
   registerLinkTools(server, obsidianLinkSource(app), ctx);
-  // ── conformance debt register, read-only (issue #211, Part A2) ──────────────
-  // Reads the accepted-debt baseline + metadata sidecar + a live conformance
-  // run and reports the carried debt (burn-down counts, staleness, budget). No
-  // write path and no accept verb: acceptance metadata is minted only at the
-  // human-run --rebaseline, never here. Whole-vault, like obsidian_health.
-  registerConformanceDebtTools(server, obsidianDebtSource(app), {
+  // ── conformance debt register (issue #211, Parts A2 + B) ────────────────────
+  // The READ tool reports the carried debt (baseline + sidecar + live run:
+  // burn-down counts, staleness, budget) — whole-vault, like obsidian_health.
+  // The RENDER tool (Part B) materializes the same report as a generated
+  // register note beside the baseline; it is mutating (readOnlyHint: false), so
+  // it rides the guard-patched registrar (read-only mode, queue, journal) and
+  // refuses under an active allowlist unless the register path is inside it.
+  // Neither has an accept verb: acceptance metadata is minted only at the
+  // human-run --rebaseline, never here, and the rendered note carries only a
+  // generated/generator derivation stamp (accept-guard-checked before writing).
+  const debtSource = obsidianDebtRenderSource(app);
+  const debtCtx = {
     config: ctx.getSettings().modules?.["conformance-debt"]?.config,
     getSettings: () => ctx.getSettings(),
-  });
+  };
+  registerConformanceDebtTools(server, debtSource, debtCtx);
+  registerConformanceDebtRenderTool(server, debtSource, debtCtx);
   // ── official-CLI proxy — conditional on the CLI binary being installed ──────
   // parseYaml is injected for the accept-forbidden guard's content-fence scan;
   // readTemplate for the template guard (create template= / quickadd:run-
