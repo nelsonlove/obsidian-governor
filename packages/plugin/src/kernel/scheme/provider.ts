@@ -154,4 +154,21 @@ export interface ScopeProvider {
    * allocate-capable provider, which scope KINDS the capability applies to.
    */
   allocatable(scope: Scope): { allocatable: boolean; hint?: string };
+
+  /**
+   * The note (if any) among `notes` whose own address equals `addr` (compared
+   * via `format`) — the "what's *there*" counterpart to `nextFree`'s "what's
+   * *free*". First match wins on the pathological case of two notes claiming
+   * the same address (that's a `duplicate_address` finding, not this method's
+   * job to flag). Null when nothing claims it.
+   */
+  occupantOf(addr: Address, notes: string[]): Member | null;
+
+  /**
+   * The note's own title with any leading address token stripped, `.md`
+   * removed — the inverse of `addressOf` (which extracts the token; this
+   * extracts what's left). A note with no address at all ⇒ its whole basename
+   * minus `.md` (nothing to strip).
+   */
+  titleOf(path: string): string;
 }
