@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type App, MarkdownView } from "obsidian";
-import { ok, fail } from "./helpers.js";
+import { ok, fail, codedError } from "./helpers.js";
 import { isVisible } from "../guard.js";
 import type { ServerCtx } from "./tools-core.js";
 
@@ -17,6 +17,37 @@ const RW = { readOnlyHint: false, destructiveHint: false, idempotentHint: false,
 function workspacesPlugin(app: App) {
   // internalPlugins is internal — not in public obsidian types.
   return (app as any).internalPlugins?.getPluginById("workspaces")?.instance ?? null;
+}
+
+/**
+ * One community plugin's state, keeping apart the two versions that can
+ * disagree: `installed_version` is the manifest Obsidian read from disk,
+ * `version` is the manifest the loaded instance carries. A rebuild moves the
+ * first; only a reload moves the second.
+ *
+ * `enabled` (configured to run) and `loaded` (running) are likewise distinct —
+ * `enabledPlugins` can name a configured-but-uninstalled plugin, so any
+ * decision about what is actually there reads `loaded`.
+ */
+function pluginState(app: App, id: string) {
+  // app.plugins.{manifests,plugins,enabledPlugins} are internal — not in public obsidian types.
+  const plugins = (app as any).plugins;
+  const manifest = plugins?.manifests?.[id] ?? null;
+  const instance = plugins?.plugins?.[id] ?? null;
+  const running: string | null = instance?.manifest?.version ?? null;
+  const installed: string | null = manifest?.version ?? null;
+  return {
+    id,
+    name: manifest?.name ?? instance?.manifest?.name ?? id,
+    enabled: plugins?.enabledPlugins?.has?.(id) === true,
+    loaded: instance !== null && instance !== undefined,
+    version: running,
+    installed_version: installed,
+    stale: running !== null && installed !== null && running !== installed,
+    author: manifest?.author ?? null,
+    description: manifest?.description ?? null,
+    dir: manifest?.dir ?? null,
+  };
 }
 
 /** Resolve the "bookmarks" internal plugin instance, or null if not enabled. */
@@ -399,6 +430,97 @@ export function registerNavTools(server: McpServer, app: App, ctx: ServerCtx) {
           await (plugins as any).disablePlugin(plugin_id);
         }
         return ok({ plugin_id, enabled });
+      } catch (e) { return fail(e); }
+    }
+  );
+
+  // ── obsidian_plugin_info ────────────────────────────────────────────────────
+  // Answers "what is actually RUNNING", which `obsidian_environment_info` cannot:
+  // that reports the manifests on disk. The two disagree for as long as a rebuilt
+  // plugin sits unloaded — and a symlinked dev build never touches the folder
+  // Obsidian watches, so nothing closes the gap on its own. Exposing the gap is
+  // the point of the tool; `obsidian_plugin_reload` below is how you close it.
+  server.registerTool(
+    "obsidian_plugin_info",
+    {
+      title: "Community plugin state: loaded vs installed",
+      description:
+        "Report community plugin state. With plugin_id, one plugin; without it, every installed plugin. " +
+        "Each entry is {id, name, enabled, loaded, version, installed_version, stale, author, description, dir}: " +
+        "`version` is what the loaded instance is running (null when not loaded), `installed_version` is the " +
+        "manifest on disk, and `stale` is true when they disagree — a rebuild that has not been reloaded yet.",
+      inputSchema: {
+        plugin_id: z.string().min(1).optional()
+          .describe("Community plugin ID, e.g. 'dataview'. Omit to report every installed plugin."),
+      },
+      annotations: RO,
+    },
+    async ({ plugin_id }) => {
+      try {
+        // app.plugins.manifests is internal — not in public obsidian types.
+        const plugins = (app as any).plugins;
+        if (!plugins) return fail(new Error("community plugins manager not available"));
+        const manifests = plugins.manifests ?? {};
+        if (plugin_id) {
+          if (!manifests[plugin_id]) {
+            return codedError("plugin_not_found", `no community plugin with id '${plugin_id}' is installed`);
+          }
+          return ok({ plugin: pluginState(app, plugin_id) });
+        }
+        const ids = Object.keys(manifests).sort();
+        return ok({ count: ids.length, plugins: ids.map((id) => pluginState(app, id)) });
+      } catch (e) { return fail(e); }
+    }
+  );
+
+  // ── obsidian_plugin_reload ──────────────────────────────────────────────────
+  // Disable + enable, the same pair the Hot Reload plugin uses. Mutating, so it
+  // takes a queue slot and journals `plugin:<id>` through the generic REF_KEYS
+  // fallback, exactly like obsidian_plugin_toggle.
+  server.registerTool(
+    "obsidian_plugin_reload",
+    {
+      title: "Reload one community plugin",
+      description:
+        "Disable then re-enable a community plugin so a rebuilt main.js takes effect, re-reading the " +
+        "manifests first so a bumped version is picked up too. The plugin must already be loaded. " +
+        "Returns {plugin_id, reloaded, version} — the version now running.",
+      inputSchema: {
+        plugin_id: z.string().min(1).describe("Community plugin ID, e.g. 'obsidian-meta-bind-plugin'."),
+      },
+      annotations: RW,
+    },
+    async ({ plugin_id }) => {
+      try {
+        // Reloading the host plugin tears down the connection carrying this
+        // response — same reasoning as obsidian_plugin_toggle's disable refusal.
+        if (plugin_id === "vault-mcp") {
+          return codedError("reload_refused", "refusing to reload vault-mcp via MCP (it hosts this connection); reload it from Obsidian's settings");
+        }
+        // app.plugins.{manifests,plugins,loadManifests,disablePlugin,enablePlugin} are internal.
+        const plugins = (app as any).plugins;
+        if (!plugins) return fail(new Error("community plugins manager not available"));
+        if (!plugins.manifests?.[plugin_id]) {
+          return codedError("plugin_not_found", `no community plugin with id '${plugin_id}' is installed`);
+        }
+        // Gate on the LOADED instance, not enabledPlugins: that set can name a
+        // configured-but-uninstalled plugin, and there is nothing to reload
+        // when nothing is running.
+        if (!plugins.plugins?.[plugin_id]) {
+          return codedError("plugin_not_loaded", `'${plugin_id}' is installed but not loaded; enable it with obsidian_plugin_toggle`);
+        }
+        // A rebuild can change manifest.json too, and disable/enable alone
+        // re-runs the manifest Obsidian read at startup.
+        if (typeof plugins.loadManifests === "function") await plugins.loadManifests();
+        await plugins.disablePlugin(plugin_id);
+        try {
+          await plugins.enablePlugin(plugin_id);
+        } catch (e) {
+          // Half-reloaded is the one outcome a caller must not have to guess at.
+          const why = e instanceof Error ? e.message : String(e);
+          return codedError("reload_failed", `'${plugin_id}' was disabled but failed to re-enable, and is now OFF: ${why}`);
+        }
+        return ok({ plugin_id, reloaded: true, version: plugins.plugins?.[plugin_id]?.manifest?.version ?? null });
       } catch (e) { return fail(e); }
     }
   );

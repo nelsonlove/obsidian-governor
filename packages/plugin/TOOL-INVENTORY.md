@@ -6,10 +6,10 @@ The FULL set is locked by `tests/tool-inventory.test.mjs`: the names documented
 here must equal the names registered in source, both directions, or the suite
 fails (the fs-expressible and scheme sub-locks from #25/task-6 still apply).
 
-**Count summary:** 17 fs-expressible + 30 always-live + 9 module-mounted
-(default enabled, settings-toggleable) = **56 base** tools, plus up to
+**Count summary:** 17 fs-expressible + 32 always-live + 9 module-mounted
+(default enabled, settings-toggleable) = **58 base** tools, plus up to
 6 conditional integration tools and 1 CLI-conditional tool (`obsidian_cli`)
-= **up to 63 total**.  The 3 Code Mode meta-tools are an alternative
+= **up to 65 total**.  The 3 Code Mode meta-tools are an alternative
 per-connection surface and are not counted (a session sees one surface or the
 other, never both).  Not counted here (outside the locked `obsidian_*` family,
 default-disabled modules): the `skills` (`vault_skills_*`), `provenance`
@@ -100,7 +100,7 @@ regardless of which community plugins are installed.
 | `obsidian_trash` | Move a note to the system trash (recoverable) |
 | `obsidian_vault_info` | Vault name, base path, config dir, attachment folder |
 
-### `tools-nav.ts` — `registerNavTools` (9 tools)
+### `tools-nav.ts` — `registerNavTools` (11 tools)
 
 | Tool name | Description |
 |---|---|
@@ -110,6 +110,8 @@ regardless of which community plugins are installed.
 | `obsidian_open_bookmark` | Open a bookmark by title |
 | `obsidian_open_workspace` | Load a named workspace layout |
 | `obsidian_periodic_note` | Open/create daily-weekly-monthly note |
+| `obsidian_plugin_info` | Community plugin state: loaded version vs installed manifest |
+| `obsidian_plugin_reload` | Reload one community plugin (disable + enable) so a rebuild takes effect |
 | `obsidian_plugin_toggle` | Enable or disable a community plugin |
 | `obsidian_save_workspace` | Save the current layout as a named workspace |
 | `obsidian_toggle_view_mode` | Switch active leaf: source / preview / live-preview |
