@@ -565,7 +565,17 @@ export class VaultMcpSettingTab extends PluginSettingTab {
               allowOpaqueTextarea.value = next.join("\n");
             }
           }
-          text.setValue("");
+          // Clear whenever the box holds a real, currently-registered command
+          // id — whether that pick just got added OR was already in the list.
+          // Gating the clear on `next !== current` alone (addAllowOpaqueEntry's
+          // no-op-by-reference treats "duplicate" and "invalid" identically)
+          // left a picked duplicate sitting in the box with no feedback that
+          // anything happened. Gating on validity directly instead matches the
+          // pre-refactor behavior (an early `return` on invalid input, an
+          // unconditional clear otherwise) without losing the keystroke fix.
+          if (value in commands) {
+            text.setValue("");
+          }
         });
       });
 
