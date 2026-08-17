@@ -1,13 +1,14 @@
-# Scope provider — `jd:` addressing (read-only)
+# Scope provider — `jd:` addressing
 
 The scope provider is a [capability module](modules.md) (id `scheme`, capabilities
 `["addressing", "allocation"]`) that gives an agent a **scheme-relative** way to name and place
 notes. The default configured scheme is **Johnny Decimal**, addressed `jd:`.
 
-Files: `packages/plugin/src/mcp/tools-scheme.ts` (tools), `packages/plugin/src/kernel/scheme/`
-(the pure engine: `registry.ts`, `jd.ts`, `provider.ts`, `findings.ts`). Everything here is
-**read-only** — nothing in the module mutates a note, and the module is Obsidian-import-free
-(headlessly testable).
+Files: `packages/plugin/src/mcp/tools-scheme.ts` (five read tools), `packages/plugin/src/mcp/tools-scheme-write.ts`
+(three write tools), `packages/plugin/src/kernel/scheme/` (the pure engine: `registry.ts`, `jd.ts`,
+`provider.ts`, `findings.ts`, `mutate.ts`). The five read tools and the kernel engine are
+**read-only** and Obsidian-import-free (headlessly testable); [the three write tools](#the-three-write-tools)
+are the module's mutating half and register differently — see below.
 
 ## `jd:` as a path address
 
@@ -34,7 +35,7 @@ it sees exactly the candidates `obsidian_resolve_address` would report:
 `schemes` setting. The ref grammar is `<scheme-id>:<address>`; `uid:` is explicitly never
 treated as a scheme ref.
 
-## The five tools
+## The five read tools
 
 All read-only (`readOnlyHint: true`), registered through the module registry (which enforces
 the read-only mount gate).
@@ -58,6 +59,42 @@ the read-only mount gate).
 
 Allowlist filtering in the scope tools is **silent** — a hidden note simply reads as not-found,
 so there is no existence oracle for territory a session is sandboxed out of.
+
+## The three write tools
+
+The write half of the module (`mcp/tools-scheme-write.ts`) — completing chapter 6's
+`ScopeProvider` with the mutation the read tools above only compute. Each is a thin
+PLAN-then-APPLY shell over a pure planning core (`kernel/scheme/mutate.ts`'s
+`planAssign`/`planRefile`/`planRenumber`): nothing in the tool layer recomputes "what should move
+where", it only decides whether to preview (`dry_run: true`, **mandatory — no default** — on all
+three) or execute via `moveOne` (`tools-vault-write.ts`'s move primitive, reused rather than
+re-implemented, so these inherit the same link-healing `renameFile` guarantee as
+`obsidian_move_notes`).
+
+| Tool | Input | Behavior |
+| --- | --- | --- |
+| **`obsidian_assign_address`** | `path`, `scope`, `scheme?`, `dry_run` | Moves the note into `scope`, assigning it the next free address the scope's own grammar computes — the same answer `obsidian_next_address` would give for that scope right now. Never overwrites: planning always targets a **free** address, so a race where something now occupies the computed path fails the move rather than clobbering it. |
+| **`obsidian_refile_address`** | `path`, `dry_run` | Moves the note to the folder its **own** address says it belongs in — the fix for what `obsidian_expected_location` reports as `placed: false`. No `scope`/`scheme` argument: the note's address decides both. Already correctly filed reports `already_correct: true` with no move, regardless of `dry_run`. |
+| **`obsidian_renumber_address`** | `path`, `to`, `scheme?`, `dry_run`, `on_occupied`, `displace_to?` | Moves the note to a specific target address `to` (parsed through the resolved instance's own grammar, not a bare guess). If `to` is occupied, `on_occupied` decides: `"fail"` (default) refuses, `"auto"` displaces the occupant to the next free address in **its own** scope, `"manual"` displaces it to `displace_to` (required and parsed only in that branch). A displaced occupant's move always runs **before** the source note's own move, in the plan and at apply time. |
+
+`dry_run: false` execution on `obsidian_renumber_address` runs its steps sequentially — never in
+parallel — so a mid-sequence failure after at least one step has already landed returns an error
+naming exactly which moves completed and which one failed, rather than hiding a partially-applied
+vault behind a bare rethrow.
+
+**Allowlist discipline matches the read tools**: `ctx.notes()` is filtered through `visiblePaths`
+before it reaches any provider method or planning function, and the note being operated on
+(`path`) gets the same one-path `out_of_allowlist` check the reverse-lookup tools use, refused
+before planning runs — a hidden note can be neither read as "what's there" nor written to by
+these tools.
+
+**Registration is direct, not through the module registry.** The [module registry](modules.md)'s
+`registerAll` gate refuses any tool whose `annotations.readOnlyHint !== true` — a capability
+module is load-bearing read-only-or-nothing by that gate's design. These three tools mutate by
+design, so they register directly in `server.ts`, the same way `obsidian_move_notes`/
+`obsidian_repoint_link` already do — not a workaround, the shape the existing hand-registered
+write tools use — sharing the identical `registry()`/`notes()` pair the read tools' registrar
+takes, so both halves see the same live-reloaded settings.
 
 ## Allocation computes, it does not reserve
 
