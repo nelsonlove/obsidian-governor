@@ -33,6 +33,11 @@ export interface ServerCtx {
    */
   getSettings: () => GuardSettings & {
     allowDangerousCli?: boolean;
+    /** Register the raw `obsidian_cli` proxy. DEFAULT OFF — the dedicated
+     * pinned-subcommand tools (tools-cli-dedicated.ts / tools-snippets.ts)
+     * cover the real usage; the free-text proxy is a surface a human opts
+     * back into (Security › "Raw CLI proxy"). */
+    rawCliProxy?: boolean;
     trustedReadOnlyPlugins?: string[];
     schemes?: SchemeInstanceConfig[];
     /** Module-host rows (`modules.<id>.enabled` / `.config`) — the mount

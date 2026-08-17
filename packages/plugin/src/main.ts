@@ -23,6 +23,17 @@ interface VaultMcpSettings {
   enabled: boolean;
   allowDangerousCli: boolean;
   /**
+   * Register the raw `obsidian_cli` proxy. DEFAULT OFF: the dedicated
+   * pinned-subcommand tools (obsidian_note_history/diff, obsidian_base_create,
+   * the snippet tools, obsidian_plugin_install/uninstall) cover the observed
+   * real usage with typed args and path scoping, and the proxy's free-text
+   * command string is the root of a whole guard-complexity family
+   * (#76/#79/#107/#110/#137/#153). When ON, the proxy behaves exactly as
+   * before — command policy, danger gate, accept guard, deny sets all intact.
+   * Takes effect on the next session connect.
+   */
+  rawCliProxy: boolean;
+  /**
    * Plugin ids whose tools may declare themselves read-only and be believed.
    * Empty by default: an external tool's `readOnlyHint: true` is otherwise
    * treated as mutating (queued, journaled, allowlist-scoped, blocked in
@@ -86,6 +97,7 @@ const DEFAULT_SETTINGS: VaultMcpSettings = {
   allowlist: [],
   enabled: true,
   allowDangerousCli: false,
+  rawCliProxy: false,
   trustedReadOnlyPlugins: [],
   // Cloned so settings edits can never mutate the module-level default rows
   // (item 6: schemes now clones symmetrically with vocabularies — a shallow
@@ -291,6 +303,7 @@ export default class VaultMcpPlugin extends Plugin {
         readOnly: this.settings.readOnly,
         allowlist: this.settings.allowlist,
         allowDangerousCli: this.settings.allowDangerousCli,
+        rawCliProxy: this.settings.rawCliProxy,
         trustedReadOnlyPlugins: this.settings.trustedReadOnlyPlugins,
         schemes: this.settings.schemes,
         modules: this.settings.modules,
