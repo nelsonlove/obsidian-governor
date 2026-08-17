@@ -39,3 +39,26 @@ test("titleOf on a malformed-but-numeric-looking token still strips only a real 
   // nothing is stripped.
   assert.equal(p.titleOf("Somewhere/06.1 Not Quite An Id.md"), "06.1 Not Quite An Id");
 });
+
+// ── finding #1 (code-review PR #214): titleOf must strip the WHOLE leading
+// decorated token — the address token PLUS an Extend-the-End "+YYYY" suffix
+// immediately following it — not just the bare address token. Before the
+// fix, titleOf sliced only `token.length` (5, for "43.11") off the full
+// name "43.11+2024 Foo", leaving "+2024 Foo" as the reported title instead
+// of "Foo".
+
+test("titleOf strips an Extend-the-End +YYYY suffix along with the address token", () => {
+  assert.equal(p.titleOf("00-09 System/06 Agent tooling/43.11+2024 Foo.md"), "Foo");
+});
+
+test("titleOf on an Extend-the-End note with no title after the suffix returns empty", () => {
+  assert.equal(p.titleOf("00-09 System/06 Agent tooling/43.11+2024.md"), "");
+});
+
+test("titleOf on a bare-addressed note (no +YYYY suffix) is unaffected by the fix", () => {
+  assert.equal(p.titleOf("00-09 System/06 Agent tooling/06.11 Vault MCP.md"), "Vault MCP");
+});
+
+test("titleOf on an unaddressed note is unaffected by the fix", () => {
+  assert.equal(p.titleOf("Unfiled/loose note.md"), "loose note");
+});
