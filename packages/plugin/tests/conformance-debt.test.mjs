@@ -369,7 +369,10 @@ describe("runConformance: budget tooth in the report + exit code", () => {
 
 describe("runCli --rebaseline: writes sidecar + appends trend", () => {
   // Guard the env keys runCli consults so the test is hermetic.
-  const ENV_KEYS = ["ASSENT_CONTENT_ROOT", "ASSENT_BASELINE_REL", "ASSENT_EXCLUDED_ROOTS", "ASSENT_ACCEPTED_BY", "ASSENT_DEBT_BUDGET"];
+  // Includes the register-render vars (#211 Part B): every --rebaseline now
+  // probes ASSENT_REGISTER_DIR for an existing register to refresh, so an
+  // ambient value would point these fixture runs at a real directory.
+  const ENV_KEYS = ["ASSENT_CONTENT_ROOT", "ASSENT_BASELINE_REL", "ASSENT_EXCLUDED_ROOTS", "ASSENT_ACCEPTED_BY", "ASSENT_DEBT_BUDGET", "ASSENT_REGISTER_DIR", "ASSENT_STALE_AFTER_DAYS"];
   function withCleanEnv(fn) {
     const saved = {};
     for (const k of ENV_KEYS) { saved[k] = process.env[k]; delete process.env[k]; }
