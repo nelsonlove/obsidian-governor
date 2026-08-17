@@ -96,3 +96,31 @@ test("planRenumber: target occupied, 'manual' with a taken displace_to refuses",
   assert.equal(out.ok, false);
   assert.match(out.error, /also occupied/);
 });
+
+// ── finding #1: renumbering a note to the address it already has ────────────
+// occupantOf(to, notes) can return the SOURCE note itself (a retry of a
+// renumber that already succeeded). Before the fix, "fail" reported a bogus
+// "occupied by <itself>" error and "auto"/"manual" built a two-step plan whose
+// first step's `from` is the same file the second step also tries to move —
+// the second step would fail against a path that no longer exists. The
+// correct behavior in all three modes is a no-op success.
+
+for (const mode of ["fail", "auto", "manual"]) {
+  test(`planRenumber: renumbering to the address the note already has is a no-op success ('${mode}')`, () => {
+    const to = p.parse("06.11"); // NOTES[0]'s own current address
+    const displaceTo = mode === "manual" ? p.parse("06.50") : undefined;
+    const out = planRenumber(p, NOTES[0], to, NOTES, mode, displaceTo);
+    assert.equal(out.ok, true, out.ok ? undefined : out.error);
+    assert.deepEqual(out.result, { steps: [], displaced: null });
+  });
+}
+
+// ── finding #7: displace_to === to is rejected under 'manual' ───────────────
+
+test("planRenumber: 'manual' with displace_to equal to `to` is refused with a clear error", () => {
+  const to = p.parse("06.12"); // occupied by NOTES[1]
+  const displaceTo = p.parse("06.12"); // same as `to`
+  const out = planRenumber(p, NOTES[0], to, NOTES, "manual", displaceTo);
+  assert.equal(out.ok, false);
+  assert.match(out.error, /displace_to must differ from to/);
+});

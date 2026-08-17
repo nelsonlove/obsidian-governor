@@ -34,16 +34,6 @@ export interface RenumberResult {
 export type RenumberOutcome = { ok: true; result: RenumberResult } | { ok: false; error: string };
 
 /**
- * Extract the folder path from a note path by finding the last "/" and taking
- * everything before it. Pure string operation.
- */
-function folderOf(path: string): string {
-  const lastSlash = path.lastIndexOf("/");
-  if (lastSlash === -1) return "";
-  return path.slice(0, lastSlash);
-}
-
-/**
  * Compute the expected full path for a note with the given address and title.
  */
 function computePath(
@@ -140,10 +130,7 @@ export function planRefile(
     };
   }
 
-  const currentFolder = folderOf(notePath);
-  const expectedFolder = folderOf(expectedPath);
-
-  if (currentFolder === expectedFolder && notePath === expectedPath) {
+  if (notePath === expectedPath) {
     return {
       ok: true,
       result: {
@@ -188,6 +175,17 @@ export function planRenumber(
 ): RenumberOutcome {
   const occupant = provider.occupantOf(to, notes);
 
+  // The target address already belongs to the SOURCE note itself (e.g. a
+  // retry of a renumber that already succeeded). Nothing to do — and
+  // critically, nothing to displace: `occupant` here IS `notePath`, so
+  // building a displacement step would move the file away from itself and
+  // then try to move it back from a path it's no longer at. This check must
+  // run before every onOccupied branch below, "fail" included — a note
+  // reporting itself as "occupied by" its own path is not a real conflict.
+  if (occupant && occupant.path === notePath) {
+    return { ok: true, result: { steps: [], displaced: null } };
+  }
+
   // No occupant — single step
   if (occupant === null) {
     const title = provider.titleOf(notePath);
@@ -227,6 +225,14 @@ export function planRenumber(
         ok: false,
         error: "on_occupied is 'manual' but displace_to was not given",
       };
+    }
+
+    // displace_to must differ from `to` — otherwise the occupant's own move
+    // step would have `from === to` (moveOne rejects that with a confusing
+    // "from and to are the same path" error surfaced from deep inside apply,
+    // rather than a clear refusal at plan time).
+    if (provider.format(displaceTo) === provider.format(to)) {
+      return { ok: false, error: "displace_to must differ from to" };
     }
 
     // Check if displace_to is occupied (and is not the occupant itself, which would be a no-op)
