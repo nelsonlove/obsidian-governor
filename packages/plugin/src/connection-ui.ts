@@ -650,6 +650,26 @@ export class VaultMcpSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         });
       });
+
+    // Developer affordances. The tool-runner defaults ON because it grants no
+    // capability beyond the MCP surface itself: it invokes the same guarded
+    // captured tools a code-mode connection gets (read-only mode, allowlist,
+    // queue, journal and the accept guard all bind identically), so hiding it
+    // is a UI-tidiness choice, not a security boundary.
+    containerEl.createEl("h4", { text: "Developer" });
+    new Setting(containerEl)
+      .setName("In-app tool runner")
+      .setDesc(
+        'Enable the "Run tool…" command: pick any MCP tool, fill its arguments in a form, and see the result in a ' +
+          "modal. Runs go through the exact guarded pipeline an agent call takes (and are journaled as " +
+          "client: tool-runner). Takes effect immediately."
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.devToolRunner).onChange(async (value) => {
+          this.plugin.settings.devToolRunner = value;
+          await this.plugin.saveSettings();
+        })
+      );
   }
 
   // ── #81: the generic, manifest-driven module renderer ──────────────────
