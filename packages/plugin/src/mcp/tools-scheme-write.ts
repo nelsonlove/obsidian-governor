@@ -24,17 +24,33 @@
 // one-path check tools-uid.ts's reverse lookup uses — rejected with a coded
 // `out_of_allowlist` refusal before any planning runs, so a hidden note can be
 // neither read as "what's there" nor written to by these tools.
+//
+// `excludedRoots` discipline matches the read tools too: an instance's
+// `excludeRoots(...)` is applied to every notes listing these tools plan
+// against, and a `path` argument this instance's excludedRoots covers is
+// treated the same way tools-scheme.ts treats it — the instance does not
+// speak for that note, so it refuses rather than silently operating on
+// territory outside what the instance claims.
+//
+// The destination a plan computes (`MoveStep.to`, and for renumber the
+// displaced occupant's own path) is NOT itself an argument, so the guard's
+// argument-level allowlist check never sees it — `expectedFolder` derives a
+// folder PREFIX from the (already-filtered) notes listing, which can in
+// principle be shorter than an allowlist prefix. So every computed path is
+// re-checked with `isVisible` before anything is applied — unconditionally,
+// even under `dry_run: true`, so a preview never claims a plan this session
+// could not actually carry out.
 
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { App } from "obsidian";
 import { ok, fail, codedError } from "./helpers.js";
-import { visiblePaths, type GuardSettings } from "../guard.js";
+import { visiblePaths, isVisible, type GuardSettings } from "../guard.js";
 import { pickInstance, parseScopeToken } from "./tools-scheme.js";
 import { moveOne, RW } from "./tools-vault-write.js";
 import { planAssign, planRefile, planRenumber, type MoveStep, type OnOccupied } from "../kernel/scheme/mutate.js";
 import type { Address } from "../kernel/scheme/provider.js";
-import type { SchemeRegistry, SchemeInstanceConfig } from "../kernel/scheme/registry.js";
+import { excludeRoots, type SchemeInstance, type SchemeRegistry, type SchemeInstanceConfig } from "../kernel/scheme/registry.js";
 
 export interface SchemeWriteToolsCtx {
   /** Rebuilt from settings per call — config edits land live, no reconnect needed. */
@@ -52,6 +68,25 @@ export function registerSchemeWriteTools(server: McpServer, app: App, ctx: Schem
   const visible = (paths: string[]): string[] => visiblePaths(paths, ctx.getSettings?.());
   const outOfAllowlist = (path: string) =>
     codedError("out_of_allowlist", `path '${path}' is outside the vault-mcp allowlist`);
+  // A computed destination (not a call argument) failing visibility — see the
+  // header comment above. Distinguished from `outOfAllowlist` in wording only
+  // (same code: a caller branching on `out_of_allowlist` should not have to
+  // know whether the offending path was named or computed).
+  const computedOutOfAllowlist = (path: string) =>
+    codedError("out_of_allowlist", `the computed destination '${path}' is outside the allowlist`);
+  // `path` is excluded from `instance`'s territory by its own `excludedRoots`
+  // — the write-tool counterpart to tools-scheme.ts's `reason: "excluded"`
+  // read-side reporting: a read can afford to just say so, but a write must
+  // refuse outright rather than operate on territory the instance disclaims.
+  const excludedFromInstance = (path: string, instance: SchemeInstance) =>
+    fail(new Error(`note '${path}' is excluded from scheme instance "${instance.id}"'s territory (excludedRoots)`));
+  /** First path in `paths` that fails `isVisible`, or null if all pass. */
+  const firstHidden = (paths: string[]): string | null => {
+    for (const p of paths) {
+      if (!isVisible(p, ctx.getSettings?.())) return p;
+    }
+    return null;
+  };
 
   // ── obsidian_assign_address ─────────────────────────────────────────────
   server.registerTool(
@@ -88,11 +123,15 @@ export function registerSchemeWriteTools(server: McpServer, app: App, ctx: Schem
         if (!parsedScope) return codedError("invalid_scope", `"${scope}" does not parse as a scope in scheme "${instance.id}"`);
 
         if (visible([path]).length === 0) return outOfAllowlist(path);
+        if (excludeRoots([path], instance.excludedRoots).length === 0) return excludedFromInstance(path, instance);
 
-        const visibleNotes = visible(ctx.notes());
+        const visibleNotes = excludeRoots(visible(ctx.notes()), instance.excludedRoots);
         const outcome = planAssign(instance.provider, parsedScope, path, visibleNotes);
         if (!outcome.ok) return fail(new Error(outcome.error));
         const { result } = outcome;
+
+        const hidden = firstHidden([result.step.to]);
+        if (hidden) return computedOutOfAllowlist(hidden);
 
         if (dry_run) return ok({ dry_run: true, address: result.address, moves: [result.step] });
 
@@ -101,7 +140,13 @@ export function registerSchemeWriteTools(server: McpServer, app: App, ctx: Schem
         } catch (e) {
           return fail(e);
         }
-        return ok({ dry_run: false, address: result.address, moves: [result.step] });
+        return ok({
+          dry_run: false,
+          address: result.address,
+          moves: [result.step],
+          filesChanged: 1,
+          files: [result.step.to],
+        });
       } catch (e) {
         return fail(e);
       }
@@ -130,16 +175,34 @@ export function registerSchemeWriteTools(server: McpServer, app: App, ctx: Schem
         if (visible([path]).length === 0) return outOfAllowlist(path);
 
         const registry = ctx.registry();
+        // Same fall-through discipline as tools-scheme.ts's obsidian_resolve_address
+        // / obsidian_expected_location: an instance that recognizes this note's
+        // address but excludes its territory does not get to claim it — keep
+        // looking for a non-excluding instance instead, and remember that at
+        // least one instance turned it away so the eventual refusal (if no
+        // instance claims it) can say why.
         let instance = null;
+        let excludedByAny = false;
         for (const inst of registry.instances()) {
-          if (inst.provider.addressOf(path)) {
-            instance = inst;
-            break;
+          if (!inst.provider.addressOf(path)) continue;
+          if (excludeRoots([path], inst.excludedRoots).length === 0) {
+            excludedByAny = true;
+            continue;
           }
+          instance = inst;
+          break;
         }
-        if (!instance) return fail(new Error("note has no address in any configured scheme"));
+        if (!instance) {
+          return fail(
+            new Error(
+              excludedByAny
+                ? "note's address is recognized only by scheme instance(s) whose excludedRoots exclude it"
+                : "note has no address in any configured scheme"
+            )
+          );
+        }
 
-        const visibleNotes = visible(ctx.notes());
+        const visibleNotes = excludeRoots(visible(ctx.notes()), instance.excludedRoots);
         const outcome = planRefile(instance.provider, path, visibleNotes);
         if (!outcome.ok) return fail(new Error(outcome.error));
         const { result } = outcome;
@@ -150,6 +213,9 @@ export function registerSchemeWriteTools(server: McpServer, app: App, ctx: Schem
         const step = result.step;
         if (!step) return fail(new Error("planRefile reported a move with no step"));
 
+        const hidden = firstHidden([step.to]);
+        if (hidden) return computedOutOfAllowlist(hidden);
+
         if (dry_run) return ok({ dry_run: true, address: result.address, moves: [step] });
 
         try {
@@ -157,7 +223,13 @@ export function registerSchemeWriteTools(server: McpServer, app: App, ctx: Schem
         } catch (e) {
           return fail(e);
         }
-        return ok({ dry_run: false, address: result.address, moves: [step] });
+        return ok({
+          dry_run: false,
+          address: result.address,
+          moves: [step],
+          filesChanged: 1,
+          files: [step.to],
+        });
       } catch (e) {
         return fail(e);
       }
@@ -170,17 +242,17 @@ export function registerSchemeWriteTools(server: McpServer, app: App, ctx: Schem
     {
       title: "Renumber a note to a specific target address",
       description:
-        "Move a note to a specific target address `to`, in the resolved scheme instance's own grammar (not a bare " +
-        "guess — `to`/`displace_to` are parsed through that instance's `provider.parse`). If `to` is already " +
-        "occupied, `on_occupied` decides what happens: \"fail\" (default) refuses; \"auto\" displaces the occupant " +
-        "to the next free address in ITS OWN scope; \"manual\" displaces the occupant to `displace_to`, which must " +
-        "be given and free. Whenever an occupant is displaced, its move always runs BEFORE the source note's own " +
-        "move, both in the reported plan and in execution order. `dry_run: true` reports the moves without " +
-        "performing them; `dry_run: false` executes them sequentially — never in parallel, so a failure partway " +
-        "through cannot race the remaining steps. Mutating.",
+        "Move a note to a specific target address `to_address`, in the resolved scheme instance's own grammar (not " +
+        "a bare guess — `to_address`/`displace_to_address` are parsed through that instance's `provider.parse`). If " +
+        "`to_address` is already occupied, `on_occupied` decides what happens: \"fail\" (default) refuses; \"auto\" " +
+        "displaces the occupant to the next free address in ITS OWN scope; \"manual\" displaces the occupant to " +
+        "`displace_to_address`, which must be given and free. Whenever an occupant is displaced, its move always " +
+        "runs BEFORE the source note's own move, both in the reported plan and in execution order. `dry_run: true` " +
+        "reports the moves without performing them; `dry_run: false` executes them sequentially — never in " +
+        "parallel, so a failure partway through cannot race the remaining steps. Mutating.",
       inputSchema: {
         path: z.string().min(1).describe("Vault-relative path (ending in .md) of the note to renumber."),
-        to: z.string().min(1).describe('The target address in the scheme\'s own grammar, e.g. "06.20".'),
+        to_address: z.string().min(1).describe('The target address in the scheme\'s own grammar, e.g. "06.20". (Not a vault path.)'),
         scheme: z
           .string()
           .min(1)
@@ -190,16 +262,16 @@ export function registerSchemeWriteTools(server: McpServer, app: App, ctx: Schem
         on_occupied: z
           .enum(["auto", "manual", "fail"])
           .default("fail")
-          .describe('What to do if `to` is already occupied: "fail" (default, refuse), "auto" (displace the occupant to its own scope\'s next free slot), or "manual" (displace the occupant to `displace_to`).'),
-        displace_to: z
+          .describe('What to do if `to_address` is already occupied: "fail" (default, refuse), "auto" (displace the occupant to its own scope\'s next free slot), or "manual" (displace the occupant to `displace_to_address`).'),
+        displace_to_address: z
           .string()
           .min(1)
           .optional()
-          .describe('Where to displace the current occupant of `to`, in the scheme\'s own grammar. Required (and used) only when `on_occupied` is "manual".'),
+          .describe('Where to displace the current occupant of `to_address`, in the scheme\'s own grammar (not a vault path). Required (and used) only when `on_occupied` is "manual".'),
       },
       annotations: RW,
     },
-    async ({ path, to, scheme, dry_run, on_occupied, displace_to }) => {
+    async ({ path, to_address, scheme, dry_run, on_occupied, displace_to_address }) => {
       try {
         const registry = ctx.registry();
         const pick = pickInstance(registry, scheme);
@@ -207,21 +279,23 @@ export function registerSchemeWriteTools(server: McpServer, app: App, ctx: Schem
         if ("error" in pick) return fail(new Error(pick.error));
         const { instance } = pick;
 
-        const parsedTo = instance.provider.parse(to);
-        if (!parsedTo) return fail(new Error(`"${to}" does not parse as an address in scheme "${instance.id}"`));
+        const parsedTo = instance.provider.parse(to_address);
+        if (!parsedTo) return fail(new Error(`"${to_address}" does not parse as an address in scheme "${instance.id}"`));
 
         let parsedDisplaceTo: Address | undefined;
-        if (on_occupied === "manual" && displace_to !== undefined) {
-          const parsed = instance.provider.parse(displace_to);
+        if (on_occupied === "manual" && displace_to_address !== undefined) {
+          const parsed = instance.provider.parse(displace_to_address);
           if (!parsed) {
-            return fail(new Error(`"${displace_to}" does not parse as an address in scheme "${instance.id}"`));
+            return fail(new Error(`"${displace_to_address}" does not parse as an address in scheme "${instance.id}"`));
           }
           parsedDisplaceTo = parsed;
         }
 
         if (visible([path]).length === 0) return outOfAllowlist(path);
+        if (excludeRoots([path], instance.excludedRoots).length === 0) return excludedFromInstance(path, instance);
 
-        const visibleNotes = visible(ctx.notes());
+        const address = instance.provider.format(parsedTo);
+        const visibleNotes = excludeRoots(visible(ctx.notes()), instance.excludedRoots);
         const outcome = planRenumber(
           instance.provider,
           path,
@@ -233,7 +307,15 @@ export function registerSchemeWriteTools(server: McpServer, app: App, ctx: Schem
         if (!outcome.ok) return fail(new Error(outcome.error));
         const { result } = outcome;
 
-        if (dry_run) return ok({ dry_run: true, moves: result.steps, displaced: result.displaced });
+        // Every computed path — each step's `to`, plus (for a displaced
+        // occupant) its `from`, which is computed by occupantOf rather than
+        // named by the caller — must itself be visible before anything is
+        // planned to happen to it, dry_run or not (see the header comment).
+        const computedPaths = result.steps.flatMap((s) => [s.from, s.to]);
+        const hidden = firstHidden(computedPaths);
+        if (hidden) return computedOutOfAllowlist(hidden);
+
+        if (dry_run) return ok({ dry_run: true, address, moves: result.steps, displaced: result.displaced });
 
         const completed: MoveStep[] = [];
         for (const step of result.steps) {
@@ -252,7 +334,14 @@ export function registerSchemeWriteTools(server: McpServer, app: App, ctx: Schem
             );
           }
         }
-        return ok({ dry_run: false, moves: result.steps, displaced: result.displaced });
+        return ok({
+          dry_run: false,
+          address,
+          moves: result.steps,
+          displaced: result.displaced,
+          filesChanged: completed.length,
+          files: completed.map((s) => s.to),
+        });
       } catch (e) {
         return fail(e);
       }
