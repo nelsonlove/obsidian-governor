@@ -36,9 +36,18 @@ const PLUGSTACK = "00-09 System/02 Obsidian/02.12 Plugin stack.md";
 
 /** Build the drift-shaped snapshot. `config` maps a vault-relative `.obsidian`
  * path to its raw text (community-plugins.json / quickadd data.json / a
- * plugin's manifest.json). */
-function snap({ sources = [], files = [], dirs = [], walkOrder = [], config = {} } = {}) {
-  const obsidianConfig = Object.entries(config).map(([path, text]) => ({ path, text }));
+ * plugin's manifest.json).
+ *
+ * Check A now REQUIRES the QuickAdd config — absence/corruption is refused
+ * loudly, not treated as an empty choice set (#136 item 2). So every snapshot
+ * defaults to a valid empty QuickAdd config (`{"choices":[]}`), letting tests
+ * that target OTHER checks ignore it. A `config` entry for the QuickAdd path
+ * overrides that default (the A dir-1/dir-2 tests supply their own); pass
+ * `noQuickadd: true` to omit it entirely and exercise check A's refusal. */
+function snap({ sources = [], files = [], dirs = [], walkOrder = [], config = {}, noQuickadd = false } = {}) {
+  const base = noQuickadd ? {} : { ".obsidian/plugins/quickadd/data.json": '{"choices":[]}' };
+  const merged = { ...base, ...config };
+  const obsidianConfig = Object.entries(merged).map(([path, text]) => ({ path, text }));
   return { notes: [], paths: [], blueprints: [], sources, files, dirs, walkOrder, obsidianConfig };
 }
 const run = (s) => driftPack().run(s);
@@ -88,8 +97,36 @@ describe("driftPack A (choices <-> actions)", () => {
     assert.ok(t.includes("ghost.action.md names choice 'Ghost' which does not exist in QuickAdd config"));
   });
 
-  test("no quickadd config → check A is skipped entirely", () => {
-    assert.deepEqual(targets(run(snap({ sources: [actGhost] })), "A"), []);
+  // #136 item 2: a missing/corrupt/reshaped QuickAdd config must REFUSE loudly
+  // (a typed throw the engine turns into a pack_error) rather than silently
+  // skip check A and let the run report CONFORMING with ~30 findings gone.
+  test("absent quickadd config → check A REFUSES loudly (not a silent skip)", () => {
+    assert.throws(() => run(snap({ sources: [actGhost], noQuickadd: true })), /needs '.*quickadd\/data\.json', which is absent/);
+  });
+
+  test("unparseable quickadd config → check A REFUSES loudly", () => {
+    const bad = { ".obsidian/plugins/quickadd/data.json": "{ not valid json" };
+    assert.throws(() => run(snap({ sources: [actGhost], config: bad })), /cannot parse .*quickadd\/data\.json.* as JSON/);
+  });
+
+  test("reshaped quickadd config (choices not an array) → check A REFUSES loudly", () => {
+    const reshaped = { ".obsidian/plugins/quickadd/data.json": JSON.stringify({ choices: "nope" }) };
+    assert.throws(() => run(snap({ sources: [actGhost], config: reshaped })), /'choices' is not an array/);
+  });
+
+  test("the refusal surfaces as a conformance_engine pack_error through the engine", async () => {
+    const { runEngine } = await import("../src/conformance/engine.ts");
+    const pack = driftPack();
+    const findings = runEngine([pack], snap({ sources: [actGhost], noQuickadd: true }));
+    const err = findings.find((f) => f.script === "conformance_engine" && f.check === "pack_error");
+    assert.ok(err, "expected a pack_error finding attributing the drift pack's refusal");
+    assert.equal(err.target, "drift_audit");
+  });
+
+  test("a valid empty quickadd config → check A runs and finds nothing (absence-vs-emptiness: [] IS a real answer)", () => {
+    assert.deepEqual(targets(run(snap({ sources: [actGhost] })), "A"), [
+      "ghost.action.md names choice 'Ghost' which does not exist in QuickAdd config",
+    ]);
   });
 });
 

@@ -50,7 +50,13 @@ describe("#125 — an ABSENT sources listing refuses; an EMPTY one is a real ans
     test(`${id}: snapshot with an EMPTY sources listing runs cleanly (empty is a real answer)`, () => {
       const findings = runEngine([make()], {
         ...base,
-        sources: [], blueprints: [], files: [], dirs: [], obsidianConfig: [], walkOrder: [],
+        sources: [], blueprints: [], files: [], dirs: [], walkOrder: [],
+        // drift's check A REQUIRES the QuickAdd config specifically (#136 item 2):
+        // an empty `obsidianConfig` means that file is ABSENT, which correctly
+        // refuses. Supply a valid EMPTY QuickAdd config so this test exercises
+        // the empty-LISTING property (not the missing-required-file one) — the
+        // other packs ignore `obsidianConfig` entirely.
+        obsidianConfig: [{ path: ".obsidian/plugins/quickadd/data.json", text: '{"choices":[]}' }],
       });
       const errs = findings.filter((f) => f.script === ENGINE_ID && f.check === "pack_error");
       assert.deepEqual(errs, [], `${id} must accept a genuinely empty listing`);

@@ -113,4 +113,16 @@ describe("renderBaseline", () => {
     const reparsed = parseBaseline("```ratchet-baseline\n" + renderBaseline(live) + "\n```\n");
     assert.ok(reparsed.has("scheme_findings|duplicate_address|Notes/B.md|06.11"));
   });
+
+  // #136 item 3: a note named with a pipe must survive render → parse → ratchet
+  // as CARRIED (accepted debt), never re-appearing as a NEW finding.
+  test("a pipe-in-target finding round-trips through the baseline and rachets as CARRIED", () => {
+    const live = [F("scheme_findings", "unaddressed", "Notes/--skip | olano.dev.md", "")];
+    const baseline = parseBaseline("```ratchet-baseline\n" + renderBaseline(live) + "\n```\n");
+    const r = ratchet(live, baseline);
+    assert.deepEqual(r.newKeys, [], "the pipe note must not resurface as NEW");
+    assert.deepEqual(r.clearedKeys, []);
+    assert.equal(r.carried, 1);
+    assert.equal(r.exitCode, 0);
+  });
 });
