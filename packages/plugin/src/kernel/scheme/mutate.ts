@@ -31,7 +31,56 @@ export interface RenumberResult {
   steps: MoveStep[];
   displaced: string | null;
 }
-export type RenumberOutcome = { ok: true; result: RenumberResult } | { ok: false; error: string };
+// `code` is present ONLY for the one failure a caller might want to branch
+// on programmatically — the target address being occupied under
+// `on_occupied: "fail"` — so the tool layer can render it as a coded refusal
+// (`codedError`) while every other planRenumber failure (an unparseable
+// displace_to, a folder that can't be derived, …) keeps falling through to a
+// plain `fail()`, unchanged.
+export type RenumberOutcome = { ok: true; result: RenumberResult } | { ok: false; error: string; code?: string };
+
+/**
+ * Build the two-step "move the occupant out of the way, then move the source
+ * note in" plan shared by planRenumber's "manual" and "auto" branches, once
+ * each has already decided WHERE to displace the occupant to (`displaceAddr`
+ * — the caller-supplied `displace_to` for "manual", the computed `nextFree`
+ * result for "auto"). Each branch keeps its OWN logic (validating
+ * `displace_to`, computing `nextFree`) — only this shared "build the two
+ * steps from a known displacement address" part is factored out, so a future
+ * fix to this assembly (error wording, ordering) can't land on one branch
+ * and silently miss the other. (This exact duplication was independently
+ * flagged twice — by this branch's own prior final-review pass, and again by
+ * code-review PR #214's finding #5.)
+ */
+function buildDisplacementSteps(
+  provider: ScopeProvider,
+  occupant: { path: string },
+  notePath: string,
+  to: Address,
+  displaceAddr: Address,
+  notes: string[]
+): { ok: true; steps: [MoveStep, MoveStep]; displaced: string } | { ok: false; error: string } {
+  const occupantTitle = provider.titleOf(occupant.path);
+  const occupantTo = computePath(provider, displaceAddr, occupantTitle, notes);
+  if (occupantTo === null) {
+    return { ok: false, error: "cannot determine the expected folder to displace the occupant to" };
+  }
+
+  const sourceTitle = provider.titleOf(notePath);
+  const sourceTo = computePath(provider, to, sourceTitle, notes);
+  if (sourceTo === null) {
+    return { ok: false, error: "cannot determine the expected folder for the source note" };
+  }
+
+  return {
+    ok: true,
+    steps: [
+      { from: occupant.path, to: occupantTo },
+      { from: notePath, to: sourceTo },
+    ],
+    displaced: occupantTo,
+  };
+}
 
 /**
  * Compute the expected full path for a note with the given address and title.
@@ -216,6 +265,7 @@ export function planRenumber(
     return {
       ok: false,
       error: `${provider.format(to)} is occupied by ${occupant.path} — pass on_occupied to auto-displace or specify displace_to`,
+      code: "address_occupied",
     };
   }
 
@@ -244,40 +294,12 @@ export function planRenumber(
       };
     }
 
-    // Move occupant first, then source
-    const occupantTitle = provider.titleOf(occupant.path);
-    const occupantTo = computePath(provider, displaceTo, occupantTitle, notes);
-    if (occupantTo === null) {
-      return {
-        ok: false,
-        error: "cannot determine the expected folder to displace the occupant to",
-      };
-    }
-
-    const sourceTitle = provider.titleOf(notePath);
-    const sourceTo = computePath(provider, to, sourceTitle, notes);
-    if (sourceTo === null) {
-      return {
-        ok: false,
-        error: "cannot determine the expected folder for the source note",
-      };
-    }
+    const built = buildDisplacementSteps(provider, occupant, notePath, to, displaceTo, notes);
+    if (!built.ok) return { ok: false, error: built.error };
 
     return {
       ok: true,
-      result: {
-        steps: [
-          {
-            from: occupant.path,
-            to: occupantTo,
-          },
-          {
-            from: notePath,
-            to: sourceTo,
-          },
-        ],
-        displaced: occupantTo,
-      },
+      result: { steps: built.steps, displaced: built.displaced },
     };
   }
 
@@ -298,39 +320,11 @@ export function planRenumber(
     };
   }
 
-  // Move occupant first, then source
-  const occupantTitle = provider.titleOf(occupant.path);
-  const occupantTo = computePath(provider, freeAddr, occupantTitle, notes);
-  if (occupantTo === null) {
-    return {
-      ok: false,
-      error: "cannot determine the expected folder to auto-displace the occupant to",
-    };
-  }
-
-  const sourceTitle = provider.titleOf(notePath);
-  const sourceTo = computePath(provider, to, sourceTitle, notes);
-  if (sourceTo === null) {
-    return {
-      ok: false,
-      error: "cannot determine the expected folder for the source note",
-    };
-  }
+  const built = buildDisplacementSteps(provider, occupant, notePath, to, freeAddr, notes);
+  if (!built.ok) return { ok: false, error: built.error };
 
   return {
     ok: true,
-    result: {
-      steps: [
-        {
-          from: occupant.path,
-          to: occupantTo,
-        },
-        {
-          from: notePath,
-          to: sourceTo,
-        },
-      ],
-      displaced: occupantTo,
-    },
+    result: { steps: built.steps, displaced: built.displaced },
   };
 }
