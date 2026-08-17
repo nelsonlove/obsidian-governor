@@ -48,8 +48,8 @@ import {
 // Mutating + can reach outside the vault (plugin installs fetch the network).
 const CLI_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };
 
-const DEFAULT_TIMEOUT_MS = 30_000;
-const MAX_TIMEOUT_MS = 300_000;
+export const DEFAULT_TIMEOUT_MS = 30_000;
+export const MAX_TIMEOUT_MS = 300_000;
 const MAX_BUFFER = 4 * 1024 * 1024;
 
 // Pure + testable: returns the first existing CLI binary, else null. Probes
@@ -828,7 +828,11 @@ export interface CliExecResult {
 }
 export type CliExec = (bin: string, args: string[], timeoutMs: number) => Promise<CliExecResult>;
 
-const defaultExec: CliExec = (bin, args, timeoutMs) =>
+/** The production exec: execFile against the CLI forwarder binary. Exported so
+ * the dedicated pinned-subcommand tools (tools-cli-dedicated.ts) share this ONE
+ * exec path — same spawn env, same timeout/kill semantics, same MAX_BUFFER —
+ * rather than forking a second one. */
+export const defaultCliExec: CliExec = (bin, args, timeoutMs) =>
   new Promise((resolve) => {
     execFile(
       bin,
@@ -863,11 +867,21 @@ export function registerCliTools(
     readTemplate?: (name: string, mode: TemplateResolveMode) => Promise<string | null>;
   }
 ) {
+  // Demoted behind a default-OFF settings toggle (Security › "Raw CLI proxy"):
+  // the dedicated pinned-subcommand tools (tools-cli-dedicated.ts /
+  // tools-snippets.ts) cover the observed real usage with typed args and
+  // path scoping, so the free-text proxy — the root of the guard-complexity
+  // family (#76/#79/#107/#110/#137/#153) — registers only when a human turns
+  // it back on. Everything about it is UNCHANGED when enabled: the policy,
+  // the danger gate, the accept guard and the deny sets all still apply.
   // Conditional registration at build time is the dynamic-registration
-  // mechanism (same as integration tools): no binary → no tool this session.
+  // mechanism (same as integration tools): setting off → no tool this
+  // session; a toggle lands on the next session connect.
+  if (ctx.getSettings().rawCliProxy !== true) return;
+  // No binary → no tool this session, same mechanism.
   const binary = deps?.binary !== undefined ? deps.binary : findObsidianBinary();
   if (!binary) return;
-  const exec = deps?.exec ?? defaultExec;
+  const exec = deps?.exec ?? defaultCliExec;
   // Injected so this module stays obsidian-free (obsidian is types-only in node,
   // and the CLI handler is unit-tested). Production wires obsidian.parseYaml from
   // server.ts; the accept guard's content-fence scan needs a real YAML parser.
@@ -879,8 +893,12 @@ export function registerCliTools(
       title: "Run an official Obsidian CLI command",
       description:
         "Run any official Obsidian CLI command against this vault (the vault is pinned; a vault param is rejected). " +
-        "Covers everything the CLI exposes that has no dedicated obsidian_* tool: file history (history, history:list, history:restore, diff), " +
-        "themes (themes, theme:set, theme:install), snippets, plugin management (plugin:install, plugin:uninstall), bases, publish, and more. " +
+        "PREFER the dedicated tools when one covers the job — obsidian_note_history / obsidian_note_diff (file history), " +
+        "obsidian_base_create (bases), obsidian_snippets_list / obsidian_snippet_read / obsidian_snippet_write / " +
+        "obsidian_snippet_toggle (CSS snippets), obsidian_plugin_install / obsidian_plugin_uninstall (plugin management) — " +
+        "they take typed arguments, return structured data, and are path-scopable where this proxy is not. " +
+        "This proxy covers the LONG TAIL the dedicated tools don't: themes (themes, theme:set, theme:install), " +
+        "history:list (files with history), history:restore (default-denied — see below), publish, sync, tasks, tabs, and more. " +
         "Discover commands with {command:'help'}; get a command's parameters with {command:'help', params:{command:'<name>'}}. " +
         "Params become key=value CLI arguments; flags are passed verbatim (e.g. ['--json']). " +
         "Output is the CLI's raw stdout/stderr plus exit_code — non-zero exits return isError with the same structure. " +

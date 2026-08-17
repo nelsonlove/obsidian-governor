@@ -95,13 +95,16 @@ describe("buildCliArgs", () => {
 
 // ── registerCliTools handler ──────────────────────────────────────────────────
 
+// rawCliProxy: true — the proxy is demoted behind a default-OFF setting; these
+// tests exercise the ENABLED proxy's behavior (the default-off gate has its own
+// tests below).
 function ctxWith(settings) {
   return {
     pluginVersion: "0.0.0-test",
     socketPath: "/tmp/x.sock",
     vaultName: "testvault",
     enabledPlugins: () => [],
-    getSettings: () => ({ readOnly: false, allowlist: [], allowDangerousCli: false, ...settings }),
+    getSettings: () => ({ readOnly: false, allowlist: [], allowDangerousCli: false, rawCliProxy: true, ...settings }),
   };
 }
 
@@ -112,6 +115,26 @@ describe("registerCliTools", () => {
     const server = fakeServer();
     registerCliTools(server, ctxWith({}), { binary: null });
     assert.equal(server.tools.size, 0);
+  });
+
+  test("does not register when the Raw CLI proxy setting is off (the demotion default)", () => {
+    const server = fakeServer();
+    registerCliTools(server, ctxWith({ rawCliProxy: false }), { binary: "/bin/obsidian", exec: okExec });
+    assert.equal(server.tools.size, 0);
+  });
+
+  test("does not register when the setting is absent entirely (default off, fail closed)", () => {
+    const server = fakeServer();
+    registerCliTools(server, ctxWith({ rawCliProxy: undefined }), { binary: "/bin/obsidian", exec: okExec });
+    assert.equal(server.tools.size, 0);
+  });
+
+  test("registers when the Raw CLI proxy setting is on and behaves as before", async () => {
+    const server = fakeServer();
+    registerCliTools(server, ctxWith({}), { binary: "/bin/obsidian", exec: okExec });
+    assert.ok(server.tools.get("obsidian_cli"));
+    const res = await server.tools.get("obsidian_cli").handler({ command: "help" });
+    assert.notEqual(res.isError, true);
   });
 
   test("registers obsidian_cli with mutating annotations", () => {

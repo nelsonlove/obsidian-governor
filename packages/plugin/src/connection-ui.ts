@@ -518,9 +518,27 @@ export class VaultMcpSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Raw CLI proxy")
+      .setDesc(
+        "Register obsidian_cli, the free-text pass-through to the official Obsidian CLI. Off by default: the " +
+          "dedicated tools (obsidian_note_history, obsidian_note_diff, obsidian_base_create, the snippet tools, " +
+          "obsidian_plugin_install/uninstall) cover the common jobs with typed arguments and path scoping. When on, " +
+          "the proxy keeps all of its guards (command policy, danger gate, accept guard, deny lists). Takes effect " +
+          "on the next session connect."
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.rawCliProxy).onChange(async (value) => {
+          this.plugin.settings.rawCliProxy = value;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
       .setName("Allow dangerous CLI commands")
       .setDesc(
-        `Let obsidian_cli run ${DANGEROUS_LIST_DESC}. These execute arbitrary code or control the app — leave off unless you need them.`
+        `Let the CLI surfaces run ${DANGEROUS_LIST_DESC}. These execute arbitrary code or control the app — leave off ` +
+          "unless you need them. Also gates the dedicated obsidian_plugin_install / obsidian_plugin_uninstall tools " +
+          "(same plugin:install / plugin:uninstall commands, same gate)."
       )
       .addToggle((t) =>
         t.setValue(this.plugin.settings.allowDangerousCli).onChange(async (value) => {

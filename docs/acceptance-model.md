@@ -199,6 +199,19 @@ primitive, so no write tool — present or future — can register a path around
 
 ## The `obsidian_cli` proxy path
 
+**Demoted (default off):** the raw proxy now registers only when the Security ›
+**"Raw CLI proxy"** setting is on — its observed real usage is covered by dedicated
+pinned-subcommand tools (`obsidian_note_history`, `obsidian_note_diff`,
+`obsidian_base_create`, the snippet tools, `obsidian_plugin_install`/`uninstall`)
+with typed arguments, and the free-text command string below is the root of the
+guard complexity this section describes. Everything in this section still applies
+whenever the proxy is enabled, and `obsidian_base_create` runs the same
+`base:create` content scan through the shared rule. `history:restore` is
+deliberately not promoted to a dedicated tool: restoring a prior version can
+reinstate an accepted value a human revoked, and the restored bytes cannot be
+scanned pre-exec (#110) — it stays in the proxy's default-denied
+uninspectable-write set.
+
 `obsidian_cli` proxies ~104 official Obsidian CLI commands, which run *inside* Obsidian and
 therefore **bypass the MCP note-write primitive** where the guard above lives. That is a real
 hole — an agent could otherwise persist acceptance through the CLI. So the CLI path grows its

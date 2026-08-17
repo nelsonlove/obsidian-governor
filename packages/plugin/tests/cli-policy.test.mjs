@@ -200,7 +200,7 @@ function ctxWith(settings) {
     socketPath: "/tmp/x.sock",
     vaultName: "testvault",
     enabledPlugins: () => [],
-    getSettings: () => ({ readOnly: false, allowlist: [], allowDangerousCli: false, ...settings }),
+    getSettings: () => ({ readOnly: false, allowlist: [], allowDangerousCli: false, rawCliProxy: true, ...settings }),
   };
 }
 
