@@ -136,6 +136,53 @@ interface RegistryNote {
   text: string;
 }
 
+const QUICKADD_CONFIG_PATH = ".obsidian/plugins/quickadd/data.json";
+
+/**
+ * The QuickAdd choice array check A compares against the `.action` registry,
+ * REFUSING loudly (typed throw → the engine attributes a `conformance_engine /
+ * pack_error` finding) when the config check A depends on is absent,
+ * unparseable, or reshaped so its `choices` cannot be walked.
+ *
+ * This is the "absence is not emptiness" discipline (`requireSources` /
+ * `requireListing_`, #142) applied one level finer: the `obsidianConfig`
+ * LISTING is present (the snapshot always supplies the array), but the specific
+ * file check A reads may be missing/broken. The old code let `qa` stay null and
+ * SKIPPED the whole check — silently emitting zero of check A's ~30 live
+ * findings and letting the run report CONFORMING (#136 item 2). The Python rail
+ * raised an explicit `RailError: no findings sentinel` for exactly this. A
+ * missing/corrupt QuickAdd config is a broken run, not a clean vault, so it must
+ * be VISIBLE (a NEW pack_error) rather than a false green.
+ */
+function requireQuickAddChoices(qaText: string | undefined): unknown[] {
+  if (qaText === undefined) {
+    throw new Error(
+      `rule pack '${DRIFT_PACK_ID}' check A needs '${QUICKADD_CONFIG_PATH}', which is absent. ` +
+        `Refusing to treat a missing QuickAdd config as an empty choice set: check A would emit zero of ` +
+        `its findings and every accepted key it owns would then read as CLEARED, a false-green run.`,
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(qaText);
+  } catch (e) {
+    throw new Error(
+      `rule pack '${DRIFT_PACK_ID}' check A cannot parse '${QUICKADD_CONFIG_PATH}' as JSON ` +
+        `(${e instanceof Error ? e.message : String(e)}). Refusing to treat an unparseable QuickAdd config ` +
+        `as an empty choice set (that would silently clear check A's accepted debt).`,
+    );
+  }
+  const choices = (parsed as { choices?: unknown } | null)?.choices;
+  if (!Array.isArray(choices)) {
+    throw new Error(
+      `rule pack '${DRIFT_PACK_ID}' check A found '${QUICKADD_CONFIG_PATH}' but its 'choices' is not an array ` +
+        `(got ${choices === undefined ? "no 'choices' key" : typeof choices}). Refusing to treat a reshaped ` +
+        `QuickAdd config as an empty choice set (that would silently clear check A's accepted debt).`,
+    );
+  }
+  return choices;
+}
+
 export function driftPack(conv: VaultConventions = DEFAULT_VAULT_CONVENTIONS): RulePack {
   const UID_EXEMPT = new Set(conv.uidExemptPaths);
   const REGISTRIES_ROOT = conv.registriesRoot;
@@ -186,22 +233,17 @@ export function driftPack(conv: VaultConventions = DEFAULT_VAULT_CONVENTIONS): R
       const actionNotes = registryFamily(".action.md");
 
       // ── A. QuickAdd command-enabled choices <-> `.action` quickadd-choice ─────
-      const qaText = configByPath.get(".obsidian/plugins/quickadd/data.json");
-      let qa: { choices?: unknown } | null = null;
-      if (qaText !== undefined) {
-        try {
-          qa = JSON.parse(qaText);
-        } catch {
-          qa = null;
-        }
-      }
+      // The QuickAdd config check A depends on is REQUIRED, not optional:
+      // absent/unparseable/reshaped refuses loudly (a pack_error) rather than
+      // silently skipping ~30 findings and reporting CONFORMING (#136 item 2).
+      const qaChoices = requireQuickAddChoices(configByPath.get(QUICKADD_CONFIG_PATH));
       // act_surfaces is also consumed by nothing else, but it is built here (as
       // Python does) from the action notes' `quickadd-choice` surfaces.
       const actSurfaces = new Map<string, string>(); // choice -> action filename (last wins, sorted)
       for (const act of actionNotes) {
         for (const ch of surface(fmBlock(act.text), "quickadd-choice") ?? []) actSurfaces.set(ch, act.name);
       }
-      if (qa && Array.isArray(qa.choices)) {
+      {
         const choices = new Map<string, unknown>(); // command-enabled choice name -> choice (walk order)
         const walkChoices = (cs: unknown[]): void => {
           for (const c of cs) {
@@ -210,7 +252,7 @@ export function driftPack(conv: VaultConventions = DEFAULT_VAULT_CONVENTIONS): R
             else if (cc && pyTruthy(cc.command)) choices.set(String(cc.name), cc);
           }
         };
-        walkChoices(qa.choices);
+        walkChoices(qaChoices);
         for (const name of choices.keys()) {
           if (!actSurfaces.has(name) && !UI_CHOICES.has(name))
             push("A", `choice '${name}' is command-enabled but no .action entry names it`);

@@ -27,13 +27,23 @@ import {
   DISCOVER_ROOT_FLAG,
 } from "../src/conformance/cli.ts";
 
-/** Drive the real CLI; return {threw, message} and never let a throw escape. */
+/** Drive the real CLI; return {threw, message} and never let a throw escape.
+ *
+ * `runCli` sets `process.exitCode` from the conformance RESULT (0/1/3). These
+ * tests exercise the discovery GATE (whether runCli throws), not the fixture's
+ * conformance, so that side effect must not leak into this test process — a
+ * benign empty fixture is legitimately NONCONFORMING now that a missing
+ * QuickAdd config refuses (#136), and a leaked exit 1 would fail the whole file
+ * despite every gate assertion passing. Save and restore it. */
 async function cli(...argv) {
+  const savedExit = process.exitCode;
   try {
     await runCli(argv);
     return { threw: false, message: "" };
   } catch (e) {
     return { threw: true, message: e instanceof Error ? e.message : String(e) };
+  } finally {
+    process.exitCode = savedExit;
   }
 }
 
