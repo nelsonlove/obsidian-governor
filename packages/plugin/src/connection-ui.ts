@@ -564,8 +564,12 @@ export class VaultMcpSettingTab extends PluginSettingTab {
             if (allowOpaqueTextarea) {
               allowOpaqueTextarea.value = next.join("\n");
             }
+            // Only clear on an actual add — clearing unconditionally wiped the
+            // box after every keystroke (a regression from the pre-refactor
+            // early `return` on an invalid/partial value, lost when that guard
+            // became addAllowOpaqueEntry's no-op-by-reference instead).
+            text.setValue("");
           }
-          text.setValue("");
         });
       });
 
