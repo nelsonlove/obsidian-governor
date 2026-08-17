@@ -92,7 +92,7 @@ type Pick_ = { instance: SchemeInstance } | { error: string } | { unavailable: s
  * refusal instead, distinct from plain "unknown", since the id is spoken
  * for and the caller should fix the config, not the id.
  */
-function pickInstance(registry: SchemeRegistry, schemeArg?: string): Pick_ {
+export function pickInstance(registry: SchemeRegistry, schemeArg?: string): Pick_ {
   if (schemeArg) {
     const instance = registry.get(schemeArg);
     if (instance) return { instance };
@@ -165,7 +165,7 @@ function resolveAddressAndInstance(
  * are valid containers for every provider. Null only when the token doesn't
  * parse as an address AT ALL — that's the one case the brief calls
  * "unparseable", and the only one `invalid_scope` reports. */
-function parseScopeToken(instance: SchemeInstance, raw: string): Scope | null {
+export function parseScopeToken(instance: SchemeInstance, raw: string): Scope | null {
   const addr = instance.provider.parse(raw);
   return addr ? { kind: addr.kind, token: addr.raw } : null;
 }

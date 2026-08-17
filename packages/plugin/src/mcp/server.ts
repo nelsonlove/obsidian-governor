@@ -3,6 +3,7 @@ import { TFile, stringifyYaml, parseYaml, type App } from "obsidian";
 import { registerFsTools, ok } from "@vault-mcp/core";
 import { registerCoreTools, type ServerCtx } from "./tools-core.js";
 import { registerVaultWriteTools } from "./tools-vault-write.js";
+import { registerSchemeWriteTools } from "./tools-scheme-write.js";
 import { registerComplementaryTools } from "./tools-complementary.js";
 import { registerNavTools } from "./tools-nav.js";
 import { registerIntegrationTools } from "./tools-integrations.js";
@@ -142,6 +143,17 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   // itself, so it must contain that scan by the allowlist on its own — no
   // argument-level check can see a set the handler discovers.
   registerVaultWriteTools(server, app, ctx);
+  // ── scope-provider write surface: assign/refile/renumber address ───────────
+  // Cannot go through mountModules below: that host's registerAll gate refuses
+  // any tool whose readOnlyHint !== true (its own header comment), and these
+  // three mutate by design. Registered directly, same shape as
+  // registerVaultWriteTools above, and the same registry()/notes() pair the
+  // guarded scheme-addressing wiring (guardedOpts, above) already builds.
+  registerSchemeWriteTools(server, app, {
+    registry: () => makeRegistry(ctx.getSettings().schemes ?? DEFAULT_SCHEMES),
+    notes: () => app.vault.getMarkdownFiles().map((f) => f.path),
+    getSettings: () => ctx.getSettings(),
+  });
   registerComplementaryTools(server, app, ctx);
   // ctx: obsidian_list_bookmarks enumerates paths the human bookmarked, which
   // is another argument-less read of vault structure.

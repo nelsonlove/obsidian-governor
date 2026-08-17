@@ -127,6 +127,19 @@ const EXPECTED_SCHEME_TOOL_NAMES = [
   "obsidian_expected_location",
 ];
 
+// ── scope-provider WRITE tools (Task 4) ─────────────────────────────────────
+// The three mutating tools (assign/refile/renumber address), registered
+// directly in server.ts — NOT through modules-mount.ts, which refuses any
+// tool whose readOnlyHint !== true (see tools-scheme-write.ts's header
+// comment). Sibling lock to EXPECTED_SCHEME_TOOL_NAMES above, for the write
+// side.
+
+const EXPECTED_SCHEME_WRITE_TOOL_NAMES = [
+  "obsidian_assign_address",
+  "obsidian_refile_address",
+  "obsidian_renumber_address",
+];
+
 // ── Full-inventory lock (TOOL-INVENTORY.md ↔ source) ────────────────────────
 // The two locks above cover 22 of the tools; the other ~44 drifted silently —
 // TOOL-INVENTORY.md calls itself "source of record" yet was missing every tool
@@ -188,7 +201,7 @@ describe("full tool inventory lock (TOOL-INVENTORY.md)", () => {
     // "every idiom", with scheme (registerTool), write_notes (register),
     // pending_review (registerTool) and call_tool (reg) covering all three.
     const registered = await registeredToolNames();
-    for (const name of [...EXPECTED_FS_TOOL_NAMES, ...EXPECTED_SCHEME_TOOL_NAMES,
+    for (const name of [...EXPECTED_FS_TOOL_NAMES, ...EXPECTED_SCHEME_TOOL_NAMES, ...EXPECTED_SCHEME_WRITE_TOOL_NAMES,
       "obsidian_write_notes", "obsidian_pending_review", "obsidian_call_tool"]) {
       assert.ok(registered.has(name), `registration scan lost "${name}"`);
     }
@@ -244,6 +257,45 @@ describe("scope-provider read-only tools (#task-6)", () => {
         !source.includes("obsidian_scheme_audit"),
         `${file} must not reference "obsidian_scheme_audit" — it was never a tool`,
       );
+    }
+  });
+});
+
+// ── scope-provider write tools (#task-4) ────────────────────────────────────
+
+describe("scope-provider write tools (#task-4)", () => {
+  test("tools-scheme-write.ts registers all expected write tool names, byte-for-byte", async () => {
+    const path = resolve(HERE, "../src/mcp/tools-scheme-write.ts");
+    const source = await readFile(path, "utf-8");
+    for (const name of EXPECTED_SCHEME_WRITE_TOOL_NAMES) {
+      assert.ok(source.includes(`"${name}"`), `tools-scheme-write.ts must register "${name}"`);
+    }
+  });
+
+  test("server.ts registers the write tools directly (not through the module host)", async () => {
+    // Unlike the read-only scheme tools (mounted through modules-mount.ts),
+    // these three mutate by design and cannot pass that host's readOnlyHint
+    // gate — see tools-scheme-write.ts's header comment — so server.ts wires
+    // them directly, the same shape as registerVaultWriteTools.
+    const serverPath = resolve(HERE, "../src/mcp/server.ts");
+    const source = await readFile(serverPath, "utf-8");
+    assert.ok(source.includes("registerSchemeWriteTools"), "server.ts must call registerSchemeWriteTools");
+    assert.ok(
+      /registerSchemeWriteTools\s*\(\s*server/.test(source),
+      "server.ts must call registerSchemeWriteTools(server, ...)"
+    );
+  });
+
+  test("all three write tools declare readOnlyHint: false", async () => {
+    const { installObsidianStub } = await import("./obsidian-stub.mjs");
+    installObsidianStub();
+    const { registerSchemeWriteTools } = await import("../src/mcp/tools-scheme-write.ts");
+    const tools = new Map();
+    const server = { registerTool: (name, def, handler) => tools.set(name, { def, handler }) };
+    registerSchemeWriteTools(server, {}, { registry: () => ({ instances: () => [], get: () => null, skipped: () => new Map() }), notes: () => [] });
+    for (const name of EXPECTED_SCHEME_WRITE_TOOL_NAMES) {
+      assert.ok(tools.has(name), `expected "${name}" to be registered`);
+      assert.equal(tools.get(name).def.annotations.readOnlyHint, false, `${name} must be mutating`);
     }
   });
 });
