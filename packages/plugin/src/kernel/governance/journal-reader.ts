@@ -64,7 +64,11 @@ export interface AgentWrite {
 
 // Agent (MCP-transport) content writes to `path` strictly after `sinceIso`, oldest→newest.
 // Human editor edits never appear here (they don't go through MCP), which is exactly why
-// the journal is a sound "was this an agent?" oracle.
+// the journal is a sound "was this an agent?" oracle. One DELIBERATE inclusion beyond
+// literal agents: the in-Obsidian dev tool-runner journals as `client: "tool-runner"`
+// (transport "mcp" — it drives the same guarded pipeline), so a human's runner write
+// lands in review like an agent write. Conservative on purpose: runner writes carry
+// unreviewed tool output, and the client label keeps them distinguishable in the queue.
 export function agentWritesSince(
   records: JournalRecord[],
   path: string,

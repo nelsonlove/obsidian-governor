@@ -52,8 +52,14 @@ function fakeApp(specs = {}, { enableFails = false, enableThrows = false, unload
   const loaded = {};
   const enabledPlugins = new Set();
   for (const [id, spec] of Object.entries(specs)) {
+    // `folder` defaults to the id but is settable apart from it: a BRAT install
+    // or a hand-renamed folder makes them diverge, and the manifest's own `dir`
+    // is what must be used. A fake that hard-wired the id would let a refactor
+    // rebuilding the path from the id pass every test and return null in
+    // production for every mismatched folder.
     manifests[id] = { id, name: spec.name ?? id, version: spec.installed, author: spec.author ?? null,
-                      description: spec.description ?? null, dir: `.obsidian/plugins/${id}` };
+                      description: spec.description ?? null,
+                      dir: spec.dir === null ? undefined : (spec.dir ?? `.obsidian/plugins/${spec.folder ?? id}`) };
     if (spec.enabled !== false) enabledPlugins.add(id);
     if (spec.running !== undefined) {
       loaded[id] = { manifest: { id, name: spec.name ?? id, version: spec.running } };
@@ -92,7 +98,26 @@ function fakeApp(specs = {}, { enableFails = false, enableThrows = false, unload
     },
   };
   if (noLoadManifests) delete plugins.loadManifests;
-  return { app: { plugins }, calls };
+  // The DISK, which `app.plugins.manifests` is only a cached read of. `disk`
+  // defaults to the cached value; setting it apart is how a rebuild that has
+  // not been re-read is modelled. `diskUnreadable` models a missing or broken
+  // manifest.json.
+  const adapter = {
+    async read(p) {
+      // Resolve by the manifest's own dir — the same lookup production makes —
+      // plus the configDir fallback for a manifest carrying no dir.
+      const id = Object.keys(specs).find((k) => {
+        const dir = manifests[k]?.dir ?? `.obsidian/plugins/${k}`;
+        return p === `${dir}/manifest.json`;
+      });
+      if (id === undefined) throw new Error(`ENOENT: ${p}`);
+      const spec = specs[id];
+      if (spec.diskUnreadable) throw new Error("ENOENT");
+      if (spec.diskMalformed) return "{not json";
+      return JSON.stringify({ id, version: spec.disk ?? spec.installed });
+    },
+  };
+  return { app: { plugins, vault: { adapter, configDir: ".obsidian" } }, calls };
 }
 
 function nav(app) {
@@ -175,6 +200,65 @@ describe("obsidian_plugin_info", () => {
     assert.match(text(res), /Error \[plugin_not_found\]/);
   });
 
+  test("the CACHED manifest is not the disk — a bumped version Obsidian has not re-read still reads stale", async () => {
+    // The defect this file's second pass fixes, found by using the tool live:
+    // `app.plugins.manifests` is Obsidian's cached read, refreshed only by
+    // loadManifests() or a restart. Computing `stale` from it made the answer
+    // `false` in exactly the case that matters. Measured against tag-wrangler:
+    // disk 0.6.5-nl.1, cached 0.6.5, running 0.6.5.
+    const { app } = fakeApp({ tw: { installed: "0.6.5", running: "0.6.5", disk: "0.6.5-nl.1" } });
+    const res = await nav(app).call("obsidian_plugin_info", { plugin_id: "tw" });
+
+    const p = res.structuredContent.plugin;
+    assert.equal(p.version, "0.6.5", "running");
+    assert.equal(p.installed_version, "0.6.5-nl.1", "read from disk, not from the cache");
+    assert.equal(p.cached_version, "0.6.5", "what Obsidian's own updater still compares against");
+    assert.equal(p.stale, true, "computing this from cached_version would have said false");
+  });
+
+  test("the folder need not be named after the plugin id — the manifest's own dir wins", async () => {
+    // BRAT installs and hand-renamed folders diverge from the id. Rebuilding the
+    // path from the id would return null here while passing every other test.
+    const { app } = fakeApp({ tw: { installed: "1.0.0", running: "1.0.0", folder: "tag-wrangler-beta", disk: "1.1.0" } });
+    const res = await nav(app).call("obsidian_plugin_info", { plugin_id: "tw" });
+
+    const p = res.structuredContent.plugin;
+    assert.equal(p.dir, ".obsidian/plugins/tag-wrangler-beta");
+    assert.equal(p.installed_version, "1.1.0", "read from the folder dir NAMES, not from the id");
+    assert.equal(p.stale, true);
+  });
+
+  test("a manifest with no dir falls back to configDir/plugins/<id> rather than giving up", async () => {
+    // dir is optional in the Obsidian typings. Returning null instead of falling
+    // back would make installed_version null for EVERY plugin and stale
+    // permanently false — the quiet no-op this change exists to remove.
+    const { app } = fakeApp({ mb: { installed: "1.0.0", running: "1.0.0", dir: null, disk: "2.0.0" } });
+    const res = await nav(app).call("obsidian_plugin_info", { plugin_id: "mb" });
+
+    const p = res.structuredContent.plugin;
+    assert.equal(p.dir, null, "nothing to report — the manifest had none");
+    assert.equal(p.installed_version, "2.0.0", "but the disk was still read, via the fallback path");
+    assert.equal(p.stale, true);
+  });
+
+  test("an unreadable manifest.json is absent, never guessed — and absent is not stale", async () => {
+    const { app } = fakeApp({ mb: { installed: "1.0.0", running: "1.0.0", diskUnreadable: true } });
+    const res = await nav(app).call("obsidian_plugin_info", { plugin_id: "mb" });
+
+    const p = res.structuredContent.plugin;
+    assert.equal(p.installed_version, null);
+    assert.equal(p.cached_version, "1.0.0");
+    assert.equal(p.stale, false, "unknown must not read as a mismatch");
+  });
+
+  test("a malformed manifest.json is absent too, not a thrown tool", async () => {
+    const { app } = fakeApp({ mb: { installed: "1.0.0", running: "1.0.0", diskMalformed: true } });
+    const res = await nav(app).call("obsidian_plugin_info", { plugin_id: "mb" });
+
+    assert.equal(res.isError, undefined, text(res));
+    assert.equal(res.structuredContent.plugin.installed_version, null);
+  });
+
   test("reports the manifest metadata, and is deliberately NOT allowlist-filtered", async () => {
     // Pins the disclosure surface so a future change to it is a deliberate one.
     // The ruling: a plugin folder is not vault content — `visiblePaths` is
@@ -190,7 +274,7 @@ describe("obsidian_plugin_info", () => {
 
     assert.deepEqual(res.structuredContent.plugin, {
       id: "mb", name: "Meta Bind", enabled: true, loaded: true,
-      version: "1.5.2", installed_version: "1.5.2", stale: false,
+      version: "1.5.2", installed_version: "1.5.2", cached_version: "1.5.2", stale: false,
       author: "moritzjung", description: "input fields", dir: ".obsidian/plugins/mb",
     });
   });
