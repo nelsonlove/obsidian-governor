@@ -40,7 +40,7 @@ async function ensureParentFolders(app: App, filePath: string): Promise<void> {
   }
 }
 
-async function moveOne(app: App, from: string, to: string, overwrite: boolean): Promise<void> {
+export async function moveOne(app: App, from: string, to: string, overwrite: boolean): Promise<void> {
   if (!from.endsWith(".md")) throw new Error("source must end in .md");
   if (!to.endsWith(".md")) throw new Error("destination must end in .md");
   if (from === to) throw new Error("from and to are the same path");
