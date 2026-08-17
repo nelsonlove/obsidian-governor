@@ -32,6 +32,7 @@ const {
   stringifyVocabConfig,
   coerceVocabInstances,
   validateVocabInstances,
+  addAllowOpaqueEntry,
   addVocabInstance,
   removeVocabInstanceAt,
   updateVocabInstanceAt,
@@ -235,6 +236,41 @@ describe("validateVocabInstances", () => {
     const p = validateVocabInstances([{ id: "a", provider: "blueprint", root: "   " }]);
     assert.equal(p.length, 1);
     assert.match(p[0], /whitespace-only/);
+  });
+});
+
+describe("addAllowOpaqueEntry — the 'Add a command' picker's append+dedupe", () => {
+  const validIds = { "quickadd:choice:New Area note": {}, "app:reload": {} };
+
+  test("appends a real, currently-registered command id", () => {
+    const before = ["app:reload"];
+    const after = addAllowOpaqueEntry(before, "quickadd:choice:New Area note", validIds);
+    assert.deepEqual(after, ["app:reload", "quickadd:choice:New Area note"]);
+    assert.deepEqual(before, ["app:reload"], "input is not mutated");
+  });
+
+  test("a value that isn't a registered command id is a no-op (same reference)", () => {
+    const before = ["app:reload"];
+    const after = addAllowOpaqueEntry(before, "not-a-real-command", validIds);
+    assert.equal(after, before, "returns the SAME array — nothing changed");
+  });
+
+  test("re-adding an already-listed id is a no-op (same reference)", () => {
+    const before = ["app:reload"];
+    const after = addAllowOpaqueEntry(before, "app:reload", validIds);
+    assert.equal(after, before);
+  });
+
+  test("a command id containing a newline is refused, even if somehow registered", () => {
+    const before = [];
+    const idsWithNewline = { "evil:id\nsmuggled:id": {} };
+    const after = addAllowOpaqueEntry(before, "evil:id\nsmuggled:id", idsWithNewline);
+    assert.equal(after, before, "refused — would split into two entries on the next textarea round-trip");
+  });
+
+  test("an empty allowOpaque list still appends normally", () => {
+    const after = addAllowOpaqueEntry([], "app:reload", validIds);
+    assert.deepEqual(after, ["app:reload"]);
   });
 });
 
