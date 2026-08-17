@@ -20,6 +20,16 @@ function workspacesPlugin(app: App) {
 }
 
 /**
+ * Own-property lookup on the plugin registries. They are plain objects, so a
+ * raw read answers `constructor` / `toString` truthily — enough for a garbage
+ * id to pass an existence check and reach `unloadPlugin`.
+ */
+function own(map: unknown, key: string): unknown {
+  if (map === null || typeof map !== "object") return undefined;
+  return Object.prototype.hasOwnProperty.call(map, key) ? (map as Record<string, unknown>)[key] : undefined;
+}
+
+/**
  * One community plugin's state, keeping apart the two versions that can
  * disagree: `installed_version` is the manifest Obsidian read from disk,
  * `version` is the manifest the loaded instance carries. A rebuild moves the
@@ -32,8 +42,8 @@ function workspacesPlugin(app: App) {
 function pluginState(app: App, id: string) {
   // app.plugins.{manifests,plugins,enabledPlugins} are internal — not in public obsidian types.
   const plugins = (app as any).plugins;
-  const manifest = plugins?.manifests?.[id] ?? null;
-  const instance = plugins?.plugins?.[id] ?? null;
+  const manifest = (own(plugins?.manifests, id) ?? null) as any;
+  const instance = (own(plugins?.plugins, id) ?? null) as any;
   const running: string | null = instance?.manifest?.version ?? null;
   const installed: string | null = manifest?.version ?? null;
   return {
@@ -462,7 +472,7 @@ export function registerNavTools(server: McpServer, app: App, ctx: ServerCtx) {
         if (!plugins) return fail(new Error("community plugins manager not available"));
         const manifests = plugins.manifests ?? {};
         if (plugin_id) {
-          if (!manifests[plugin_id]) {
+          if (own(manifests, plugin_id) === undefined) {
             return codedError("plugin_not_found", `no community plugin with id '${plugin_id}' is installed`);
           }
           return ok({ plugin: pluginState(app, plugin_id) });
@@ -484,7 +494,8 @@ export function registerNavTools(server: McpServer, app: App, ctx: ServerCtx) {
       description:
         "Disable then re-enable a community plugin so a rebuilt main.js takes effect, re-reading the " +
         "manifests first so a bumped version is picked up too. The plugin must already be loaded. " +
-        "Returns {plugin_id, reloaded, version} — the version now running.",
+        "Returns {plugin_id, reloaded, manifests_reloaded, version} — the version now running. " +
+        "A plugin that fails to come back is reported as an error saying it is now OFF, never as a reload.",
       inputSchema: {
         plugin_id: z.string().min(1).describe("Community plugin ID, e.g. 'obsidian-meta-bind-plugin'."),
       },
@@ -500,27 +511,54 @@ export function registerNavTools(server: McpServer, app: App, ctx: ServerCtx) {
         // app.plugins.{manifests,plugins,loadManifests,disablePlugin,enablePlugin} are internal.
         const plugins = (app as any).plugins;
         if (!plugins) return fail(new Error("community plugins manager not available"));
-        if (!plugins.manifests?.[plugin_id]) {
+        if (own(plugins.manifests, plugin_id) === undefined) {
           return codedError("plugin_not_found", `no community plugin with id '${plugin_id}' is installed`);
         }
         // Gate on the LOADED instance, not enabledPlugins: that set can name a
         // configured-but-uninstalled plugin, and there is nothing to reload
         // when nothing is running.
-        if (!plugins.plugins?.[plugin_id]) {
+        if (own(plugins.plugins, plugin_id) === undefined) {
           return codedError("plugin_not_loaded", `'${plugin_id}' is installed but not loaded; enable it with obsidian_plugin_toggle`);
         }
         // A rebuild can change manifest.json too, and disable/enable alone
-        // re-runs the manifest Obsidian read at startup.
-        if (typeof plugins.loadManifests === "function") await plugins.loadManifests();
+        // re-runs the manifest Obsidian read at startup. Reported rather than
+        // assumed: on a host without it, a version bump is NOT picked up, and
+        // the caller should be told which of the two reloads it got.
+        const manifests_reloaded = typeof plugins.loadManifests === "function";
+        if (manifests_reloaded) await plugins.loadManifests();
+        // The re-read can drop the id — a rebuild that truncates manifest.json
+        // mid-write is exactly the situation this tool is used in. Enabling a
+        // plugin Obsidian no longer has a manifest for is not a reload.
+        if (own(plugins.manifests, plugin_id) === undefined) {
+          return codedError("plugin_not_found", `'${plugin_id}' vanished from the manifests when they were re-read (a broken or half-written manifest.json?); it is still loaded and was NOT disabled`);
+        }
+
         await plugins.disablePlugin(plugin_id);
+        // Obsidian SWALLOWS a throwing onunload: disablePlugin catches, shows a
+        // Notice, and leaves the instance in `plugins.plugins`. Enabling over
+        // the top would run two copies, the older one unreachable and still
+        // wired to its events — so stop here instead, with the plugin in the
+        // state the failure left it (loaded, old build).
+        if (own(plugins.plugins, plugin_id) !== undefined) {
+          return codedError("unload_failed", `'${plugin_id}' did not unload (its onunload threw — see the developer console); it was NOT re-enabled, because loading a second instance over a live one leaves both running`);
+        }
+
+        let enabled: unknown;
         try {
-          await plugins.enablePlugin(plugin_id);
+          enabled = await plugins.enablePlugin(plugin_id);
         } catch (e) {
-          // Half-reloaded is the one outcome a caller must not have to guess at.
           const why = e instanceof Error ? e.message : String(e);
           return codedError("reload_failed", `'${plugin_id}' was disabled but failed to re-enable, and is now OFF: ${why}`);
         }
-        return ok({ plugin_id, reloaded: true, version: plugins.plugins?.[plugin_id]?.manifest?.version ?? null });
+        // enablePlugin RESOLVES FALSE on failure rather than throwing — it
+        // catches the load error itself and reports it as a Notice. Checking
+        // only for a throw would return success for a plugin now switched off,
+        // so the post-state is what decides.
+        const instance = own(plugins.plugins, plugin_id) as any;
+        if (enabled === false || instance === undefined) {
+          return codedError("reload_failed", `'${plugin_id}' was disabled but did not come back, and is now OFF (a failed load, an isDesktopOnly/minAppVersion mismatch, or a deprecated plugin — see the developer console)`);
+        }
+        return ok({ plugin_id, reloaded: true, manifests_reloaded, version: instance?.manifest?.version ?? null });
       } catch (e) { return fail(e); }
     }
   );
