@@ -96,6 +96,12 @@ export interface DebtFilter {
   kind?: string;
 }
 
+/** Default staleness threshold (days) — a "sane default" (issue #211 teeth);
+ * `staleAfterDays: 0` disables it. Lives here (not in the tool layer) so the
+ * headless CLI's register render and the MCP tool agree on it without a
+ * conformance → mcp import. */
+export const DEFAULT_STALE_AFTER_DAYS = 90;
+
 const MS_PER_DAY = 86_400_000;
 
 /** Whole days between an ISO `acceptedOn` (YYYY-MM-DD) and `now`, or undefined
