@@ -31,12 +31,10 @@ import type { App } from "obsidian";
 import { ok, fail, codedError } from "./helpers.js";
 import { visiblePaths, type GuardSettings } from "../guard.js";
 import { pickInstance, parseScopeToken } from "./tools-scheme.js";
-import { moveOne } from "./tools-vault-write.js";
+import { moveOne, RW } from "./tools-vault-write.js";
 import { planAssign, planRefile, planRenumber, type MoveStep, type OnOccupied } from "../kernel/scheme/mutate.js";
 import type { Address } from "../kernel/scheme/provider.js";
 import type { SchemeRegistry, SchemeInstanceConfig } from "../kernel/scheme/registry.js";
-
-const RW = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
 
 export interface SchemeWriteToolsCtx {
   /** Rebuilt from settings per call — config edits land live, no reconnect needed. */

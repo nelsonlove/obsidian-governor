@@ -13,7 +13,7 @@ import { ok, fail, okError, validateMoves } from "./helpers.js";
 import { repointLinksInText } from "./repoint.js";
 import { visiblePaths, type GuardSettings } from "../guard.js";
 
-const RW = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
+export const RW = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
 
 export interface VaultWriteToolsCtx {
   /**
