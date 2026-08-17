@@ -17,6 +17,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { installObsidianStub, TFile, TFolder } from "./obsidian-stub.mjs";
 import { makeRegistry, DEFAULT_SCHEMES } from "../src/kernel/scheme/registry.ts";
+import { makeGuarded } from "../src/mcp/guarded.ts";
 
 installObsidianStub();
 const { registerSchemeWriteTools } = await import("../src/mcp/tools-scheme-write.ts");
@@ -139,6 +140,8 @@ describe("obsidian_assign_address", () => {
       dry_run: false,
       address: "06.10",
       moves: [{ from: "Unfiled/New thing.md", to: "00-09 System/06 Agent tooling/06.10 New thing.md" }],
+      filesChanged: 1,
+      files: ["00-09 System/06 Agent tooling/06.10 New thing.md"],
     });
     assert.deepEqual(calls.renameFile, [["Unfiled/New thing.md", "00-09 System/06 Agent tooling/06.10 New thing.md"]]);
     assert.deepEqual(calls.vaultRename, []);
@@ -202,6 +205,8 @@ describe("obsidian_refile_address", () => {
     assert.deepEqual(calls.vaultRename, []);
     assert.equal(tree.has("00-09 System/06 Agent tooling/06.13 Oops.md"), true);
     assert.equal(res.structuredContent.address, "06.13");
+    assert.equal(res.structuredContent.filesChanged, 1);
+    assert.deepEqual(res.structuredContent.files, ["00-09 System/06 Agent tooling/06.13 Oops.md"]);
   });
 
   test("an already-correctly-filed note reports already_correct: true and moves nothing, dry_run or not", async () => {
@@ -237,13 +242,14 @@ describe("obsidian_renumber_address", () => {
     const { call, calls } = toolServer();
     const res = await call("obsidian_renumber_address", {
       path: "Unfiled/New thing.md",
-      to: "06.20",
+      to_address: "06.20",
       dry_run: true,
       on_occupied: "fail",
     });
     assert.equal(res.isError, undefined, res.content?.[0]?.text);
     assert.deepEqual(res.structuredContent, {
       dry_run: true,
+      address: "06.20",
       moves: [{ from: "Unfiled/New thing.md", to: "00-09 System/06 Agent tooling/06.20 New thing.md" }],
       displaced: null,
     });
@@ -254,19 +260,22 @@ describe("obsidian_renumber_address", () => {
     const { call, calls } = toolServer();
     const res = await call("obsidian_renumber_address", {
       path: "Unfiled/New thing.md",
-      to: "06.20",
+      to_address: "06.20",
       dry_run: false,
       on_occupied: "fail",
     });
     assert.equal(res.isError, undefined, res.content?.[0]?.text);
     assert.deepEqual(calls.renameFile, [["Unfiled/New thing.md", "00-09 System/06 Agent tooling/06.20 New thing.md"]]);
+    assert.equal(res.structuredContent.address, "06.20");
+    assert.equal(res.structuredContent.filesChanged, 1);
+    assert.deepEqual(res.structuredContent.files, ["00-09 System/06 Agent tooling/06.20 New thing.md"]);
   });
 
   test("on_occupied 'fail' (the default) refuses when the target is occupied, with no moves performed", async () => {
     const { call, calls } = toolServer();
     const res = await call("obsidian_renumber_address", {
       path: "Unfiled/New thing.md",
-      to: "06.11",
+      to_address: "06.11",
       dry_run: false,
       on_occupied: "fail",
     });
@@ -289,7 +298,7 @@ describe("obsidian_renumber_address", () => {
     const { call, calls } = toolServer();
     const res = await call("obsidian_renumber_address", {
       path: "Unfiled/New thing.md",
-      to: "06.11",
+      to_address: "06.11",
       dry_run: true,
       on_occupied: "auto",
     });
@@ -306,7 +315,7 @@ describe("obsidian_renumber_address", () => {
     const { call, calls, tree } = toolServer();
     const res = await call("obsidian_renumber_address", {
       path: "Unfiled/New thing.md",
-      to: "06.11",
+      to_address: "06.11",
       dry_run: false,
       on_occupied: "auto",
     });
@@ -319,16 +328,21 @@ describe("obsidian_renumber_address", () => {
     assert.equal(tree.has("00-09 System/06 Agent tooling/06.10 Vault MCP.md"), true);
     assert.equal(tree.has("00-09 System/06 Agent tooling/06.11 New thing.md"), true);
     assert.equal(res.structuredContent.displaced, "00-09 System/06 Agent tooling/06.10 Vault MCP.md");
+    assert.equal(res.structuredContent.filesChanged, 2);
+    assert.deepEqual(res.structuredContent.files, [
+      "00-09 System/06 Agent tooling/06.10 Vault MCP.md",
+      "00-09 System/06 Agent tooling/06.11 New thing.md",
+    ]);
   });
 
-  test("on_occupied 'manual' — requires displace_to, and moves occupant there first", async () => {
+  test("on_occupied 'manual' — requires displace_to_address, and moves occupant there first", async () => {
     const { call, calls } = toolServer();
     const res = await call("obsidian_renumber_address", {
       path: "Unfiled/New thing.md",
-      to: "06.11",
+      to_address: "06.11",
       dry_run: false,
       on_occupied: "manual",
-      displace_to: "06.50",
+      displace_to_address: "06.50",
     });
     assert.equal(res.isError, undefined, res.content?.[0]?.text);
     assert.deepEqual(calls.renameFile, [
@@ -337,11 +351,11 @@ describe("obsidian_renumber_address", () => {
     ]);
   });
 
-  test("on_occupied 'manual' without displace_to is refused by the planner", async () => {
+  test("on_occupied 'manual' without displace_to_address is refused by the planner", async () => {
     const { call, calls } = toolServer();
     const res = await call("obsidian_renumber_address", {
       path: "Unfiled/New thing.md",
-      to: "06.11",
+      to_address: "06.11",
       dry_run: true,
       on_occupied: "manual",
     });
@@ -350,21 +364,21 @@ describe("obsidian_renumber_address", () => {
     assert.deepEqual(calls.renameFile, []);
   });
 
-  test("an unparseable `to` is refused before any planning runs", async () => {
+  test("an unparseable `to_address` is refused before any planning runs", async () => {
     const { call, calls } = toolServer();
-    const res = await call("obsidian_renumber_address", { path: "Unfiled/New thing.md", to: "not an address!", dry_run: true });
+    const res = await call("obsidian_renumber_address", { path: "Unfiled/New thing.md", to_address: "not an address!", dry_run: true });
     assert.equal(res.isError, true);
     assert.deepEqual(calls.renameFile, []);
   });
 
-  test("an unparseable displace_to (on_occupied manual) is refused before any planning runs", async () => {
+  test("an unparseable displace_to_address (on_occupied manual) is refused before any planning runs", async () => {
     const { call, calls } = toolServer();
     const res = await call("obsidian_renumber_address", {
       path: "Unfiled/New thing.md",
-      to: "06.11",
+      to_address: "06.11",
       dry_run: true,
       on_occupied: "manual",
-      displace_to: "not an address!",
+      displace_to_address: "not an address!",
     });
     assert.equal(res.isError, true);
     assert.deepEqual(calls.renameFile, []);
@@ -372,7 +386,7 @@ describe("obsidian_renumber_address", () => {
 
   test("a path outside the allowlist is a coded out_of_allowlist refusal", async () => {
     const { call, calls } = toolServer({ settings: { readOnly: false, allowlist: ["00-09 System"] } });
-    const res = await call("obsidian_renumber_address", { path: "Unfiled/New thing.md", to: "06.20", dry_run: true });
+    const res = await call("obsidian_renumber_address", { path: "Unfiled/New thing.md", to_address: "06.20", dry_run: true });
     assert.equal(res.isError, true);
     assert.match(res.content[0].text, /Error \[out_of_allowlist\]/);
     assert.deepEqual(calls.renameFile, []);
@@ -401,7 +415,7 @@ describe("obsidian_renumber_address", () => {
 
     const res = await call("obsidian_renumber_address", {
       path: "Unfiled/New thing.md",
-      to: "06.11",
+      to_address: "06.11",
       dry_run: false,
       on_occupied: "auto",
     });
@@ -415,5 +429,163 @@ describe("obsidian_renumber_address", () => {
     // reported inconsistent state, not merely described as such.
     assert.equal(tree.has("00-09 System/06 Agent tooling/06.10 Vault MCP.md"), true);
     assert.equal(tree.has("Unfiled/New thing.md"), true, "the source note never moved");
+  });
+});
+
+// ── finding #3: a COMPUTED destination is allowlist-checked too ─────────────
+//
+// `expectedFolder` derives the destination folder from the notes listing by
+// finding a folder segment whose own name is the container's JD token — NOT
+// from where the visible notes themselves happen to sit. So a note visible
+// deep inside a narrower allowlist prefix can still compute a destination
+// folder that is a SHORTER prefix, outside that narrower allowlist, even
+// though the note that triggered the computation is itself fully visible.
+
+describe("computed destination containment (finding #3)", () => {
+  test("a computed destination outside a narrower allowlist prefix is refused, dry_run or not, before any move runs", async () => {
+    const notes = [
+      "00-09 System/06 Agent tooling/Sub/06.11 Existing.md",
+      "00-09 System/06 Agent tooling/Sub/New thing.md",
+    ];
+    const folders = ["00-09 System", "00-09 System/06 Agent tooling", "00-09 System/06 Agent tooling/Sub"];
+    // expectedFolder finds the folder actually NAMED "06 Agent tooling" (the
+    // category container) via scopesAlongPath, not the deeper "Sub" folder
+    // the visible notes happen to live in — so category "06"'s computed
+    // destination is "00-09 System/06 Agent tooling", outside this allowlist
+    // even though the source note itself is inside it.
+    const allowlist = ["00-09 System/06 Agent tooling/Sub"];
+
+    for (const dry_run of [true, false]) {
+      const { call, calls } = toolServer({ notes, folders, settings: { readOnly: false, allowlist } });
+      const res = await call("obsidian_assign_address", {
+        path: "00-09 System/06 Agent tooling/Sub/New thing.md",
+        scope: "06",
+        dry_run,
+      });
+      assert.equal(res.isError, true, res.content?.[0]?.text);
+      assert.match(res.content[0].text, /Error \[out_of_allowlist\]/);
+      assert.match(res.content[0].text, /computed destination/);
+      assert.deepEqual(calls.renameFile, [], `dry_run=${dry_run}: no move must be attempted once the destination check refuses it`);
+    }
+  });
+});
+
+// ── finding #4: excludedRoots discipline matches the read tools ─────────────
+
+describe("excludedRoots discipline (finding #4)", () => {
+  const EXCLUDED_SCHEMES = [{ id: "jd", provider: "johnny-decimal", excludedRoots: ["Vault archaeology"] }];
+
+  test("obsidian_assign_address refuses when `path` itself is under an excluded root", async () => {
+    const notes = [...NOTES, "Vault archaeology/loose.md"];
+    const folders = [...FOLDERS, "Vault archaeology"];
+    const { call, calls } = toolServer({ schemes: EXCLUDED_SCHEMES, notes, folders });
+    const res = await call("obsidian_assign_address", { path: "Vault archaeology/loose.md", scope: "06", dry_run: true });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /excluded/);
+    assert.deepEqual(calls.renameFile, []);
+  });
+
+  test("obsidian_renumber_address refuses when `path` itself is under an excluded root", async () => {
+    const notes = [...NOTES, "Vault archaeology/loose.md"];
+    const folders = [...FOLDERS, "Vault archaeology"];
+    const { call, calls } = toolServer({ schemes: EXCLUDED_SCHEMES, notes, folders });
+    const res = await call("obsidian_renumber_address", {
+      path: "Vault archaeology/loose.md",
+      to_address: "06.20",
+      dry_run: true,
+    });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /excluded/);
+    assert.deepEqual(calls.renameFile, []);
+  });
+
+  test("obsidian_refile_address refuses when the note's only recognizing instance excludes it", async () => {
+    const notes = [...NOTES, "Vault archaeology/06.13 Archived.md"];
+    const folders = [...FOLDERS, "Vault archaeology"];
+    const { call, calls } = toolServer({ schemes: EXCLUDED_SCHEMES, notes, folders });
+    const res = await call("obsidian_refile_address", { path: "Vault archaeology/06.13 Archived.md", dry_run: true });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /excludedRoots/);
+    assert.deepEqual(calls.renameFile, []);
+  });
+
+  test("a note under an excluded root is not counted as an occupant — the address it duplicates reads as free", async () => {
+    // "06.11" is claimed only by a note under the excluded root; the live
+    // spine has no note at 06.11. Without excludeRoots applied to the notes
+    // listing planRenumber plans against, occupantOf would find the archived
+    // note and report a spurious conflict (or, with 'auto'/'manual', try to
+    // displace a note this instance does not even speak for).
+    const notes = [
+      "00-09 System/06 Agent tooling/06.00 JDex.md",
+      "Vault archaeology/06.11 Archived dup.md",
+      "Unfiled/New thing.md",
+    ];
+    const folders = ["00-09 System", "00-09 System/06 Agent tooling", "Vault archaeology", "Unfiled"];
+    const { call, calls } = toolServer({ schemes: EXCLUDED_SCHEMES, notes, folders });
+    const res = await call("obsidian_renumber_address", {
+      path: "Unfiled/New thing.md",
+      to_address: "06.11",
+      dry_run: false,
+      on_occupied: "fail",
+    });
+    assert.equal(res.isError, undefined, res.content?.[0]?.text);
+    assert.deepEqual(calls.renameFile, [["Unfiled/New thing.md", "00-09 System/06 Agent tooling/06.11 New thing.md"]]);
+  });
+});
+
+// ── finding #2: to_address/displace_to_address vs. the guard's PATH_KEYS ────
+//
+// guard.ts's PATH_KEYS includes "to" (a well-known path-argument name across
+// the tool surface). obsidian_renumber_address's target is a SCHEME ADDRESS
+// ("06.20"), not a path — so under the tool's original "to" argument name, a
+// call through the real guard wrapper with an active path allowlist got
+// checked as if "06.20" were a path, and refused as out_of_allowlist even
+// though the note actually being operated on (`path`) was fully inside the
+// allowlist. Renamed to `to_address`/`displace_to_address`, which collide
+// with nothing in PATH_KEYS/ARRAY_PATH_KEYS, so only `path` is ever checked.
+//
+// This drives the REAL makeGuarded wrapper (not the raw handler) — the same
+// harness link-healing.test.mjs's `journaledRepoint` uses — so it proves the
+// fix at the actual interception point a live client goes through, not just
+// against the bare tool handler.
+
+const ACTOR = { transport: "mcp", client: "test-client/1.0.0", connection: "test-conn-1" };
+
+describe("obsidian_renumber_address through the real guard wrapper (finding #2)", () => {
+  test("to_address/displace_to_address are never mistaken for paths — a call whose source path IS in the allowlist succeeds", async () => {
+    const { app, calls } = fakeApp();
+    const server = fakeServer();
+    // Both roots allowlisted: "Unfiled" so the source note is visible, and
+    // "00-09 System" so the "06" category's folder can still be derived from
+    // a visible member — this test is about to_address not colliding with
+    // the guard's own path check, not about a narrow-allowlist edge case
+    // (that is finding #3's "computed destination containment" test, above).
+    const allowlist = ["Unfiled", "00-09 System"];
+    registerSchemeWriteTools(server, app, {
+      registry: () => makeRegistry(DEFAULT_SCHEMES),
+      notes: () => NOTES,
+      getSettings: () => ({ readOnly: false, allowlist, schemes: DEFAULT_SCHEMES }),
+    });
+    const { def, handler } = server.tools.get("obsidian_renumber_address");
+    const guarded = makeGuarded({
+      getSettings: () => ({ readOnly: false, allowlist }),
+      actor: () => ACTOR,
+    })(def, handler, "obsidian_renumber_address");
+
+    const res = await guarded(
+      {
+        path: "Unfiled/New thing.md", // inside the allowlist
+        to_address: "06.20", // NOT a path — must never be allowlist-checked
+        displace_to_address: "06.50", // ditto, even though unused by on_occupied:"fail"
+        dry_run: true,
+        on_occupied: "fail",
+      },
+      {}
+    );
+
+    assert.equal(res.isError, undefined, res.content?.[0]?.text);
+    assert.doesNotMatch(res.content?.[0]?.text ?? "", /out_of_allowlist/);
+    assert.equal(res.structuredContent.address, "06.20");
+    assert.deepEqual(calls.renameFile, [], "dry_run must not move anything");
   });
 });

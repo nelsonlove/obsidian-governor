@@ -147,11 +147,13 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   // Cannot go through mountModules below: that host's registerAll gate refuses
   // any tool whose readOnlyHint !== true (its own header comment), and these
   // three mutate by design. Registered directly, same shape as
-  // registerVaultWriteTools above, and the same registry()/notes() pair the
-  // guarded scheme-addressing wiring (guardedOpts, above) already builds.
+  // registerVaultWriteTools above. Reuses guardedOpts.schemes/schemeNotes
+  // rather than building a third `makeRegistry(...)` closure identical to the
+  // one guardedOpts already constructed above — same per-call freshness (a
+  // scheme config edit lands live, no reconnect needed), one expression.
   registerSchemeWriteTools(server, app, {
-    registry: () => makeRegistry(ctx.getSettings().schemes ?? DEFAULT_SCHEMES),
-    notes: () => app.vault.getMarkdownFiles().map((f) => f.path),
+    registry: guardedOpts.schemes,
+    notes: guardedOpts.schemeNotes,
     getSettings: () => ctx.getSettings(),
   });
   registerComplementaryTools(server, app, ctx);
