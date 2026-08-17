@@ -6,10 +6,10 @@ The FULL set is locked by `tests/tool-inventory.test.mjs`: the names documented
 here must equal the names registered in source, both directions, or the suite
 fails (the fs-expressible and scheme sub-locks from #25/task-6 still apply).
 
-**Count summary:** 17 fs-expressible + 33 always-live + 9 module-mounted
-(default enabled, settings-toggleable) = **59 base** tools, plus up to
+**Count summary:** 17 fs-expressible + 35 always-live + 10 module-mounted
+(default enabled, settings-toggleable) = **62 base** tools, plus up to
 6 conditional integration tools and 1 CLI-conditional tool (`obsidian_cli`)
-= **up to 66 total**.  The 3 Code Mode meta-tools are an alternative
+= **up to 69 total**.  The 3 Code Mode meta-tools are an alternative
 per-connection surface and are not counted (a session sees one surface or the
 other, never both).  Not counted here (outside the locked `obsidian_*` family,
 default-disabled modules): the `skills` (`vault_skills_*`), `provenance`
@@ -18,11 +18,11 @@ module surfaces — see Section 2c and their own module docs.
 
 Cross-check: the observed live set with Dataview + Templater + Metadata Menu
 loaded (but NOT Omnisearch, no CLI binary) reported 44 tools — an observation
-that PREDATES the kernel-v0 tools (locks ×4, uid ×1, links ×1), the vocab
 module (×4), the scheme module (×6), `obsidian_write_notes`,
-`obsidian_pending_review`, and the scheme write surface (`obsidian_assign_address`,
+`obsidian_pending_review`, `obsidian_plugin_info`, `obsidian_plugin_reload`,
+and the scheme write surface (`obsidian_assign_address`,
 `obsidian_refile_address`, `obsidian_renumber_address`); the same plugin set
-today registers 17 + 33 + 9 + 6 = **65**.
+today registers 17 + 35 + 10 + 6 = **68**.
 
 ---
 
@@ -55,7 +55,7 @@ against its `FilesystemBackend`.
 
 ---
 
-## Section 2 — live-only, always registered (33)
+## Section 2 — live-only, always registered (35)
 
 These tools depend on live Obsidian `app.*` state and cannot be expressed on the
 filesystem.  They are unconditionally registered on every `buildMcpServer` call,
@@ -116,7 +116,7 @@ read tools; `dry_run` never mutates.
 | `obsidian_trash` | Move a note to the system trash (recoverable) |
 | `obsidian_vault_info` | Vault name, base path, config dir, attachment folder |
 
-### `tools-nav.ts` — `registerNavTools` (9 tools)
+### `tools-nav.ts` — `registerNavTools` (11 tools)
 
 | Tool name | Description |
 |---|---|
@@ -126,6 +126,8 @@ read tools; `dry_run` never mutates.
 | `obsidian_open_bookmark` | Open a bookmark by title |
 | `obsidian_open_workspace` | Load a named workspace layout |
 | `obsidian_periodic_note` | Open/create daily-weekly-monthly note |
+| `obsidian_plugin_info` | Community plugin state: loaded version vs installed manifest |
+| `obsidian_plugin_reload` | Reload one community plugin (disable + enable) so a rebuild takes effect |
 | `obsidian_plugin_toggle` | Enable or disable a community plugin |
 | `obsidian_save_workspace` | Save the current layout as a named workspace |
 | `obsidian_toggle_view_mode` | Switch active leaf: source / preview / live-preview |
@@ -153,7 +155,7 @@ read tools; `dry_run` never mutates.
 
 ---
 
-## Section 2b — module-mounted, default enabled (9)
+## Section 2b — module-mounted, default enabled (10)
 
 Registered through the module host (`modules-mount.ts` → `ModuleRegistry`), not
 directly: `server.ts` calls `mountModules`, and each module's tools register
@@ -296,7 +298,7 @@ it stood then:
 - (`obsidian_cli` additionally registers when the CLI binary is installed)
 
 **No tool in the observed-44 list was unaccounted for in source.**  Under the
-same plugin set the current surface registers 64 (see the count summary); the
+same plugin set the current surface registers 67 (see the count summary); the
 source↔doc lock in `tests/tool-inventory.test.mjs` keeps this file current, and
 any future live observation should be checked against that lock rather than
 this historical snapshot.
@@ -313,7 +315,7 @@ this historical snapshot.
 | `packages/plugin/src/mcp/tools-vault-write.ts` | `registerVaultWriteTools` | 2 always-live |
 | `packages/plugin/src/mcp/tools-scheme-write.ts` | `registerSchemeWriteTools` | 3 always-live |
 | `packages/plugin/src/mcp/tools-complementary.ts` | `registerComplementaryTools` | 9 always-live |
-| `packages/plugin/src/mcp/tools-nav.ts` | `registerNavTools` | 9 always-live |
+| `packages/plugin/src/mcp/tools-nav.ts` | `registerNavTools` | 11 always-live |
 | `packages/plugin/src/mcp/tools-locks.ts` | `registerLockTools` | 4 always-live |
 | `packages/plugin/src/mcp/tools-uid.ts` | `registerUidTools` | 1 always-live |
 | `packages/plugin/src/mcp/tools-links.ts` | `registerLinkTools` | 1 always-live |
