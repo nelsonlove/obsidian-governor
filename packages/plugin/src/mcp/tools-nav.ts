@@ -30,22 +30,64 @@ function own(map: unknown, key: string): unknown {
 }
 
 /**
- * One community plugin's state, keeping apart the two versions that can
- * disagree: `installed_version` is the manifest Obsidian read from disk,
- * `version` is the manifest the loaded instance carries. A rebuild moves the
- * first; only a reload moves the second.
+ * Read the version out of a plugin's `manifest.json` ON DISK.
+ *
+ * This is the correction to the first cut of these tools, found by using them:
+ * `app.plugins.manifests` is not the disk, it is Obsidian's CACHED read of the
+ * disk, refreshed only by `loadManifests()` or a restart. So after a rebuild
+ * that bumps the version — the exact moment the caller wants a warning — the
+ * cached map still holds the OLD number and matches the running instance, and a
+ * `stale` computed from it reads `false`. Measured live against tag-wrangler:
+ * disk said `0.6.5-nl.1`, both cached and running said `0.6.5`.
+ *
+ * A plain adapter read, so the tool stays read-only — no `loadManifests()`,
+ * which would mutate host state from inside a `readOnlyHint: true` handler.
+ */
+async function diskManifestVersion(app: App, id: string, dir: unknown): Promise<string | null> {
+  // `dir` is vault-relative (".obsidian/plugins/<folder>") and the folder need
+  // not equal the id — BRAT installs and hand-renamed folders diverge — so the
+  // manifest's own dir is authoritative. It is optional in the typings, and the
+  // fallback matches main.ts's loadInstallId: without one, an unset dir would
+  // make installed_version null for EVERY plugin and stale permanently false,
+  // which is the quiet no-op this whole change exists to remove.
+  const folder = typeof dir === "string" && dir ? dir : `${app.vault.configDir}/plugins/${id}`;
+  try {
+    const raw = await app.vault.adapter.read(`${folder}/manifest.json`);
+    const v = JSON.parse(raw)?.version;
+    return typeof v === "string" ? v : null;
+  } catch {
+    // Missing, unreadable or malformed — absent, never a guess.
+    return null;
+  }
+}
+
+/**
+ * One community plugin's state, keeping apart the THREE versions that can
+ * disagree:
+ *
+ * - `version` — what the loaded instance is running. Only a reload moves it.
+ * - `installed_version` — `manifest.json` on disk. A rebuild moves it.
+ * - `cached_version` — Obsidian's in-memory manifest, which is what its own
+ *   updater compares against until `loadManifests()` or a restart.
+ *
+ * `stale` is `version` vs `installed_version`, because that is the pair a
+ * caller acts on. **It is version-based and nothing else**: a rebuild that does
+ * not bump the version — the usual case in a dev loop, and always the case for
+ * a symlinked build — is invisible here. `stale: false` means the numbers
+ * agree, not that the bytes do.
  *
  * `enabled` (configured to run) and `loaded` (running) are likewise distinct —
  * `enabledPlugins` can name a configured-but-uninstalled plugin, so any
  * decision about what is actually there reads `loaded`.
  */
-function pluginState(app: App, id: string) {
+async function pluginState(app: App, id: string) {
   // app.plugins.{manifests,plugins,enabledPlugins} are internal — not in public obsidian types.
   const plugins = (app as any).plugins;
   const manifest = (own(plugins?.manifests, id) ?? null) as any;
   const instance = (own(plugins?.plugins, id) ?? null) as any;
   const running: string | null = instance?.manifest?.version ?? null;
-  const installed: string | null = manifest?.version ?? null;
+  const cached: string | null = manifest?.version ?? null;
+  const installed: string | null = await diskManifestVersion(app, id, manifest?.dir);
   return {
     id,
     name: manifest?.name ?? instance?.manifest?.name ?? id,
@@ -53,6 +95,7 @@ function pluginState(app: App, id: string) {
     loaded: instance !== null && instance !== undefined,
     version: running,
     installed_version: installed,
+    cached_version: cached,
     stale: running !== null && installed !== null && running !== installed,
     author: manifest?.author ?? null,
     description: manifest?.description ?? null,
@@ -446,19 +489,26 @@ export function registerNavTools(server: McpServer, app: App, ctx: ServerCtx) {
 
   // ── obsidian_plugin_info ────────────────────────────────────────────────────
   // Answers "what is actually RUNNING", which `obsidian_environment_info` cannot:
-  // that reports the manifests on disk. The two disagree for as long as a rebuilt
-  // plugin sits unloaded — and a symlinked dev build never touches the folder
-  // Obsidian watches, so nothing closes the gap on its own. Exposing the gap is
-  // the point of the tool; `obsidian_plugin_reload` below is how you close it.
+  // that returns an id list (`enabledPlugins`) with no versions in it at all.
+  // Running and on-disk disagree for as long as a
+  // rebuilt plugin sits unloaded — and a symlinked dev build never touches the
+  // folder Obsidian watches, so nothing closes the gap on its own. Exposing the
+  // gap is the point of the tool; `obsidian_plugin_reload` below is how you
+  // close it. Three versions are reported, not two, because the cached manifest
+  // is a third thing again — see `pluginState`.
   server.registerTool(
     "obsidian_plugin_info",
     {
-      title: "Community plugin state: loaded vs installed",
+      title: "Community plugin state: running vs on-disk vs cached",
       description:
         "Report community plugin state. With plugin_id, one plugin; without it, every installed plugin. " +
-        "Each entry is {id, name, enabled, loaded, version, installed_version, stale, author, description, dir}: " +
-        "`version` is what the loaded instance is running (null when not loaded), `installed_version` is the " +
-        "manifest on disk, and `stale` is true when they disagree — a rebuild that has not been reloaded yet.",
+        "Each entry is {id, name, enabled, loaded, version, installed_version, cached_version, stale, author, description, dir}. " +
+        "Three versions that can disagree: `version` is what the loaded instance is RUNNING (null when not loaded), " +
+        "`installed_version` is read from manifest.json ON DISK, and `cached_version` is Obsidian's in-memory manifest " +
+        "(what its own updater compares against until a restart). `stale` is true when running and on-disk disagree — " +
+        "a rebuild not yet reloaded. Two caveats: stale is VERSION-based, so a rebuild that does not bump the version " +
+        "(the usual dev-loop case, and always the case for a symlinked build) is invisible to it; and an unreadable or " +
+        "malformed manifest.json also reads as stale:false, so check installed_version is non-null before trusting it.",
       inputSchema: {
         plugin_id: z.string().min(1).optional()
           .describe("Community plugin ID, e.g. 'dataview'. Omit to report every installed plugin."),
@@ -475,10 +525,11 @@ export function registerNavTools(server: McpServer, app: App, ctx: ServerCtx) {
           if (own(manifests, plugin_id) === undefined) {
             return codedError("plugin_not_found", `no community plugin with id '${plugin_id}' is installed`);
           }
-          return ok({ plugin: pluginState(app, plugin_id) });
+          return ok({ plugin: await pluginState(app, plugin_id) });
         }
         const ids = Object.keys(manifests).sort();
-        return ok({ count: ids.length, plugins: ids.map((id) => pluginState(app, id)) });
+        // One small adapter read per plugin, run together rather than in series.
+        return ok({ count: ids.length, plugins: await Promise.all(ids.map((id) => pluginState(app, id))) });
       } catch (e) { return fail(e); }
     }
   );
