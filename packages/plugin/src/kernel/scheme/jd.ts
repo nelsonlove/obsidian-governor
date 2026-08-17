@@ -651,6 +651,24 @@ export function jdProvider(cfg: JdConfig): ScopeProvider {
     allocatable(scope: Scope) {
       return allocatabilityOf(scope, cfg);
     },
+
+    occupantOf(addr: Address, notes: string[]): Member | null {
+      const target = format(addr);
+      for (const path of notes) {
+        const p = parsedFromPath(path, cfg);
+        if (p && format(toAddress(p)) === target) return { path, address: target };
+      }
+      return null;
+    },
+
+    titleOf(path: string): string {
+      const name = basename(path).replace(/\.md$/, "");
+      const token = idTokenFromName(basename(path));
+      if (token && parseJdId(token, cfg)) {
+        return name.slice(token.length).trimStart();
+      }
+      return name;
+    },
   };
 }
 
