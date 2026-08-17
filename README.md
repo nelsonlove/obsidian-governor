@@ -191,7 +191,7 @@ journal, the path allowlist, and third-party tool trust, live in
 - [Identity & links](docs/identity-and-links.md) — uid index, `uid:` addressing, link healing.
 - [Agent write & review surface](docs/agent-writes.md) — batch writes, change-`intent`, `obsidian_pending_review`.
 - [The module system](docs/modules.md) — the registry, the mount, toggling, the accept tripwire.
-- [Scope provider](docs/scope-provider.md) · [Vocabulary provider](docs/vocabulary.md) — `jd:` addressing and controlled-vocabulary validation (both read-only).
+- [Scope provider](docs/scope-provider.md) · [Vocabulary provider](docs/vocabulary.md) — `jd:` addressing, placement, and mutation (assign/refile/renumber) and controlled-vocabulary validation (vocabulary provider is read-only).
 - [Conformance engine](docs/conformance.md) — rule packs, the ratchet, the headless CLI.
 
 Deep-dive index with the architecture story: [docs/README.md](docs/README.md).
