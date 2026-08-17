@@ -18,7 +18,9 @@ loose Python rail scripts, whose staged retirement completes when the last port 
 | `snapshot.ts` | Headless disk source: parses frontmatter/bodies into the listings packs accept (reuses `@vault-mcp/core` parsing; accepts an `excludedRoots` exclusion list — the same seam as `schemes[].excludedRoots`, not yet wired from settings in the CLI, see #116). |
 | `engine.ts` | Runs the registered packs over a snapshot. |
 | `ratchet.ts` | Baseline diff: **NEW / CLEARED / CARRIED** per finding key. New findings gate; carried ones are accepted debt burning down on the human's schedule. |
-| `cli.ts` | Headless runner (dev CLI via `tsx`). |
+| `cli.ts` | The testable rail core (`runConformance`) + `runCli` (argv/env/read/write). The debt sidecar reconcile + trend append + budget teeth live here (#211). |
+| `main.ts` | The process entry (`node --import tsx src/conformance/main.ts …`). Split from `cli.ts` so the importable core carries no `import.meta` (the plugin bundles `runConformance` for the read-only debt tool). |
+| `debt-sidecar.ts` / `debt.ts` / `debt-trend.ts` | The debt register data layer (#211): the per-key metadata sidecar, the read-only report core (carried items + burn-down + staleness/budget teeth), and the append-only trend log. |
 | `packs/` | The rule packs (below). |
 
 ## Rule packs

@@ -12,6 +12,8 @@ import { registerLockTools } from "./tools-locks.js";
 import { registerUidTools } from "./tools-uid.js";
 import { registerPendingReviewTools, obsidianPendingReviewSource } from "./tools-pending-review.js";
 import { registerLinkTools, obsidianLinkSource } from "./tools-links.js";
+import { registerConformanceDebtTools } from "./tools-conformance-debt.js";
+import { obsidianDebtSource } from "./obsidian-debt-source.js";
 import { obsidianVocabSource } from "./tools-vocab.js";
 import { obsidianSkillsBackend } from "./tools-skills.js";
 import { obsidianProvenanceBackend } from "./tools-provenance.js";
@@ -208,6 +210,15 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   // Read-only by construction: moves already heal their own links through
   // fileManager.renameFile, so this reports the drift that came from OUTSIDE.
   registerLinkTools(server, obsidianLinkSource(app), ctx);
+  // ── conformance debt register, read-only (issue #211, Part A2) ──────────────
+  // Reads the accepted-debt baseline + metadata sidecar + a live conformance
+  // run and reports the carried debt (burn-down counts, staleness, budget). No
+  // write path and no accept verb: acceptance metadata is minted only at the
+  // human-run --rebaseline, never here. Whole-vault, like obsidian_health.
+  registerConformanceDebtTools(server, obsidianDebtSource(app), {
+    config: ctx.getSettings().modules?.["conformance-debt"]?.config,
+    getSettings: () => ctx.getSettings(),
+  });
   // ── official-CLI proxy — conditional on the CLI binary being installed ──────
   // parseYaml is injected for the accept-forbidden guard's content-fence scan;
   // readTemplate for the template guard (create template= / quickadd:run-

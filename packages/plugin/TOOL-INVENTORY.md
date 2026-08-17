@@ -6,10 +6,10 @@ The FULL set is locked by `tests/tool-inventory.test.mjs`: the names documented
 here must equal the names registered in source, both directions, or the suite
 fails (the fs-expressible and scheme sub-locks from #25/task-6 still apply).
 
-**Count summary:** 17 fs-expressible + 32 always-live + 10 module-mounted
-(default enabled, settings-toggleable) = **59 base** tools, plus up to
+**Count summary:** 17 fs-expressible + 33 always-live + 10 module-mounted
+(default enabled, settings-toggleable) = **60 base** tools, plus up to
 6 conditional integration tools and 1 CLI-conditional tool (`obsidian_cli`)
-= **up to 66 total**.  The 3 Code Mode meta-tools are an alternative
+= **up to 67 total**.  The 3 Code Mode meta-tools are an alternative
 per-connection surface and are not counted (a session sees one surface or the
 other, never both).  Not counted here (outside the locked `obsidian_*` family,
 default-disabled modules): the `skills` (`vault_skills_*`), `provenance`
@@ -21,7 +21,7 @@ loaded (but NOT Omnisearch, no CLI binary) reported 44 tools — an observation
 that PREDATES the kernel-v0 tools (locks ×4, uid ×1, links ×1), the vocab
 module (×4), the scheme module (×6), `obsidian_write_notes` and
 `obsidian_pending_review`; the same plugin set today registers
-17 + 32 + 10 + 6 = **65**.
+17 + 33 + 10 + 6 = **66**.
 
 ---
 
@@ -54,7 +54,7 @@ against its `FilesystemBackend`.
 
 ---
 
-## Section 2 — live-only, always registered (32)
+## Section 2 — live-only, always registered (33)
 
 These tools depend on live Obsidian `app.*` state and cannot be expressed on the
 filesystem.  They are unconditionally registered on every `buildMcpServer` call,
@@ -136,6 +136,12 @@ regardless of which community plugins are installed.
 | Tool name | Description |
 |---|---|
 | `obsidian_check_links` | Dangling links + duplicated uids + uid coverage, report-only |
+
+### `tools-conformance-debt.ts` — `registerConformanceDebtTools` (1 tool, issue #211)
+
+| Tool name | Description |
+|---|---|
+| `obsidian_conformance_debt` | Accepted conformance-debt register: carried items (script/check/target/kind + sidecar metadata + ageDays) with burn-down counts (carried/cleared/new), a stale list, and a budget status; filter by folder/pack/check/kind and group counts. Read-only, whole-vault; never mints acceptance (that is the human-run `--rebaseline`) |
 
 ---
 
@@ -302,6 +308,7 @@ this historical snapshot.
 | `packages/plugin/src/mcp/tools-locks.ts` | `registerLockTools` | 4 always-live |
 | `packages/plugin/src/mcp/tools-uid.ts` | `registerUidTools` | 1 always-live |
 | `packages/plugin/src/mcp/tools-links.ts` | `registerLinkTools` | 1 always-live |
+| `packages/plugin/src/mcp/tools-conformance-debt.ts` | `registerConformanceDebtTools` | 1 always-live |
 | `packages/plugin/src/mcp/tools-write-notes.ts` | `registerWriteNotesTool` | 1 always-live |
 | `packages/plugin/src/mcp/tools-pending-review.ts` | `registerPendingReviewTools` | 1 always-live |
 | `packages/plugin/src/mcp/tools-scheme.ts` | `registerSchemeTools` (via `modules-mount.ts`) | 6 module-mounted |
