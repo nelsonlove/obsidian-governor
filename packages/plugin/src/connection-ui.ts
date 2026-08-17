@@ -240,6 +240,28 @@ export function validateVocabInstances(list: VocabInstanceSettings[]): string[] 
   return problems;
 }
 
+/**
+ * Append `value` to the allowOpaque re-enable list, from the "Add a command"
+ * picker. Pure; returns the SAME array (not a copy) when nothing changes, so
+ * a caller can tell "added" from "no-op" by reference — same convention the
+ * kernel's mapPaths/visiblePaths use elsewhere in this repo. Two guards
+ * beyond plain dedup: `value` must be a key of `validCommandIds` (this is
+ * what keeps the picker strictly additive convenience rather than a laxer
+ * path than the free-text textarea below it, which still accepts anything
+ * typed), and `value` must not contain a newline — allowOpaque round-trips
+ * through a one-per-line textarea (join("\n") / split("\n")), so a stored id
+ * containing "\n" would silently split into two independent entries the next
+ * time the textarea re-parses on any unrelated edit.
+ */
+export function addAllowOpaqueEntry(
+  current: string[],
+  value: string,
+  validCommandIds: Record<string, unknown>
+): string[] {
+  if (!(value in validCommandIds) || value.includes("\n") || current.includes(value)) return current;
+  return [...current, value];
+}
+
 /** Append a new, blank instance (first provider preselected). Pure. */
 export function addVocabInstance(list: VocabInstanceSettings[]): VocabInstanceSettings[] {
   return [...list, { id: "", provider: VOCAB_PROVIDERS[0], root: "" }];
@@ -534,16 +556,13 @@ export class VaultMcpSettingTab extends PluginSettingTab {
           // required (same cast the CommandSuggest / obsidian_get_command_ids
           // use).
           const commands = (this.app as any).commands.commands as Record<string, unknown>;
-          if (!(value in commands)) return;
           const current = this.plugin.settings.cliPolicy.allowOpaque;
-          if (!current.includes(value)) {
-            this.plugin.settings.cliPolicy = {
-              ...this.plugin.settings.cliPolicy,
-              allowOpaque: [...current, value],
-            };
+          const next = addAllowOpaqueEntry(current, value, commands);
+          if (next !== current) {
+            this.plugin.settings.cliPolicy = { ...this.plugin.settings.cliPolicy, allowOpaque: next };
             await this.plugin.saveSettings();
             if (allowOpaqueTextarea) {
-              allowOpaqueTextarea.value = this.plugin.settings.cliPolicy.allowOpaque.join("\n");
+              allowOpaqueTextarea.value = next.join("\n");
             }
           }
           text.setValue("");
