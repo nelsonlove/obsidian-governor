@@ -13,7 +13,7 @@
 
 import { readFile, writeFile } from "node:fs/promises";
 import { existsSync, realpathSync, lstatSync, readlinkSync, statSync } from "node:fs";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { VocabRegistry, DEFAULT_VOCABULARIES, type VocabInstanceSettings } from "../kernel/vocab/registry.js";
 import { makeRegistry, DEFAULT_SCHEMES, type SchemeInstanceConfig } from "../kernel/scheme/registry.js";
 import { buildSnapshot } from "./snapshot.js";
@@ -24,8 +24,9 @@ import { vaultConventionsFrom } from "./vault-conventions.js";
 import { parseBaseline, renderBaseline, ratchet, type RatchetResult } from "./ratchet.js";
 import { parseKey, findingKey, type Finding } from "./finding.js";
 import type { RulePack } from "./rule-pack.js";
-import { budgetStatus, type DebtBudgetStatus } from "./debt.js";
-import { parseSidecarStrict, reconcileSidecar, serializeSidecar, sidecarPathFor } from "./debt-sidecar.js";
+import { budgetStatus, DEFAULT_STALE_AFTER_DAYS, type DebtBudgetStatus } from "./debt.js";
+import { buildRegisterFromRun, registerAcceptRefusal, REGISTER_BASENAME } from "./debt-register.js";
+import { parseSidecar, parseSidecarStrict, reconcileSidecar, serializeSidecar, sidecarPathFor, type DebtSidecar } from "./debt-sidecar.js";
 import { appendTrend, trendPathFor, type DebtTrendRecord } from "./debt-trend.js";
 
 export interface RunOpts {
@@ -206,6 +207,34 @@ export function debtBudgetFrom(argv: string[], env: Record<string, string | unde
  * `ageDays` computation (debt.ts), which also works in UTC. */
 export function isoDate(now: Date): string {
   return now.toISOString().slice(0, 10);
+}
+
+/**
+ * The staleness threshold (days) for a register render (issue #211, Part B):
+ * `--stale-after=<n>`, else `ASSENT_STALE_AFTER_DAYS`, else the shared default
+ * (90). `0` disables the check; a non-numeric or negative value falls back to
+ * the default — a soft display knob, never a refusal.
+ */
+export function staleAfterFrom(argv: string[], env: Record<string, string | undefined>): number {
+  const raw =
+    argv.find((a) => a.startsWith("--stale-after="))?.slice("--stale-after=".length).trim() ??
+    (env.ASSENT_STALE_AFTER_DAYS ?? "").trim();
+  if (!raw) return DEFAULT_STALE_AFTER_DAYS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : DEFAULT_STALE_AFTER_DAYS;
+}
+
+/**
+ * An explicit register directory for this invocation (issue #211, Part B):
+ * `--register-dir=<path>`, else `ASSENT_REGISTER_DIR`, else null — the caller
+ * then defaults to the baseline's own folder, where the sidecar and trend log
+ * already live. Relative values are root-relative (resolved by the caller).
+ */
+export function registerDirFrom(argv: string[], env: Record<string, string | undefined>): string | null {
+  const flag = argv.find((a) => a.startsWith("--register-dir="))?.slice("--register-dir=".length).trim();
+  if (flag) return flag;
+  const e = (env.ASSENT_REGISTER_DIR ?? "").trim();
+  return e || null;
 }
 
 /**
@@ -718,6 +747,45 @@ export async function runCli(argv: string[]): Promise<void> {
   };
   await appendTrend(trendPathFor(baselinePath), trendRec);
 
+  // ── the human-facing register (issue #211, Part B) ─────────────────────────
+  // `--render-register` writes `Conformance debt.md` (default: beside the
+  // baseline; `--register-dir=`/`ASSENT_REGISTER_DIR` overrides). At
+  // `--rebaseline` an EXISTING register is refreshed automatically — the debt
+  // set just changed under it — but one is never created unasked. DERIVED
+  // output only: it never touches the baseline or the sidecar.
+  const renderRegister = argv.includes("--render-register");
+  const registerDirArg = registerDirFrom(argv, process.env);
+  const registerDir = registerDirArg
+    ? isAbsolute(registerDirArg)
+      ? resolve(registerDirArg)
+      : join(root, registerDirArg)
+    : dirname(baselinePath);
+  const registerPath = join(registerDir, REGISTER_BASENAME);
+  const staleAfterDays = staleAfterFrom(argv, process.env);
+  const renderRegisterTo = async (baselineKeys: Set<string>, sidecar: DebtSidecar): Promise<void> => {
+    // A baseline note named like the register would be overwritten by its own
+    // report — refuse the collision rather than clobber an acceptance record.
+    if (resolve(registerPath) === resolve(baselinePath)) {
+      throw new Error(
+        `refusing to render the register over the baseline itself (${registerPath}) — point --register-dir elsewhere`,
+      );
+    }
+    const { text } = buildRegisterFromRun({
+      baselineKeys,
+      live: res.findings,
+      sidecar,
+      now,
+      staleAfterDays,
+      debtBudget,
+      strictBudget,
+    });
+    // The shared accept-guard over the text that will land — same invariant as
+    // the MCP render tool: the register can never carry an acceptance field.
+    registerAcceptRefusal(text);
+    await writeFile(registerPath, text);
+    process.stdout.write(`rendered register ${registerPath}\n`);
+  };
+
   if (rebaseline) {
     // Computed from the run that just happened, not a hardcoded constant, and
     // keyed on the FILE THIS WILL WRITE rather than on argv shape — pointing
@@ -760,7 +828,23 @@ export async function runCli(argv: string[]): Promise<void> {
     await writeFile(sidecarPath, serializeSidecar(nextSidecar));
 
     process.stdout.write(`rebaselined ${baselinePath} (${res.findings.length} findings)\n`);
+
+    // Refresh the register from the POST-rebaseline state (every live key is
+    // now accepted; cleared/new are zero by construction) — when asked, or when
+    // a register already exists (it just went stale). Never created unasked.
+    if (renderRegister || existsSync(registerPath)) {
+      await renderRegisterTo(baselineKeysWritten, nextSidecar);
+    }
     return;
+  }
+
+  if (renderRegister) {
+    const sidecarPath = sidecarPathFor(baselinePath);
+    // Tolerant parse (the read tool's discipline): a broken sidecar renders a
+    // register without metadata rather than failing the run over a display
+    // artifact — the strict parse stays reserved for the sidecar WRITE path.
+    const sidecar = parseSidecar(existsSync(sidecarPath) ? await readFile(sidecarPath, "utf8") : "");
+    await renderRegisterTo(parseBaseline(baselineText), sidecar);
   }
 
   process.stdout.write(res.report + "\n");
