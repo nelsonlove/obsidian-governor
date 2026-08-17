@@ -220,9 +220,19 @@ export default class VaultMcpPlugin extends Plugin {
    * before the layout settles would otherwise still run its rebuild — indexing a
    * vault on behalf of an instance that no longer exists — so the callback is
    * gated on a disposed flag that `register` flips at unload. Wired only when
-   * the plugin is enabled: a disabled plugin serves no connection, so an index
-   * it maintains is upkeep nobody can read.
+   * something can READ it — a live socket (`settings.enabled`) or the dev
+   * tool-runner (whose captured tools resolve `uid:` addressing and report uid
+   * coverage over this same index; an unwired index would make those answers
+   * silently empty, precisely in the socket-off mode the runner supports) —
+   * via `ensureUidIndexWired`, so an instance serving neither does no upkeep.
    */
+  private uidIndexWired = false;
+  private ensureUidIndexWired(index: UidIndex): void {
+    if (this.uidIndexWired) return;
+    this.uidIndexWired = true;
+    this.wireUidIndex(index);
+  }
+
   private wireUidIndex(index: UidIndex): void {
     let disposed = false;
     this.register(() => { disposed = true; });
@@ -292,12 +302,14 @@ export default class VaultMcpPlugin extends Plugin {
       kernel,
     };
 
-    if (this.settings.enabled) {
-      // The uid index is kept fresh only while the plugin actually serves: with
-      // the socket down nothing can address a uid, so an index maintained off
-      // every metadata event would be work done for no reader.
-      this.wireUidIndex(uidIndex);
+    // The uid index is kept fresh only while something can actually read it:
+    // a live socket, or the dev tool-runner (which resolves uid: addressing
+    // over the same index, socket or no socket). Neither ⇒ no reader ⇒ no
+    // upkeep. The runner command below also calls ensureUidIndexWired on use,
+    // covering a devToolRunner toggle flipped ON mid-session.
+    if (this.settings.enabled || this.settings.devToolRunner) this.ensureUidIndexWired(uidIndex);
 
+    if (this.settings.enabled) {
       // One MCP server per connection → concurrent Claude Code sessions and
       // background agents share the plugin without evicting each other.
       this.listener = new UnixSocketListener(sock, (transport, connOpts) => {
@@ -389,6 +401,11 @@ export default class VaultMcpPlugin extends Plugin {
       checkCallback: (checking) => {
         if (!this.settings.devToolRunner) return false;
         if (!checking) {
+          // A late toggle-on must not leave the runner reading a never-built
+          // uid index (empty answers for uids that exist). Idempotent; and
+          // onLayoutReady fires immediately when the layout is already ready,
+          // so a mid-session first wire rebuilds right away.
+          this.ensureUidIndexWired(uidIndex);
           openToolRunner(this.app, () => {
             let registry: CapturedRegistry = new Map();
             buildMcpServer(this.app, ctx, {
