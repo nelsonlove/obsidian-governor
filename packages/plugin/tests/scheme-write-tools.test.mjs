@@ -589,3 +589,97 @@ describe("obsidian_renumber_address through the real guard wrapper (finding #2)"
     assert.deepEqual(calls.renameFile, [], "dry_run must not move anything");
   });
 });
+
+// ── code-review PR #214, finding #2: obsidian_refile_address must not
+// silently pick the FIRST configured scheme instance when a note's address
+// parses under more than one. Matches the discipline
+// resolveBareOrRef/resolveAddressAndInstance (tools-scheme.ts) already apply
+// to the `address` argument direction of obsidian_resolve_address /
+// obsidian_expected_location.
+
+describe("obsidian_refile_address instance-selection ambiguity (PR #214 finding #2)", () => {
+  const TWO_SCHEMES = [
+    { id: "jd1", provider: "johnny-decimal" },
+    { id: "jd2", provider: "johnny-decimal" },
+  ];
+
+  test("a note whose address parses under two configured scheme instances is refused, not silently resolved against the first", async () => {
+    const { call, calls } = toolServer({ schemes: TWO_SCHEMES });
+    const res = await call("obsidian_refile_address", { path: "Random/06.13 Oops.md", dry_run: true });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /Error \[scheme_ambiguous\]/);
+    assert.match(res.content[0].text, /jd1/);
+    assert.match(res.content[0].text, /jd2/);
+    assert.deepEqual(calls.renameFile, []);
+  });
+
+  test("a single configured instance is unaffected — still refiles normally", async () => {
+    const { call } = toolServer();
+    const res = await call("obsidian_refile_address", { path: "Random/06.13 Oops.md", dry_run: true });
+    assert.equal(res.isError, undefined, res.content?.[0]?.text);
+    assert.equal(res.structuredContent.address, "06.13");
+  });
+});
+
+// ── code-review PR #214, finding #3: `path` must be rejected upfront when it
+// doesn't end in .md — before any allowlist/instance/planning logic runs, and
+// with `dry_run: true` never returning a plan — matching
+// obsidian_move_notes's static validateMoves precedent.
+
+describe("path must end in .md, checked upfront (PR #214 finding #3)", () => {
+  test("obsidian_assign_address rejects a non-.md path immediately", async () => {
+    const { call, calls } = toolServer();
+    const res = await call("obsidian_assign_address", { path: "Unfiled/SomeFile.txt", scope: "06", dry_run: true });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /must end in \.md/);
+    assert.equal(res.structuredContent, undefined, "dry_run: true must never return a plan for a rejected path");
+    assert.deepEqual(calls.renameFile, []);
+  });
+
+  test("obsidian_refile_address rejects a non-.md path immediately", async () => {
+    const { call, calls } = toolServer();
+    const res = await call("obsidian_refile_address", { path: "Unfiled/SomeFile.txt", dry_run: true });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /must end in \.md/);
+    assert.equal(res.structuredContent, undefined);
+    assert.deepEqual(calls.renameFile, []);
+  });
+
+  test("obsidian_renumber_address rejects a non-.md path immediately", async () => {
+    const { call, calls } = toolServer();
+    const res = await call("obsidian_renumber_address", { path: "Unfiled/SomeFile.txt", to_address: "06.20", dry_run: true });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /must end in \.md/);
+    assert.equal(res.structuredContent, undefined);
+    assert.deepEqual(calls.renameFile, []);
+  });
+});
+
+// ── code-review PR #214, finding #4: refusals a caller might branch on carry
+// a stable `codedError` code, matching out_of_allowlist/invalid_scope/
+// scheme_unavailable two lines away in the same file — not a codeless plain
+// `fail()`.
+
+describe("coded refusals (PR #214 finding #4)", () => {
+  test("obsidian_renumber_address's occupied refusal is coded address_occupied", async () => {
+    const { call } = toolServer();
+    const res = await call("obsidian_renumber_address", {
+      path: "Unfiled/New thing.md",
+      to_address: "06.11",
+      dry_run: false,
+      on_occupied: "fail",
+    });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /Error \[address_occupied\]/);
+  });
+
+  test("an excludedRoots territory refusal is coded excluded_root", async () => {
+    const EXCLUDED_SCHEMES = [{ id: "jd", provider: "johnny-decimal", excludedRoots: ["Vault archaeology"] }];
+    const notes = [...NOTES, "Vault archaeology/loose.md"];
+    const folders = [...FOLDERS, "Vault archaeology"];
+    const { call } = toolServer({ schemes: EXCLUDED_SCHEMES, notes, folders });
+    const res = await call("obsidian_assign_address", { path: "Vault archaeology/loose.md", scope: "06", dry_run: true });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /Error \[excluded_root\]/);
+  });
+});
