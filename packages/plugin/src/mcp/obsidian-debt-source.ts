@@ -90,6 +90,9 @@ export function obsidianDebtRenderSource(app: App): DebtRegisterSource {
     defaultRegisterDir(): string {
       return dir === "." ? "" : dir;
     },
+    baselineNotePath(): string {
+      return baselineRel;
+    },
     async writeNote(path: string, text: string): Promise<void> {
       const existing = vault.getAbstractFileByPath(path);
       if (existing) {

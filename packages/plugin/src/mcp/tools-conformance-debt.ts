@@ -34,6 +34,7 @@
 // a fake source. The Obsidian adapter — which runs the real conformance engine
 // over the vault's on-disk root — is the one un-headless seam, verified live.
 
+import { posix } from "node:path";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ok, fail } from "./helpers.js";
@@ -190,8 +191,24 @@ export interface DebtRegisterSource extends DebtSource {
    * override — by convention the baseline's own folder, where the sidecar and
    * trend log already live. "" = vault root. */
   defaultRegisterDir(): string;
+  /** The baseline note's vault-relative path — consulted so the render can
+   * REFUSE a collision (a baseline named like the register must never be
+   * overwritten by its own report). */
+  baselineNotePath(): string;
   /** Write a note at a vault-relative path (creating parent folders). */
   writeNote(path: string, text: string): Promise<void>;
+}
+
+/** True when a configured register dir cannot be honored: absolute (the vault
+ * API expects vault-relative paths and would let `create` land outside the
+ * vault base) or normalizing above the vault root. "" (the vault root) is
+ * fine. Mirrors the guard's own normalize-before-compare discipline — the
+ * config is user-set, so this is a misconfiguration refusal, not a security
+ * boundary (an active allowlist already blocks escaped paths). */
+function invalidRegisterDir(dir: string): boolean {
+  if (dir.startsWith("/") || /^[A-Za-z]:[\\/]/.test(dir)) return true;
+  const n = posix.normalize(dir);
+  return n === ".." || n.startsWith("../");
 }
 
 /** Render-specific config from the raw `modules.conformance-debt.config` bag:
@@ -239,7 +256,25 @@ export function registerConformanceDebtRenderTool(
     async () => {
       try {
         const registerDir = renderCfg.registerDir ?? source.defaultRegisterDir();
-        const notePath = registerNotePathFor(registerDir);
+        if (invalidRegisterDir(registerDir)) {
+          return codedError(
+            "invalid_register_dir",
+            `registerDir (${registerDir}) must be a vault-relative folder — not absolute, not escaping the vault root.`,
+          );
+        }
+        // Normalized before use, so the path checked (allowlist, collision) is
+        // the path written.
+        const notePath = registerNotePathFor(registerDir === "" ? "" : posix.normalize(registerDir));
+        // A baseline named like the register must never be overwritten by its
+        // own report — the CLI's collision refusal, mirrored here (case-folded:
+        // the default macOS filesystem treats case variants as one file).
+        if (notePath.toLowerCase() === source.baselineNotePath().toLowerCase()) {
+          return codedError(
+            "register_baseline_collision",
+            `the register path (${notePath}) is the baseline note itself — rendering would overwrite the ` +
+              "acceptance record. Configure `registerDir` elsewhere or rename the baseline.",
+          );
+        }
         const settings = ctx.getSettings?.();
         if (settings?.allowlist?.length && !isVisible(notePath, settings)) {
           return codedError(

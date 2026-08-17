@@ -765,7 +765,13 @@ export async function runCli(argv: string[]): Promise<void> {
   const renderRegisterTo = async (baselineKeys: Set<string>, sidecar: DebtSidecar): Promise<void> => {
     // A baseline note named like the register would be overwritten by its own
     // report — refuse the collision rather than clobber an acceptance record.
-    if (resolve(registerPath) === resolve(baselinePath)) {
+    // Case-folded: the default macOS filesystem treats case variants as one
+    // file, and `resolve` does not case-canonicalize (the same caveat the
+    // rebaseline identity guard documents). A symlink alias of the register
+    // dir can still evade a string compare — accepted residual: it requires
+    // deliberately aliasing the baseline's own folder AND naming the baseline
+    // like the register.
+    if (resolve(registerPath).toLowerCase() === resolve(baselinePath).toLowerCase()) {
       throw new Error(
         `refusing to render the register over the baseline itself (${registerPath}) — point --register-dir elsewhere`,
       );

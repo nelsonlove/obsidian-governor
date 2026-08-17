@@ -264,7 +264,7 @@ describe("cleared section", () => {
 // ── 6. the mutating render tool ──────────────────────────────────────────────
 
 describe("obsidian_conformance_debt_render tool", () => {
-  function setup({ config, settings } = {}) {
+  function setup({ config, settings, baselinePath } = {}) {
     const { findings, baselineKeys, sidecar } = fixture();
     const baselineText = "```ratchet-baseline\n" + [...baselineKeys].sort().join("\n") + "\n```\n";
     const writes = [];
@@ -274,6 +274,7 @@ describe("obsidian_conformance_debt_render tool", () => {
       baselineText: async () => baselineText,
       sidecar: async () => sidecar,
       defaultRegisterDir: () => "Assent/Build/conformance",
+      baselineNotePath: () => baselinePath ?? "Assent/Build/conformance/Conformance baseline.md",
       writeNote: async (p, t) => writes.push({ path: p, text: t }),
     };
     registerConformanceDebtRenderTool(server, source, {
@@ -322,6 +323,37 @@ describe("obsidian_conformance_debt_render tool", () => {
     const res = await tool.handler({});
     assert.ok(!res.isError, res.content?.[0]?.text);
     assert.equal(writes.length, 1);
+  });
+
+  test("a baseline named like the register REFUSES — including a case variant", async () => {
+    // The exact path (via ASSENT_BASELINE_REL, a documented knob) …
+    const exact = setup({ baselinePath: `Assent/Build/conformance/${REGISTER_BASENAME}` });
+    const r1 = await exact.tool.handler({});
+    assert.equal(r1.isError, true);
+    assert.match(r1.content[0].text, /Error \[register_baseline_collision\]/);
+    assert.equal(exact.writes.length, 0);
+    // … and a case variant (macOS's default filesystem folds case).
+    const variant = setup({ baselinePath: "assent/build/conformance/conformance DEBT.md" });
+    const r2 = await variant.tool.handler({});
+    assert.equal(r2.isError, true);
+    assert.match(r2.content[0].text, /register_baseline_collision/);
+    assert.equal(variant.writes.length, 0);
+  });
+
+  test("an absolute or vault-escaping registerDir config REFUSES — nothing written", async () => {
+    for (const registerDir of ["/tmp/evil", "../outside", "a/../../outside", "C:\\evil"]) {
+      const { tool, writes } = setup({ config: { registerDir } });
+      const res = await tool.handler({});
+      assert.equal(res.isError, true, `refused: ${registerDir}`);
+      assert.match(res.content[0].text, /Error \[invalid_register_dir\]/);
+      assert.equal(writes.length, 0);
+    }
+    // an interior `..` that still normalizes inside the vault is fine — and
+    // the path written is the NORMALIZED one
+    const ok = setup({ config: { registerDir: "A/../B" } });
+    const res = await ok.tool.handler({});
+    assert.ok(!res.isError);
+    assert.equal(ok.writes[0].path, `B/${REGISTER_BASENAME}`);
   });
 
   test("the render never writes the baseline or the sidecar", async () => {
@@ -437,6 +469,15 @@ describe("CLI --render-register", () => {
         await writeFile(collidingBaseline, "# Conformance baseline\n```ratchet-baseline\n```\n");
         await assert.rejects(
           runCli([`--root=${root}`, `--baseline=${collidingBaseline}`, "--no-legacy-packs", "--no-baseline", "--render-register", "--register-dir=Reg"]),
+          /refusing to render the register over the baseline itself/,
+        );
+        // …and a CASE VARIANT of the register name collides too (the default
+        // macOS filesystem folds case; the compare is case-folded).
+        await mkdir(path.join(root, "Reg2"), { recursive: true });
+        const caseVariant = path.join(root, "Reg2", REGISTER_BASENAME.toUpperCase());
+        await writeFile(caseVariant, "# Conformance baseline\n```ratchet-baseline\n```\n");
+        await assert.rejects(
+          runCli([`--root=${root}`, `--baseline=${caseVariant}`, "--no-legacy-packs", "--no-baseline", "--render-register", "--register-dir=Reg2"]),
           /refusing to render the register over the baseline itself/,
         );
       });
