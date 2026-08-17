@@ -14,7 +14,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { existsSync, realpathSync, lstatSync, readlinkSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
-import { pathToFileURL } from "node:url";
 import { VocabRegistry, DEFAULT_VOCABULARIES, type VocabInstanceSettings } from "../kernel/vocab/registry.js";
 import { makeRegistry, DEFAULT_SCHEMES, type SchemeInstanceConfig } from "../kernel/scheme/registry.js";
 import { buildSnapshot } from "./snapshot.js";
@@ -23,8 +22,11 @@ import { runEngine, ENGINE_ID } from "./engine.js";
 import { vocabPack, schemePack, structurePack, portPack, stePack, driftPack } from "./packs/index.js";
 import { vaultConventionsFrom } from "./vault-conventions.js";
 import { parseBaseline, renderBaseline, ratchet, type RatchetResult } from "./ratchet.js";
-import { parseKey, type Finding } from "./finding.js";
+import { parseKey, findingKey, type Finding } from "./finding.js";
 import type { RulePack } from "./rule-pack.js";
+import { budgetStatus, type DebtBudgetStatus } from "./debt.js";
+import { parseSidecarStrict, reconcileSidecar, serializeSidecar, sidecarPathFor } from "./debt-sidecar.js";
+import { appendTrend, trendPathFor, type DebtTrendRecord } from "./debt-trend.js";
 
 export interface RunOpts {
   root: string;
@@ -50,6 +52,15 @@ export interface RunOpts {
    * run, but the caller then has to mean it.
    */
   legacyPacks?: boolean;
+  /**
+   * Debt-budget tooth (issue #211): the max CARRIED count before the report
+   * surfaces a WARNING. Absent/null ⇒ off. Warn-only by default — the run's
+   * exit code is unchanged unless `strictBudget` is set.
+   */
+  debtBudget?: number | null;
+  /** When set, an over-budget run FAILS (exit 1) as well as warning. Off by
+   * default: the budget must not refuse a run unless explicitly asked to. */
+  strictBudget?: boolean;
 }
 
 export interface RunResult {
@@ -64,6 +75,9 @@ export interface RunResult {
   packIds: string[];
   /** Registered packs that did NOT throw — the set the baseline was actually measured against. */
   coveredPackIds: string[];
+  /** Debt-budget tooth status (issue #211): the carried count vs the configured
+   * budget, and whether it is over (and whether that is a hard failure). */
+  budget: DebtBudgetStatus;
 }
 
 export async function runConformance(opts: RunOpts): Promise<RunResult> {
@@ -107,14 +121,21 @@ export async function runConformance(opts: RunOpts): Promise<RunResult> {
     findings.filter((f) => f.script === ENGINE_ID && f.check === "pack_error").map((f) => f.target),
   );
   const coveredPackIds = packIds.filter((id) => !errored.has(id));
+  // Debt-budget tooth (#211): warn when carried debt exceeds the configured
+  // ceiling. Warn-only unless `strictBudget` — then an over-budget run also
+  // fails, alongside the ordinary NEW-findings gate. A NEW-findings failure
+  // still fails regardless of the budget.
+  const budget = budgetStatus(result.carried, opts.debtBudget ?? null, opts.strictBudget ?? false);
+  const exitCode: 0 | 1 = result.failed || (budget.over && budget.strict) ? 1 : 0;
   return {
     packIds,
     coveredPackIds,
     findings,
     ratchet: result,
-    report: renderReport(result, packIds, baselinePackIds(baselineKeys), findings, opts.excludedRoots ?? []),
+    budget,
+    report: renderReport(result, packIds, baselinePackIds(baselineKeys), findings, opts.excludedRoots ?? [], budget),
     rebaseline: renderBaseline(findings),
-    exitCode: result.exitCode,
+    exitCode,
   };
 }
 
@@ -150,6 +171,41 @@ export function excludedRootsFrom(argv: string[], env: Record<string, string | u
     .split(",")
     .map((r) => r.trim())
     .filter(Boolean);
+}
+
+/**
+ * The identity stamped as `acceptedBy` on keys newly entering the baseline at
+ * `--rebaseline` (issue #211). `--accepted-by=<name>`, else
+ * `ASSENT_ACCEPTED_BY`, else the literal "human". Never an agent identity — the
+ * sidecar write only happens at the human-run rebaseline, and this only names
+ * WHICH human. Blank/whitespace falls through to the default.
+ */
+export const DEFAULT_ACCEPTED_BY = "human";
+export function acceptedByFrom(argv: string[], env: Record<string, string | undefined>): string {
+  const flag = argv.find((a) => a.startsWith("--accepted-by="))?.slice("--accepted-by=".length).trim();
+  if (flag) return flag;
+  const e = (env.ASSENT_ACCEPTED_BY ?? "").trim();
+  return e || DEFAULT_ACCEPTED_BY;
+}
+
+/**
+ * The debt budget for this invocation (issue #211): `--debt-budget=<n>`, else
+ * `ASSENT_DEBT_BUDGET`, else null (off). A non-numeric or negative value is
+ * ignored (off) rather than throwing — the budget is a soft guardrail.
+ */
+export function debtBudgetFrom(argv: string[], env: Record<string, string | undefined>): number | null {
+  const raw =
+    argv.find((a) => a.startsWith("--debt-budget="))?.slice("--debt-budget=".length).trim() ??
+    (env.ASSENT_DEBT_BUDGET ?? "").trim();
+  if (!raw) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+}
+
+/** ISO date (YYYY-MM-DD) for a clock, in UTC so `acceptedOn` agrees with the
+ * `ageDays` computation (debt.ts), which also works in UTC. */
+export function isoDate(now: Date): string {
+  return now.toISOString().slice(0, 10);
 }
 
 /**
@@ -401,9 +457,14 @@ function renderReport(
   baselineIds: Set<string> = new Set(),
   findings: Finding[] = [],
   excludedRoots: string[] = [],
+  budget?: DebtBudgetStatus,
 ): string {
   const lines: string[] = [];
   lines.push(`conformance: ${r.carried} carried, ${r.newKeys.length} NEW, ${r.clearedKeys.length} cleared`);
+  // Debt-budget tooth (#211): a WARNING line when carried debt is over the
+  // configured ceiling, so slow-leaking debt is visible in the plain report.
+  // Warn-only unless --strict-budget, which also fails the run (see exitCode).
+  if (budget?.warning) lines.push(`WARNING: ${budget.warning}`);
   // An exclusion that is not printed is indistinguishable from a rail that
   // simply found nothing there — declare it, per the ruling (#112).
   if (excludedRoots.length) {
@@ -578,6 +639,12 @@ export function baselineMissingRefusal(baselinePath: string, exists: boolean, no
 
 export async function runCli(argv: string[]): Promise<void> {
   const rebaseline = argv.includes("--rebaseline");
+  // The run's clock, sampled ONCE at entry. Threaded into the sidecar stamp and
+  // the trend record so both agree, and so a shared bundle never assumes a live
+  // Date.now() in a context that lacks one (issue #211).
+  const now = new Date();
+  const debtBudget = debtBudgetFrom(argv, process.env);
+  const strictBudget = argv.includes("--strict-budget");
   const rootArg = argv.find((a) => a.startsWith("--root="))?.slice("--root=".length);
   let root: string;
   if (rootArg) {
@@ -624,6 +691,9 @@ export async function runCli(argv: string[]): Promise<void> {
     legacyPacks: !argv.includes("--no-legacy-packs"),
     // The rail governs live content, not the frozen archive (#112 ruling).
     excludedRoots,
+    // Debt-budget tooth (#211): warn-only unless --strict-budget.
+    debtBudget,
+    strictBudget,
   });
 
   // Coverage is checked on EVERY run, not only before a rebaseline: a baseline
@@ -634,6 +704,19 @@ export async function runCli(argv: string[]): Promise<void> {
   const covered = new Set(res.coveredPackIds);
   const coverage = coverageRefusal(baselineIds, covered, rebaseline ? "--rebaseline" : "run");
   if (coverage) throw new Error(coverage);
+
+  // Trend (#211, A3): one append-only record per run capturing the burn-down
+  // numbers, beside the baseline. Best-effort — a broken trend log never fails
+  // the run (appendTrend swallows). Recorded on every run that got this far
+  // (past all refusals), including a rebaseline, whose counts describe the
+  // state the human is about to accept.
+  const trendRec: DebtTrendRecord = {
+    ts: now.toISOString(),
+    carried: res.ratchet.carried,
+    cleared: res.ratchet.clearedKeys.length,
+    new: res.ratchet.newKeys.length,
+  };
+  await appendTrend(trendPathFor(baselinePath), trendRec);
 
   if (rebaseline) {
     // Computed from the run that just happened, not a hardcoded constant, and
@@ -654,8 +737,28 @@ export async function runCli(argv: string[]): Promise<void> {
   }
 
   if (rebaseline) {
+    // Debt metadata sidecar (#211, A1): reconcile it against the keyset being
+    // written. New keys get `acceptedOn` (this run's clock) + `acceptedBy` (the
+    // human identity); persisting keys carry their entry forward verbatim
+    // (human reason/priority/fixBy preserved); departed keys are dropped. This
+    // is the ONE place acceptance metadata is minted, and it runs only here, at
+    // the human-run --rebaseline. Parsed/reconciled BEFORE the baseline write so
+    // a corrupt existing sidecar (strict parse throws) aborts the WHOLE
+    // rebaseline atomically — never leaving the baseline rewritten while the
+    // human's annotations we could not read are clobbered or stranded.
+    const sidecarPath = sidecarPathFor(baselinePath);
+    const prevSidecarText = existsSync(sidecarPath) ? await readFile(sidecarPath, "utf8") : "";
+    const prevSidecar = parseSidecarStrict(prevSidecarText); // throws on a present-but-corrupt sidecar
+    const baselineKeysWritten = new Set(res.findings.map((f) => findingKey(f)));
+    const nextSidecar = reconcileSidecar(prevSidecar, baselineKeysWritten, {
+      acceptedOn: isoDate(now),
+      acceptedBy: acceptedByFrom(argv, process.env),
+    });
+
     const next = writeFence(baselineText || "# Conformance baseline\n", res.rebaseline);
     await writeFile(baselinePath, next);
+    await writeFile(sidecarPath, serializeSidecar(nextSidecar));
+
     process.stdout.write(`rebaselined ${baselinePath} (${res.findings.length} findings)\n`);
     return;
   }
@@ -664,9 +767,6 @@ export async function runCli(argv: string[]): Promise<void> {
   process.exitCode = res.exitCode;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  runCli(process.argv.slice(2)).catch((e) => {
-    process.stderr.write(`conformance: ${e instanceof Error ? e.message : String(e)}\n`);
-    process.exitCode = 3;
-  });
-}
+// The process entry lives in ./main.ts (kept separate so this importable core
+// carries no `import.meta` — the plugin bundles `runConformance` from here for
+// the read-only debt tool, and esbuild cannot represent `import.meta` in CJS).
