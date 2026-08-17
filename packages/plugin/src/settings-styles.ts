@@ -17,7 +17,10 @@
  * so re-opening the settings tab never stacks duplicate stylesheets. */
 export const SETTINGS_STYLE_ID = "vault-mcp-settings-styles";
 
-/** The tabbed-settings stylesheet. Scoped under `.vault-mcp-settings`. */
+/** The plugin stylesheet: the tabbed settings tab (scoped under
+ * `.vault-mcp-settings`) plus the dev tool-runner's modal styles (scoped by
+ * the `vault-mcp-runner-` class prefix — modals render outside the settings
+ * wrapper, so they carry their own prefix instead). */
 export const SETTINGS_STYLES = `
 .vault-mcp-settings .settings-view__tab-nav {
   display: flex;
@@ -61,6 +64,93 @@ export const SETTINGS_STYLES = `
   .vault-mcp-settings .settings-view__tab-content--active {
     animation: none;
   }
+}
+
+/* ── dev tool-runner modals (src/tool-runner.ts) ─────────────────────────────
+   Scoped by the vault-mcp-runner-* prefix; theme-aware via Obsidian's own CSS
+   variables, like the tab styles above. */
+.vault-mcp-runner-item-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--size-4-2, 8px);
+}
+.vault-mcp-runner-item-name {
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-small, 13px);
+}
+.vault-mcp-runner-item-title {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller, 12px);
+}
+.vault-mcp-runner-badge {
+  font-size: var(--font-ui-smaller, 12px);
+  border-radius: var(--radius-s, 4px);
+  padding: 0 var(--size-4-1, 4px);
+}
+.vault-mcp-runner-badge--read {
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+}
+.vault-mcp-runner-badge--write {
+  background: var(--background-modifier-error);
+  color: var(--text-on-accent, var(--text-normal));
+}
+.vault-mcp-runner-item-desc {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller, 12px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vault-mcp-runner-desc {
+  color: var(--text-muted);
+}
+.vault-mcp-runner-warning {
+  border: 1px solid var(--background-modifier-error);
+  border-radius: var(--radius-s, 4px);
+  padding: var(--size-4-2, 8px);
+  margin: var(--size-4-2, 8px) 0;
+  color: var(--text-error);
+}
+.vault-mcp-runner-error-banner {
+  border: 1px solid var(--background-modifier-error);
+  background: var(--background-modifier-error-hover, transparent);
+  border-radius: var(--radius-s, 4px);
+  padding: var(--size-4-2, 8px);
+  margin-bottom: var(--size-4-2, 8px);
+  color: var(--text-error);
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-small, 13px);
+  word-break: break-word;
+}
+.vault-mcp-runner-error-line {
+  color: var(--text-error);
+  font-size: var(--font-ui-small, 13px);
+}
+.vault-mcp-runner-meta {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller, 12px);
+}
+.vault-mcp-runner-section {
+  margin-top: var(--size-4-3, 12px);
+  font-weight: 600;
+  font-size: var(--font-ui-small, 13px);
+}
+.vault-mcp-runner-pre {
+  max-height: 12em;
+  overflow: auto;
+  background: var(--background-secondary);
+  border-radius: var(--radius-s, 4px);
+  padding: var(--size-4-2, 8px);
+  font-size: var(--font-ui-smaller, 12px);
+  user-select: text;
+}
+.vault-mcp-runner-pre--result {
+  max-height: 24em;
+}
+.vault-mcp-runner-json {
+  width: 100%;
+  font-family: var(--font-monospace);
 }
 `;
 

@@ -2,6 +2,8 @@ import { Plugin, FileSystemAdapter, Modal, Notice, type Component } from "obsidi
 import * as fs from "node:fs";
 import { UnixSocketListener } from "./socket-transport.js";
 import { buildMcpServer } from "./mcp/server.js";
+import type { CapturedRegistry } from "./mcp/tools-code-mode.js";
+import { openToolRunner } from "./tool-runner.js";
 import { vaultSlug, socketPath, stateDir, bridgeDestPath } from "./paths.js";
 import { writeDiscovery, removeDiscovery, writeBridge, type Discovery } from "./discovery.js";
 import { ConnectionSetupModal, VaultMcpSettingTab } from "./connection-ui.js";
@@ -67,6 +69,16 @@ interface VaultMcpSettings {
    * indirectly are what this policy denies. See mcp/cli-policy.ts.
    */
   cliPolicy: { deny: string[]; allowOpaque: string[] };
+  /**
+   * The in-Obsidian dev tool-runner ("Vault MCP: Run tool…" — src/tool-runner.ts).
+   * Default ON: it grants nothing the MCP surface doesn't already grant — it
+   * invokes the same guarded captured tools a code-mode connection gets, so
+   * every rail (read-only mode, allowlist, queue, journal, accept-forbidden)
+   * binds identically. The toggle exists so a locked-down vault can remove the
+   * in-app surface anyway; it is read live by the command's checkCallback, so
+   * flipping it needs no reload.
+   */
+  devToolRunner: boolean;
 }
 const DEFAULT_SETTINGS: VaultMcpSettings = {
   setupAcknowledged: false,
@@ -84,6 +96,7 @@ const DEFAULT_SETTINGS: VaultMcpSettings = {
   schemes: structuredClone(DEFAULT_SCHEMES),
   modules: {},
   cliPolicy: { deny: [], allowOpaque: [] },
+  devToolRunner: true,
 };
 
 class DiagnosticsModal extends Modal {
@@ -207,9 +220,19 @@ export default class VaultMcpPlugin extends Plugin {
    * before the layout settles would otherwise still run its rebuild — indexing a
    * vault on behalf of an instance that no longer exists — so the callback is
    * gated on a disposed flag that `register` flips at unload. Wired only when
-   * the plugin is enabled: a disabled plugin serves no connection, so an index
-   * it maintains is upkeep nobody can read.
+   * something can READ it — a live socket (`settings.enabled`) or the dev
+   * tool-runner (whose captured tools resolve `uid:` addressing and report uid
+   * coverage over this same index; an unwired index would make those answers
+   * silently empty, precisely in the socket-off mode the runner supports) —
+   * via `ensureUidIndexWired`, so an instance serving neither does no upkeep.
    */
+  private uidIndexWired = false;
+  private ensureUidIndexWired(index: UidIndex): void {
+    if (this.uidIndexWired) return;
+    this.uidIndexWired = true;
+    this.wireUidIndex(index);
+  }
+
   private wireUidIndex(index: UidIndex): void {
     let disposed = false;
     this.register(() => { disposed = true; });
@@ -279,12 +302,14 @@ export default class VaultMcpPlugin extends Plugin {
       kernel,
     };
 
-    if (this.settings.enabled) {
-      // The uid index is kept fresh only while the plugin actually serves: with
-      // the socket down nothing can address a uid, so an index maintained off
-      // every metadata event would be work done for no reader.
-      this.wireUidIndex(uidIndex);
+    // The uid index is kept fresh only while something can actually read it:
+    // a live socket, or the dev tool-runner (which resolves uid: addressing
+    // over the same index, socket or no socket). Neither ⇒ no reader ⇒ no
+    // upkeep. The runner command below also calls ensureUidIndexWired on use,
+    // covering a devToolRunner toggle flipped ON mid-session.
+    if (this.settings.enabled || this.settings.devToolRunner) this.ensureUidIndexWired(uidIndex);
 
+    if (this.settings.enabled) {
       // One MCP server per connection → concurrent Claude Code sessions and
       // background agents share the plugin without evicting each other.
       this.listener = new UnixSocketListener(sock, (transport, connOpts) => {
@@ -349,6 +374,50 @@ export default class VaultMcpPlugin extends Plugin {
       id: "connect-claude-code",
       name: "Connect to Claude Code",
       callback: () => this.autoRegister(true),
+    });
+
+    // ── dev tool-runner: "Vault MCP: Run tool…" ────────────────────────────────
+    // ONE command over the whole tool surface, not one command per tool: ~68
+    // commands would spam the palette, and — since every Obsidian command is
+    // agent-reachable via obsidian_run_command — would multiply the policy
+    // surface for zero gain. The registry is built LAZILY per invocation via a
+    // fresh codeMode capture build (the same registration path a new MCP
+    // connection runs), so conditional tools reflect the live plugin state.
+    // The built server is never connected to any transport — only its captured
+    // guarded handlers are used — and its journal actor carries
+    // client: "tool-runner" so runner writes are distinguishable in the audit
+    // stream while still landing exactly like MCP writes.
+    //
+    // This command being agent-invokable via obsidian_run_command is fine BY
+    // CONSTRUCTION: it grants nothing MCP doesn't already grant (an agent with
+    // run_command has the MCP tools directly, under the same guard), and the
+    // modal chain requires real UI interaction anyway. Registered regardless of
+    // `settings.enabled` (the socket) — dev use with the transport off is the
+    // point — but gated live on the devToolRunner setting via checkCallback,
+    // which also gates executeCommandById.
+    this.addCommand({
+      id: "run-tool",
+      name: "Run tool…",
+      checkCallback: (checking) => {
+        if (!this.settings.devToolRunner) return false;
+        if (!checking) {
+          // A late toggle-on must not leave the runner reading a never-built
+          // uid index (empty answers for uids that exist). Idempotent; and
+          // onLayoutReady fires immediately when the layout is already ready,
+          // so a mid-session first wire rebuilds right away.
+          this.ensureUidIndexWired(uidIndex);
+          openToolRunner(this.app, () => {
+            let registry: CapturedRegistry = new Map();
+            buildMcpServer(this.app, ctx, {
+              codeMode: true,
+              clientLabel: "tool-runner",
+              onRegistry: (r) => (registry = r),
+            });
+            return registry;
+          });
+        }
+        return true;
+      },
     });
 
     void this.autoRegister();
