@@ -110,7 +110,7 @@ regardless of which community plugins are installed.
 | `obsidian_open_bookmark` | Open a bookmark by title |
 | `obsidian_open_workspace` | Load a named workspace layout |
 | `obsidian_periodic_note` | Open/create daily-weekly-monthly note |
-| `obsidian_plugin_info` | Community plugin state: loaded version vs installed manifest |
+| `obsidian_plugin_info` | Community plugin state: running vs on-disk vs Obsidian's cached manifest version |
 | `obsidian_plugin_reload` | Reload one community plugin (disable + enable) so a rebuild takes effect |
 | `obsidian_plugin_toggle` | Enable or disable a community plugin |
 | `obsidian_save_workspace` | Save the current layout as a named workspace |

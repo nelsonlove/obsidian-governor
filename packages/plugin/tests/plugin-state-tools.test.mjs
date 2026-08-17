@@ -92,7 +92,21 @@ function fakeApp(specs = {}, { enableFails = false, enableThrows = false, unload
     },
   };
   if (noLoadManifests) delete plugins.loadManifests;
-  return { app: { plugins }, calls };
+  // The DISK, which `app.plugins.manifests` is only a cached read of. `disk`
+  // defaults to the cached value; setting it apart is how a rebuild that has
+  // not been re-read is modelled. `diskUnreadable` models a missing or broken
+  // manifest.json.
+  const adapter = {
+    async read(p) {
+      const id = Object.keys(specs).find((k) => p === `.obsidian/plugins/${k}/manifest.json`);
+      if (id === undefined) throw new Error("ENOENT");
+      const spec = specs[id];
+      if (spec.diskUnreadable) throw new Error("ENOENT");
+      if (spec.diskMalformed) return "{not json";
+      return JSON.stringify({ id, version: spec.disk ?? spec.installed });
+    },
+  };
+  return { app: { plugins, vault: { adapter } }, calls };
 }
 
 function nav(app) {
@@ -175,6 +189,40 @@ describe("obsidian_plugin_info", () => {
     assert.match(text(res), /Error \[plugin_not_found\]/);
   });
 
+  test("the CACHED manifest is not the disk — a bumped version Obsidian has not re-read still reads stale", async () => {
+    // The defect this file's second pass fixes, found by using the tool live:
+    // `app.plugins.manifests` is Obsidian's cached read, refreshed only by
+    // loadManifests() or a restart. Computing `stale` from it made the answer
+    // `false` in exactly the case that matters. Measured against tag-wrangler:
+    // disk 0.6.5-nl.1, cached 0.6.5, running 0.6.5.
+    const { app } = fakeApp({ tw: { installed: "0.6.5", running: "0.6.5", disk: "0.6.5-nl.1" } });
+    const res = await nav(app).call("obsidian_plugin_info", { plugin_id: "tw" });
+
+    const p = res.structuredContent.plugin;
+    assert.equal(p.version, "0.6.5", "running");
+    assert.equal(p.installed_version, "0.6.5-nl.1", "read from disk, not from the cache");
+    assert.equal(p.cached_version, "0.6.5", "what Obsidian's own updater still compares against");
+    assert.equal(p.stale, true, "computing this from cached_version would have said false");
+  });
+
+  test("an unreadable manifest.json is absent, never guessed — and absent is not stale", async () => {
+    const { app } = fakeApp({ mb: { installed: "1.0.0", running: "1.0.0", diskUnreadable: true } });
+    const res = await nav(app).call("obsidian_plugin_info", { plugin_id: "mb" });
+
+    const p = res.structuredContent.plugin;
+    assert.equal(p.installed_version, null);
+    assert.equal(p.cached_version, "1.0.0");
+    assert.equal(p.stale, false, "unknown must not read as a mismatch");
+  });
+
+  test("a malformed manifest.json is absent too, not a thrown tool", async () => {
+    const { app } = fakeApp({ mb: { installed: "1.0.0", running: "1.0.0", diskMalformed: true } });
+    const res = await nav(app).call("obsidian_plugin_info", { plugin_id: "mb" });
+
+    assert.equal(res.isError, undefined, text(res));
+    assert.equal(res.structuredContent.plugin.installed_version, null);
+  });
+
   test("reports the manifest metadata, and is deliberately NOT allowlist-filtered", async () => {
     // Pins the disclosure surface so a future change to it is a deliberate one.
     // The ruling: a plugin folder is not vault content — `visiblePaths` is
@@ -190,7 +238,7 @@ describe("obsidian_plugin_info", () => {
 
     assert.deepEqual(res.structuredContent.plugin, {
       id: "mb", name: "Meta Bind", enabled: true, loaded: true,
-      version: "1.5.2", installed_version: "1.5.2", stale: false,
+      version: "1.5.2", installed_version: "1.5.2", cached_version: "1.5.2", stale: false,
       author: "moritzjung", description: "input fields", dir: ".obsidian/plugins/mb",
     });
   });
