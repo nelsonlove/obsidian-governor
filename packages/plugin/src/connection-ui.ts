@@ -5,6 +5,7 @@ import { bridgeDestPath } from "./paths.js";
 import { findClaudeBinary, claudeIsRegistered } from "./claude-cli.js";
 import { DANGEROUS_LIST_DESC } from "./mcp/tools-cli.js";
 import { OPAQUE_ACCEPT_CLI_COMMANDS, OPAQUE_ACCEPT_COMMAND_IDS } from "./mcp/cli-policy.js";
+import { CommandSuggest } from "./command-suggest.js";
 import { builtinModules } from "./mcp/modules-mount.js";
 import { renderGovernanceSettings } from "./governance/wiring.js";
 import {
@@ -237,6 +238,28 @@ export function validateVocabInstances(list: VocabInstanceSettings[]): string[] 
     }
   });
   return problems;
+}
+
+/**
+ * Append `value` to the allowOpaque re-enable list, from the "Add a command"
+ * picker. Pure; returns the SAME array (not a copy) when nothing changes, so
+ * a caller can tell "added" from "no-op" by reference — same convention the
+ * kernel's mapPaths/visiblePaths use elsewhere in this repo. Two guards
+ * beyond plain dedup: `value` must be a key of `validCommandIds` (this is
+ * what keeps the picker strictly additive convenience rather than a laxer
+ * path than the free-text textarea below it, which still accepts anything
+ * typed), and `value` must not contain a newline — allowOpaque round-trips
+ * through a one-per-line textarea (join("\n") / split("\n")), so a stored id
+ * containing "\n" would silently split into two independent entries the next
+ * time the textarea re-parses on any unrelated edit.
+ */
+export function addAllowOpaqueEntry(
+  current: string[],
+  value: string,
+  validCommandIds: Record<string, unknown>
+): string[] {
+  if (!(value in validCommandIds) || value.includes("\n") || current.includes(value)) return current;
+  return [...current, value];
 }
 
 /** Append a new, blank instance (first provider preselected). Pure. */
@@ -510,15 +533,53 @@ export class VaultMcpSettingTab extends PluginSettingTab {
     // quickadd:run, quickadd:run-template, eval, command, and quickadd:*
     // run_command ids — is denied by DEFAULT; the re-enable list below is the
     // one human-only way back in. The deny list always wins over a re-enable.
+    //
+    // allowOpaque holds run_command IDs, not CLI command names — a picker
+    // over app.commands (registered Obsidian commands, e.g. a QuickAdd
+    // choice's quickadd:choice:<name> id) covers exactly that half. The CLI
+    // side (quickadd/quickadd:run-template/eval/command) still has to be
+    // typed by hand below: those aren't registered Obsidian commands, so
+    // there's nothing to pick from.
+    let allowOpaqueTextarea: HTMLTextAreaElement | undefined;
+    new Setting(containerEl)
+      .setName("Add a command")
+      .setDesc(
+        "Search registered Obsidian commands by name or id (e.g. a QuickAdd choice) and pick one to add it to " +
+          "the re-enable list below. Adds the moment the box holds a real, currently-registered command id — " +
+          "whether that came from picking a suggestion or typing the id out in full."
+      )
+      .addText((text) => {
+        new CommandSuggest(this.app, text.inputEl);
+        text.setPlaceholder("Search commands…");
+        text.onChange(async (value) => {
+          // app.commands.commands is not in the public obsidian types — cast
+          // required (same cast the CommandSuggest / obsidian_get_command_ids
+          // use).
+          const commands = (this.app as any).commands.commands as Record<string, unknown>;
+          const current = this.plugin.settings.cliPolicy.allowOpaque;
+          const next = addAllowOpaqueEntry(current, value, commands);
+          if (next !== current) {
+            this.plugin.settings.cliPolicy = { ...this.plugin.settings.cliPolicy, allowOpaque: next };
+            await this.plugin.saveSettings();
+            if (allowOpaqueTextarea) {
+              allowOpaqueTextarea.value = next.join("\n");
+            }
+          }
+          text.setValue("");
+        });
+      });
+
     new Setting(containerEl)
       .setName("Re-enabled opaque commands")
       .setDesc(
         `Opaque macro/code commands (${[...OPAQUE_ACCEPT_CLI_COMMANDS].join(", ")}; ${[...OPAQUE_ACCEPT_COMMAND_IDS].join(", ")} ` +
           "command ids) are denied by default — the acceptance guard cannot inspect what they execute. List a " +
           "specific command or exact command id here (one per line; no wildcards — each entry re-enables exactly " +
-          "one) to re-enable it. eval/command additionally require the dangerous-CLI toggle above. Takes effect immediately."
+          "one) to re-enable it, or use the picker above for a registered command id. eval/command additionally " +
+          "require the dangerous-CLI toggle above. Takes effect immediately."
       )
       .addTextArea((ta) => {
+        allowOpaqueTextarea = ta.inputEl;
         ta.setValue(this.plugin.settings.cliPolicy.allowOpaque.join("\n"));
         ta.inputEl.rows = 3;
         ta.inputEl.style.width = "100%";
