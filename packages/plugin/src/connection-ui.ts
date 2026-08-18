@@ -548,8 +548,8 @@ export class VaultMcpSettingTab extends PluginSettingTab {
       );
 
     // Command policy (mcp/cli-policy.ts). The opaque-accept set — quickadd,
-    // quickadd:run, quickadd:run-template, eval, command, and quickadd:*
-    // run_command ids — is denied by DEFAULT; the re-enable list below is the
+    // quickadd:run, quickadd:run-template, eval, command, and the quickadd:*
+    // / js-engine:* run_command id families — is denied by DEFAULT; the re-enable list below is the
     // one human-only way back in. The deny list always wins over a re-enable.
     //
     // allowOpaque holds run_command IDs, not CLI command names — a picker
