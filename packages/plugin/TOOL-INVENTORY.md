@@ -14,8 +14,9 @@ fails (the fs-expressible and scheme sub-locks from #25/task-6 still apply).
 CLI-conditional tool (`obsidian_cli`, default OFF)
 = **up to 80 total**.  The 3 Code Mode meta-tools are an alternative
 per-connection surface and are not counted (a session sees one surface or the
-other, never both).  Not counted here (outside the locked `obsidian_*` family,
-default-disabled modules): the `skills` (`vault_skills_*`), `provenance`
+other, never both).  Not counted here (outside the locked `obsidian_*` family):
+the always-on `governance_submit_revision` (1 tool, see its section below), and
+the default-disabled `skills` (`vault_skills_*`), `provenance`
 (`provenance_*`), and `fileclass` (`fileclass_*`, 8 tools, plugin+binary-gated)
 module surfaces — see Section 2c and their own module docs.
 
@@ -107,6 +108,15 @@ read tools; `dry_run` never mutates.
 | Tool name | Description |
 |---|---|
 | `obsidian_pending_review` | Read-only view of Stewardship's published review queue (`pending-index.json`); data-only coupling, no accept verb |
+
+### `tools-governance-revision.ts` — `registerGovernanceRevisionTool` (1 tool, #101)
+
+Outside the locked `obsidian_*` family (like the module surfaces), but
+registered ALWAYS-ON in `server.ts` through the ordinary guarded registrar.
+
+| Tool name | Description |
+|---|---|
+| `governance_submit_revision` | The one agent-expressible disposition (#221 authority axis): resubmit a note a human marked `acceptance-status: revising` — status back to `proposed`, the `[!revision-request]` callout(s) removed, optional `summary` inserted as a `[!revision-report]` callout below the H1. Mutating (`readOnlyHint: false`); refuses `not_revising` when there is nothing to submit; re-checks the write with the shared accept-forbidden guard — it can never write acceptance |
 
 ### `tools-complementary.ts` — `registerComplementaryTools` (9 tools)
 
