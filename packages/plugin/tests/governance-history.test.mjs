@@ -185,7 +185,7 @@ test("history.ts references no accept/baseline/log-write capability and imports 
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/([^:])\/\/[^\n]*/g, "$1")
     .replace(/^\/\/[^\n]*/gm, "");
-  for (const name of ["setBaseline", "acceptNote", "revertNote", "performAccept", "performAdopt", "appendLog", "stampAcceptance", "adapter"]) {
+  for (const name of ["setBaseline", "acceptNote", "revertNote", "performAccept", "performAdopt", "appendLog", "stampAcceptedFrontmatter", "adapter"]) {
     assert.ok(!new RegExp(`\\b${name}\\b`).test(src), `history.ts must not reference ${name}`);
   }
   assert.ok(!/from\s+["']obsidian["']/.test(src), "history.ts must not import obsidian");

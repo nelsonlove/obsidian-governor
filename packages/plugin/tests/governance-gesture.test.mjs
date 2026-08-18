@@ -139,6 +139,49 @@ test("runGuardedDisposition with a confirm gate: forged arg never even opens the
   assert.equal(acted, 0);
 });
 
+// ── #221/#164: the CONVERGED accept behind the gate now also WRITES (the stamp) ──
+//
+// Since the acceptance convergence, a gesture-gated Accept on a `proposed` note stamps the
+// accepted family into the note's frontmatter as well as advancing the baseline. The gate is
+// the same isRealGesture perimeter — so a forged/synthesized gesture must produce NO stamp
+// AND NO baseline advance. Modeled exactly as the pane handler is wired: the accept action
+// (stamp + advance, the acceptNote shape) runs only behind the gesture check.
+
+test("converged accept: a FORGED plain-object gesture produces no stamp and no baseline advance", async () => {
+  let stamps = 0;
+  let advances = 0;
+  const outcome = await runGuardedDispositionShim({ isTrusted: true }, async () => { stamps++; advances++; });
+  assert.equal(outcome, "blocked-untrusted");
+  assert.equal(stamps, 0, "a forged gesture must never stamp the accepted family");
+  assert.equal(advances, 0, "a forged gesture must never advance a baseline");
+});
+
+test("converged accept: a SYNTHESIZED (untrusted) Event produces no stamp and no baseline advance", async () => {
+  let stamps = 0;
+  let advances = 0;
+  const outcome = await runGuardedDispositionShim(new Event("click"), async () => { stamps++; advances++; });
+  assert.equal(outcome, "blocked-untrusted");
+  assert.equal(stamps, 0);
+  assert.equal(advances, 0);
+});
+
+test("converged accept: a genuine gesture runs the stamp+advance action exactly once", async () => {
+  let stamps = 0;
+  let advances = 0;
+  const outcome = await runGuardedDispositionShim(new RealGestureEvent("click"), async () => { stamps++; advances++; });
+  assert.equal(outcome, "done");
+  assert.equal(stamps, 1);
+  assert.equal(advances, 1);
+});
+
+// The pane's accept handlers gate directly on isRealGesture then run the action — the
+// confirm-less runGuardedDisposition shape. Kept as a shim so these tests exercise the SAME
+// shared gate mechanism the descriptor set names.
+async function runGuardedDispositionShim(evt, action) {
+  const { runGuardedDisposition } = await import("../src/kernel/governance/gesture.ts");
+  return runGuardedDisposition(evt, null, action);
+}
+
 test("runGuardedAdopt IS the confirm-gated instantiation of the shared gate (one mechanism)", async () => {
   const { runGuardedAdopt: adopt, runGuardedDisposition } = await import("../src/kernel/governance/gesture.ts");
   // Behavioral identity on all three outcomes.
