@@ -103,6 +103,12 @@ export interface ReviewController {
   // One note's `acceptance-status` from the metadata cache — display data for the same
   // context-aware surfacing (proposed ⇒ "will stamp", else ⇒ "baseline only").
   acceptanceStatus(path: string): string | null;
+  // ── protected properties (#135/#224) — READ-ONLY display data ──────────────
+  // The HONORED per-note auto-accept policy ("appends" | "all" | null), derived from the
+  // blessed BASELINE frontmatter (honor-only-if-blessed) — never the raw current note. The
+  // pane only BADGES it; the human sets it by editing the note's frontmatter (their editor
+  // write is human-attributed and therefore honored). No toggle here, deliberately.
+  honoredAutoAccept(path: string): string | null;
 }
 
 // Confirmation modal for the mass-silencing adopt-baseline action. Opens on a human gesture,
@@ -665,6 +671,19 @@ export class GovernanceReviewView extends ItemView {
       cls: "governance-detail-sub",
       text: `${item.agent} · ${shortOp(item.op)} · ${item.writeCount} write(s) · ${relTime(item.when)}`,
     });
+    // #224 side-door rows: name the drifted declared properties (text node — plain data).
+    if (item.sideDoor) {
+      title.createDiv({
+        cls: "governance-detail-sub",
+        text: `side-door change to protected propert${(item.protectedKeys?.length ?? 0) === 1 ? "y" : "ies"}: ` +
+          `${(item.protectedKeys ?? []).join(", ")} — inert until accepted`,
+      });
+    }
+    // #135 read-only policy badge: the HONORED per-note auto-accept policy, if any.
+    const honoredPolicy = deps.honoredAutoAccept(item.path);
+    if (honoredPolicy) {
+      title.createDiv({ cls: "governance-detail-sub", text: `auto-accept policy (honored): ${honoredPolicy}` });
+    }
     // UNTRUSTED agent-authored text — see kernel/governance/intent-view.ts for the text-node-only
     // render path and its behavioral escaping test.
     if (item.intent) {

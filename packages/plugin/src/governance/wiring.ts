@@ -88,6 +88,7 @@ import {
   type ClassId,
 } from "../kernel/governance/auto-accept/classes.js";
 import { evaluate, autoAcceptRecord, type AutoAcceptRecord } from "../kernel/governance/auto-accept/eligibility.js";
+import { autoAcceptPolicyOf, protectedPropertyDrift, type AutoAcceptPolicy } from "../kernel/governance/protected-policy.js";
 import type { RenameIndex } from "../kernel/governance/auto-accept/detectors.js";
 import { badgeVisible } from "../kernel/governance/badge.js";
 import { governanceDisplaySettings, governanceAcceptanceSettings } from "../kernel/governance/settings.js";
@@ -561,6 +562,10 @@ function buildController(plugin: Plugin): ReviewController {
     getProposed: () => listProposed(plugin),
     acceptedBy: () => acceptanceSettings(plugin).acceptedBy,
     acceptanceStatus: (path) => acceptanceStatusFor(plugin, path),
+    // #135/#224 read-only display data: the HONORED per-note auto-accept policy
+    // (from the blessed baseline — never the raw frontmatter). Confers nothing;
+    // the pane only badges it.
+    honoredAutoAccept: (path) => autoAcceptPolicyOf(getStore(plugin).get(path)?.content ?? null),
   };
 }
 
@@ -636,9 +641,14 @@ async function maybeAutoAccept(plugin: Plugin, path: string): Promise<boolean> {
     const journal = await readJournal(plugin);
     if (agentWritesSince(journal, path, baseline.acceptedAt).length === 0) return false;
 
+    // The per-note policy (#135) is the HONORED one — derived from the blessed
+    // BASELINE frontmatter, never the raw current note (honor-only-if-blessed,
+    // #224). A side-door `auto-accept` sitting only in the current bytes
+    // therefore confers nothing here.
     const result = evaluate(baseline.content, current, {
       enabled: getEnabledClasses(plugin),
       renameIndex: getRenameIndex(plugin),
+      policy: autoAcceptPolicyOf(baseline.content),
     });
     if (!result.eligible) return false;
 
@@ -651,6 +661,8 @@ async function maybeAutoAccept(plugin: Plugin, path: string): Promise<boolean> {
       toHash,
       classes: result.classes,
       railResult: result.rail,
+      // Audit which policy drove a policy-accept (#135) — like class accepts log their classes.
+      policy: result.policy,
     }));
     return true;
   } catch {
@@ -692,6 +704,9 @@ async function refresh(plugin: Plugin): Promise<void> {
     notes,
     getBaseline: (p) => getStore(plugin).get(p),
     journal,
+    // #224 governance watch: surface side-door drift over declared protected
+    // properties for review (the drift is already inert — this makes it seen).
+    protectedDrift: protectedPropertyDrift,
   });
   cachedPending.set(plugin, pending);
   updateBadge(plugin, pending.length);

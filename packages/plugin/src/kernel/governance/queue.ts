@@ -10,6 +10,12 @@
 // merely differs (human edit) is NOT queued here — and separately, the modify-classifier
 // advances its baseline silently so it doesn't linger as a phantom diff.
 //
+// ONE scoped exception (#224): a note that differs WITHOUT any agent write still surfaces
+// when a DECLARED protected property drifted from the blessed baseline (the injected
+// `protectedDrift` detector) — a side-door write to protected state is inert until blessed,
+// but it must be SEEN. Human editor edits to such a property don't linger here either: the
+// reconcile attributes them and advances the baseline, at which point there is no drift.
+//
 // A note with NO baseline at all (e.g. an agent created it after adopt-baseline) is treated
 // as having an empty baseline accepted at epoch, so any agent write surfaces it as a full add.
 
@@ -26,6 +32,15 @@ export interface QueueInputs {
   notes: NoteSnapshot[];
   getBaseline: (path: string) => Baseline | null;
   journal: JournalRecord[];
+  /**
+   * #224 governance watch: given (blessed baseline content, current content),
+   * the declared protected-property keys that drifted — wired to
+   * `protectedPropertyDrift` (protected-policy.ts). When present, a note that
+   * differs from its baseline WITHOUT any agent write still surfaces iff a
+   * declared property drifted (a side-door write to protected state must be
+   * SEEN, not silently inert forever). Absent ⇒ the historical queue exactly.
+   */
+  protectedDrift?: (blessed: string, current: string) => string[];
 }
 
 const EPOCH = new Date(0).toISOString();
@@ -42,7 +57,39 @@ export function computeQueue(inputs: QueueInputs): PendingItem[] {
     if (contentHash(note.content) === baseHash) continue; // unchanged vs baseline
 
     const writes = agentWritesSince(journal, note.path, since);
-    if (writes.length === 0) continue; // differs, but not attributable to an agent → not queued
+    if (writes.length === 0) {
+      // Differs, but not attributable to an agent → not queued — UNLESS a
+      // declared protected property drifted from the blessed baseline (#224):
+      // a side-door write to protected state is inert (honor-only-if-blessed)
+      // but must surface for review rather than linger invisibly. Requires a
+      // real baseline: with none, nothing was ever blessed to drift FROM (and
+      // the human-edit reconcile path advances attributed edits before they
+      // could surface here). Any drift-detector exception → fail toward the
+      // historical behavior (not queued) rather than failing the whole queue.
+      if (baseline && inputs.protectedDrift) {
+        let drifted: string[] = [];
+        try {
+          drifted = inputs.protectedDrift(baseline.content, note.content);
+        } catch {
+          drifted = [];
+        }
+        if (drifted.length > 0) {
+          out.push({
+            path: note.path,
+            title: titleOf(note.path),
+            agent: "(side-door)",
+            op: "external-write",
+            when: baseline.acceptedAt,
+            writeCount: 0,
+            writes: [],
+            hadBaseline: true,
+            sideDoor: true,
+            protectedKeys: drifted,
+          });
+        }
+      }
+      continue;
+    }
 
     const latest = writes[writes.length - 1];
     out.push({
