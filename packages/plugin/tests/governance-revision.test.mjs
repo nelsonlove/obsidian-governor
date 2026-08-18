@@ -121,6 +121,14 @@ describe("buildRevisionCallout + h1LineIndex", () => {
     assert.equal(h1LineIndex(["```", "# in a fence", "```", "# Real"]), 3);
     assert.equal(h1LineIndex(["no heading at all"]), -1);
   });
+
+  test("fence tracking is per MARKER: a ``` inside a ~~~ fence is content, not a closer (review #228.1)", () => {
+    // The "``` example wrapped in ~~~" doc pattern: the H1 inside the tilde fence must be
+    // skipped; the real H1 after the fence closes is the insertion anchor.
+    assert.equal(h1LineIndex(["~~~", "```", "# inside tilde fence", "~~~", "# Real"]), 4);
+    // And symmetrically for a ~~~ inside a ``` fence.
+    assert.equal(h1LineIndex(["```", "~~~", "# inside backtick fence", "```", "# Real"]), 4);
+  });
 });
 
 describe("insertCalloutBelowH1", () => {
@@ -202,6 +210,18 @@ describe("removeRevisionRequestCallouts — surgical, request-callouts only", ()
   test("CRLF bodies stay CRLF after removal", () => {
     const body = "# T\r\n\r\n> [!revision-request] R (d)\r\n> x\r\n\r\nContent\r\n";
     assert.equal(removeRevisionRequestCallouts(body).body, "# T\r\n\r\nContent\r\n");
+  });
+
+  test("a callout with NO trailing blank never merges the surrounding paragraphs (review #228.2)", () => {
+    // e.g. the revising agent edited around the callout: content follows it directly. The
+    // preceding blank must SURVIVE — eating it would glue para1 and para2 into one paragraph.
+    const body = "para1\n\n> [!revision-request] R (d)\n> x\npara2\n";
+    assert.deepEqual(removeRevisionRequestCallouts(body), { body: "para1\n\npara2\n", removed: 1 });
+  });
+
+  test("a trailing callout at EOF still collapses its preceding separator blank", () => {
+    const body = "para\n\n> [!revision-request] R (d)\n> x";
+    assert.deepEqual(removeRevisionRequestCallouts(body), { body: "para", removed: 1 });
   });
 });
 

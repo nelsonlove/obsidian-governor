@@ -440,9 +440,12 @@ export class GovernanceReviewView extends ItemView {
     const withdrawDesc = dispositionById("withdraw")!;
     const section = root.createDiv({ cls: "governance-revising" });
     section.createDiv({ cls: "governance-revising-title", text: `Revising (${items.length})` });
+    // Careful copy: `acceptance-status: revising` is an agent-legal frontmatter value, so this
+    // section reports the STATE, not provenance — the acceptance log is what records who actually
+    // requested changes. No capability rides on the listing either way.
     section.createDiv({
       cls: "governance-revising-desc",
-      text: "Notes a human sent back for changes — the feedback lives in each note's [!revision-request] callout.",
+      text: "Notes in the revising state — review feedback lives in each note's [!revision-request] callout.",
     });
     for (const item of items) {
       const row = section.createDiv({ cls: "governance-revising-row" });

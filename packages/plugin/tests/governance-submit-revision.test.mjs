@@ -251,6 +251,25 @@ describe("acceptanceStatusOf — key spelling tolerance", () => {
     assert.equal(acceptanceStatusOf({ other: "x" }), null);
     assert.equal(acceptanceStatusOf(null), null);
   });
+
+  test("CONFLICTING duplicate spellings read as null — never first-key-wins (review #228.5)", () => {
+    assert.equal(acceptanceStatusOf({ acceptance_status: "revising", "acceptance-status": "accepted" }), null);
+    assert.equal(acceptanceStatusOf({ "acceptance-status": "accepted", acceptance_status: "revising" }), null);
+    // Agreeing duplicates are fine.
+    assert.equal(acceptanceStatusOf({ acceptance_status: "revising", "acceptance-status": "revising" }), "revising");
+    // And one non-string spoils the set (unrecognizable state).
+    assert.equal(acceptanceStatusOf({ acceptance_status: "revising", "acceptance-status": ["revising"] }), null);
+  });
+
+  test("the tool refuses not_revising on a conflicting-spellings note — nothing written", async () => {
+    const { call, writes } = toolServer({
+      "n.md": "---\nacceptance_status: revising\nacceptance-status: accepted\n---\n# T\nbody\n",
+    });
+    const res = await call({ path: "n.md" });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /Error \[not_revising\]/);
+    assert.equal(writes.length, 0);
+  });
 });
 
 // ── through the REAL guard wrapper + kernel ──────────────────────────────────

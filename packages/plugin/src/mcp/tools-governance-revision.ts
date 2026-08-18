@@ -51,17 +51,26 @@ export interface RevisionSource {
 
 const RW = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
 
-/** The note's acceptance-status as a trimmed string, however the key is cased/underscored. */
+/**
+ * The note's acceptance-status as a trimmed string, however the key is cased/underscored.
+ * A note carrying MULTIPLE status-key spellings that DISAGREE (e.g. `acceptance_status:
+ * revising` beside `acceptance-status: accepted`) reads as null — an unrecognizable state must
+ * refuse `not_revising` rather than let first-key-wins pick the permissive reading. Non-string
+ * values likewise read as null.
+ */
 export function acceptanceStatusOf(fm: Record<string, unknown> | null): string | null {
   if (!fm) return null;
+  const values: string[] = [];
   for (const key of Object.keys(fm)) {
     const k = key.trim().toLowerCase();
     if (k === "acceptance-status" || k === "acceptance_status") {
       const v = fm[key];
-      return typeof v === "string" ? v.trim() : null;
+      if (typeof v !== "string") return null;
+      values.push(v.trim());
     }
   }
-  return null;
+  if (values.length === 0) return null;
+  return values.every((v) => v === values[0]) ? values[0] : null;
 }
 
 /**

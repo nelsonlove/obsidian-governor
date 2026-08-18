@@ -27,8 +27,11 @@
 //
 //  Pure functions over strings — obsidian-free, headless-testable
 //  (tests/governance-revision.test.mjs). CRLF notes keep their CRLF: inserted
-//  lines use the note's own dominant line ending, and removal/joins never
-//  fold line endings.
+//  lines use the note's own DOMINANT line ending. A genuinely MIXED-EOL region
+//  (some \r\n, some \n in one frontmatter block or body) is normalized to that
+//  dominant ending by the rejoin — a deliberate trade (per-line EOL bookkeeping
+//  is not worth its complexity for a byte pattern Obsidian itself normalizes on
+//  the next processFrontMatter touch).
 // ============================================================================
 
 import { stripLeadingBom, LEADING_FRONTMATTER_RE } from "@vault-mcp/core";
@@ -71,7 +74,8 @@ export function splitNote(content: string): { head: string; body: string } {
  *
  * DELIBERATELY takes no value parameter: `proposed` is the only value this
  * module can write, so no caller can turn it into an acceptance writer.
- * Everything else in the frontmatter block is preserved byte-for-byte.
+ * Every other frontmatter line is preserved verbatim (a mixed-EOL block is
+ * rejoined with its dominant line ending — see the module header).
  */
 export function setAcceptanceStatusProposed(content: string): string | null {
   const bomless = stripLeadingBom(content);
@@ -113,14 +117,19 @@ export function buildRevisionCallout(type: string, title: string, text: string, 
  * the top of the body instead).
  */
 export function h1LineIndex(bodyLines: string[]): number {
-  let inFence = false;
+  // Fence tracking is per MARKER: only the marker that opened a fence can close it (a ``` line
+  // inside a ~~~ fence is content, and vice versa — the "``` example wrapped in ~~~" doc pattern).
+  let fence: "```" | "~~~" | null = null;
   for (let i = 0; i < bodyLines.length; i++) {
     const line = bodyLines[i];
-    if (/^\s*(```|~~~)/.test(line)) {
-      inFence = !inFence;
+    const m = /^\s*(```|~~~)/.exec(line);
+    if (m) {
+      const marker = m[1] as "```" | "~~~";
+      if (fence === null) fence = marker;
+      else if (fence === marker) fence = null;
       continue;
     }
-    if (inFence) continue;
+    if (fence !== null) continue;
     if (/^#[ \t]/.test(line)) return i;
   }
   return -1;
@@ -167,11 +176,13 @@ export function removeRevisionRequestCallouts(body: string): { body: string; rem
       removed++;
       i++; // the head line
       while (i < lines.length && QUOTE_LINE_RE.test(lines[i])) i++; // continuation lines
-      // Collapse ONE adjacent blank so insert→remove round-trips: prefer the
-      // following blank (the separator insertion added), else a preceding one.
+      // Collapse ONE adjacent blank so insert→remove round-trips: the following
+      // blank (the separator insertion added), or — ONLY for a callout at EOF —
+      // the preceding one. When non-blank content follows directly, pop
+      // NOTHING: eating the preceding blank would merge unrelated paragraphs.
       if (i < lines.length && lines[i].trim() === "") {
         i++;
-      } else if (out.length > 0 && out[out.length - 1].trim() === "") {
+      } else if (i >= lines.length && out.length > 0 && out[out.length - 1].trim() === "") {
         out.pop();
       }
       continue;
