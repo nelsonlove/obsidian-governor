@@ -14,7 +14,7 @@ import { registerExternalTools } from "./external-tools.js";
 import { registerLockTools } from "./tools-locks.js";
 import { registerUidTools } from "./tools-uid.js";
 import { registerPendingReviewTools, obsidianPendingReviewSource } from "./tools-pending-review.js";
-import { registerGovernanceRevisionTool } from "./tools-governance-revision.js";
+import { registerGovernanceRevisionTool, registerGovernanceRevisionsListTool } from "./tools-governance-revision.js";
 import { registerLinkTools, obsidianLinkSource } from "./tools-links.js";
 import { registerConformanceDebtTools, registerConformanceDebtRenderTool } from "./tools-conformance-debt.js";
 import { obsidianDebtRenderSource } from "./obsidian-debt-source.js";
@@ -237,6 +237,20 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
       await app.vault.process(f, () => content);
     },
     now: () => new Date(),
+  });
+  // The read-side discovery listing beside it — same always-on rationale
+  // (read-only, confers nothing; a dispatcher's view of waiting revision work).
+  registerGovernanceRevisionsListTool(server, {
+    listNotes: async () =>
+      app.vault.getMarkdownFiles().map((f) => ({
+        path: f.path,
+        frontmatter: (app.metadataCache.getFileCache(f)?.frontmatter ?? null) as Record<string, unknown> | null,
+      })),
+    read: async (p) => {
+      const f = app.vault.getAbstractFileByPath(p);
+      return f instanceof TFile ? app.vault.read(f) : null;
+    },
+    getSettings: () => ctx.getSettings(),
   });
   // ── capability modules: scope-provider + vocab + skills ────────────────────
   // Ruled decision #2 realized: the two capability modules register THROUGH

@@ -6,13 +6,13 @@ The FULL set is locked by `tests/tool-inventory.test.mjs`: the names documented
 here must equal the names registered in source, both directions, or the suite
 fails (the fs-expressible and scheme sub-locks from #25/task-6 still apply).
 
-**Count summary:** 17 fs-expressible + 41 always-live + 10 module-mounted
-(default enabled, settings-toggleable) = **68 base** tools, plus up to
+**Count summary:** 17 fs-expressible + 42 always-live + 10 module-mounted
+(default enabled, settings-toggleable) = **69 base** tools, plus up to
 6 conditional integration tools, 5 CLI-binary-conditional dedicated tools
 (`obsidian_note_history`, `obsidian_note_diff`, `obsidian_base_create`,
 `obsidian_plugin_install`, `obsidian_plugin_uninstall`), and 1 settings-gated
 CLI-conditional tool (`obsidian_cli`, default OFF)
-= **up to 80 total**.  The 3 Code Mode meta-tools are an alternative
+= **up to 81 total**.  The 3 Code Mode meta-tools are an alternative
 per-connection surface and are not counted (a session sees one surface or the
 other, never both).  Not counted here (outside the locked `obsidian_*` family):
 the always-on `governance_submit_revision` (1 tool, see its section below), and
@@ -118,6 +118,7 @@ registered ALWAYS-ON in `server.ts` through the ordinary guarded registrar.
 | Tool name | Description |
 |---|---|
 | `governance_submit_revision` | The one agent-expressible disposition (#221 authority axis): resubmit a note a human marked `acceptance-status: revising` — status back to `proposed`, the `[!revision-request]` callout(s) removed, optional `summary` inserted as a `[!revision-report]` callout below the H1. Mutating (`readOnlyHint: false`); refuses `not_revising` when there is nothing to submit; re-checks the write with the shared accept-forbidden guard — it can never write acceptance |
+| `governance_revisions` | Read-side discovery for the revision round-trip: lists `acceptance-status: revising` notes with each `[!revision-request]` callout parsed out (date + request text) so a dispatcher reads the human's asks at a glance. Read-only, always-on beside the submit tool; allowlist-filtered (`isVisible`); optional `folder` prefix filter; capped at 100 |
 
 ### `tools-complementary.ts` — `registerComplementaryTools` (9 tools)
 
