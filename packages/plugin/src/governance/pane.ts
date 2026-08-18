@@ -4,7 +4,9 @@
 // cycle 2). This is the ONE obsidian-facing accept surface in vault-mcp.
 //
 // SECURITY: the Accept, Revert, Adopt-baseline AND auto-accept allowlist controls below are the
-// ONLY call sites of the baseline-advance / allowlist-mutation code paths in the entire plugin.
+// ONLY call sites of the baseline-advance / allowlist-mutation code paths in the entire plugin;
+// the request-changes and withdraw dispositions (#101) keep the SAME gesture perimeter (their
+// state transitions are agent-legal, but exercising them from this pane confers human standing).
 // They are wired with `addEventListener('click', …)` — NEVER `el.onclick = …` — so the handler
 // function is not a reachable property (`btn.onclick` stays null; renderer-JS cannot grab it to
 // forge-call). Each handler additionally gates on `isRealGesture(evt)`, which requires a genuine
@@ -27,12 +29,19 @@ import { ItemView, Notice, Modal, TFile, type WorkspaceLeaf, type App } from "ob
 import { type PendingItem, groupByAgent } from "../kernel/governance/queue.js";
 import { diffNote, toHunks, type DiffLine, type HunkCollapsed } from "../kernel/governance/diff.js";
 import { isRealGesture, runGuardedAdopt } from "../kernel/governance/gesture.js";
+import { dispositionsFor, dispositionById, type DispositionId } from "../kernel/governance/dispositions.js";
 import { badgeVisible } from "../kernel/governance/badge.js";
 import { renderIntent } from "../kernel/governance/intent-view.js";
 import type { ClassId, ClassSpec } from "../kernel/governance/auto-accept/classes.js";
 import { buildHistory, renderHistoryEntries, HISTORY_DEFAULT_CAP } from "../kernel/governance/history.js";
 
 export const VIEW_TYPE_GOVERNANCE = "governance-review";
+
+/** One note currently in the revising state — plain display data for the Revising section. */
+export interface RevisingItem {
+  path: string;
+  title: string;
+}
 
 export interface ReviewController {
   getPending(): PendingItem[];
@@ -59,6 +68,19 @@ export interface ReviewController {
   // null = the log exists but could not be read — shown as unavailable, never as empty).
   // Reading the log confers nothing: no accept capability rides on it, the pane never writes it.
   readAcceptanceLog(): Promise<string | null>;
+  // ── revision round-trip (#101; HUMAN dispositions, gesture-gated at their call sites) ──
+  // request-changes: acceptance-status → revising + a [!revision-request] callout below the
+  // note's H1 carrying `text`. withdraw: remove the [!revision-request] callout(s) and set
+  // acceptance-status → proposed. Both wired to module-scope functions in wiring.ts (the
+  // performAdopt pattern) — never a command, method, or MCP tool; reached ONLY from the
+  // addEventListener + isRealGesture handlers below. NOT accept-equivalent (they write the
+  // agent-legal revising/proposed transitions and advance no baseline), but they confer
+  // standing ("a human asked for changes"), so they keep the full gesture perimeter.
+  requestChanges(path: string, text: string): Promise<void>;
+  withdraw(path: string): Promise<void>;
+  // Read-only listing of notes with `acceptance-status: revising` (metadata cache) for the
+  // Revising section. Plain data — confers no capability.
+  getRevising(): RevisingItem[];
 }
 
 // Confirmation modal for the mass-silencing adopt-baseline action. Opens on a human gesture,
@@ -114,6 +136,65 @@ export function confirmAdopt(app: App): Promise<boolean> {
       },
       resolve,
     ).open();
+  });
+}
+
+// Free-text modal for the request-changes disposition (#101). Opens on a human gesture from the
+// pane; resolves the reviewer's text only when the human clicks the confirm button — which is
+// itself gesture-gated (addEventListener + isRealGesture, the ConfirmModal discipline), so a
+// forged/synthesized click cannot submit the modal any more than it could open it. Cancel /
+// Escape / backdrop resolve null (nothing happens). The modal itself holds NO capability: it
+// only collects text; the state change runs in the button handler that opened it.
+class RequestChangesModal extends Modal {
+  private decided = false;
+  constructor(
+    app: App,
+    private readonly noteTitle: string,
+    private readonly resolve: (text: string | null) => void,
+  ) {
+    super(app);
+  }
+  private settle(text: string | null): void {
+    if (this.decided) return;
+    this.decided = true;
+    this.resolve(text);
+  }
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.createEl("h3", { text: "Request changes" });
+    contentEl.createEl("p", {
+      text:
+        `Describe the changes you want on “${this.noteTitle}”. On confirm the note's acceptance-status ` +
+        "becomes “revising” and this text is inserted into the note as a [!revision-request] callout " +
+        "below its H1 — a revising agent reads it there, in the note body.",
+    });
+    const input = contentEl.createEl("textarea", {
+      cls: "governance-request-text",
+      attr: { rows: "6", placeholder: "What should change, and why…" },
+    });
+    const row = contentEl.createDiv({ cls: "governance-actions" });
+    const cancel = row.createEl("button", { text: "Cancel" });
+    cancel.onclick = () => this.close();
+    const confirm = row.createEl("button", { cls: "mod-cta governance-request-confirm", text: "Request changes" });
+    confirm.addEventListener("click", (evt) => {
+      if (!isRealGesture(evt)) return;
+      const text = input.value.trim();
+      if (!text) return; // nothing to request — keep the modal open for the human to type or cancel
+      this.settle(text);
+      this.close();
+    });
+  }
+  onClose(): void {
+    this.settle(null); // Escape / backdrop / Cancel all resolve as "no request"
+    this.contentEl.empty();
+  }
+}
+
+// The exact request-changes text-capture flow. Resolves the text only on a confirmed gesture.
+// Module-private on purpose: nothing outside the pane needs it, so nothing outside can open it.
+function promptRequestChanges(app: App, noteTitle: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    new RequestChangesModal(app, noteTitle, resolve).open();
   });
 }
 
@@ -196,6 +277,14 @@ export function wireAdoptButton(
     if (outcome === "done") await onDone();
   });
 }
+
+// Per-disposition button classes for the descriptor-driven action row. Pure display data (CSS
+// class strings) keyed by descriptor id — the descriptors themselves stay style-free.
+const DISPOSITION_BTN_CLS: Partial<Record<DispositionId, string>> = {
+  accept: "mod-cta governance-accept",
+  revert: "governance-revert",
+  "request-changes": "governance-request-changes",
+};
 
 // Module-private store of each view's controller. Not reachable by walking the view object:
 // `viewDeps` is a module-local binding, and WeakMap entries cannot be enumerated. This is
@@ -326,9 +415,66 @@ export class GovernanceReviewView extends ItemView {
     } else {
       this.selected = null;
       this.renderList(root, pending);
+      // The Revising section (#101): notes with acceptance-status: revising, whether or not
+      // they are in the pending queue — the frontmatter-lifecycle visibility that makes this
+      // pane a superset of the retired js-engine panel.
+      this.renderRevising(root, deps);
       // The auto-accept allowlist section — HUMAN-ONLY-MUTABLE, gesture-gated. Rendered via the
       // shared renderAllowlist (one implementation, shared with the settings tab).
       renderAllowlist(root, deps);
+    }
+  }
+
+  // The Revising section — notes whose frontmatter says `acceptance-status: revising` (from the
+  // metadata cache), each with an Open link (read-only navigation) and the withdraw disposition.
+  // Withdraw is a HUMAN disposition (gesture-gated, addEventListener-wired): it removes the
+  // [!revision-request] callout(s) the pane inserted and sets acceptance-status back to proposed.
+  private renderRevising(root: HTMLElement, deps: ReviewController): void {
+    let items: RevisingItem[] = [];
+    try {
+      items = deps.getRevising();
+    } catch {
+      items = [];
+    }
+    if (items.length === 0) return;
+    const withdrawDesc = dispositionById("withdraw")!;
+    const section = root.createDiv({ cls: "governance-revising" });
+    section.createDiv({ cls: "governance-revising-title", text: `Revising (${items.length})` });
+    // Careful copy: `acceptance-status: revising` is an agent-legal frontmatter value, so this
+    // section reports the STATE, not provenance — the acceptance log is what records who actually
+    // requested changes. No capability rides on the listing either way.
+    section.createDiv({
+      cls: "governance-revising-desc",
+      text: "Notes in the revising state — review feedback lives in each note's [!revision-request] callout.",
+    });
+    for (const item of items) {
+      const row = section.createDiv({ cls: "governance-revising-row" });
+      const main = row.createDiv({ cls: "governance-row-main" });
+      main.createDiv({ cls: "governance-row-title", text: item.title });
+      main.createDiv({ cls: "governance-row-path", text: item.path });
+      const controls = row.createDiv({ cls: "governance-revising-controls" });
+      // Open in tab — read-only navigation, same as the detail view's button; plain onclick is
+      // safe here (opening a file confers nothing renderer-JS lacks).
+      const openBtn = controls.createEl("button", { cls: "governance-open", text: "Open" });
+      openBtn.onclick = async () => {
+        const file = this.app.vault.getAbstractFileByPath(item.path);
+        if (file instanceof TFile) await this.app.workspace.getLeaf(false).openFile(file);
+      };
+      // withdraw (#101) — gesture-gated (addEventListener + isRealGesture; the shared
+      // authority-class discipline). Reaches the module-scope performWithdraw via deps only.
+      const withdrawBtn = controls.createEl("button", { cls: "governance-withdraw", text: withdrawDesc.label });
+      withdrawBtn.addEventListener("click", async (evt) => {
+        if (!isRealGesture(evt)) return; // inert on forged arg or synthesized click
+        withdrawBtn.disabled = true;
+        try {
+          await deps.withdraw(item.path);
+          new Notice(`vault-mcp governance: withdrew the revision request on ${item.title}`);
+          await this.rerender();
+        } catch (e) {
+          new Notice(`vault-mcp governance: withdraw failed — ${(e as Error).message}`);
+          withdrawBtn.disabled = false;
+        }
+      });
     }
   }
 
@@ -393,7 +539,9 @@ export class GovernanceReviewView extends ItemView {
     // the button click closures below (each closed over this specific `item` row). They are
     // never assigned to `this`, so no app-reachable walk finds an accept/revert callable.
     const deps = viewDeps.get(this)!;
-    const back = root.createEl("button", { cls: "governance-back", text: "← Back to queue" });
+    // "skip" — the one STATELESS descriptor (rotate/deselect only, mutates nothing), so a plain
+    // onclick is safe; its label still comes from the declared set.
+    const back = root.createEl("button", { cls: "governance-back", text: dispositionById("skip")!.label });
     back.onclick = () => { this.selected = null; void this.rerender(); };
 
     const title = root.createDiv({ cls: "governance-detail-title" });
@@ -427,16 +575,30 @@ export class GovernanceReviewView extends ItemView {
       void this.rerender();
     };
 
-    // Action buttons — the ONLY accept/revert call sites.
+    // Action buttons — the ONLY accept/revert/request-changes call sites. MEMBERSHIP, ORDER and
+    // LABELS come from the declared disposition set (kernel/governance/dispositions.ts — #101,
+    // phase 1 of #221): every button below is created from a `pending-item` descriptor, so the
+    // pane cannot render a human disposition the table does not declare. The descriptors are
+    // pure DATA — the accept-capable callables still arrive ONLY through `deps` (the
+    // module-private WeakMap) and are captured ONLY by the addEventListener closures below;
+    // wrapping the existing wiring in descriptors adds no reachable callable anywhere.
     const actions = root.createDiv({ cls: "governance-actions" });
-    const acceptBtn = actions.createEl("button", { cls: "mod-cta governance-accept", text: "Accept" });
-    const revertBtn = actions.createEl("button", { cls: "governance-revert", text: "Revert" });
+    const btnFor = new Map<DispositionId, HTMLButtonElement>();
+    for (const d of dispositionsFor("pending-item")) {
+      btnFor.set(d.id, actions.createEl("button", { cls: DISPOSITION_BTN_CLS[d.id] ?? "governance-disposition", text: d.label }));
+    }
+    const acceptBtn = btnFor.get("accept")!;
+    const revertBtn = btnFor.get("revert")!;
+    const requestBtn = btnFor.get("request-changes")!;
+    const setBusy = (busy: boolean): void => {
+      for (const b of btnFor.values()) b.disabled = busy;
+    };
     // Wired via addEventListener (onclick stays null → unreachable to renderer-JS) and gated on
     // isRealGesture (forged plain-object arg fails instanceof Event; synthesized click has
     // isTrusted false). Only a physical human click reaches deps.accept / deps.revert.
     acceptBtn.addEventListener("click", async (evt) => {
       if (!isRealGesture(evt)) return; // inert on forged arg or synthesized click
-      acceptBtn.disabled = revertBtn.disabled = true;
+      setBusy(true);
       try {
         await deps.accept(item.path);
         new Notice(`vault-mcp governance: accepted ${item.title}`);
@@ -444,12 +606,12 @@ export class GovernanceReviewView extends ItemView {
         await this.rerender();
       } catch (e) {
         new Notice(`vault-mcp governance: accept failed — ${(e as Error).message}`);
-        acceptBtn.disabled = revertBtn.disabled = false;
+        setBusy(false);
       }
     });
     revertBtn.addEventListener("click", async (evt) => {
       if (!isRealGesture(evt)) return; // inert on forged arg or synthesized click
-      acceptBtn.disabled = revertBtn.disabled = true;
+      setBusy(true);
       try {
         await deps.revert(item.path);
         new Notice(`vault-mcp governance: reverted ${item.title} (previous version quarantined)`);
@@ -457,7 +619,26 @@ export class GovernanceReviewView extends ItemView {
         await this.rerender();
       } catch (e) {
         new Notice(`vault-mcp governance: revert failed — ${(e as Error).message}`);
-        acceptBtn.disabled = revertBtn.disabled = false;
+        setBusy(false);
+      }
+    });
+    // request-changes (#101) — HUMAN disposition, gesture-gated exactly like Accept. The click
+    // opens the free-text modal (whose confirm button is itself gesture-gated); only then does
+    // the state change run: acceptance-status → revising + the [!revision-request] callout below
+    // the note's H1 (deps.requestChanges → module-scope performRequestChanges in wiring.ts).
+    requestBtn.addEventListener("click", async (evt) => {
+      if (!isRealGesture(evt)) return; // inert on forged arg or synthesized click
+      const text = await promptRequestChanges(this.app, item.title);
+      if (text === null) return; // cancelled — nothing changes
+      setBusy(true);
+      try {
+        await deps.requestChanges(item.path, text);
+        new Notice(`vault-mcp governance: requested changes on ${item.title}`);
+        this.selected = null;
+        await this.rerender();
+      } catch (e) {
+        new Notice(`vault-mcp governance: request-changes failed — ${(e as Error).message}`);
+        setBusy(false);
       }
     });
 

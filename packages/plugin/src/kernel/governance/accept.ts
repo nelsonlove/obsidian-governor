@@ -82,7 +82,20 @@ export interface SilentAdvanceRecord {
   toHash: string;          // hash the baseline advanced to
 }
 
-export type LogRecord = StewardshipLogRecord | SilentAdvanceRecord;
+// #101 — the request-changes / withdraw human dispositions log to the SAME
+// acceptance-log.jsonl (uniform audit records for every disposition). Pure
+// record shape only: the actions live in governance/wiring.ts as module-scope
+// functions reached solely from gesture-gated pane handlers. Neither advances
+// a baseline — they write the agent-legal `revising`/`proposed` transitions —
+// but both confer standing ("a human asked for changes"), so they are audited.
+export interface RevisionDispositionRecord {
+  action: "request-changes" | "withdraw-request";
+  path: string;
+  ts: string;
+  by: string;
+}
+
+export type LogRecord = StewardshipLogRecord | SilentAdvanceRecord | RevisionDispositionRecord;
 
 // Pure builder for the silent-advance audit record (kept pure so it is headless-testable
 // and reused verbatim by wiring.ts's reconcile path).

@@ -36,6 +36,8 @@ export const HISTORY_DEFAULT_CAP = 200;
 export type HistoryKind =
   | "accept"
   | "revert"
+  | "request-changes"
+  | "withdraw-request"
   | "silent-advance"
   | "auto-accept"
   | "unknown";
@@ -80,7 +82,11 @@ const str = (v: unknown): string => (typeof v === "string" ? v : "");
 // audit record it doesn't understand.
 export function toHistoryEntry(r: Record<string, unknown>): HistoryEntry {
   const ts = str(r.ts);
-  // Accept/revert records use `action`; event records use `event`.
+  // Accept/revert (and the #101 revision dispositions) use `action`; event records use `event`.
+  if (r.action === "request-changes" || r.action === "withdraw-request") {
+    const by = str(r.by);
+    return { kind: r.action, ts, path: str(r.path), detail: by ? `by ${by}` : "" };
+  }
   if (r.action === "accept" || r.action === "revert") {
     const by = str(r.by);
     return {
@@ -142,6 +148,8 @@ export function buildHistory(
 const KIND_LABEL: Record<HistoryKind, string> = {
   accept: "accepted",
   revert: "reverted",
+  "request-changes": "changes requested",
+  "withdraw-request": "request withdrawn",
   "silent-advance": "silent advance",
   "auto-accept": "auto-accepted",
   unknown: "record",

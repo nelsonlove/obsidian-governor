@@ -34,19 +34,36 @@ export function isRealGesture(evt?: unknown): evt is Event {
   return evt instanceof Event && evt.isTrusted === true;
 }
 
-export type AdoptOutcome = "blocked-untrusted" | "cancelled" | "done";
+export type DispositionOutcome = "blocked-untrusted" | "cancelled" | "done";
+export type AdoptOutcome = DispositionOutcome;
+
+// THE ONE SHARED GESTURE GATE for every state-mutating human disposition (#101/#221: gating is
+// applied by authority CLASS, not per-button code). `action` runs only when `evt` is a genuine
+// trusted gesture AND — when a `confirm` gate is supplied (adopt's confirmation modal) — the human
+// confirmed. Returns which gate stopped it (for tests + UX). A forged plain object or a
+// synthesized click stops at the first gate: the confirm modal never even opens.
+export async function runGuardedDisposition(
+  evt: unknown,
+  confirm: (() => Promise<boolean>) | null,
+  action: () => Promise<void>,
+): Promise<DispositionOutcome> {
+  if (!isRealGesture(evt)) return "blocked-untrusted";
+  if (confirm) {
+    const confirmed = await confirm();
+    if (!confirmed) return "cancelled";
+  }
+  await action();
+  return "done";
+}
 
 // Adopt-baseline is the most dangerous action (it silences the ENTIRE queue), so it is gated
 // TWICE: (1) the originating event must be a real, trusted gesture, and (2) the human must confirm
-// in a modal. `action` runs only when both hold. Returns which gate stopped it (for tests + UX).
-export async function runGuardedAdopt(
+// in a modal. The confirm-gated instantiation of runGuardedDisposition — kept as a named entry
+// point because the tripwire pins the pane's adopt wiring to it.
+export function runGuardedAdopt(
   evt: unknown,
   confirm: () => Promise<boolean>,
   action: () => Promise<void>,
 ): Promise<AdoptOutcome> {
-  if (!isRealGesture(evt)) return "blocked-untrusted";
-  const confirmed = await confirm();
-  if (!confirmed) return "cancelled";
-  await action();
-  return "done";
+  return runGuardedDisposition(evt, confirm, action);
 }
