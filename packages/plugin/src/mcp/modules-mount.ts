@@ -57,7 +57,7 @@ import { DEFAULT_PROVENANCE_CONFIG, validateProvenanceConfig, DEFAULT_NOTES_DIR,
 import { registerHealthTools, type HealthToolsCtx } from "./tools-health.js";
 import { DEFAULT_HEALTH_CONFIG, validateHealthConfig, DEFAULT_EMPTY_CHARS, type HealthSource } from "../kernel/health/index.js";
 import { registerFileclassTools, type FileclassToolsCtx } from "./tools-fileclass.js";
-import { DEFAULT_GOVERNANCE_SETTINGS } from "../kernel/governance/settings.js";
+import { DEFAULT_GOVERNANCE_SETTINGS, DEFAULT_ACCEPTANCE_SETTINGS } from "../kernel/governance/settings.js";
 
 // ── manifests (#81: config-host — see
 //    docs/superpowers/specs/2026-08-10-config-host-design.md) ──────────────
@@ -725,14 +725,20 @@ const FILECLASS_MANIFEST: ModuleManifest = {
 // contributes nothing to MCP, the tripwire's "no accept-shaped tool reaches the surface" holds
 // trivially — the accept path lives entirely behind gesture-gated pane buttons.
 //
-// The two config fields below are the accept pane's ONLY MCP-side knobs — badge-DISPLAY prefs, not
-// accept capabilities. They live at `modules.governance.config.{showRibbonBadge,showViewTabBadge}`,
-// the exact keys the pane wiring reads through `governanceDisplaySettings` (kernel/governance/
-// settings.ts): the ribbon-icon pending-count badge and the review-pane tab-icon badge. Both default
-// ON (DEFAULT_GOVERNANCE_SETTINGS), matching the pane's own default-on coercion of an absent config,
-// so the toggles render ON out of the box and flipping one OFF stores a `false` the pane honors on
-// the next pane wire. Toggling these confers NO accept/revert/adopt capability (see the pane's
-// SECURITY note); the human-only accept controls remain gesture-gated pane buttons, never settings.
+// The config fields below are the accept pane's ONLY MCP-side knobs — display prefs and
+// acceptance-convergence parameters, not accept capabilities. They live at
+// `modules.governance.config.*`, the exact keys the pane wiring reads through
+// `governanceDisplaySettings` / `governanceAcceptanceSettings` (kernel/governance/settings.ts):
+// the two pending-count badges (default ON), the `acceptedBy` identity the human's own Accept
+// gesture stamps into a `proposed` note (#221/#164 convergence — settings are human-only by
+// construction, so the identity is human-set), and the OPTIONAL `requiredFrontmatterKeys`
+// conformance gate (default EMPTY = no gate; when set, Accept on a `proposed` note REFUSES —
+// no stamp, no baseline advance — while any listed key is missing/empty; this is where the
+// legacy QuickAdd accept-macro's vault-specific uid/title/description checks live now, as
+// per-vault config rather than plugin hardcode). None of these confers accept/revert/adopt
+// capability — `acceptedBy` only labels the human's own gesture and `requiredFrontmatterKeys`
+// can only make Accept refuse MORE; the human-only accept controls remain gesture-gated pane
+// buttons, never settings.
 const GOVERNANCE_CONFIG_FIELDS: ConfigField[] = [
   {
     key: "showRibbonBadge",
@@ -752,29 +758,53 @@ const GOVERNANCE_CONFIG_FIELDS: ConfigField[] = [
       "badge; the ribbon badge above is independent. Takes effect on the next queue refresh (the badge prefs " +
       "are read live).",
   },
+  {
+    key: "acceptedBy",
+    label: "Accepted-by identity",
+    type: "text",
+    placeholder: DEFAULT_ACCEPTANCE_SETTINGS.acceptedBy,
+    help:
+      "The identity the pane's Accept stamps as `accepted-by` (and records in the acceptance log) when " +
+      "accepting a note whose frontmatter is `acceptance-status: proposed`. Human-set by construction — " +
+      "this settings tab is not agent-reachable, and agent transports can never write the accepted family.",
+  },
+  {
+    key: "requiredFrontmatterKeys",
+    label: "Required frontmatter for acceptance",
+    type: "csv",
+    placeholder: "uid, title, description",
+    help:
+      "Optional conformance gate: comma-separated frontmatter keys that must be present and non-empty " +
+      "before a `proposed` note can be Accepted. While any listed key is missing, Accept refuses with no " +
+      "partial write (no stamp AND no baseline advance). Empty (the default) ⇒ no gate. The legacy QuickAdd " +
+      "accept-macro's vault-specific checks (uuid7 uid, title, description) map onto this setting.",
+  },
 ];
 
 const GOVERNANCE_MANIFEST: ModuleManifest = {
   summary:
     "Governance (Acceptance): the human-only review pane. When enabled, vault-mcp registers an Obsidian " +
     "review pane where a human reviews agent changes and Accepts / Reverts / Requests changes / Adopts a " +
-    "baseline, plus a Revising section (withdraw a revision request) and an auto-accept allowlist for " +
+    "baseline, plus a Proposed section (the context-aware Accept: accepting a proposed note also stamps " +
+    "the accepted family into its frontmatter — the ONE accept across both lifecycles), a Revising section " +
+    "(withdraw a revision request) and an auto-accept allowlist for " +
     "provably-mechanical changes. Every state-changing control is a real-click gesture in the pane — never " +
     "a command, never an MCP tool, never a method on any object reachable from `app`. This module " +
     "contributes ZERO tools to the MCP transport: the read-only obsidian_pending_review view and the " +
     "guarded governance_submit_revision resubmit verb (which can never accept) are registered always-on in " +
     "server.ts, independent of this toggle. Ships disabled — a human enables the accept pane here.",
-  // The `config` block ships two badge-DISPLAY toggles (GOVERNANCE_CONFIG_FIELDS) — the accept
+  // The `config` block ships the two badge-DISPLAY toggles plus the two acceptance-convergence
+  // fields (GOVERNANCE_CONFIG_FIELDS) — the accept
   // pane's only MCP-side knobs, read at pane-wire time from `modules.governance.config` (no
-  // ConfigBinding — the default location, exactly where the pane wiring reads them). Default ON,
-  // and they confer NO accept capability. The auto-accept ALLOWLIST and adopt-baseline are NOT
+  // ConfigBinding — the default location, exactly where the pane wiring reads them). They confer
+  // NO accept capability. The auto-accept ALLOWLIST and adopt-baseline are NOT
   // manifest config fields (they are not scalar knobs) — they are gesture-gated, human-only-mutable
   // controls the governance module RENDERS itself, into BOTH the review pane and the settings tab
   // (connection-ui.ts calls the module's renderGovernanceSettings, which builds them from its own
   // module-private accept-capable controller — never surfaced as data here).
   config: {
     fields: GOVERNANCE_CONFIG_FIELDS,
-    defaults: { ...DEFAULT_GOVERNANCE_SETTINGS } as Record<string, unknown>,
+    defaults: { ...DEFAULT_GOVERNANCE_SETTINGS, ...DEFAULT_ACCEPTANCE_SETTINGS } as Record<string, unknown>,
   },
   //
   // The directory is deliberately EMPTY — the module adds no MCP tool, address form, rule pack, or

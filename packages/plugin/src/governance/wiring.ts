@@ -27,8 +27,19 @@
 //  plain object and a synthesized dispatchEvent both fail. See kernel/governance/gesture.ts.
 //
 //  The accept-equivalent capabilities, and how each is unreachable:
-//    - performAccept   — module-scope fn; reached only via the pane Accept button click
-//                        (gesture-gated). Never a method/field/command/tool.
+//    - performAccept   — module-scope fn; reached only via the pane Accept button clicks
+//                        (gesture-gated; the pending detail view AND the Proposed section —
+//                        the SAME context-aware accept). Never a method/field/command/tool.
+//    - stampAcceptedFrontmatter — THE ONE PRODUCTION WRITER of the accepted family
+//                        (acceptance-status: accepted / accepted-by / accepted-on), via
+//                        Obsidian's own app.fileManager.processFrontMatter (#221/#164
+//                        convergence). Module-scope, NEVER exported, reached ONLY through
+//                        acceptNote's injected stampAccepted dep (buildAcceptDeps), i.e.
+//                        only from the gesture-gated performAccept. Never a
+//                        method/field/command/tool; the MCP transport cannot reach it —
+//                        agent transports still cannot write the accepted family (the
+//                        accept-forbidden guard in @vault-mcp/core is untouched; this is
+//                        an in-app human-gesture write path that bypasses MCP entirely).
 //    - performRevert   — module-scope fn; reached only via the pane Revert button click.
 //    - performAdopt    — module-scope fn; reached only via the pane Adopt button (gesture- AND
 //                        confirmation-gated). Never a method/field/command/tool.
@@ -59,9 +70,13 @@ import {
   acceptNote,
   revertNote,
   silentAdvanceRecord,
+  formatLocalMinutes,
   type AcceptDeps,
+  type AcceptResult,
+  type AcceptanceStampFields,
   type LogRecord,
 } from "../kernel/governance/accept.js";
+import { buildProposedList, type ProposedItem } from "../kernel/governance/proposed.js";
 import { insertRevisionRequest, withdrawRevisionRequests } from "../kernel/governance/revision.js";
 import { contentHash } from "../kernel/governance/hash.js";
 import {
@@ -75,7 +90,7 @@ import {
 import { evaluate, autoAcceptRecord, type AutoAcceptRecord } from "../kernel/governance/auto-accept/eligibility.js";
 import type { RenameIndex } from "../kernel/governance/auto-accept/detectors.js";
 import { badgeVisible } from "../kernel/governance/badge.js";
-import { governanceDisplaySettings } from "../kernel/governance/settings.js";
+import { governanceDisplaySettings, governanceAcceptanceSettings } from "../kernel/governance/settings.js";
 import { isRealGesture } from "../kernel/governance/gesture.js";
 import {
   GovernanceReviewView,
@@ -144,6 +159,13 @@ function paths(plugin: Plugin): PluginPaths {
 const configReaders = new WeakMap<Plugin, () => Record<string, unknown>>();
 function displaySettings(plugin: Plugin) {
   return governanceDisplaySettings(configReaders.get(plugin)?.() ?? {});
+}
+// The acceptance-convergence config (#221/#164): the accepted-by identity + the optional
+// required-frontmatter conformance gate. Read live per accept, like the badge prefs. Plain
+// data — human-only-mutable (the settings tab is not agent-reachable) and confers no accept
+// capability (`requiredFrontmatterKeys` can only make Accept refuse MORE, never accept more).
+function acceptanceSettings(plugin: Plugin) {
+  return governanceAcceptanceSettings(configReaders.get(plugin)?.() ?? {});
 }
 
 const cachedPending = new WeakMap<Plugin, PendingItem[]>();
@@ -356,10 +378,30 @@ function governedMarkdownFiles(plugin: Plugin): TFile[] {
 }
 
 // ── accept / revert / adopt — module-scope, closure-captured only by UI handlers ──
+//
+// THE ONE PRODUCTION WRITER of the accepted family (#221/#164 acceptance convergence).
+// Writes acceptance-status: accepted + accepted-by + accepted-on into the note's frontmatter
+// via Obsidian's own app.fileManager.processFrontMatter — an in-app write that never touches
+// the MCP transport (the accept-forbidden guard on every agent transport is untouched and
+// still refuses the accepted family; this path is what the guard reserves for the human).
+// Module-scope, NEVER exported, never a command/method/tool: it is reachable ONLY through
+// acceptNote's injected `stampAccepted` dep below, i.e. only from the gesture-gated
+// performAccept. `fields.status` is the literal type "accepted" (AcceptanceStampFields), so
+// this writer structurally cannot stamp any other value.
+async function stampAcceptedFrontmatter(plugin: Plugin, path: string, fields: AcceptanceStampFields): Promise<void> {
+  const file = noteFileOf(plugin, path);
+  await plugin.app.fileManager.processFrontMatter(file, (fm) => {
+    fm["acceptance-status"] = fields.status;
+    fm["accepted-by"] = fields.by;
+    fm["accepted-on"] = fields.on;
+  });
+}
 function buildAcceptDeps(plugin: Plugin): AcceptDeps {
+  const acceptance = acceptanceSettings(plugin);
   return {
     readNote: (p) => readNote(plugin, p),
     writeNote: (p, c) => writeNote(plugin, p, c),
+    stampAccepted: (p, fields) => stampAcceptedFrontmatter(plugin, p, fields),
     store: {
       get: (p) => getStore(plugin).get(p),
       setBaseline: (p, c, by, at) => getStore(plugin).setBaseline(p, c, by, at),
@@ -367,12 +409,27 @@ function buildAcceptDeps(plugin: Plugin): AcceptDeps {
     quarantine: (p, c) => quarantineWrite(plugin, p, c),
     appendLog: (r) => appendLog(plugin, r),
     now: () => new Date().toISOString(),
-    user: LOCAL_USER,
+    nowLocal: () => formatLocalMinutes(new Date()),
+    user: acceptance.acceptedBy,
+    requiredFrontmatterKeys: acceptance.requiredFrontmatterKeys,
   };
 }
-async function performAccept(plugin: Plugin, path: string): Promise<void> {
-  await acceptNote(buildAcceptDeps(plugin), path);
-  await refresh(plugin);
+// The ONE context-aware accept (both the pending detail view's Accept and the Proposed
+// section's Accept land here). acceptNote stamps FIRST (proposed notes only) and advances
+// the baseline from the post-stamp content, so the stamp never re-queues; see accept.ts.
+async function performAccept(plugin: Plugin, path: string): Promise<AcceptResult> {
+  try {
+    return await acceptNote(buildAcceptDeps(plugin), path);
+  } finally {
+    // #228 race discipline, extended to the converged accept: the stamp is a PROGRAMMATIC
+    // write, but the human just clicked (and may have typed in this note's editor moments
+    // before). A lingering genuine-human-input record for this path would let the debounced
+    // reconcile misattribute a subsequent unrelated agent write as a human edit and silently
+    // baseline-advance it. Clear the record around this write — in `finally`, because a
+    // partially-failed accept (stamp landed, baseline advance threw) has still written.
+    humanInputMap(plugin).delete(path);
+    await refresh(plugin);
+  }
 }
 async function performRevert(plugin: Plugin, path: string): Promise<void> {
   await revertNote(buildAcceptDeps(plugin), path);
@@ -450,6 +507,29 @@ function listRevising(plugin: Plugin): RevisingItem[] {
   }
   return out.sort((a, b) => a.path.localeCompare(b.path));
 }
+// The Proposed listing (#221/#164) — read-only, from the metadata cache exactly like the
+// Revising listing, with the dedupe/exclusion rules in the pure kernel builder: proposed
+// notes ALREADY in the pending queue are deduped out (their queue row carries the same
+// context-aware Accept), and the EXCLUDED_PREFIXES territories are respected. Plain data.
+function listProposed(plugin: Plugin): ProposedItem[] {
+  const candidates = plugin.app.vault.getMarkdownFiles().map((file) => ({
+    path: file.path,
+    title: file.basename,
+    status: (plugin.app.metadataCache.getFileCache(file)?.frontmatter as Record<string, unknown> | undefined)?.[
+      "acceptance-status"
+    ],
+  }));
+  return buildProposedList(candidates, getCachedPending(plugin).map((p) => p.path), isExcluded);
+}
+// The metadata-cache acceptance-status of ONE note — plain display data for the pane's
+// context-aware Accept surfacing (button tooltip + Notice). Read-only; confers nothing.
+function acceptanceStatusFor(plugin: Plugin, path: string): string | null {
+  const file = plugin.app.vault.getAbstractFileByPath(path);
+  if (!(file instanceof TFile)) return null;
+  const fm = plugin.app.metadataCache.getFileCache(file)?.frontmatter as Record<string, unknown> | undefined;
+  const v = fm?.["acceptance-status"];
+  return typeof v === "string" ? v : null;
+}
 
 // The controller handed to the view. Carries accept/revert/adopt/setClassEnabled callables —
 // passed straight into the view constructor (which stows it in a module-private WeakMap) and never
@@ -473,6 +553,11 @@ function buildController(plugin: Plugin): ReviewController {
     requestChanges: (path, text) => performRequestChanges(plugin, path, text),
     withdraw: (path) => performWithdraw(plugin, path),
     getRevising: () => listRevising(plugin),
+    // Acceptance convergence (#221/#164): the Proposed listing + the plain display data the
+    // pane uses to SURFACE what the context-aware Accept will do (identity + per-note status).
+    getProposed: () => listProposed(plugin),
+    acceptedBy: () => acceptanceSettings(plugin).acceptedBy,
+    acceptanceStatus: (path) => acceptanceStatusFor(plugin, path),
   };
 }
 
@@ -746,14 +831,18 @@ function injectStyles(component: Component): void {
   .governance-history-more{color:var(--text-faint);font-size:11px;text-align:center;
     padding:6px 0;}
   .history-request-changes .governance-history-kind{color:var(--color-yellow,#d29922);}
-  .governance-revising{margin-top:16px;border-top:1px solid var(--background-modifier-border);
-    padding-top:8px;}
-  .governance-revising-title{font-weight:600;font-size:12px;margin-bottom:4px;}
-  .governance-revising-desc{font-size:11px;color:var(--text-muted);margin-bottom:8px;}
-  .governance-revising-row{display:flex;justify-content:space-between;gap:8px;padding:6px 4px;
-    border-radius:6px;align-items:center;}
-  .governance-revising-controls{display:flex;gap:6px;white-space:nowrap;}
+  .governance-revising,.governance-proposed{margin-top:16px;
+    border-top:1px solid var(--background-modifier-border);padding-top:8px;}
+  .governance-revising-title,.governance-proposed-title{font-weight:600;font-size:12px;
+    margin-bottom:4px;}
+  .governance-revising-desc,.governance-proposed-desc{font-size:11px;color:var(--text-muted);
+    margin-bottom:8px;}
+  .governance-revising-row,.governance-proposed-row{display:flex;justify-content:space-between;
+    gap:8px;padding:6px 4px;border-radius:6px;align-items:center;}
+  .governance-revising-controls,.governance-proposed-controls{display:flex;gap:6px;
+    white-space:nowrap;}
   .governance-withdraw,.governance-request-changes{font-size:12px;cursor:pointer;}
+  .governance-proposed-accept{font-size:12px;cursor:pointer;}
   .governance-request-text{width:100%;min-height:110px;font-size:13px;margin:8px 0;
     font-family:var(--font-interface);}
   `;
