@@ -17,7 +17,7 @@ import { installObsidianStub } from "./obsidian-stub.mjs";
 installObsidianStub();
 const { registerComplementaryTools } = await import("../src/mcp/tools-complementary.ts");
 
-function build(settings = {}) {
+function build(settings = {}, { quickadd } = {}) {
   const server = fakeServer();
   const opened = [];
   const executed = [];
@@ -26,6 +26,7 @@ function build(settings = {}) {
     commands: { executeCommandById: (id) => (executed.push(id), true) },
     vault: { getMarkdownFiles: () => [], getName: () => "test" },
     metadataCache: {},
+    plugins: { plugins: quickadd ? { quickadd } : {} },
   };
   const ctx = {
     pluginVersion: "0.0.0-test",
@@ -36,6 +37,27 @@ function build(settings = {}) {
   };
   registerComplementaryTools(server, app, ctx);
   return { handler: server.tools.get("obsidian_run_command").handler, opened, executed };
+}
+
+// A fake QuickAdd plugin instance: one choice, id "abc", name "My Choice".
+// executeChoice records what it was called with and either resolves or
+// rejects, matching the real API's behavior (errors thrown inside a script
+// propagate through executeChoice's own await chain).
+function fakeQuickAdd({ throws } = {}) {
+  const calls = [];
+  return {
+    calls,
+    getChoiceById: (id) => {
+      if (id !== "abc") throw new Error(`Choice ${id} not found`);
+      return { id: "abc", name: "My Choice" };
+    },
+    api: {
+      executeChoice: async (name, vars) => {
+        calls.push({ name, vars });
+        if (throws) throw throws;
+      },
+    },
+  };
 }
 
 describe("obsidian_run_command: policy wiring in the real handler", () => {
@@ -71,5 +93,80 @@ describe("obsidian_run_command: policy wiring in the real handler", () => {
     assert.equal(res.isError, true);
     assert.match(res.content[0].text, /cli_denied/);
     assert.deepEqual(executed, []);
+  });
+});
+
+describe("obsidian_run_command: variables routes through QuickAdd's executeChoice", () => {
+  test("a QuickAdd id with variables still needs allowOpaque — policy checked before the quickadd branch", async () => {
+    const quickadd = fakeQuickAdd();
+    const { handler } = build({ cliPolicy: { deny: [], allowOpaque: [] } }, { quickadd });
+    const res = await handler({ command_id: "quickadd:choice:abc", variables: { foo: "bar" } });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[cli_denied\]/);
+    assert.deepEqual(quickadd.calls, []);
+  });
+
+  test("resolves the choice id to its name and calls executeChoice, defaulting _invoked-by to agent", async () => {
+    const quickadd = fakeQuickAdd();
+    const { handler } = build({ cliPolicy: { deny: [], allowOpaque: ["quickadd:choice:abc"] } }, { quickadd });
+    const res = await handler({ command_id: "quickadd:choice:abc", variables: { foo: "bar" } });
+    assert.notEqual(res.isError, true);
+    assert.deepEqual(quickadd.calls, [{ name: "My Choice", vars: { "_invoked-by": "agent", foo: "bar" } }]);
+    assert.equal(res.structuredContent.choice, "My Choice");
+  });
+
+  test("an explicit _invoked-by overrides the default", async () => {
+    const quickadd = fakeQuickAdd();
+    const { handler } = build({ cliPolicy: { deny: [], allowOpaque: ["quickadd:choice:abc"] } }, { quickadd });
+    await handler({ command_id: "quickadd:choice:abc", variables: { "_invoked-by": "human" } });
+    assert.deepEqual(quickadd.calls, [{ name: "My Choice", vars: { "_invoked-by": "human" } }]);
+  });
+
+  test("a thrown script error (e.g. missing required variable) surfaces as a normal failure", async () => {
+    const quickadd = fakeQuickAdd({ throws: new Error('Missing required variable "range"') });
+    const { handler } = build({ cliPolicy: { deny: [], allowOpaque: ["quickadd:choice:abc"] } }, { quickadd });
+    const res = await handler({ command_id: "quickadd:choice:abc", variables: {} });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /Missing required variable "range"/);
+  });
+
+  test("an unknown choice id is a typed refusal, not a crash", async () => {
+    const quickadd = fakeQuickAdd();
+    const { handler } = build({ cliPolicy: { deny: [], allowOpaque: ["quickadd:choice:nope"] } }, { quickadd });
+    const res = await handler({ command_id: "quickadd:choice:nope", variables: {} });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[choice_not_found\]/);
+  });
+
+  test("QuickAdd not installed/enabled is a typed refusal", async () => {
+    const { handler } = build({ cliPolicy: { deny: [], allowOpaque: ["quickadd:choice:abc"] } });
+    const res = await handler({ command_id: "quickadd:choice:abc", variables: {} });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[quickadd_unavailable\]/);
+  });
+
+  test("no variables means the plain command path runs, unaffected", async () => {
+    const quickadd = fakeQuickAdd();
+    const { handler, executed } = build({ cliPolicy: { deny: [], allowOpaque: ["quickadd:choice:abc"] } }, { quickadd });
+    const res = await handler({ command_id: "quickadd:choice:abc" });
+    assert.notEqual(res.isError, true);
+    assert.deepEqual(executed, ["quickadd:choice:abc"]);
+    assert.deepEqual(quickadd.calls, []);
+  });
+
+  test("a non-QuickAdd command_id with variables runs the plain command path, per its own docs (`ignored otherwise`)", async () => {
+    const quickadd = fakeQuickAdd();
+    const { handler, executed } = build({}, { quickadd });
+    const res = await handler({ command_id: "editor:toggle-bold", variables: { foo: "bar" } });
+    assert.notEqual(res.isError, true);
+    assert.deepEqual(executed, ["editor:toggle-bold"]);
+    assert.deepEqual(quickadd.calls, []);
+  });
+
+  test("a non-QuickAdd command_id with variables runs fine even when QuickAdd isn't installed at all", async () => {
+    const { handler, executed } = build({});
+    const res = await handler({ command_id: "editor:toggle-bold", variables: { foo: "bar" } });
+    assert.notEqual(res.isError, true);
+    assert.deepEqual(executed, ["editor:toggle-bold"]);
   });
 });
