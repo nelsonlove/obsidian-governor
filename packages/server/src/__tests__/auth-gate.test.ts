@@ -17,7 +17,7 @@ import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import type { Request, Response, NextFunction, RequestHandler } from "express";
-import { generateKeyPair, exportJWK, SignJWT, type KeyLike } from "jose";
+import { generateKeyPair, exportJWK, SignJWT } from "jose";
 import { createAuthGate, STATIC_CHALLENGE, type AuthConfig } from "../auth.js";
 
 // ── Minimal Express stubs ─────────────────────────────────────────────────────
@@ -107,7 +107,11 @@ async function runGate(
 
 // ── Shared JWKS server (used by tests 4 & 5) ─────────────────────────────────
 
-let privateKey!: KeyLike;
+// Derived from generateKeyPair rather than jose's `KeyLike` export: jose v6
+// removed `KeyLike` (keys are plain CryptoKey now), and this package's jose v5
+// can be shadowed by a hoisted v6 copy at typecheck time depending on
+// node_modules layout. This form typechecks identically under both majors.
+let privateKey!: Awaited<ReturnType<typeof generateKeyPair>>["privateKey"];
 let jwksUri: string;
 let jwksServer: http.Server;
 const TEST_ISSUER = "https://test.issuer.example";
