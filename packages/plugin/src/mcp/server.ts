@@ -24,6 +24,7 @@ import { obsidianProvenanceBackend } from "./tools-provenance.js";
 import { obsidianHealthBackend } from "./tools-health.js";
 import { mountModules } from "./modules-mount.js";
 import { FILECLASS_PLUGIN_ID } from "./tools-fileclass.js";
+import { obsidianCrosssessionSource, obsidianReceiptStore } from "./tools-crosssession.js";
 import { registerCodeModeTools, makeCaptureRegister, type CapturedRegistry } from "./tools-code-mode.js";
 import { makeGuarded, resolveGuardedPath, withKernelArgs } from "./guarded.js";
 import { sealUnguardedRegistration } from "./seal-registration.js";
@@ -257,6 +258,11 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
     // locked decision).
     vaultName: ctx.vaultName,
     fileclassPresent: () => !!(app as any).plugins?.plugins?.[FILECLASS_PLUGIN_ID],
+    // The crosssession module (#232): vault reads/appends via the duck-typed
+    // source; read-receipt state in the plugin dir beside the journal
+    // (`crosssession-receipts.json` — the install-id precedent), NOT data.json.
+    crosssessionSource: obsidianCrosssessionSource(app as any),
+    crosssessionReceipts: obsidianReceiptStore(app as any),
   });
   // Skip-and-report only reports if someone reads the report: every mount
   // defect (unknown module id in settings, a gate-refused tool, a config
