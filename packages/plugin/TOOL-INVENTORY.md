@@ -15,7 +15,7 @@ CLI-conditional tool (`obsidian_cli`, default OFF)
 = **up to 80 total**.  The 3 Code Mode meta-tools are an alternative
 per-connection surface and are not counted (a session sees one surface or the
 other, never both).  Not counted here (outside the locked `obsidian_*` family):
-the always-on `governance_submit_revision` (1 tool, see its section below), and
+the always-on `governance_submit_revision` + `governance_revisions` (2 tools, see their section below), and
 the default-disabled `skills` (`vault_skills_*`), `provenance`
 (`provenance_*`), `fileclass` (`fileclass_*`, 8 tools, plugin+binary-gated),
 `crosssession` (`crosssession_*`, 4 tools), and `triage` (`triage_*`, 2 tools)
@@ -110,7 +110,7 @@ read tools; `dry_run` never mutates.
 |---|---|
 | `obsidian_pending_review` | Read-only view of Stewardship's published review queue (`pending-index.json`); data-only coupling, no accept verb |
 
-### `tools-governance-revision.ts` — `registerGovernanceRevisionTool` (1 tool, #101)
+### `tools-governance-revision.ts` — `registerGovernanceRevisionTool` / `registerGovernanceRevisionsListTool` (2 tools, #101/#221)
 
 Outside the locked `obsidian_*` family (like the module surfaces), but
 registered ALWAYS-ON in `server.ts` through the ordinary guarded registrar.
@@ -118,6 +118,7 @@ registered ALWAYS-ON in `server.ts` through the ordinary guarded registrar.
 | Tool name | Description |
 |---|---|
 | `governance_submit_revision` | The one agent-expressible disposition (#221 authority axis): resubmit a note a human marked `acceptance-status: revising` — status back to `proposed`, the `[!revision-request]` callout(s) removed, optional `summary` inserted as a `[!revision-report]` callout below the H1. Mutating (`readOnlyHint: false`); refuses `not_revising` when there is nothing to submit; re-checks the write with the shared accept-forbidden guard — it can never write acceptance |
+| `governance_revisions` | Read-side discovery for the revision round-trip: lists `acceptance-status: revising` notes with each `[!revision-request]` callout parsed out (date + request text) so a dispatcher reads the human's asks at a glance. Read-only, always-on beside the submit tool; allowlist-filtered (`isVisible`); optional `folder` prefix filter; capped at 100 |
 
 ### `tools-complementary.ts` — `registerComplementaryTools` (9 tools)
 

@@ -165,6 +165,44 @@ export function insertCalloutBelowH1(body: string, calloutLines: string[]): stri
  * (including `[!revision-report]`) and all surrounding content are preserved
  * verbatim. Returns the new body and how many blocks were removed.
  */
+/** One parsed `[!revision-request]` callout: the head-line date (when the title
+ * carries a `(...)` group, however precise) and the request text — continuation
+ * lines with their `>` markers stripped, joined on the body's own EOL. */
+export interface ParsedRevisionRequest {
+  date: string | null;
+  text: string;
+}
+
+/**
+ * Extract every `[!revision-request]` callout from a note BODY, non-destructively —
+ * the read-side mirror of `removeRevisionRequestCallouts` (same head/continuation
+ * detection, so anything the remover would remove, this reports). Feeds the
+ * read-only `governance_revisions` listing so a dispatcher can read the human's
+ * requests without opening each note.
+ */
+export function parseRevisionRequestCallouts(body: string): ParsedRevisionRequest[] {
+  const eol = eolOf(body);
+  const lines = body.split(/\r\n|\n/);
+  const out: ParsedRevisionRequest[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    if (REVISION_REQUEST_HEAD_RE.test(lines[i].trimStart()) && QUOTE_LINE_RE.test(lines[i])) {
+      const head = lines[i].trimStart().replace(REVISION_REQUEST_HEAD_RE, "").trim();
+      const date = /\(([^)]+)\)\s*$/.exec(head)?.[1] ?? null;
+      i++;
+      const textLines: string[] = [];
+      while (i < lines.length && QUOTE_LINE_RE.test(lines[i])) {
+        textLines.push(lines[i].replace(/^\s{0,3}>\s?/, ""));
+        i++;
+      }
+      out.push({ date, text: textLines.join(eol).trim() });
+      continue;
+    }
+    i++;
+  }
+  return out;
+}
+
 export function removeRevisionRequestCallouts(body: string): { body: string; removed: number } {
   const eol = eolOf(body);
   const lines = body.split(/\r\n|\n/);
