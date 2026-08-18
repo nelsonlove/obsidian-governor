@@ -19,7 +19,20 @@ export {
   parseGuardFrontmatter,
   stripLeadingBom,
   LEADING_FRONTMATTER_RE,
+  // Declared protected properties (#224) — the generalized perimeter.
+  DEFAULT_PROTECTED_PROPERTIES,
+  normalizeProtectedProperties,
+  setDeclaredProtectedProperties,
+  declaredProtectedProperties,
+  declaredGradeOf,
+  canonicalPropertyKey,
+  findPropertiesCanonical,
+  frontmatterValuesEqual,
+  acceptTransitionNeedsBefore,
+  parseProtectedPropertyLines,
+  formatProtectedPropertyLines,
 } from "./accept-guard.js";
+export type { ProtectedProperty, ProtectedPropertyGrade } from "./accept-guard.js";
 export {
   SHARED_ANNOTATIONS,
   FS_TOOLS,
