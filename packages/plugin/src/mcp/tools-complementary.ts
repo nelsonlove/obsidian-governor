@@ -245,7 +245,13 @@ export function registerComplementaryTools(server: McpServer, app: App, ctx: Ser
           await app.workspace.openLinkText(file_path, "", false);
         }
 
-        if (variables) {
+        // Only a QuickAdd-namespaced id is routed through executeChoice — per
+        // the tool's own description, `variables` is "ignored otherwise", so
+        // a non-QuickAdd id carrying `variables` falls through to the plain
+        // command path below rather than misrouting into a choice lookup
+        // that was never going to resolve.
+        const isQuickAddId = command_id.startsWith("quickadd:");
+        if (variables && isQuickAddId) {
           // app.plugins is not in the public obsidian types — cast required.
           const quickadd = (app as any).plugins?.plugins?.quickadd;
           if (!quickadd?.api?.executeChoice) {
@@ -254,12 +260,13 @@ export function registerComplementaryTools(server: McpServer, app: App, ctx: Ser
           // Obsidian namespaces every registered command id with the owning
           // plugin's id, so a QuickAdd choice's real command_id is
           // "quickadd:choice:<uuid>" — but executeChoice takes the choice's
-          // NAME, not its id, so the id is resolved to a choice first.
+          // NAME, not its id, so the id is resolved to a choice first. (A
+          // quickadd: id that isn't a choice — e.g. "quickadd:reloadQuickAdd"
+          // — falls through unchanged and fails choice_not_found below,
+          // which is the correct outcome: executeChoice can't run it either.)
           const rawId = command_id.startsWith("quickadd:choice:")
             ? command_id.slice("quickadd:choice:".length)
-            : command_id.startsWith("choice:")
-              ? command_id.slice("choice:".length)
-              : command_id;
+            : command_id.slice("quickadd:".length);
           let choiceName: string;
           try {
             choiceName = quickadd.getChoiceById(rawId).name;

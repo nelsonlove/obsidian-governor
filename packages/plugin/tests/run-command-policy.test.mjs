@@ -153,4 +153,20 @@ describe("obsidian_run_command: variables routes through QuickAdd's executeChoic
     assert.deepEqual(executed, ["quickadd:choice:abc"]);
     assert.deepEqual(quickadd.calls, []);
   });
+
+  test("a non-QuickAdd command_id with variables runs the plain command path, per its own docs (`ignored otherwise`)", async () => {
+    const quickadd = fakeQuickAdd();
+    const { handler, executed } = build({}, { quickadd });
+    const res = await handler({ command_id: "editor:toggle-bold", variables: { foo: "bar" } });
+    assert.notEqual(res.isError, true);
+    assert.deepEqual(executed, ["editor:toggle-bold"]);
+    assert.deepEqual(quickadd.calls, []);
+  });
+
+  test("a non-QuickAdd command_id with variables runs fine even when QuickAdd isn't installed at all", async () => {
+    const { handler, executed } = build({});
+    const res = await handler({ command_id: "editor:toggle-bold", variables: { foo: "bar" } });
+    assert.notEqual(res.isError, true);
+    assert.deepEqual(executed, ["editor:toggle-bold"]);
+  });
 });
