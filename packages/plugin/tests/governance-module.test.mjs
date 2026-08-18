@@ -374,6 +374,45 @@ describe("governance module: THE TRIPWIRE — source reachability (accept surfac
   });
 });
 
+describe("history browser (#135): a READ-ONLY surface that confers nothing", () => {
+  // The history browser reads the acceptance log and renders it. It must add NO accept surface:
+  // no command, no MCP tool, no log-write path, and the MCP transport must not grow a way to
+  // reach the log reader. (The render path's text-node-only discipline is pinned behaviorally in
+  // governance-history.test.mjs.)
+
+  test("wiring.ts: readAcceptanceLog is module-scope, read-only (adapter.read), never a this.<member> or export", () => {
+    const wiring = code("governance/wiring.ts");
+    assert.match(wiring, /\nasync function readAcceptanceLog\(/, "readAcceptanceLog must be a module-scope function");
+    assert.ok(!/\bthis\.readAcceptanceLog\b/.test(wiring), "must not be an instance member");
+    assert.ok(!/export\s+(?:async\s+)?function\s+readAcceptanceLog\b/.test(wiring), "must not be exported");
+    // The one appendLog writer is unchanged; the history reader must never append.
+    const m = /async function readAcceptanceLog\([\s\S]*?\n\}/.exec(wiring);
+    assert.ok(m, "readAcceptanceLog body found");
+    assert.ok(!/\.append\(|\.write\(/.test(m[0]), "the history reader must not write the log");
+  });
+
+  test("the kernel history module is import-reachable from the pane ONLY — never from the MCP layer", () => {
+    for (const rel of ["mcp/server.ts", "mcp/modules-mount.ts", ...mcpToolFiles()]) {
+      assert.ok(
+        !/kernel\/governance\/history/.test(readRaw(rel)),
+        `${rel} must not import the governance history module`,
+      );
+      assert.ok(!/\breadAcceptanceLog\b/.test(code(rel)), `${rel} must not reference readAcceptanceLog`);
+    }
+    assert.match(readRaw("governance/pane.ts"), /kernel\/governance\/history/, "the pane renders the history");
+  });
+
+  test("history adds no command and no forbidden-named tool (the module still contributes ZERO tools)", () => {
+    const { server, registry } = mount({ modules: { governance: { enabled: true } } });
+    assert.deepEqual(registry.describe().find((d) => d.id === "governance").tools, []);
+    for (const name of server.tools.keys()) {
+      assert.ok(!/history/i.test(name), `no history tool may reach the MCP surface: ${name}`);
+      assert.ok(!FORBIDDEN.test(name), `a forbidden-named tool reached the surface: ${name}`);
+    }
+    assert.ok(!/\baddCommand\b/.test(code("governance/pane.ts")), "the pane registers no command");
+  });
+});
+
 describe("governance settings-tab surface: the accept path stays module-private across the NEW home", () => {
   // The settings tab is a SECOND gesture-gated home for adopt-baseline + the auto-accept allowlist.
   // The invariant is unchanged: connection-ui.ts (the settings tab) must never hold, receive, or be

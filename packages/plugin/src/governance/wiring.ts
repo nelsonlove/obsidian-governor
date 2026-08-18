@@ -296,6 +296,19 @@ async function quarantineWrite(plugin: Plugin, path: string, content: string): P
 async function appendLog(plugin: Plugin, record: LogRecord | AutoAcceptRecord): Promise<void> {
   await plugin.app.vault.adapter.append(paths(plugin).logPath, JSON.stringify(record) + "\n");
 }
+// Read the acceptance log for the DISPLAY-ONLY history browser. Read-only by construction:
+// nothing derived from it feeds a baseline advance, and the pane renders it via text nodes only.
+// An ABSENT log is genuinely empty history (""), but a read FAILURE returns null so the pane can
+// say "history unavailable" — an unreadable audit log must never render as a clean empty one.
+async function readAcceptanceLog(plugin: Plugin): Promise<string | null> {
+  try {
+    const p = paths(plugin).logPath;
+    if (!(await plugin.app.vault.adapter.exists(p))) return "";
+    return await plugin.app.vault.adapter.read(p);
+  } catch {
+    return null;
+  }
+}
 async function readJournal(plugin: Plugin): Promise<JournalRecord[]> {
   const adapter = plugin.app.vault.adapter;
   const dir = paths(plugin).journalDir;
@@ -388,6 +401,8 @@ function buildController(plugin: Plugin): ReviewController {
     authorizedClasses: () => AUTHORIZED_CLASSES,
     isClassEnabled: (id) => isClassEnabled(plugin, id),
     setClassEnabled: (id, on, evt) => setClassEnabled(plugin, id, on, evt),
+    // History browser: read-only log text (display-only in the pane; text nodes only).
+    readAcceptanceLog: () => readAcceptanceLog(plugin),
   };
 }
 
@@ -643,6 +658,23 @@ function injectStyles(component: Component): void {
     border-color:var(--interactive-accent);}
   .governance-plain{white-space:pre-wrap;font-family:var(--font-monospace);font-size:12px;
     background:var(--background-secondary);padding:8px;border-radius:6px;overflow-x:auto;}
+  .governance-history-toggle{font-size:12px;cursor:pointer;}
+  .governance-history-sub{display:flex;align-items:center;gap:8px;margin-bottom:8px;
+    font-size:12px;color:var(--text-muted);}
+  .governance-history-clear{font-size:11px;cursor:pointer;}
+  .governance-history-row{padding:5px 4px;border-bottom:1px solid
+    var(--background-modifier-border);}
+  .governance-history-head{display:flex;gap:8px;align-items:baseline;}
+  .governance-history-kind{font-weight:600;font-size:11px;text-transform:uppercase;
+    color:var(--text-accent);white-space:nowrap;}
+  .history-revert .governance-history-kind{color:var(--color-red,#e5484d);}
+  .history-accept .governance-history-kind{color:var(--color-green,#3aa757);}
+  .governance-history-path{font-size:12px;word-break:break-word;}
+  .governance-history-meta{display:flex;gap:10px;font-size:11px;color:var(--text-muted);
+    flex-wrap:wrap;margin-top:1px;}
+  .governance-history-hash{font-family:var(--font-monospace);}
+  .governance-history-more{color:var(--text-faint);font-size:11px;text-align:center;
+    padding:6px 0;}
   `;
   const style = document.createElement("style");
   style.id = "vault-mcp-governance-styles";
