@@ -78,8 +78,11 @@ function escapeRe(s: string): string {
  * block's line endings are then folded to LF because the line-anchored
  * `fmValue`/`surface` scans below embed literal `\n` — the same LF text
  * Python's universal-newline `read_text` handed drift_audit.py. For an
- * LF-authored note both steps are byte no-ops, so every already-recognized
- * note's findings (and therefore its ratchet keys) are unchanged. */
+ * ordinary LF-authored fence both steps are byte no-ops, so such notes'
+ * findings (and therefore their ratchet keys) are unchanged; the exotic
+ * shapes where the shared recognizer differs on LF input too (`--- ` opener,
+ * `---x`-prefixed closer line, closer at EOF) now match what the vault itself
+ * honors — the same tradeoff #187 made. */
 function fmBlock(text: string): string {
   const block = leadingFrontmatterBlock(text);
   return block === null ? "" : block.replace(/\r\n?/g, "\n");
