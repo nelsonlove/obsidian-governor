@@ -25,6 +25,7 @@ import { obsidianHealthBackend } from "./tools-health.js";
 import { mountModules } from "./modules-mount.js";
 import { FILECLASS_PLUGIN_ID } from "./tools-fileclass.js";
 import { obsidianCrosssessionSource, obsidianReceiptStore } from "./tools-crosssession.js";
+import { obsidianTriageSource } from "./obsidian-triage-source.js";
 import { registerCodeModeTools, makeCaptureRegister, type CapturedRegistry } from "./tools-code-mode.js";
 import { makeGuarded, resolveGuardedPath, withKernelArgs } from "./guarded.js";
 import { sealUnguardedRegistration } from "./seal-registration.js";
@@ -263,6 +264,10 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
     // (`crosssession-receipts.json` — the install-id precedent), NOT data.json.
     crosssessionSource: obsidianCrosssessionSource(app as any),
     crosssessionReceipts: obsidianReceiptStore(app as any),
+    // The triage module (#221 phase 2): reads via the metadata cache, writes
+    // via the SHARED primitives — moveOne (link-healing renameFile),
+    // fileManager.trashFile, processFrontMatter — see obsidian-triage-source.ts.
+    triageSource: obsidianTriageSource(app),
   });
   // Skip-and-report only reports if someone reads the report: every mount
   // defect (unknown module id in settings, a gate-refused tool, a config
