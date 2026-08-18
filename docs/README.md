@@ -26,6 +26,7 @@ surface, the socket/bridge architecture, the path allowlist). These docs go deep
 | [scope-provider.md](scope-provider.md) | The scope provider module: Johnny Decimal `jd:` addressing and read-only allocation (compute, not reserve). |
 | [vocabulary.md](vocabulary.md) | The vocabulary provider module: read-only validation of tags, properties, types, and glossary terms. |
 | [crosssession.md](crosssession.md) | The cross-session channel module: coordination-log discovery by frontmatter, delta reads, read-receipt attestation, and posting refused while stale (`stale_read`). |
+| [triage.md](triage.md) | The inbox-triage module: the disposition substrate (#221) and its second instance — ten agent dispositions over inbox notes, one dry-run-by-default guarded tool, no pane. |
 | [conformance.md](conformance.md) | The TS conformance engine: rule packs, the ratchet (baseline-diffed findings), the ported legacy checks, and the headless CLI. |
 | [reference.md](reference.md) | The precise operational contracts: addressing (`uid:`/schemes), write queue & journal semantics, `if_rev`/idempotency, advisory claims, the path allowlist and its oracles, external-tool trust, Code Mode. |
 
