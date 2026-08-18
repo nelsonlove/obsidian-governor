@@ -4,8 +4,10 @@ import { type App, TFile, getAllTags } from "obsidian";
 import {
   AcceptForbiddenError,
   acceptTransitionReason,
+  acceptTransitionNeedsBefore,
   parseGuardFrontmatter,
   stripLeadingFrontmatter,
+  unverifiableProtectedPropertyIn,
 } from "@vault-mcp/core";
 import { ok, fail, codedError } from "./helpers.js";
 import { visiblePaths } from "../guard.js";
@@ -29,14 +31,26 @@ import { runCommandRefusal } from "./cli-policy.js";
 // an existing human-granted accepted value forward UNCHANGED is allowed.
 function guardAppendResult(beforeText: string | null, resultingContent: string): void {
   const after = parseGuardFrontmatter(resultingContent);
-  if (!after || !acceptTransitionReason(null, after)) return;
+  // Result-only shortcut delegated to the shared helper (#224): an absent
+  // declared protected property can be a removal, decidable only against the
+  // before-frontmatter, so the shortcut is safe only with none declared.
+  if (!acceptTransitionNeedsBefore(after)) return;
   let before: Record<string, unknown> | null = null;
   if (beforeText !== null) {
     // A before that itself cannot be parsed is treated as no prior acceptance
-    // (fail closed on the transition), matching the backend's diskFrontmatter.
+    // (fail closed on the transition), matching the backend's diskFrontmatter —
+    // except when the unreadable block textually mentions a declared protected
+    // property, which refuses (#224: null-before would let a removal through).
     try {
       before = parseGuardFrontmatter(beforeText);
     } catch {
+      const k = unverifiableProtectedPropertyIn(beforeText);
+      if (k) {
+        throw new AcceptForbiddenError(
+          `the note's current frontmatter mentions the protected property '${k}' but cannot be confidently ` +
+            `parsed, so this write cannot be verified to carry the property forward unchanged`
+        );
+      }
       before = null;
     }
   }

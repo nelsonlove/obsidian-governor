@@ -23,6 +23,12 @@ import {
   type VocabInstanceSettings,
 } from "./kernel/vocab/registry.js";
 import { ensureSettingsStyles } from "./settings-styles.js";
+import {
+  DEFAULT_PROTECTED_PROPERTIES,
+  formatProtectedPropertyLines,
+  normalizeProtectedProperties,
+  parseProtectedPropertyLines,
+} from "@vault-mcp/core";
 
 // ── tabbed settings UI: the pure, DOM-free half ─────────────────────────────
 //
@@ -666,6 +672,42 @@ export class VaultMcpSettingTab extends PluginSettingTab {
         ta.onChange(async (value) => {
           this.plugin.settings.allowlist = value.split("\n").map((s) => s.trim()).filter(Boolean);
           await this.plugin.saveSettings();
+        });
+      });
+
+    // ── Protected frontmatter properties (#224) ───────────────────────────
+    // Human-only-mutable declaration list for the generalized accept-guard
+    // perimeter. Saving routes through plugin.saveSettings, which re-syncs the
+    // core guard registry (normalizing: floor keys / unknown grades dropped
+    // loudly) — so edits land live on the next guarded write.
+    new Setting(containerEl)
+      .setName("Protected frontmatter properties")
+      .setDesc(
+        "One per line, as `key: grade`. Grade `agent-forbidden`: no agent transport may introduce, change, or " +
+          "remove the property (byte-identical carry-forward is allowed). Grade `authority-conferring`: " +
+          "additionally, the value only takes effect once the write that set it is human-attributed or accepted " +
+          "in review. The accepted family (accepted / accepted-by / accepted-on / acceptance-status: accepted) " +
+          "is a hardcoded floor underneath — it is always enforced and cannot be declared, removed, or downgraded " +
+          `here. Default: ${formatProtectedPropertyLines(DEFAULT_PROTECTED_PROPERTIES)} (the per-note auto-accept ` +
+          "policy — a human writes auto-accept: appends|all in a note's own frontmatter to delegate)."
+      )
+      .addTextArea((ta) => {
+        ta.setValue(formatProtectedPropertyLines(this.plugin.settings.protectedProperties));
+        ta.inputEl.rows = 3;
+        ta.inputEl.style.width = "100%";
+        ta.onChange(async (value) => {
+          const raw = parseProtectedPropertyLines(value);
+          this.plugin.settings.protectedProperties = raw;
+          await this.plugin.saveSettings();
+          // Surface what actually took effect (normalization may have dropped
+          // floor keys or unknown grades) without fighting the user mid-typing.
+          const effective = normalizeProtectedProperties(raw, () => {});
+          if (effective.length < raw.length) {
+            new Notice(
+              `vault-mcp: ${raw.length - effective.length} protected-property line(s) ignored ` +
+                `(floor keys and unknown grades cannot be declared) — see the console for details.`
+            );
+          }
         });
       });
 

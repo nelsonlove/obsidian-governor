@@ -97,6 +97,28 @@ Known-overstated section instead — see its header for the format.
   source names no vault-specific key — the uid/title/description list appears only as a
   settings placeholder/example; governance-proposed.test.mjs pins the coercion and
   governance-accept.test.mjs pins empty ⇒ no gate.
+- The accepted family is one hardcoded instance of a general rule, and #224 generalizes it: a **declared list** of frontmatter properties (Security › *Protected frontmatter properties*, human-only-mutable — no agent path writes plugin config) that every guarded transport enforces through the **same two predicates** the accepted family already rides (`acceptTransitionReason` / `acceptForbiddenReason` in `@vault-mcp/core`).
+  substantiated 2026-08-18 (#224): the declared list lives in the module registry inside
+  accept-guard.ts and is consulted INSIDE the two predicates, so every existing call site
+  (fs backend, ObsidianBackend, composeNote, append_at_heading, CLI property/content,
+  fileclass, skills, provenance, revision, debt-register) enforces it with zero call-site
+  changes; protected-properties.test.ts, protected-properties-fs.test.ts and
+  protected-properties-transports.test.mjs are the per-transport sweep. "No agent path
+  writes plugin config" carries the standing settings-surface caveat: settings are
+  data.json, mutable by any local process outside the plugin's transports — the same
+  residual the class allowlist documents (a tampered list can only extend the perimeter;
+  the floor is hardcoded).
+- The governance module's `honoredValueFromBlessed` reads the accepted **baseline** — never the raw frontmatter — so a value sneaked in through a side door (another plugin, a script, Sync) is **inert** until blessed.
+  substantiated 2026-08-18 (#224/#135): honoredValueFromBlessed takes the blessed CONTENT
+  (wiring reads it off the BaselineStore) and has no raw-note read path; baselines advance
+  only via Accept / attributed human edit / adopt / auto-accept, each blessed by
+  construction. governance-protected-policy.test.mjs's honor-rule scenario pins side-door
+  inertness and the bless-then-honor flip.
+- The eligibility engine consults the **honored** policy (from the blessed baseline) before the class allowlist, and every policy-driven auto-accept logs `policy: appends|all` in the acceptance log beside the class-driven records.
+  substantiated 2026-08-18 (#135): eligibility.ts's policy branch precedes the allowlist
+  gate; wiring.ts passes autoAcceptPolicyOf(baseline.content) and forwards result.policy
+  into autoAcceptRecord; governance-protected-policy.test.mjs pins the branch and the
+  record's policy field.
 
 ## docs/agent-writes.md
 

@@ -22,4 +22,11 @@ export interface PendingItem {
   // journal record predates the intent field or the agent didn't supply one. Render as a
   // plain text node only.
   intent?: string;
+  // #224 governance watch: this row surfaced because a DECLARED protected property drifted
+  // from the blessed baseline through a NON-journaled path (another plugin, a script, Sync) —
+  // no agent write attributes it. The change is already INERT (honor-only-if-blessed); the
+  // row exists so it is SEEN and can be accepted (bless) or reverted. `protectedKeys` names
+  // the drifted declared keys.
+  sideDoor?: boolean;
+  protectedKeys?: string[];
 }

@@ -31,7 +31,13 @@
  */
 
 import { TFile, TFolder, getAllTags, type App } from "obsidian";
-import { CHARACTER_LIMIT, deriveJdIdFromPath, parseGuardFrontmatter } from "@vault-mcp/core";
+import {
+  CHARACTER_LIMIT,
+  acceptTransitionNeedsBefore,
+  deriveJdIdFromPath,
+  parseGuardFrontmatter,
+  unverifiableProtectedPropertyIn,
+} from "@vault-mcp/core";
 import { backlinkKeys } from "./helpers.js";
 import { AcceptForbiddenError, acceptTransitionReason } from "./write-notes-compose.js";
 import type {
@@ -136,13 +142,32 @@ export class ObsidianBackend implements VaultBackend {
     return parseGuardFrontmatter(markdown);
   }
 
-  /** The note's current on-disk frontmatter, parsed from its raw text; null when the note is new/absent/unparseable. */
+  /**
+   * The note's current on-disk frontmatter, parsed from its raw text; null when
+   * the note is new/absent/unparseable. An unparseable before whose block
+   * textually mentions a declared protected property REFUSES instead (#224 —
+   * null-before decides introduce/change correctly but would let a REMOVAL
+   * through, and the write cannot be verified to carry the property forward).
+   */
   private async diskFrontmatter(path: string): Promise<Record<string, unknown> | null> {
     const f = this.app.vault.getAbstractFileByPath(path);
     if (!(f instanceof TFile)) return null;
+    let raw: string;
     try {
-      return this.fmOf(await this.app.vault.read(f));
+      raw = await this.app.vault.read(f);
     } catch {
+      return null; // unreadable note — same as absent (historical behavior)
+    }
+    try {
+      return this.fmOf(raw);
+    } catch {
+      const k = unverifiableProtectedPropertyIn(raw);
+      if (k) {
+        throw new AcceptForbiddenError(
+          `the note's current frontmatter mentions the protected property '${k}' but cannot be confidently ` +
+            `parsed, so this write cannot be verified to carry the property forward unchanged`
+        );
+      }
       return null;
     }
   }
@@ -156,7 +181,10 @@ export class ObsidianBackend implements VaultBackend {
    */
   private async guardWrittenContent(path: string, resultingContent: string): Promise<void> {
     const after = this.fmOf(resultingContent);
-    if (!after || !acceptTransitionReason(null, after)) return;
+    // Result-only shortcut delegated to the shared helper: with declared
+    // protected properties (#224) an ABSENT key can be a removal, decidable
+    // only against the on-disk frontmatter, so the before read is required.
+    if (!acceptTransitionNeedsBefore(after)) return;
     const reason = acceptTransitionReason(await this.diskFrontmatter(path), after);
     if (reason) throw new AcceptForbiddenError(reason);
   }
@@ -434,6 +462,19 @@ export class ObsidianBackend implements VaultBackend {
     }
 
     // op === "delete"
+    // #224: removing a declared protected property is a mutation — route the
+    // RESULTING frontmatter (before with this one field deleted) through the
+    // same transition predicate the set path uses, before anything lands. The
+    // accepted family is untouched: the floor's rule only inspects the RESULT's
+    // keys, so deleting an accepted-* field stays allowed exactly as before.
+    {
+      const beforeFm = this.app.metadataCache.getFileCache(file)?.frontmatter ?? null;
+      if (beforeFm && Object.prototype.hasOwnProperty.call(beforeFm, key)) {
+        const afterFm: Record<string, unknown> = { ...beforeFm };
+        delete afterFm[key];
+        this.guardResultingFrontmatter(beforeFm, afterFm);
+      }
+    }
     let existed = false;
     let previous: FrontmatterEditValue | undefined;
     await this.app.fileManager.processFrontMatter(file, (fm) => {

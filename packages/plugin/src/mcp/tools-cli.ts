@@ -37,7 +37,7 @@ import type { ServerCtx } from "./tools-core.js";
 // Reuse the SAME accepted-family rule the MCP note-write primitive uses — no
 // second definition of "accepted" on the CLI path (see cliAcceptRefusal below).
 import { acceptForbiddenReason } from "./write-notes-compose.js";
-import { leadingFrontmatterBlock, stripLeadingBom } from "@vault-mcp/core";
+import { canonicalPropertyKey, declaredProtectedProperties, leadingFrontmatterBlock, stripLeadingBom } from "@vault-mcp/core";
 import {
   cliCommandRefusal,
   configPathRefusal,
@@ -655,6 +655,15 @@ function acceptReasonForBlock(block: string, parseYaml?: (yaml: string) => unkno
   } catch {
     if (/acceptance[-_]status/i.test(block) && /\baccepted\b|accepted[-_]/i.test(block)) {
       return "carries an accepted acceptance-status fence";
+    }
+    // Same suspect-not-through treatment for the declared protected properties
+    // (#224): a block real YAML rejects cannot be judged structurally, so one
+    // that mentions a declared key textually (either separator form) refuses
+    // rather than slipping the perimeter on a parse error.
+    for (const prop of declaredProtectedProperties()) {
+      const k = canonicalPropertyKey(prop.key);
+      const pat = new RegExp(k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/-/g, "[-_]"), "i");
+      if (pat.test(block)) return `carries a fence mentioning the protected property '${prop.key}'`;
     }
     return null;
   }

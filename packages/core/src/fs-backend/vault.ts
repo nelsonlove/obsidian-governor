@@ -12,6 +12,8 @@ import type {
 import {
   AcceptForbiddenError,
   acceptTransitionReason,
+  acceptTransitionNeedsBefore,
+  unverifiableProtectedPropertyIn,
   parseGuardFrontmatter,
   stripLeadingBom,
   LEADING_FRONTMATTER_RE,
@@ -418,9 +420,35 @@ class VaultImpl {
    */
   async guardWrittenContent(relPath: string, resultingContent: string): Promise<void> {
     const after = parseGuardFrontmatter(resultingContent);
-    if (!after || !acceptTransitionReason(null, after)) return;
+    // The result-only shortcut is delegated to the shared helper: with declared
+    // protected properties (#224) an ABSENT key can be a removal, so the before
+    // read is required even when the result asserts nothing.
+    if (!acceptTransitionNeedsBefore(after)) return;
     const before = await this.diskContentSafe(relPath);
-    const reason = acceptTransitionReason(before ? parseGuardFrontmatter(before) : null, after);
+    // A before that cannot be parsed reads as "no prior frontmatter" — matching
+    // ObsidianBackend.diskFrontmatter — so the transition fails CLOSED toward
+    // "introduce" (refused) rather than the whole write throwing on the
+    // unrelated state of the note already on disk. EXCEPT for declared
+    // protected properties: null-before decides introduce/change correctly but
+    // lets a REMOVAL through, so when the unreadable block textually mentions a
+    // declared key the write refuses — it cannot be verified to carry the
+    // property forward (adversarial-review finding #1).
+    let beforeFm: Record<string, unknown> | null = null;
+    if (before !== null) {
+      try {
+        beforeFm = parseGuardFrontmatter(before);
+      } catch {
+        const k = unverifiableProtectedPropertyIn(before);
+        if (k) {
+          throw new AcceptForbiddenError(
+            `the note's current frontmatter mentions the protected property '${k}' but cannot be confidently ` +
+              `parsed, so this write cannot be verified to carry the property forward unchanged`
+          );
+        }
+        beforeFm = null;
+      }
+    }
+    const reason = acceptTransitionReason(beforeFm, after);
     if (reason) throw new AcceptForbiddenError(reason);
   }
 
@@ -650,6 +678,17 @@ class VaultImpl {
     const lines = region.body.split("\n");
     const range = findKeyRange(lines, key);
     if (!range) return { previous: undefined, existed: false };
+    // #224: removing a declared protected property is a mutation — route the
+    // RESULTING frontmatter through the same transition predicate the set path
+    // uses, before anything lands. Parse discipline matches setFrontmatterField
+    // (an unclassifiable frontmatter throws → refuses rather than mutating
+    // blind). The accepted family is untouched by this: the floor's rule only
+    // inspects the RESULT's keys, so deleting an accepted-* field stays allowed
+    // exactly as it always was.
+    const beforeFm = parseGuardFrontmatter(text);
+    const afterFm = { ...(beforeFm ?? {}) };
+    delete afterFm[key];
+    this.guardResultingFrontmatter(beforeFm, afterFm);
     const previous = parseSingleKeyFromLines(lines, key, range);
     lines.splice(range.start, range.end - range.start);
     await fs.writeFile(abs, reassemble(region, lines.join("\n")), "utf8");
