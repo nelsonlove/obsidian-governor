@@ -107,7 +107,7 @@ tool whose `readOnlyHint !== true`).
 
 | Tool name | Description |
 |---|---|
-| `obsidian_quickadd_compile` | Compiles every Macro/UserScript choice note (frontmatter `quickadd-type: macro`) into QuickAdd's live config. `dry_run: true` reports the compiled choices and any per-note errors without touching anything; `dry_run: false` applies via a scoped merge — only choices this tool itself generated (a stable `qan:`-prefixed id derived from the note's path) are added/updated/removed, every other choice is left untouched |
+| `obsidian_quickadd_compile` | Compiles every Macro/UserScript choice note (frontmatter `quickadd-type: macro`) into QuickAdd's live config. Both modes report the would-be diff (`added`/`changed`/`removed` compiler-owned choices) plus per-note `errors` (a non-empty `errors` sets `isError: true`, so a partial compile is distinguishable from a clean one). `dry_run: true` touches nothing; `dry_run: false` applies via a scoped merge — only choices this tool itself generated (a stable `qan:`-prefixed id derived from the note's path) are added/updated/removed, every other choice is left untouched — then (de)registers the Obsidian commands via QuickAdd's own `removeCommandForChoice`/`addCommandForChoice` (`commandsRegistered: false` ⇒ config written but that API was unavailable). Refuses `suspicious_mass_removal` when a non-dry-run would find 0 choices while deleting 3+ (a cold metadata cache), and `out_of_allowlist` outright while a path allowlist is active |
 
 ### `tools-write-notes.ts` — `registerWriteNotesTool` (1 tool, kernel B1)
 
