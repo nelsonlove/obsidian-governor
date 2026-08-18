@@ -21,6 +21,7 @@
 // drift_audit's `fm`/`fm_list` regexes, not a YAML parser) extracts the few
 // keys the vocabulary needs.
 
+import { leadingFrontmatterBlock } from "@vault-mcp/core";
 import {
   VocabAmbiguousError,
   type VocabCapabilities,
@@ -48,12 +49,16 @@ export interface BlueprintConfig {
 
 /** The leading `---` block of `body`, as key → scalar-or-list. Deliberately
  * minimal: `key: value` lines and `key:\n  - item` block lists, quotes
- * stripped — the registry keys this module reads are all that shape. */
+ * stripped — the registry keys this module reads are all that shape. The
+ * BLOCK is found by the shared recognizer in @vault-mcp/core (#189), not a
+ * local `/^---\n/` copy, so a BOM- or CRLF-authored `.fileclass` definition is
+ * read rather than silently skipped; the line split is universal-newline for
+ * the same reason. LF-authored input parses byte-identically. */
 export function scanFrontmatter(body: string): Record<string, unknown> {
-  const m = body.match(/^---\n([\s\S]*?)\n---(?:\n|$)/);
-  if (!m) return {};
+  const block = leadingFrontmatterBlock(body);
+  if (block === null) return {};
   const out: Record<string, unknown> = {};
-  const lines = m[1].split("\n");
+  const lines = block.split(/\r\n|\n|\r/);
   for (let i = 0; i < lines.length; i++) {
     const kv = lines[i].match(/^([A-Za-z][\w -]*):\s*(.*)$/);
     if (!kv) continue;

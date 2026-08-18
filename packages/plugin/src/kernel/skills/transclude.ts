@@ -4,6 +4,8 @@
 // arrives at Claude Code as dead markup. This module inlines it at collection time.
 // Pure — the vault lookup is injected, so it's unit-testable without `obsidian`.
 
+import { stripLeadingFrontmatter } from "@vault-mcp/core";
+
 export interface EmbedSource {
   /** Vault path of the resolved target (cycle detection key). */
   path: string;
@@ -33,9 +35,14 @@ const safeLabel = (s: string): string => s.replace(/-->/g, "--›");
 export const transclusionOpen = (label: string): string => `<!-- transcluded from: ${safeLabel(label)} -->`;
 export const transclusionClose = (label: string): string => `<!-- end transclusion: ${safeLabel(label)} -->`;
 
-/** Strip a single leading YAML frontmatter block. (Shared with exporter.ts.) */
+/** Strip a single leading YAML frontmatter block. (Shared with exporter.ts.)
+ *  Bound to the shared recognizer in @vault-mcp/core (#189) — the old local
+ *  regex was BOM-blind, so a BOM-authored note carried its frontmatter fence
+ *  verbatim into transcluded/exported output. A leading BOM is dropped either
+ *  way (it is a byte-order mark, not body); the `^\s+` trim after is this
+ *  site's own semantics, unchanged. */
 export function stripFrontmatter(content: string): string {
-  return content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "").replace(/^\s+/, "");
+  return stripLeadingFrontmatter(content).replace(/^\s+/, "");
 }
 
 /** Targets with a non-md file extension (images, PDFs, canvas) are attachment embeds,
