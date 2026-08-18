@@ -18,11 +18,17 @@
 
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, mkdir, readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import {
+  FsWriteKernel,
+  FS_JOURNAL_DIR_ENV_VAR,
+  type FsJournalRecord,
+  type FsJournalIo,
+} from "../fs-write-kernel.js";
 
 // ── Dynamic imports — resolved after VAULT_PATH is set ───────────────────────
 
@@ -35,6 +41,7 @@ let FS_TOOLS: (typeof import("@vault-mcp/core"))["FS_TOOLS"];
 // ── Temp vault setup ─────────────────────────────────────────────────────────
 
 let tmpVault: string;
+let tmpJournalDir: string;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let handler: any; // FsHandler instance for ready()/stop() lifecycle
 
@@ -42,6 +49,13 @@ before(async () => {
   // Create temp vault dir and wire VAULT_PATH before any vault module loads.
   tmpVault = await mkdtemp(path.join(tmpdir(), "fs-mode-test-"));
   process.env.VAULT_PATH = tmpVault;
+
+  // Point the process-wide FS write kernel's journal (issue #92) at a temp dir
+  // OUTSIDE the vault — writes in this file would otherwise journal into the
+  // real ~/.claude/vault-mcp/. Must be set before the first FS-mode write
+  // (getFsWriteKernel reads it lazily, once per process).
+  tmpJournalDir = await mkdtemp(path.join(tmpdir(), "fs-mode-journal-"));
+  process.env[FS_JOURNAL_DIR_ENV_VAR] = tmpJournalDir;
 
   // Dynamic import after env is set — vault.ts captures VAULT_ROOT at import time.
   const fsMod = await import("../fs-mode.js");
@@ -61,8 +75,10 @@ before(async () => {
 after(async () => {
   // Close the vault watcher so no open handles remain and the test runner exits.
   if (handler) await handler.stop();
-  // Clean up temp vault.
+  // Clean up temp vault + journal.
   await rm(tmpVault, { recursive: true, force: true });
+  await rm(tmpJournalDir, { recursive: true, force: true });
+  delete process.env[FS_JOURNAL_DIR_ENV_VAR];
 });
 
 // ── Test harness ──────────────────────────────────────────────────────────────
@@ -460,6 +476,21 @@ describe("FS-mode write gate (issue #92)", () => {
     }
   });
 
+  test("gate refusals are not journaled — nothing ran (matches the plugin's pre-queue refusals)", async () => {
+    const countBefore = (await journalRecords()).length;
+    const { client, teardown } = await makeClientFromFsServer(undefined, false);
+    try {
+      const result = await client.callTool({
+        name: "obsidian_write_note",
+        arguments: { path: "fs-mode-write-gate-test/Unjournaled.md", content: "x", overwrite: false },
+      });
+      assert.ok(result.isError);
+    } finally {
+      await teardown();
+    }
+    assert.equal((await journalRecords()).length, countBefore, "a refused write must not journal");
+  });
+
   test("reads (obsidian_list_notes, obsidian_read_note) work identically whether or not writes are allowed", async () => {
     // Seed a note directly on disk (bypassing the gated write tools).
     const noteDir = path.join(tmpVault, "fs-mode-write-gate-read-test");
@@ -485,6 +516,230 @@ describe("FS-mode write gate (issue #92)", () => {
       } finally {
         await teardown();
       }
+    }
+  });
+});
+
+// ── Journal-reading helper (issue #92 suites) ────────────────────────────────
+
+/** All records currently in the temp journal dir, file order then line order. */
+async function journalRecords(): Promise<FsJournalRecord[]> {
+  const files = await readdir(tmpJournalDir).catch(() => [] as string[]);
+  const out: FsJournalRecord[] = [];
+  for (const f of files.filter((f) => f.endsWith(".jsonl")).sort()) {
+    const content = await readFile(path.join(tmpJournalDir, f), "utf8");
+    for (const line of content.split("\n")) {
+      if (line.trim()) out.push(JSON.parse(line) as FsJournalRecord);
+    }
+  }
+  return out;
+}
+
+/**
+ * Issue #92, resolution (a) — FS-mode writes now run through a process-wide
+ * serialized write queue and append one JSONL record per mutating operation to
+ * the server-side journal (fs-write-kernel.ts). These tests drive the REAL
+ * MCP tools end-to-end (buildFsServer → registerFsTools → makeBackend) and
+ * read the journal files the default process kernel writes.
+ *
+ * The queue's interleaving-impossibility proof (deferred-based) lives in
+ * fs-write-kernel.test.ts; here we pin the WIRING: every mutating tool
+ * journals exactly once, reads never journal, separate connections share the
+ * one process kernel, and a broken journal never fails a write.
+ */
+describe("FS-mode write queue + journal (issue #92)", () => {
+  test("every mutating tool appends exactly one ok record; reads append none", async () => {
+    const { client, teardown } = await makeClientFromFsServer(undefined, true);
+    try {
+      const steps: Array<{ tool: string; args: Record<string, unknown> }> = [
+        {
+          tool: "obsidian_write_note",
+          args: { path: "fs-mode-journal-test/A.md", content: "# A\n\n## Section\nbody ^blk1", overwrite: false },
+        },
+        { tool: "obsidian_append_note", args: { path: "fs-mode-journal-test/A.md", content: "\nmore" } },
+        {
+          tool: "obsidian_patch_note",
+          args: {
+            path: "fs-mode-journal-test/A.md",
+            anchor_type: "heading",
+            anchor: "Section",
+            op: "append",
+            content: "patched line",
+          },
+        },
+        {
+          tool: "obsidian_manage_frontmatter",
+          args: { path: "fs-mode-journal-test/A.md", key: "status", op: "set", value: "open" },
+        },
+        {
+          tool: "obsidian_move_note",
+          args: { from: "fs-mode-journal-test/A.md", to: "fs-mode-journal-test/B.md", update_backlinks: false },
+        },
+        { tool: "obsidian_delete_note", args: { path: "fs-mode-journal-test/B.md", confirm: true } },
+      ];
+
+      for (const step of steps) {
+        const before = (await journalRecords()).length;
+        const result = await client.callTool({ name: step.tool, arguments: step.args });
+        assert.ok(!result.isError, `${step.tool} failed: ${JSON.stringify(result.content)}`);
+        const recs = await journalRecords();
+        assert.equal(recs.length, before + 1, `${step.tool} must journal exactly one record`);
+        const rec = recs[recs.length - 1];
+        assert.equal(rec.op, step.tool);
+        assert.equal(rec.outcome, "ok");
+        assert.equal(rec.actor.server.mode, "fs-fallback");
+        // Note bodies never enter the journal.
+        if ("content" in step.args) {
+          assert.match(String(rec.argsDigest.content), /^<\d+ chars>$/);
+        }
+      }
+
+      // Move records both ends; delete/write carry the primary path.
+      const all = await journalRecords();
+      const move = all.find((r) => r.op === "obsidian_move_note");
+      assert.deepEqual(move?.target.paths, ["fs-mode-journal-test/A.md", "fs-mode-journal-test/B.md"]);
+
+      // Reads journal nothing.
+      const before = (await journalRecords()).length;
+      const read = await client.callTool({
+        name: "obsidian_list_notes",
+        arguments: { subdir: "fs-mode-journal-test", limit: 10, offset: 0 },
+      });
+      assert.ok(!read.isError);
+      const fmGet = await client.callTool({
+        name: "obsidian_manage_frontmatter",
+        arguments: { path: "fs-mode-journal-test/DoesNotMatter.md", key: "status", op: "get" },
+      });
+      // get on a missing note errors, but must not journal either way.
+      void fmGet;
+      assert.equal((await journalRecords()).length, before, "read operations must never journal");
+    } finally {
+      await teardown();
+    }
+  });
+
+  test("a failing mutation journals exactly one error record and still errors to the caller", async () => {
+    const { client, teardown } = await makeClientFromFsServer(undefined, true);
+    try {
+      const before = (await journalRecords()).length;
+      const result = await client.callTool({
+        name: "obsidian_delete_note",
+        arguments: { path: "fs-mode-journal-test/Nonexistent.md", confirm: true },
+      });
+      assert.ok(result.isError, "deleting a missing note must error");
+      const recs = await journalRecords();
+      assert.equal(recs.length, before + 1, "the failure must journal exactly one record");
+      const rec = recs[recs.length - 1];
+      assert.equal(rec.op, "obsidian_delete_note");
+      assert.equal(rec.outcome, "error");
+      assert.ok(rec.error, "the error record must carry the failure message");
+    } finally {
+      await teardown();
+    }
+  });
+
+  test("two separate connections share the one process kernel (cross-connection serialization)", async () => {
+    // Two independent per-request servers, as createFsHandler.handle() builds
+    // them — no injected kernel, so both must resolve to the same process-wide
+    // singleton. actor.connection is per-process: identical across both proves
+    // both writes rode the same queue + journal.
+    const a = await makeClientFromFsServer(undefined, true);
+    const b = await makeClientFromFsServer(undefined, true);
+    try {
+      const r1 = await a.client.callTool({
+        name: "obsidian_write_note",
+        arguments: { path: "fs-mode-journal-test/Shared.md", content: "from A", overwrite: true },
+      });
+      const r2 = await b.client.callTool({
+        name: "obsidian_write_note",
+        arguments: { path: "fs-mode-journal-test/Shared.md", content: "from B", overwrite: true },
+      });
+      assert.ok(!r1.isError && !r2.isError);
+      const recs = (await journalRecords()).filter(
+        (r) => r.target.path === "fs-mode-journal-test/Shared.md",
+      );
+      assert.equal(recs.length, 2);
+      assert.equal(
+        recs[0].actor.connection,
+        recs[1].actor.connection,
+        "both connections must share the process kernel",
+      );
+    } finally {
+      await a.teardown();
+      await b.teardown();
+    }
+  });
+
+  test("concurrent writes to one note serialize FIFO — deterministic final state", async () => {
+    const { client, teardown } = await makeClientFromFsServer(undefined, true);
+    try {
+      // Fired without awaiting: both are in flight together. The process
+      // kernel's FIFO queue makes enqueue order the run order, so the final
+      // content is exactly the second write's.
+      const p1 = client.callTool({
+        name: "obsidian_write_note",
+        arguments: { path: "fs-mode-journal-test/Race.md", content: "first write", overwrite: true },
+      });
+      const p2 = client.callTool({
+        name: "obsidian_write_note",
+        arguments: { path: "fs-mode-journal-test/Race.md", content: "second write", overwrite: true },
+      });
+      const [r1, r2] = await Promise.all([p1, p2]);
+      assert.ok(!r1.isError && !r2.isError);
+
+      const readResult = await client.callTool({
+        name: "obsidian_read_note",
+        arguments: { path: "fs-mode-journal-test/Race.md" },
+      });
+      assert.ok(!readResult.isError);
+      const data = JSON.parse((readResult.content as Array<{ type: string; text: string }>)[0].text);
+      assert.equal(data.content, "second write", "the later-enqueued write must win, deterministically");
+
+      const recs = (await journalRecords()).filter(
+        (r) => r.target.path === "fs-mode-journal-test/Race.md",
+      );
+      assert.equal(recs.length, 2, "both writes must journal");
+    } finally {
+      await teardown();
+    }
+  });
+
+  test("a broken journal never fails the vault operation (swallow semantics)", async () => {
+    const failingIo: FsJournalIo = {
+      async append() {
+        throw new Error("journal disk full");
+      },
+      async mkdir() {
+        throw new Error("mkdir refused");
+      },
+    };
+    const kernel = new FsWriteKernel({
+      journalDir: path.join(tmpJournalDir, "never-created"),
+      identity: { vault: "test", version: "0" },
+      journalIo: failingIo,
+    });
+    const server = buildFsServer({ indexStatus: false, allowWrites: true, kernel });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "0.0.1" });
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    try {
+      const result = await client.callTool({
+        name: "obsidian_write_note",
+        arguments: { path: "fs-mode-journal-test/JournalDown.md", content: "still lands", overwrite: false },
+      });
+      assert.ok(!result.isError, `the write must succeed despite the broken journal: ${JSON.stringify(result.content)}`);
+
+      const readResult = await client.callTool({
+        name: "obsidian_read_note",
+        arguments: { path: "fs-mode-journal-test/JournalDown.md" },
+      });
+      assert.ok(!readResult.isError);
+      const data = JSON.parse((readResult.content as Array<{ type: string; text: string }>)[0].text);
+      assert.equal(data.content, "still lands");
+    } finally {
+      await client.close();
+      await server.close();
     }
   });
 });

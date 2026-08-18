@@ -44,6 +44,11 @@ import {
   registerFsTools,
 } from "@vault-mcp/core";
 import type { VaultBackend, VaultWatcherHandle } from "@vault-mcp/core";
+import path from "node:path";
+import { FsWriteKernel, defaultJournalDir } from "./fs-write-kernel.js";
+
+/** This server's version, as asserted in MCP serverInfo and journal identity. */
+const SERVER_VERSION = "1.0.0";
 
 // ── Public interface ──────────────────────────────────────────────────────────
 
@@ -87,22 +92,55 @@ export interface FsHandlerOpts {
    * independent of the env var.
    */
   allowWrites?: boolean;
+  /**
+   * Explicit FsWriteKernel override (tests). Omitted ⇒ the process-wide
+   * singleton from getFsWriteKernel(), which is what gives FS-mode writes
+   * cross-connection serialization — every per-request server built by this
+   * factory shares the one queue and the one journal.
+   */
+  kernel?: FsWriteKernel;
 }
 
-// ── FS-mode write gate (issue #92) ──────────────────────────────────────────
+// ── FS-mode write gate + write kernel (issue #92) ───────────────────────────
 //
-// FS-fallback mode (this file) has no journal and no serialized write queue:
+// FS-fallback mode used to have no journal and no serialized write queue:
 // those live in the plugin's kernel (packages/plugin/src/kernel/), and
 // packages/server depends on @vault-mcp/core + third-party only — it does not,
-// and must not, depend on packages/plugin. Bringing FS-mode writes to kernel
-// parity would mean either extracting the kernel into packages/core (a large
-// architectural change, out of scope here) or re-implementing journal/queue
-// logic in this package (duplicate-implementation drift this codebase has
-// been actively eliminating). Neither is on this issue.
+// and must not, depend on packages/plugin. That gap is now closed at the
+// queue+journal level by fs-write-kernel.ts, a lean server-local counterpart:
+// every FS-mode mutation runs through one process-wide FIFO queue and appends
+// exactly one JSONL record to the server-side journal
+// (`~/.claude/vault-mcp/journal/<slug>/YYYY-MM.jsonl` by default).
 //
-// So instead of pretending to close the gap, FS-mode writes are refused by
-// default, with a typed refusal that names the gap and how to opt in. Reads
-// are never gated — FS-mode read fallback keeps working exactly as before.
+// The opt-in gate REMAINS, because journal+queue is not full kernel parity:
+// FS-mode writes still bypass the plugin kernel's governance surface (if_rev
+// preconditions, idempotency keys, advisory locks, the pending-review flow),
+// and serialization is in-process only — nothing here can serialize against a
+// concurrently running Obsidian or a second server process. Writes are
+// refused by default, with a typed refusal that names the residual gap and
+// how to opt in. Reads are never gated — FS-mode read fallback keeps working
+// exactly as before.
+
+/**
+ * The process-wide FS write kernel — lazy, so a read-only FS session (or a
+ * deployment that never opts into FS writes) creates nothing. Env-derived
+ * configuration (journal dir, vault name) is read once at first use and cached
+ * for the process's lifetime, same convention as semantic-proxy's cached FS
+ * backend.
+ */
+let processKernel: FsWriteKernel | null = null;
+
+export function getFsWriteKernel(): FsWriteKernel {
+  if (!processKernel) {
+    const vaultName = path.basename(vaultRoot());
+    processKernel = new FsWriteKernel({
+      journalDir: defaultJournalDir(vaultName),
+      identity: { vault: vaultName, version: SERVER_VERSION },
+      resolvePath: (relPath) => path.join(vaultRoot(), relPath),
+    });
+  }
+  return processKernel;
+}
 
 /** Env var that opts a deployment into FS-mode writes. Unset/falsy ⇒ refused. */
 export const FS_WRITES_ENV_VAR = "VAULT_MCP_FS_ALLOW_WRITES";
@@ -130,11 +168,13 @@ export class FsWritesDisabledError extends Error {
   readonly code = "fs_writes_disabled";
   constructor() {
     super(
-      "FS-fallback mode is a degraded, unaudited write path: Obsidian is offline, so there is " +
-        "no kernel to route through — this write would bypass the kernel's serialized write " +
-        `queue and append-only write journal entirely. Refused by default. Set ${FS_WRITES_ENV_VAR}=true ` +
-        "to opt in deliberately, understanding that writes made this way are not journaled or " +
-        "serialized against concurrent connections until Obsidian reconnects and LIVE mode resumes.",
+      "FS-fallback mode is a degraded write path: Obsidian is offline, so there is no plugin " +
+        "kernel to route through. FS-mode writes are serialized in-process and journaled to the " +
+        "server-side write journal, but they still bypass the kernel's governance surface " +
+        "(if_rev preconditions, idempotency keys, advisory locks, pending review) and cannot be " +
+        `serialized against other processes. Refused by default. Set ${FS_WRITES_ENV_VAR}=true ` +
+        "to opt in deliberately, understanding that writes made this way carry only queue+journal " +
+        "guarantees until Obsidian reconnects and LIVE mode resumes.",
     );
     this.name = "FsWritesDisabledError";
   }
@@ -147,10 +187,31 @@ export class FsWritesDisabledError extends Error {
 // singletons are pinned to VAULT_PATH at process start, which is the same
 // root the vault watcher uses — keeping the index consistent.
 
-export function makeBackend(opts: { allowWrites?: boolean } = {}): VaultBackend {
+export function makeBackend(
+  opts: { allowWrites?: boolean; kernel?: FsWriteKernel } = {},
+): VaultBackend {
   const allowWrites = opts.allowWrites ?? isFsWritesEnabled();
   const requireWrites = (): void => {
     if (!allowWrites) throw new FsWritesDisabledError();
+  };
+
+  /**
+   * Route one mutating operation through the FS write kernel (issue #92):
+   * gate first (a refusal runs nothing, so — like the plugin's pre-queue
+   * refusals — it is not journaled), then queue + journal. The kernel resolves
+   * lazily so a read-only session never instantiates it; the default is the
+   * process-wide singleton, which is what serializes writes ACROSS the
+   * stateless per-request servers this factory builds.
+   */
+  const mutate = <T>(
+    op: string,
+    target: { path?: string; paths?: string[] },
+    args: Record<string, unknown>,
+    fn: () => Promise<T>,
+  ): Promise<T> => {
+    requireWrites();
+    const kernel = opts.kernel ?? getFsWriteKernel();
+    return kernel.runMutation(op, target, args, fn);
   };
 
   return {
@@ -181,46 +242,76 @@ export function makeBackend(opts: { allowWrites?: boolean } = {}): VaultBackend 
       if (op === "get") {
         return { value: await getFrontmatterField(relPath, key) };
       }
-      requireWrites();
-      if (op === "delete") {
-        return deleteFrontmatterField(relPath, key);
-      }
-      // op === "set"
-      if (value === undefined) {
-        throw new Error("`value` is required for op='set'");
-      }
-      return setFrontmatterField(relPath, key, value);
+      // op names are the MCP tool names, so the FS journal greps like the
+      // plugin's (only `set`/`delete` reach here — `get` returned above and,
+      // like every read, is never queued and never journaled).
+      return mutate(
+        "obsidian_manage_frontmatter",
+        { path: relPath },
+        { path: relPath, key, op, ...(value !== undefined ? { value } : {}) },
+        async () => {
+          if (op === "delete") {
+            return deleteFrontmatterField(relPath, key);
+          }
+          // op === "set"
+          if (value === undefined) {
+            throw new Error("`value` is required for op='set'");
+          }
+          return setFrontmatterField(relPath, key, value);
+        },
+      );
     },
 
-    patchNote: async (relPath, anchor, op, content) => {
-      requireWrites();
-      return patchNote(relPath, anchor, op, content);
-    },
+    patchNote: async (relPath, anchor, op, content) =>
+      mutate(
+        "obsidian_patch_note",
+        { path: relPath },
+        { path: relPath, anchor, op, content },
+        () => patchNote(relPath, anchor, op, content),
+      ),
 
-    writeNote: async (relPath, content, overwrite) => {
-      requireWrites();
-      return writeNote(relPath, content, overwrite);
-    },
+    writeNote: async (relPath, content, overwrite) =>
+      mutate(
+        "obsidian_write_note",
+        { path: relPath },
+        { path: relPath, content, overwrite },
+        () => writeNote(relPath, content, overwrite),
+      ),
 
-    appendNote: async (relPath, content) => {
-      requireWrites();
-      return appendNote(relPath, content);
-    },
+    appendNote: async (relPath, content) =>
+      mutate(
+        "obsidian_append_note",
+        { path: relPath },
+        { path: relPath, content },
+        () => appendNote(relPath, content),
+      ),
 
-    moveNote: async (fromRel, toRel, options) => {
-      requireWrites();
-      return moveNote(fromRel, toRel, {
-        update_backlinks: options.update_backlinks,
-        overwrite: options.overwrite,
-        backlinks_provider: getBacklinks,
-        resolve_ref: (ref: string) => resolveRefs([ref])[0]?.path,
-      });
-    },
+    moveNote: async (fromRel, toRel, options) =>
+      mutate(
+        "obsidian_move_note",
+        { path: fromRel, paths: [fromRel, toRel] },
+        {
+          from: fromRel,
+          to: toRel,
+          update_backlinks: options.update_backlinks,
+          overwrite: options.overwrite,
+        },
+        () =>
+          moveNote(fromRel, toRel, {
+            update_backlinks: options.update_backlinks,
+            overwrite: options.overwrite,
+            backlinks_provider: getBacklinks,
+            resolve_ref: (ref: string) => resolveRefs([ref])[0]?.path,
+          }),
+      ),
 
-    deleteNote: async (relPath, confirm) => {
-      requireWrites();
-      return deleteNote(relPath, confirm);
-    },
+    deleteNote: async (relPath, confirm) =>
+      mutate(
+        "obsidian_delete_note",
+        { path: relPath },
+        { path: relPath, confirm },
+        () => deleteNote(relPath, confirm),
+      ),
   };
 }
 
@@ -231,13 +322,13 @@ export function makeBackend(opts: { allowWrites?: boolean } = {}): VaultBackend 
 
 export function buildFsServer(opts?: FsHandlerOpts): McpServer {
   const server = new McpServer(
-    { name: "obsidian-vault-mcp-server", version: "1.0.0" },
+    { name: "obsidian-vault-mcp-server", version: SERVER_VERSION },
     // listChanged: true is required by Phase 2b (notifications/tools/list_changed);
     // harmless in Phase 2a but declared now so the capability is advertised.
     { capabilities: { tools: { listChanged: true } } },
   );
 
-  registerFsTools(server, makeBackend({ allowWrites: opts?.allowWrites }), {
+  registerFsTools(server, makeBackend({ allowWrites: opts?.allowWrites, kernel: opts?.kernel }), {
     decodeHtml: true,
     includeIndexStatus: (opts?.indexStatus ?? true) ? indexStatus : undefined,
   });
