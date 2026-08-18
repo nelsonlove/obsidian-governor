@@ -261,9 +261,54 @@ against the note's current on-disk frontmatter:
 
 This is essential: a legitimate agent edit to a note a human *already accepted* must be able
 to carry that `accepted` value forward unchanged. Destroying the human's decision would
-violate the invariant just as much as forging it would. So the on-disk value is read (only
-when the resulting frontmatter asserts acceptance at all — the common clean write pays no
-extra read) and equality-checked; an exact carry-forward passes, anything else does not.
+violate the invariant just as much as forging it would. So the on-disk value is read and
+equality-checked; an exact carry-forward passes, anything else does not. (Historically the
+before-read was skipped whenever the result asserted nothing; with declared protected
+properties — next section — absence can be a *removal*, so the shared
+`acceptTransitionNeedsBefore` helper decides when the shortcut is still sound.)
+
+## Declared protected properties (#224) — the generalized perimeter
+
+The accepted family is one hardcoded instance of a general rule, and #224 generalizes it: a
+**declared list** of frontmatter properties (Security › *Protected frontmatter properties*,
+human-only-mutable — no agent path writes plugin config) that every guarded transport
+enforces through the **same two predicates** the accepted family already rides
+(`acceptTransitionReason` / `acceptForbiddenReason` in `@vault-mcp/core`). No second
+definition, no per-transport reimplementation: a transport that enforces the accepted family
+enforces the declared list by construction.
+
+Two grades per declared property:
+
+- **`agent-forbidden`** — no agent transport may **introduce, change, or remove** the
+  property; byte-identical carry-forward is allowed. (Removal *is* refused for declared
+  keys — stripping a human's declaration is as much a mutation as changing it. The accepted
+  family keeps its exact historical semantics untouched.) Key matching is canonical —
+  case-insensitive with `_`/`-` folded — and compares the full multiset of matching keys, so
+  an `auto_accept` written beside an existing `auto-accept` is a change, not a carry-forward.
+- **`authority-conferring`** — agent-forbidden **plus honor-only-if-blessed**: the value only
+  takes *effect* once the write that set it is attributed to a human (the reconciler's
+  isTrusted human-input capture) or accepted in review. The governance module's
+  `honoredValueFromBlessed` reads the accepted **baseline** — never the raw frontmatter — so
+  a value sneaked in through a side door (another plugin, a script, Sync) is **inert** until
+  blessed. A side-door change to any declared property also **surfaces in the review queue**
+  as a `(side-door)` row (inert, but seen).
+
+**The floor is not config.** The accepted-family checks run unconditionally, before and
+independently of the declared list; `normalizeProtectedProperties` drops (loudly) any config
+entry naming an accepted-family key or `acceptance-status`. Config can only *extend* the
+perimeter — never shrink, downgrade, or restate the floor. `acceptance-status`'s
+non-accepted values stay deliberately agent-writable workflow state (`proposed`,
+`revising`), exactly as before.
+
+**The first consumer — the per-note auto-accept policy (#135).** `auto-accept` ships in the
+default declared list as authority-conferring. A human delegates by writing
+`auto-accept: appends` (auto-accept append-only changes — the baseline must be a byte-prefix
+of the current content; a write that appends *and* edits stays pending) or
+`auto-accept: all` in a note's own frontmatter — their editor write is human-attributed and
+therefore honored; no pane toggle exists. The eligibility engine consults the **honored**
+policy (from the blessed baseline) before the class allowlist, and every policy-driven
+auto-accept logs `policy: appends|all` in the acceptance log beside the class-driven
+records. The review pane badges the honored policy read-only.
 
 ## Every write surface is covered
 
