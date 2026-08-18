@@ -18,12 +18,29 @@ It is a single Express process (`src/front.ts`) that:
 
 **FS-mode write caveat:** writes while Obsidian is closed are direct disk edits.
 Obsidian Sync reconciles them on relaunch; they are canonical after that point.
-They are also **unaudited** (issue #92): FS mode has no journal and no serialized
-write queue — those live in the plugin's kernel, and this package does not (and
-must not) depend on `packages/plugin`. FS-mode writes are therefore **refused by
-default**; a deployment opts in explicitly via `VAULT_MCP_FS_ALLOW_WRITES=true`
-(`src/fs-mode.ts`'s `isFsWritesEnabled`/`FsWritesDisabledError`), and `GET /health`
-reports the current setting as `fsWritesEnabled`. Reads are never gated.
+Since issue #92 they are **serialized and journaled**: every FS-mode mutation
+runs through a process-wide FIFO write queue and appends exactly one JSONL
+record to the server-side journal (`src/fs-write-kernel.ts` — a lean,
+server-local counterpart to the plugin kernel's WriteQueue/WriteJournal; this
+package does not, and must not, depend on `packages/plugin`). Journal location:
+`~/.claude/vault-mcp/journal/<vault-slug>/YYYY-MM.jsonl` (or under
+`$VAULT_MCP_STATE_DIR`; override with `$VAULT_MCP_FS_JOURNAL_DIR`) — beside the
+server's socket state, never inside the vault tree. Record shape matches the
+plugin's `JournalRecord` field-for-field where meaningful (`ts`, `op`, `target`,
+`actor`, `argsDigest`, `outcome: ok|error`, `error`, `durationMs`,
+`queueWaitMs`, `revBefore`/`revAfter`), with `actor.server.mode:
+"fs-fallback"` so the two streams stay jointly greppable; journal failures are
+logged and swallowed, never failing the vault op; note bodies never land.
+
+FS-mode writes remain **refused by default**, because queue+journal is not full
+kernel parity: they still bypass the plugin kernel's governance surface
+(`if_rev`, idempotency keys, advisory locks, pending review), and serialization
+is in-process only — nothing serializes against a concurrently running Obsidian
+or a second server process. A deployment opts in explicitly via
+`VAULT_MCP_FS_ALLOW_WRITES=true` (`src/fs-mode.ts`'s
+`isFsWritesEnabled`/`FsWritesDisabledError`), and `GET /health` reports the
+current setting as `fsWritesEnabled`. Reads are never gated, never queued, and
+never journaled.
 
 ## Auth (dual + per-user allowlist)
 
@@ -46,6 +63,7 @@ See `deploy/REMOTE.md` § 5 for the full env-var reference.
 | `src/presence.ts` | `createPresenceMonitor` — socket-probe poll |
 | `src/live-proxy.ts` | `createLiveProxy` — session factory (bridge.mjs per session) |
 | `src/fs-mode.ts` | `createFsHandler` — stateless FS-mode request handler |
+| `src/fs-write-kernel.ts` | issue #92: process-wide FS write queue + append-only JSONL write journal |
 | `src/auth.ts` | `createAuthGate` + PRM / RFC 9728 helpers |
 | `src/semantic-proxy.ts` | Phase 2b: MCP-semantic proxy — mid-session 44↔17 via `tools/list_changed`; enabled by `VAULT_MCP_SEAMLESS=1` (default OFF) |
 

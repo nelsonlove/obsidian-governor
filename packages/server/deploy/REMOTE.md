@@ -23,7 +23,7 @@ front.ts (LaunchAgent)  ── presence poll ──►  ~/.claude/vault-mcp/<vau
 | Obsidian state | Mode | Tool surface | Notes |
 | --- | --- | --- | --- |
 | Running + plugin enabled | `live` | 44 tools (full `obsidian_*` set) | Writes go through Obsidian APIs — canonical, sync-safe, **journaled and serialized** by the plugin kernel |
-| Closed / plugin disabled | `fs` | 17 tools (FS read + write) | Writes are direct disk edits; Obsidian Sync reconciles on relaunch. **Unaudited by default** (issue #92): FS mode has no journal and no serialized write queue (no kernel to route through), so FS-mode writes are **refused** unless the deployment opts in via `VAULT_MCP_FS_ALLOW_WRITES=true`. Reads are never affected. |
+| Closed / plugin disabled | `fs` | 17 tools (FS read + write) | Writes are direct disk edits; Obsidian Sync reconciles on relaunch. **Serialized in-process and journaled** (issue #92) to `~/.claude/vault-mcp/journal/<slug>/YYYY-MM.jsonl` via `fs-write-kernel.ts`, but they still bypass the plugin kernel's governance (`if_rev`, idempotency, locks, pending review) and cross-process serialization — so FS-mode writes are **refused** unless the deployment opts in via `VAULT_MCP_FS_ALLOW_WRITES=true`. Reads are never affected. |
 | Reopened after closure | `live` | Back to 44 tools (auto) | Open SSE channels get a `notifications/tools/list_changed` push |
 
 `GET /health` returns:
@@ -37,7 +37,9 @@ front.ts (LaunchAgent)  ── presence poll ──►  ~/.claude/vault-mcp/<vau
 Obsidian reopens. `fsWritesEnabled` reflects `VAULT_MCP_FS_ALLOW_WRITES` — `false`
 (the default) means FS-mode writes are currently refused with
 `Error [fs_writes_disabled]`; `true` means this deployment has explicitly opted
-into unjournaled, unserialized FS-mode writes.
+into FS-mode writes — which are serialized in-process and journaled
+(server-side JSONL, see the table above), but carry none of the plugin
+kernel's governance guarantees.
 
 ## 1. Token + env
 
@@ -157,7 +159,8 @@ Two Clerk realities shaped the wiring:
 | `VAULT_MCP_BRIDGE` | `~/.claude/vault-mcp/bridge.mjs` | plugin stdio bridge to spawn per LIVE session |
 | `VAULT_MCP_IDLE_MS` | `1800000` (30 min) | idle-reap window for LIVE sessions |
 | `VAULT_MCP_MAX_SESSIONS` | `32` | concurrent LIVE-backend cap |
-| `VAULT_MCP_FS_ALLOW_WRITES` | `false` | opt into FS-mode writes (issue #92) — FS mode has no journal/serialized queue, so writes are refused (`Error [fs_writes_disabled]`) unless this is set. Reads are unaffected either way |
+| `VAULT_MCP_FS_ALLOW_WRITES` | `false` | opt into FS-mode writes (issue #92) — refused (`Error [fs_writes_disabled]`) unless this is set. Opted-in writes are serialized in-process and journaled, but bypass the plugin kernel's governance. Reads are unaffected either way |
+| `VAULT_MCP_FS_JOURNAL_DIR` | `<state dir>/journal/<vault-slug>` | override the FS-write journal directory (issue #92); default sits beside the socket state under `~/.claude/vault-mcp/` or `$VAULT_MCP_STATE_DIR` |
 | `PORT` / `HOST` | `8787` / `127.0.0.1` | local listen (tunnel target); keep on loopback |
 | `AUTH_ENABLED` | `false` | enable the OAuth path + PRM discovery |
 | `MCP_RESOURCE_URL` | — | PRM resource id + required JWT `aud` |
