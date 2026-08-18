@@ -420,6 +420,29 @@ export function frontmatterValuesEqual(a: unknown, b: unknown): boolean {
 }
 
 /**
+ * The first DECLARED key textually present in `rawBefore`'s leading frontmatter
+ * block (either separator form, case-insensitive), or null.
+ *
+ * The removal-detection backstop for an UNPARSEABLE before: a content-write
+ * guard that collapses an unclassifiable before to "no prior frontmatter"
+ * decides introduce/change correctly but lets a REMOVAL through (prevs=[] ⇒
+ * nothing to remove). When the unreadable block textually mentions a declared
+ * key, the write cannot be verified to carry it forward — fail closed. Scoped
+ * to the frontmatter block, not the body, so prose mentioning a key name never
+ * trips it; no fence ⇒ no prior frontmatter ⇒ genuinely nothing to remove.
+ */
+export function unverifiableProtectedPropertyIn(rawBefore: string): string | null {
+  if (declared.length === 0) return null;
+  const block = leadingFrontmatterBlock(rawBefore);
+  if (block === null) return null;
+  const l = block.toLowerCase();
+  for (const p of declared) {
+    if (l.includes(p.key) || l.includes(p.key.replace(/-/g, "_"))) return p.key;
+  }
+  return null;
+}
+
+/**
  * Whether a transition guard must fetch the BEFORE frontmatter to prove a write
  * clean, given only the RESULT. The historical fast path — "the result asserts
  * nothing, skip the disk read" — is only sound while absence in the result is

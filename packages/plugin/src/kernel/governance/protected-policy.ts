@@ -41,6 +41,7 @@ import {
   declaredProtectedProperties,
   findPropertiesCanonical,
   frontmatterValuesEqual,
+  leadingFrontmatterBlock,
   parseGuardFrontmatter,
 } from "@vault-mcp/core";
 
@@ -122,8 +123,12 @@ export function protectedPropertyDrift(blessed: string, current: string): string
   for (const prop of props) {
     const key = canonicalPropertyKey(prop.key);
     if (bf === undefined || cf === undefined) {
+      // Scoped to the leading frontmatter BLOCK, not the body — prose that
+      // merely mentions a key name must not surface a review row.
       const mentions = (c: string) => {
-        const l = c.toLowerCase();
+        const block = leadingFrontmatterBlock(c);
+        if (block === null) return false;
+        const l = block.toLowerCase();
         return l.includes(key) || l.includes(key.replace(/-/g, "_"));
       };
       if (mentions(blessed) || mentions(current)) out.push(key);

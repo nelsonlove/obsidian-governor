@@ -35,6 +35,7 @@ import {
   normalizeProtectedProperties,
   parseProtectedPropertyLines,
   setDeclaredProtectedProperties,
+  unverifiableProtectedPropertyIn,
 } from "../src/accept-guard.js";
 
 const silent = () => {};
@@ -212,6 +213,27 @@ describe("acceptTransitionNeedsBefore — the fast-path helper", () => {
     assert.equal(acceptTransitionNeedsBefore(null), false);
     assert.equal(acceptTransitionNeedsBefore({ title: "x" }), false);
     assert.equal(acceptTransitionNeedsBefore({ "accepted-by": "me" }), true);
+  });
+});
+
+describe("unverifiableProtectedPropertyIn — the unparseable-before removal backstop", () => {
+  test("an unclassifiable block mentioning a declared key (either separator form) is flagged", () => {
+    assert.equal(unverifiableProtectedPropertyIn("---\n\t: broken\nauto-accept: all\n---\nbody\n"), "auto-accept");
+    assert.equal(unverifiableProtectedPropertyIn("---\n\t: broken\nAUTO_ACCEPT: all\n---\nbody\n"), "auto-accept");
+  });
+
+  test("an unclassifiable block NOT mentioning any declared key is null (historical fail-toward-null holds)", () => {
+    assert.equal(unverifiableProtectedPropertyIn("---\n\t: broken\ntitle: x\n---\nbody\n"), null);
+  });
+
+  test("a BODY mention does not flag — the scan is scoped to the frontmatter block", () => {
+    assert.equal(unverifiableProtectedPropertyIn("---\n\t: broken\n---\nprose about auto-accept\n"), null);
+  });
+
+  test("no fence ⇒ nothing to remove ⇒ null; empty declared list ⇒ null", () => {
+    assert.equal(unverifiableProtectedPropertyIn("prose mentioning auto-accept\n"), null);
+    setDeclaredProtectedProperties([], silent);
+    assert.equal(unverifiableProtectedPropertyIn("---\n\t: broken\nauto-accept: all\n---\n"), null);
   });
 });
 

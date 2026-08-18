@@ -13,6 +13,7 @@ import {
   AcceptForbiddenError,
   acceptTransitionReason,
   acceptTransitionNeedsBefore,
+  unverifiableProtectedPropertyIn,
   parseGuardFrontmatter,
   stripLeadingBom,
   LEADING_FRONTMATTER_RE,
@@ -427,12 +428,23 @@ class VaultImpl {
     // A before that cannot be parsed reads as "no prior frontmatter" — matching
     // ObsidianBackend.diskFrontmatter — so the transition fails CLOSED toward
     // "introduce" (refused) rather than the whole write throwing on the
-    // unrelated state of the note already on disk.
+    // unrelated state of the note already on disk. EXCEPT for declared
+    // protected properties: null-before decides introduce/change correctly but
+    // lets a REMOVAL through, so when the unreadable block textually mentions a
+    // declared key the write refuses — it cannot be verified to carry the
+    // property forward (adversarial-review finding #1).
     let beforeFm: Record<string, unknown> | null = null;
     if (before !== null) {
       try {
         beforeFm = parseGuardFrontmatter(before);
       } catch {
+        const k = unverifiableProtectedPropertyIn(before);
+        if (k) {
+          throw new AcceptForbiddenError(
+            `the note's current frontmatter mentions the protected property '${k}' but cannot be confidently ` +
+              `parsed, so this write cannot be verified to carry the property forward unchanged`
+          );
+        }
         beforeFm = null;
       }
     }

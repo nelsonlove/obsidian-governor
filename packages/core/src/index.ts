@@ -29,6 +29,7 @@ export {
   findPropertiesCanonical,
   frontmatterValuesEqual,
   acceptTransitionNeedsBefore,
+  unverifiableProtectedPropertyIn,
   parseProtectedPropertyLines,
   formatProtectedPropertyLines,
 } from "./accept-guard.js";

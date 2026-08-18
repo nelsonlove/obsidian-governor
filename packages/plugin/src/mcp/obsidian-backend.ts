@@ -31,7 +31,13 @@
  */
 
 import { TFile, TFolder, getAllTags, type App } from "obsidian";
-import { CHARACTER_LIMIT, acceptTransitionNeedsBefore, deriveJdIdFromPath, parseGuardFrontmatter } from "@vault-mcp/core";
+import {
+  CHARACTER_LIMIT,
+  acceptTransitionNeedsBefore,
+  deriveJdIdFromPath,
+  parseGuardFrontmatter,
+  unverifiableProtectedPropertyIn,
+} from "@vault-mcp/core";
 import { backlinkKeys } from "./helpers.js";
 import { AcceptForbiddenError, acceptTransitionReason } from "./write-notes-compose.js";
 import type {
@@ -136,13 +142,32 @@ export class ObsidianBackend implements VaultBackend {
     return parseGuardFrontmatter(markdown);
   }
 
-  /** The note's current on-disk frontmatter, parsed from its raw text; null when the note is new/absent/unparseable. */
+  /**
+   * The note's current on-disk frontmatter, parsed from its raw text; null when
+   * the note is new/absent/unparseable. An unparseable before whose block
+   * textually mentions a declared protected property REFUSES instead (#224 —
+   * null-before decides introduce/change correctly but would let a REMOVAL
+   * through, and the write cannot be verified to carry the property forward).
+   */
   private async diskFrontmatter(path: string): Promise<Record<string, unknown> | null> {
     const f = this.app.vault.getAbstractFileByPath(path);
     if (!(f instanceof TFile)) return null;
+    let raw: string;
     try {
-      return this.fmOf(await this.app.vault.read(f));
+      raw = await this.app.vault.read(f);
     } catch {
+      return null; // unreadable note — same as absent (historical behavior)
+    }
+    try {
+      return this.fmOf(raw);
+    } catch {
+      const k = unverifiableProtectedPropertyIn(raw);
+      if (k) {
+        throw new AcceptForbiddenError(
+          `the note's current frontmatter mentions the protected property '${k}' but cannot be confidently ` +
+            `parsed, so this write cannot be verified to carry the property forward unchanged`
+        );
+      }
       return null;
     }
   }

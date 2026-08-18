@@ -133,6 +133,22 @@ describe("fs transport — declared protected properties refuse on every write s
     assert.match(await raw("m.md"), /new/);
   });
 
+  test("UNPARSEABLE before mentioning auto-accept: a rewrite omitting it REFUSES (removal cannot be verified)", async () => {
+    // Adversarial-review finding #1: null-before decides introduce/change but
+    // would let a REMOVAL through. A note whose frontmatter is unclassifiable
+    // (tab indentation) AND carries auto-accept must refuse a rewrite that
+    // cannot be verified to carry the property forward.
+    const exotic = "---\n\tbad: indent\nauto-accept: all\n---\nbody\n";
+    await seed("x.md", exotic);
+    await assert.rejects(() => vault.writeNote("x.md", "---\ntitle: clean\n---\nbody\n", true), isAcceptForbidden);
+    assert.equal(await raw("x.md"), exotic);
+    // An unclassifiable before NOT mentioning a declared key keeps the
+    // historical null-before behavior: an ordinary rewrite passes.
+    await seed("y.md", "---\n\tbad: indent\ntitle: t\n---\nbody\n");
+    await vault.writeNote("y.md", "---\ntitle: clean\n---\nbody\n", true);
+    assert.match(await raw("y.md"), /clean/);
+  });
+
   test("with NO declared properties, all of the above writes pass (config-driven, floor untouched)", async () => {
     setDeclaredProtectedProperties([], silent);
     await vault.writeNote("n.md", "---\nauto-accept: all\n---\nhi\n", false);

@@ -170,6 +170,11 @@ describe("protectedPropertyDrift + the queue's side-door surfacing (#224 §3)", 
     assert.deepEqual(protectedPropertyDrift("---\ntitle: T\n---\n", brokenUnrelated), []);
   });
 
+  test("the textual fallback is scoped to the frontmatter BLOCK — a body mention surfaces nothing", () => {
+    const brokenBodyMention = "---\n\t: broken\ntitle: T\n---\nprose about auto-accept in the body\n";
+    assert.deepEqual(protectedPropertyDrift("---\ntitle: T\n---\n", brokenBodyMention), []);
+  });
+
   test("computeQueue: a non-journaled declared-property change surfaces as a side-door row", () => {
     const baseline = {
       path: "n.md",
