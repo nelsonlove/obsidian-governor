@@ -12,6 +12,7 @@ import { ExternalToolRegistry, type VaultMcpApi } from "./mcp/external-tools.js"
 import { Kernel, WriteQueue, WriteJournal, IdempotencyStore, LockStore, UidIndex, loadInstallId, DEFAULT_VOCABULARIES, type VocabInstanceSettings, type ModuleSettings } from "./kernel/index.js";
 import { obsidianProbe, obsidianServerIdentity, obsidianUidSource } from "./kernel/obsidian-probe.js";
 import { DEFAULT_SCHEMES, type SchemeInstanceConfig } from "./kernel/scheme/registry.js";
+import { DEFAULT_PROTECTED_PROPERTIES, setDeclaredProtectedProperties } from "@vault-mcp/core";
 import { wireGovernance } from "./governance/wiring.js";
 import { mountAction } from "./governance/mount-state.js";
 import { wireSkills } from "./skills/wiring.js";
@@ -40,6 +41,18 @@ interface VaultMcpSettings {
    * read-only mode) — see mcp/external-tools.ts.
    */
   trustedReadOnlyPlugins: string[];
+  /**
+   * Declared protected frontmatter properties (#224): `{key, grade}` rows the
+   * accept guard enforces on EVERY guarded transport (grade `agent-forbidden`
+   * — introduce/change/remove refused, byte-identical carry-forward allowed —
+   * or `authority-conferring`, which additionally honors the value only once
+   * blessed). Human-only-mutable by construction (settings tab; no MCP path
+   * writes plugin config). The accepted family + acceptance-status are a
+   * HARDCODED floor underneath — entries naming them are ignored loudly
+   * (@vault-mcp/core normalizeProtectedProperties); this list can only EXTEND
+   * the perimeter. Synced into the core guard registry on load and save.
+   */
+  protectedProperties: Array<{ key: string; grade: string }>;
   /**
    * Controlled-vocabulary sources for the vocab tools (mcp/tools-vocab.ts):
    * `{ id, provider, root, config }` rows, mirroring the scheme settings
@@ -99,6 +112,7 @@ const DEFAULT_SETTINGS: VaultMcpSettings = {
   allowDangerousCli: false,
   rawCliProxy: false,
   trustedReadOnlyPlugins: [],
+  protectedProperties: DEFAULT_PROTECTED_PROPERTIES.map((p) => ({ ...p })),
   // Cloned so settings edits can never mutate the module-level default rows
   // (item 6: schemes now clones symmetrically with vocabularies — a shallow
   // `.map((s) => ({...s}))` would miss a nested `config` object were one ever
@@ -154,8 +168,27 @@ export default class VaultMcpPlugin extends Plugin {
       deny: list(this.settings.cliPolicy?.deny),
       allowOpaque: list(this.settings.cliPolicy?.allowOpaque),
     };
+    // #224: coerce the declared protected-property rows to the storable shape
+    // first (a hand-edited data.json carrying a non-array or junk rows must not
+    // crash the settings-tab render — the cliPolicy discipline above). Raw
+    // grade STRINGS are preserved as typed so the textarea round-trips; full
+    // validation stays in the registry setter.
+    this.settings.protectedProperties = Array.isArray(this.settings.protectedProperties)
+      ? this.settings.protectedProperties
+          .filter((r): r is { key: string; grade: string } => !!r && typeof (r as { key?: unknown }).key === "string")
+          .map((r) => ({ key: r.key, grade: typeof r.grade === "string" ? r.grade : "agent-forbidden" }))
+      : DEFAULT_PROTECTED_PROPERTIES.map((p) => ({ ...p }));
+    // Sync the list into the core guard registry (the setter normalizes —
+    // floor keys and unknown grades are dropped loudly, so a tampered
+    // data.json can extend the perimeter but never shrink or restate the
+    // hardcoded accepted-family floor).
+    setDeclaredProtectedProperties(this.settings.protectedProperties);
   }
-  async saveSettings() { await this.saveData(this.settings); }
+  async saveSettings() {
+    await this.saveData(this.settings);
+    // Keep the core guard registry live with settings-tab edits (#224).
+    setDeclaredProtectedProperties(this.settings.protectedProperties);
+  }
 
   private discoveryCount(): number {
     try { return fs.readdirSync(stateDir()).filter((f) => f.endsWith(".json")).length; }
