@@ -212,20 +212,31 @@ export function registerComplementaryTools(server: McpServer, app: App, ctx: Ser
       title: "Run Obsidian command",
       description:
         "Execute an Obsidian command by its ID (see obsidian_get_command_ids). Optionally open file_path first so file-scoped commands have a target. " +
-        "QuickAdd command ids (quickadd:*) run opaque macros the acceptance guard cannot inspect and are DENIED by default (Error [cli_denied]); a human can re-enable a specific id in the vault-mcp settings.",
+        "QuickAdd command ids (quickadd:*) run opaque macros the acceptance guard cannot inspect and are DENIED by default (Error [cli_denied]); a human can re-enable a specific id in the vault-mcp settings. " +
+        "Pass `variables` to invoke a QuickAdd choice through its own executeChoice API instead of the plain command call — this is how the vault's dual-mode scripts (variables-first, `_invoked-by: \"agent\"` fails fast instead of opening a modal nobody will answer) are meant to be driven headlessly. `_invoked-by` defaults to \"agent\" when `variables` is given, so a missing required input fails fast rather than hanging on a prompt. KNOWN LIMITATION: QuickAdd's own executeChoice API does not return the invoked script's return value — only success/failure (a thrown error surfaces as a normal tool failure). To see a script's result, re-read whatever it changed after this call returns.",
       inputSchema: {
-        command_id: z.string().min(1).describe("Obsidian command ID, e.g. 'editor:toggle-bold'."),
+        command_id: z.string().min(1).describe("Obsidian command ID, e.g. 'editor:toggle-bold'. A QuickAdd choice's id is 'quickadd:choice:<uuid>' (see obsidian_get_command_ids)."),
         file_path: z.string().optional().describe("Open this vault-relative path before running the command."),
+        variables: z
+          .record(z.string())
+          .optional()
+          .describe(
+            "QuickAdd choice variables (only meaningful for a QuickAdd command id — ignored otherwise). " +
+            "Routes through quickAddApi.executeChoice(name, variables) rather than the plain command call. " +
+            "'_invoked-by' defaults to \"agent\" here unless you set it yourself."
+          ),
       },
       annotations: RW,
     },
-    async ({ command_id, file_path }) => {
+    async ({ command_id, file_path, variables }) => {
       try {
         // Command policy (cli-policy.ts): QuickAdd ids run arbitrary macros
         // the acceptance guard cannot inspect — denied by default, re-enabled
         // per-command only through the human-only settings. Same policy object
         // as obsidian_cli; refused BEFORE anything runs (including the
         // file_path open, which would leak an action for a refused command).
+        // Applies identically whether or not `variables` is given — passing
+        // variables changes HOW an allowed command runs, never WHETHER it may.
         const policyReason = runCommandRefusal(command_id, ctx.getSettings().cliPolicy);
         if (policyReason) {
           return codedError("cli_denied", policyReason);
@@ -233,6 +244,35 @@ export function registerComplementaryTools(server: McpServer, app: App, ctx: Ser
         if (file_path) {
           await app.workspace.openLinkText(file_path, "", false);
         }
+
+        if (variables) {
+          // app.plugins is not in the public obsidian types — cast required.
+          const quickadd = (app as any).plugins?.plugins?.quickadd;
+          if (!quickadd?.api?.executeChoice) {
+            return codedError("quickadd_unavailable", "QuickAdd is not installed, not enabled, or its API is unavailable.");
+          }
+          // Obsidian namespaces every registered command id with the owning
+          // plugin's id, so a QuickAdd choice's real command_id is
+          // "quickadd:choice:<uuid>" — but executeChoice takes the choice's
+          // NAME, not its id, so the id is resolved to a choice first.
+          const rawId = command_id.startsWith("quickadd:choice:")
+            ? command_id.slice("quickadd:choice:".length)
+            : command_id.startsWith("choice:")
+              ? command_id.slice("choice:".length)
+              : command_id;
+          let choiceName: string;
+          try {
+            choiceName = quickadd.getChoiceById(rawId).name;
+          } catch {
+            return codedError("choice_not_found", `No QuickAdd choice with id "${rawId}".`);
+          }
+          const withDefaultActor = { "_invoked-by": "agent", ...variables };
+          try {
+            await quickadd.api.executeChoice(choiceName, withDefaultActor);
+          } catch (e) { return fail(e); }
+          return ok({ command_id, choice: choiceName, executed: true, variables: withDefaultActor });
+        }
+
         // app.commands is not in the public obsidian types — cast required.
         const executed = (app as any).commands.executeCommandById(command_id) as boolean | undefined;
         return ok({ command_id, executed: executed !== false });
