@@ -46,6 +46,7 @@
 // parity -- see issue #136. Do not "simplify" this back to `target: rest` for
 // E/F without re-reading that issue.
 
+import { leadingFrontmatterBlock } from "@vault-mcp/core";
 import { DEFAULT_VAULT_CONVENTIONS, type VaultConventions } from "../vault-conventions.js";
 import type { Finding } from "../finding.js";
 import type { RulePack, SourceFile, VaultSnapshot } from "../rule-pack.js";
@@ -70,11 +71,18 @@ function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** drift_audit.py `fm`: the frontmatter block (between the leading `---\n` and
- * the first `\n---\n`), or "" when the note has no leading frontmatter. */
+/** drift_audit.py `fm`: the leading frontmatter block, or "" when the note has
+ * none. Bound to the shared recognizer in @vault-mcp/core (#189) rather than a
+ * local `/^---\n/` copy, so a BOM- or CRLF-authored note reads as HAVING its
+ * frontmatter instead of silently reading as bare (the #150 class). The
+ * block's line endings are then folded to LF because the line-anchored
+ * `fmValue`/`surface` scans below embed literal `\n` — the same LF text
+ * Python's universal-newline `read_text` handed drift_audit.py. For an
+ * LF-authored note both steps are byte no-ops, so every already-recognized
+ * note's findings (and therefore its ratchet keys) are unchanged. */
 function fmBlock(text: string): string {
-  const m = text.match(/^---\n([\s\S]*?)\n---\n/);
-  return m ? m[1] : "";
+  const block = leadingFrontmatterBlock(text);
+  return block === null ? "" : block.replace(/\r\n?/g, "\n");
 }
 
 /** drift_audit.py `fm_value`: `^key: (.+)$` over the block, whitespace- then

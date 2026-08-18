@@ -1,7 +1,12 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type App, TFile, getAllTags } from "obsidian";
-import { AcceptForbiddenError, acceptTransitionReason, parseGuardFrontmatter } from "@vault-mcp/core";
+import {
+  AcceptForbiddenError,
+  acceptTransitionReason,
+  parseGuardFrontmatter,
+  stripLeadingFrontmatter,
+} from "@vault-mcp/core";
 import { ok, fail, codedError } from "./helpers.js";
 import { visiblePaths } from "../guard.js";
 import type { ServerCtx } from "./tools-core.js";
@@ -87,12 +92,14 @@ export function registerComplementaryTools(server: McpServer, app: App, ctx: Ser
         const cache = app.metadataCache.getFileCache(file);
         const content = await app.vault.read(file);
 
-        // Strip a leading YAML frontmatter block. Regex-based so it doesn't
-        // depend on the exact inclusive/exclusive semantics of the cache's
-        // frontmatterPosition.end.offset (which differs across versions).
-        const body = cache?.frontmatter
-          ? content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "")
-          : content;
+        // Strip a leading YAML frontmatter block via the shared recognizer
+        // (#189) rather than the cache's frontmatterPosition offsets (whose
+        // inclusive/exclusive semantics differ across Obsidian versions) or a
+        // local regex (whose old copy was BOM-blind, so a BOM-authored note's
+        // "body" still carried the whole frontmatter fence even though the
+        // cache had parsed it). The cache gate stays: no cache-recognized
+        // frontmatter ⇒ content passes through byte-identically.
+        const body = cache?.frontmatter ? stripLeadingFrontmatter(content) : content;
 
         return ok({
           path: p,
