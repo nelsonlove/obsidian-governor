@@ -17,8 +17,9 @@ per-connection surface and are not counted (a session sees one surface or the
 other, never both).  Not counted here (outside the locked `obsidian_*` family):
 the always-on `governance_submit_revision` (1 tool, see its section below), and
 the default-disabled `skills` (`vault_skills_*`), `provenance`
-(`provenance_*`), and `fileclass` (`fileclass_*`, 8 tools, plugin+binary-gated)
-module surfaces — see Section 2c and their own module docs.
+(`provenance_*`), `fileclass` (`fileclass_*`, 8 tools, plugin+binary-gated),
+and `crosssession` (`crosssession_*`, 4 tools) module surfaces — see Section 2c
+and their own module docs.
 
 Cross-check: the observed live set with Dataview + Templater + Metadata Menu
 loaded (but NOT Omnisearch, no CLI binary) reported 44 tools — an observation
@@ -234,11 +235,13 @@ session connect.
 
 Registered through the module host like Section 2b, but these modules ship
 `enabled: false` — a human turns them on in the config tab, and the tools appear
-on the next session connect. (The `skills`, `provenance` and `fileclass` modules
-also ship disabled, but their tools are named `vault_skills_*` / `provenance_*` /
-`fileclass_*`, outside the `obsidian_*` family this inventory locks, so the first
-two are documented in their own module docs; `fileclass` is documented just below
-because it is also plugin-gated.)
+on the next session connect. (The `skills`, `provenance`, `fileclass` and
+`crosssession` modules also ship disabled, but their tools are named
+`vault_skills_*` / `provenance_*` / `fileclass_*` / `crosssession_*`, outside the
+`obsidian_*` family this inventory locks, so the first two are documented in
+their own module docs; `fileclass` and `crosssession` are documented just below —
+fileclass because it is also plugin-gated, crosssession because it is the
+cross-session coordination surface, #232.)
 
 ### `tools-health.ts` — `registerHealthTools` via the `health` module (2 tools)
 
@@ -280,6 +283,44 @@ an accepted value (`Error [accept_forbidden]`, refused before the CLI runs).
 | `fileclass_validate` | R | Schema violations vault-wide or per fileClass; exit 1 (violations) is returned, not errored — CLI `validate` |
 | `fileclass_set` | W | Validated single-note field write; accept-guarded — CLI `set <path> <field> <value>` |
 | `fileclass_set_where` | W | Validated bulk write; **dry-run by default**, `apply: true` to commit; accept-guarded — CLI `set-where <class> <field> <value>` |
+
+### `tools-crosssession.ts` — `registerCrosssessionTools` via the `crosssession` module (4 tools)
+
+The cross-session channel surface (#232): the fleet's coordination-log
+conventions given an agent surface. Channels are discovered by **fileclass +
+`audience:` frontmatter** (default `Collection/Log` + any `audience` value —
+never by path); a channel's entries are read from BOTH live forms: the single
+append-only log file's `## <stamp> · <handle>` sections and per-message notes
+(`fileClass: Agent/Log/CrossSession`, filename `<stamp> · <handle>.md`). Stamps
+are treated as **opaque ordered strings** (the live file contains imprecise
+`…T14:2x` stamps), compared with `:` stripped so the file form and the filename
+form of one minute agree.
+
+**Handles are cooperative**, self-declared tool arguments — not authenticated
+identities (the fleet's fallible-not-adversarial threat model: the module
+catches honest lapses, not adversaries). **Read positions are module state**:
+per-handle receipts in `crosssession-receipts.json` beside the journal in the
+plugin's own directory — not in any note's frontmatter, not in `data.json`.
+Receipts are keyed by the channel note's `uid` (a reorg move keeps read state).
+A channel outside the path allowlist is **invisible**: absent from discovery,
+`channel_unresolved` to the other tools (no existence oracle); hidden member
+files contribute no entries.
+
+The two write tools ride the guard-patched registrar (read-only mode, queue,
+journal, kernel args). `crosssession_post` refuses **`stale_read`** — a typed
+policy refusal, checked before anything is written — while the channel holds
+entries the poster's receipt does not cover (the poster's own entries exempt):
+"posting asserts you are current," enforced mechanically. Post appends body
+text at end-of-file only and composes no frontmatter; attest writes only the
+module's receipt file (registered mutating for the journal record, the
+lock-claim precedent).
+
+| Tool name | R/W | Description |
+|---|---|---|
+| `crosssession_channels` | R | Discover channels by fileclass + audience frontmatter: uid, path, audience, projects, entry count, newest stamp, recorded receipts (which handles are behind); with `handle`, your position + unread count |
+| `crosssession_delta` | R | Entries newer than your attested position, `{stamp, handle, body}` from both forms, oldest first; capped (default 20) with `more` + `next_stamp`; own entries omitted |
+| `crosssession_attest` | W | Record a read receipt (`through_stamp` ≤ newest entry; `stamp_ahead` otherwise) — a read-receipt, not authority; mutates module state only |
+| `crosssession_post` | W | Append one `## <stamp> · <handle>` section (run clock, minutes precision) to the channel's log file; **refuses `stale_read` before any write** while unread entries exist; auto-attests through its own entry on success |
 
 ---
 
