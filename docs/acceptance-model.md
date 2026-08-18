@@ -32,6 +32,33 @@ A write that **introduces** any of these is rejected with `Error [accept_forbidd
 write only `acceptance-status: proposed`; the accepted-family is reserved for the human's
 gesture.
 
+## The revision round-trip (dispositions as data)
+
+Revert is not the only way a human says "not this". Since #101 (phase 1 of #221) the
+reviewer can send a change back for another pass:
+
+- **Request changes…** (pane, gesture-gated): the reviewer's feedback is inserted into the
+  note as a `> [!revision-request] Requested changes (YYYY-MM-DD)` callout directly below
+  the H1 (top of body when the note has no H1), and `acceptance-status` becomes `revising`.
+  There is no `requested-changes` frontmatter property — the feedback lives in the note
+  body, and that is where a revising agent reads it.
+- **Withdraw** (pane, gesture-gated, in the Revising section): removes the
+  `[!revision-request]` callout(s) the pane inserted and sets the status back to `proposed`.
+- **`governance_submit_revision`** (the one agent verb): a revising agent resubmits — status
+  back to `proposed`, addressed `[!revision-request]` callout(s) removed, optional summary
+  inserted as a `> [!revision-report]` callout for the reviewer to dispose of at review. It
+  is an ordinary guarded mutating tool (read-only mode, path allowlist, write queue, write
+  journal all apply), it refuses `not_revising` when there is nothing to submit, and the
+  shared accept-forbidden guard re-checks its write. `revising` and `proposed` are
+  agent-legal status transitions; the accepted-family stays forbidden exactly as above.
+
+The full verb set is declared as **data** (`kernel/governance/dispositions.ts`): each
+disposition carries `{id, authority, surface, label, effect}`, and the pane renders its
+controls from that table. The authority axis (#221) is what sorts them — a verb that confers
+standing is a human gesture; a mechanical, reversible write is agent-expressible. Accept
+stays non-writing on the body: it advances the baseline and touches no callout, so the
+reviewer prunes `[!revision-report]` callouts at review or keeps them as history.
+
 ## The accept-forbidden guard
 
 The guarantee is enforced at the **shared write primitive** — the single point every

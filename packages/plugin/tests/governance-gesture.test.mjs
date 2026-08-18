@@ -92,3 +92,62 @@ test("adopt proceeds ONLY on a real gesture AND human confirm", async () => {
   assert.equal(outcome, "done");
   assert.equal(acted, 1, "adopt runs exactly once on a confirmed real gesture");
 });
+
+// ── #101: the ONE shared gesture gate for every state-mutating human disposition ──
+//
+// runGuardedDisposition is the authority-class mechanism the descriptor set (#221) names: the
+// confirm-gated form IS runGuardedAdopt (kept as a named entry point), and the confirm-less form
+// backs the request-changes / withdraw pane handlers. These tests are the headless
+// forged-gesture-refusal proof for the two NEW human dispositions: the same two forgery classes
+// rejected for adopt are rejected here, before any confirm/action runs.
+
+test("runGuardedDisposition (no confirm) is INERT on a forged plain object", async () => {
+  const { runGuardedDisposition } = await import("../src/kernel/governance/gesture.ts");
+  let acted = 0;
+  const outcome = await runGuardedDisposition({ isTrusted: true }, null, async () => { acted++; });
+  assert.equal(outcome, "blocked-untrusted");
+  assert.equal(acted, 0, "a forged plain object must not run a disposition");
+});
+
+test("runGuardedDisposition (no confirm) is INERT on a synthesized (untrusted) Event", async () => {
+  const { runGuardedDisposition } = await import("../src/kernel/governance/gesture.ts");
+  let acted = 0;
+  const outcome = await runGuardedDisposition(new Event("click"), null, async () => { acted++; });
+  assert.equal(outcome, "blocked-untrusted");
+  assert.equal(acted, 0, "a synthesized dispatchEvent must not run a disposition");
+});
+
+test("runGuardedDisposition (no confirm) runs exactly once on a real gesture", async () => {
+  const { runGuardedDisposition } = await import("../src/kernel/governance/gesture.ts");
+  let acted = 0;
+  const outcome = await runGuardedDisposition(new RealGestureEvent("click"), null, async () => { acted++; });
+  assert.equal(outcome, "done");
+  assert.equal(acted, 1);
+});
+
+test("runGuardedDisposition with a confirm gate: forged arg never even opens the confirm", async () => {
+  const { runGuardedDisposition } = await import("../src/kernel/governance/gesture.ts");
+  let confirmed = 0;
+  let acted = 0;
+  const outcome = await runGuardedDisposition(
+    { isTrusted: true },
+    async () => { confirmed++; return true; },
+    async () => { acted++; },
+  );
+  assert.equal(outcome, "blocked-untrusted");
+  assert.equal(confirmed, 0);
+  assert.equal(acted, 0);
+});
+
+test("runGuardedAdopt IS the confirm-gated instantiation of the shared gate (one mechanism)", async () => {
+  const { runGuardedAdopt: adopt, runGuardedDisposition } = await import("../src/kernel/governance/gesture.ts");
+  // Behavioral identity on all three outcomes.
+  for (const [evt, confirm, expected] of [
+    [{ isTrusted: true }, async () => true, "blocked-untrusted"],
+    [new RealGestureEvent("click"), async () => false, "cancelled"],
+    [new RealGestureEvent("click"), async () => true, "done"],
+  ]) {
+    assert.equal(await adopt(evt, confirm, async () => {}), expected);
+    assert.equal(await runGuardedDisposition(evt, confirm, async () => {}), expected);
+  }
+});

@@ -413,6 +413,132 @@ describe("history browser (#135): a READ-ONLY surface that confers nothing", () 
   });
 });
 
+describe("#101 dispositions-as-data: THE TRIPWIRE — the wrap adds no reachable callable", () => {
+  // The descriptor refactor wraps accept/revert/adopt's EXISTING wiring in declared data and adds
+  // two new human dispositions (request-changes, withdraw) plus ONE agent tool
+  // (governance_submit_revision). These tests pin that the refactor changed reachability NOWHERE:
+  // descriptors are pure data, the new human verbs are gesture-only, and the only new agent
+  // surface is the guarded MCP tool registered in server.ts.
+
+  test("dispositions.ts is a pure-data leaf: no accept import, no accept-path reference, no obsidian import", () => {
+    const d = code("kernel/governance/dispositions.ts");
+    assert.ok(!/^\s*import /m.test(readRaw("kernel/governance/dispositions.ts")), "dispositions.ts must import nothing");
+    for (const name of ["performAccept", "performAdopt", "acceptNote", "revertNote", "stampAcceptance", "setBaseline", "runGuardedAdopt"]) {
+      assert.ok(!new RegExp(`\\b${name}\\b`).test(d), `dispositions.ts must not reference ${name}`);
+    }
+    assert.ok(!/from ["']obsidian["']/.test(readRaw("kernel/governance/dispositions.ts")));
+  });
+
+  test("wiring.ts: performRequestChanges / performWithdraw are module-scope, never instance methods, this.<members>, or exports", () => {
+    const wiring = code("governance/wiring.ts");
+    for (const fn of ["performRequestChanges", "performWithdraw", "listRevising"]) {
+      assert.match(wiring, new RegExp(`\\n(?:async )?function ${fn}\\s*\\(`), `${fn} must be a module-scope function`);
+      assert.ok(!new RegExp(`\\bthis\\.${fn}\\b`).test(wiring), `this.${fn} must not exist`);
+      assert.ok(!new RegExp(`export\\s+(?:async\\s+)?function\\s+${fn}\\b`).test(wiring), `${fn} must NOT be exported`);
+      assert.ok(!new RegExp(`export\\s+\\{[^}]*\\b${fn}\\b`).test(wiring), `${fn} must NOT be re-exported`);
+    }
+  });
+
+  test("pane.ts: the request-changes and withdraw buttons are addEventListener-wired and isRealGesture-gated", () => {
+    const paneRaw = readRaw("governance/pane.ts");
+    const pane = code("governance/pane.ts");
+    for (const el of ["requestBtn", "withdrawBtn"]) {
+      assert.ok(!new RegExp(`\\b${el}\\.onclick\\s*=`).test(pane), `${el}.onclick = … is the forgeable wiring`);
+      const lines = paneRaw.split("\n");
+      let found = false;
+      for (let i = 0; i < lines.length; i++) {
+        if (new RegExp(`${el}\\.addEventListener\\(`).test(lines[i])) {
+          assert.match(lines.slice(i, i + 5).join("\n"), /isRealGesture/, `${el} handler must gate on isRealGesture`);
+          found = true;
+        }
+      }
+      assert.ok(found, `${el} must be wired with addEventListener`);
+    }
+  });
+
+  test("pane.ts: the request-changes modal's confirm button is gesture-gated like the adopt confirm", () => {
+    const paneRaw = readRaw("governance/pane.ts");
+    // Both modal confirm buttons are named `confirm`; every one must be addEventListener-wired
+    // (the shared .onclick tripwire above covers the forgeable form) and each addEventListener
+    // handler must gate on isRealGesture within its opening lines.
+    const lines = paneRaw.split("\n");
+    let confirms = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (/\bconfirm\.addEventListener\(/.test(lines[i])) {
+        confirms++;
+        assert.match(lines.slice(i, i + 4).join("\n"), /isRealGesture/, "modal confirm must gate on isRealGesture");
+      }
+    }
+    assert.equal(confirms, 2, "both modals (adopt confirm + request-changes confirm) must be addEventListener-wired");
+  });
+
+  test("descriptors drive the render but carry NO callable: the pane reads only labels/ids from them", () => {
+    const pane = code("governance/pane.ts");
+    // The pane renders from the declared set …
+    assert.match(pane, /dispositionsFor\("pending-item"\)/);
+    // … and never invokes anything ON a descriptor (data in, no capability out).
+    assert.ok(!/\bd\.effect\s*\(/.test(pane), "descriptor.effect must never be called");
+    assert.ok(!/\bd\.(run|handler|action|perform)\b/.test(pane), "descriptors must carry no handler-shaped member");
+  });
+
+  test("the MCP layer never references the revision GESTURE path (the two human verbs stay pane-only)", () => {
+    for (const rel of ["mcp/server.ts", "mcp/modules-mount.ts", ...mcpToolFiles()]) {
+      const src = code(rel);
+      // The module-scope gesture callables + the modal prompt — the names that would indicate the
+      // MCP layer had grown a way to reach the human dispositions. (Prose like the module
+      // summary's "withdraw a revision request" is fine; these identifiers are not.)
+      for (const name of ["performRequestChanges", "performWithdraw", "promptRequestChanges", "listRevising"]) {
+        assert.ok(!new RegExp(`\\b${name}\\b`).test(src), `${rel} must not reference the gesture-path name ${name}`);
+      }
+    }
+  });
+
+  test("both disposition writes clear the human-input record — a modal keystroke must not launder a silent advance", () => {
+    // performRequestChanges runs right after the human TYPED (in the modal). If the reviewed note
+    // is also the active editor tab, that typing recorded genuine human input for the path, and
+    // reconcile would misread the programmatic write as a human edit — silently baseline-advancing
+    // the agent's unreviewed content without an Accept. Both writes must clear the record.
+    const wiringRaw = readRaw("governance/wiring.ts");
+    for (const fn of ["performRequestChanges", "performWithdraw"]) {
+      const m = new RegExp(`async function ${fn}\\([^)]*\\)[^{]*\\{([\\s\\S]*?)\\n\\}`).exec(wiringRaw);
+      assert.ok(m, `${fn} body found`);
+      assert.match(m[1], /humanInputMap\(plugin\)\.delete\(path\)/, `${fn} must clear the human-input record`);
+    }
+  });
+
+  test("no command reaches the new dispositions (wiring/pane register zero commands — re-asserted post-#101)", () => {
+    assert.ok(!/\baddCommand\b/.test(code("governance/wiring.ts")));
+    assert.ok(!/\baddCommand\b/.test(code("governance/pane.ts")));
+  });
+
+  test("governance_submit_revision is the ONE new agent surface — NOT a governance-module tool, not accept-shaped", () => {
+    // It registers in server.ts (the registerVaultWriteTools shape); the governance MODULE still
+    // contributes ZERO tools, and the mounted module surface never sees it.
+    const { server, registry } = mount({ modules: { governance: { enabled: true } } });
+    assert.deepEqual(registry.describe().find((d) => d.id === "governance").tools, []);
+    assert.ok(!server.tools.has("governance_submit_revision"));
+    // The name deliberately does NOT match the forbidden matcher: submit-revision supplies a
+    // candidate; it is not an accept/adopt/baseline verb.
+    assert.ok(!FORBIDDEN.test("governance_submit_revision"));
+    // And server.ts registers it through the ORDINARY patched registrar (guard/queue/journal).
+    assert.match(code("mcp/server.ts"), /registerGovernanceRevisionTool\(server,/);
+    // The tool module reaches ONLY the pure kernel machinery — never the pane/wiring gesture path.
+    const tool = readRaw("mcp/tools-governance-revision.ts");
+    assert.ok(!/from ["'][^"']*\/governance\/(pane|wiring)/.test(tool));
+    assert.match(tool, /kernel\/governance\/revision/);
+  });
+
+  test("the submit tool structurally cannot write acceptance: only setAcceptanceStatusProposed writes status", () => {
+    const revision = code("kernel/governance/revision.ts");
+    // The one status writer takes NO value parameter and hard-codes `proposed`.
+    assert.match(revision, /export function setAcceptanceStatusProposed\(content: string\)/);
+    assert.match(revision, /: proposed`/);
+    assert.ok(!/accepted/.test(revision.replace(/acceptance[-_][sS]tatus/g, "")), "revision.ts must never name an accepted value");
+    // And it must not reference the sanctioned accepted-writer.
+    assert.ok(!/\bstampAcceptance\b/.test(revision));
+  });
+});
+
 describe("governance settings-tab surface: the accept path stays module-private across the NEW home", () => {
   // The settings tab is a SECOND gesture-gated home for adopt-baseline + the auto-accept allowlist.
   // The invariant is unchanged: connection-ui.ts (the settings tab) must never hold, receive, or be

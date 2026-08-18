@@ -1,0 +1,140 @@
+/**
+ * governance-dispositions.test.mjs — dispositions as data (#101, phase 1 of #221).
+ *
+ * The acceptance instance's disposition set is a DECLARED table
+ * (kernel/governance/dispositions.ts): `{id, authority, surface, label,
+ * effect, …}` per verb. These tests pin:
+ *
+ *   • completeness — the set contains exactly the seven declared verbs, and
+ *     every pane action (pending-item buttons, the queue's adopt, the
+ *     Revising section's withdraw, the back/skip control) renders FROM a
+ *     descriptor (source-level: the pane builds buttons by iterating
+ *     dispositionsFor / dispositionById, not from stray literals);
+ *   • authority classes — submit-revision is the ONE agent verb; everything
+ *     else is human; exactly one confirm gate (adopt), one text-input gate
+ *     (request-changes), one stateless verb (skip);
+ *   • descriptors are pure DATA — frozen, no callable rides any descriptor
+ *     (an accept-capable callable on module-exported data would be an
+ *     app-walkable accept gadget);
+ *   • the agent verb's tool name is derived from the table
+ *     (SUBMIT_REVISION_TOOL) and used by the registrar.
+ */
+
+import { test, describe } from "node:test";
+import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  DISPOSITIONS,
+  dispositionsFor,
+  dispositionById,
+  gestureGatedDispositions,
+  SUBMIT_REVISION_TOOL,
+} from "../src/kernel/governance/dispositions.ts";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const src = (rel) => fs.readFileSync(path.join(here, "..", "src", rel), "utf8");
+
+describe("the declared set: completeness + authority classes", () => {
+  test("exactly the seven declared verbs, no more, no less", () => {
+    assert.deepEqual(
+      DISPOSITIONS.map((d) => d.id).sort(),
+      ["accept", "adopt", "request-changes", "revert", "skip", "submit-revision", "withdraw"],
+    );
+  });
+
+  test("submit-revision is the ONLY agent-authority disposition; all others are human", () => {
+    const agents = DISPOSITIONS.filter((d) => d.authority === "agent");
+    assert.deepEqual(agents.map((d) => d.id), ["submit-revision"]);
+    for (const d of DISPOSITIONS) {
+      assert.ok(["human", "agent"].includes(d.authority), `${d.id} has an unknown authority`);
+    }
+  });
+
+  test("exactly one confirm-gated verb (adopt), one input verb (request-changes), one stateless (skip)", () => {
+    assert.deepEqual(DISPOSITIONS.filter((d) => d.confirm).map((d) => d.id), ["adopt"]);
+    assert.deepEqual(DISPOSITIONS.filter((d) => d.input).map((d) => d.id), ["request-changes"]);
+    assert.deepEqual(DISPOSITIONS.filter((d) => d.stateless).map((d) => d.id), ["skip"]);
+  });
+
+  test("surface membership + order match what the pane renders", () => {
+    assert.deepEqual(dispositionsFor("pending-item").map((d) => d.id), ["accept", "revert", "request-changes"]);
+    assert.deepEqual(dispositionsFor("queue").map((d) => d.id), ["adopt"]);
+    assert.deepEqual(dispositionsFor("revising-item").map((d) => d.id), ["withdraw"]);
+    assert.deepEqual(dispositionsFor("mcp-tool").map((d) => d.id), ["submit-revision"]);
+    assert.deepEqual(dispositionsFor("navigation").map((d) => d.id), ["skip"]);
+  });
+
+  test("gestureGatedDispositions = every state-mutating HUMAN verb (all human minus stateless skip)", () => {
+    assert.deepEqual(
+      gestureGatedDispositions().map((d) => d.id).sort(),
+      ["accept", "adopt", "request-changes", "revert", "withdraw"],
+    );
+    // The agent verb is NOT a pane control, so it is never in the gesture-gated set.
+    assert.ok(!gestureGatedDispositions().some((d) => d.id === "submit-revision"));
+  });
+
+  test("the agent verb's tool name is derived from the table", () => {
+    assert.equal(SUBMIT_REVISION_TOOL, "governance_submit_revision");
+    assert.equal(dispositionById("submit-revision").label, SUBMIT_REVISION_TOOL);
+  });
+});
+
+describe("descriptors are pure data (no callable, frozen)", () => {
+  test("no descriptor carries a function-valued property", () => {
+    for (const d of DISPOSITIONS) {
+      for (const [k, v] of Object.entries(d)) {
+        assert.notEqual(typeof v, "function", `${d.id}.${k} must not be a callable`);
+        assert.ok(["string", "boolean"].includes(typeof v), `${d.id}.${k} must be plain data`);
+      }
+    }
+  });
+
+  test("the set and every descriptor are frozen — nothing can add or mutate a verb at runtime", () => {
+    assert.ok(Object.isFrozen(DISPOSITIONS), "the set must be frozen");
+    for (const d of DISPOSITIONS) assert.ok(Object.isFrozen(d), `${d.id} must be frozen`);
+  });
+
+  test("effect strings are documentation, present on every verb", () => {
+    for (const d of DISPOSITIONS) {
+      assert.ok(typeof d.effect === "string" && d.effect.length > 0, `${d.id} must declare its effect`);
+      assert.ok(typeof d.label === "string" && d.label.length > 0, `${d.id} must declare a label`);
+    }
+  });
+});
+
+describe("the pane renders FROM the descriptor set (source-level completeness)", () => {
+  const pane = src("governance/pane.ts");
+
+  test("pending-item action buttons are built by iterating dispositionsFor('pending-item')", () => {
+    assert.match(pane, /for \(const d of dispositionsFor\("pending-item"\)\)/);
+    // and each button's text is the descriptor's label, not a literal
+    assert.match(pane, /text:\s*d\.label/);
+  });
+
+  test("the withdraw button's label comes from the withdraw descriptor", () => {
+    assert.match(pane, /dispositionById\("withdraw"\)/);
+    assert.match(pane, /text:\s*withdrawDesc\.label/);
+  });
+
+  test("the back/skip control's label comes from the skip descriptor", () => {
+    assert.match(pane, /dispositionById\("skip"\)!\.label/);
+  });
+
+  test("no stray human-disposition button literals remain (labels live in the table)", () => {
+    // The old literals must be gone from button creation: the only "Accept"/"Revert" strings
+    // left in the pane are notices/descriptions, not createEl text for action buttons.
+    assert.ok(!/createEl\("button",\s*\{[^}]*text:\s*"Accept"/.test(pane), "Accept button text must come from the descriptor");
+    assert.ok(!/createEl\("button",\s*\{[^}]*text:\s*"Revert"/.test(pane), "Revert button text must come from the descriptor");
+  });
+
+  test("the MCP registrar uses the table-derived tool name, not a second literal", () => {
+    const tool = src("mcp/tools-governance-revision.ts");
+    assert.match(tool, /SUBMIT_REVISION_TOOL/);
+    assert.ok(
+      !/registerTool\(\s*"governance_submit_revision"/.test(tool),
+      "the registrar must register via the SUBMIT_REVISION_TOOL constant",
+    );
+  });
+});

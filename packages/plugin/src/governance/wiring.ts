@@ -36,6 +36,13 @@
 //                        (gesture-gated). Never a method/field/command/tool.
 //    - reconcile       — the silent human-edit baseline advance; module-scope fn driven by the
 //                        vault "modify" event only. Never a method/field/command/tool.
+//  The #101 revision dispositions follow the same shape without being accept-equivalent
+//  (they write the agent-legal revising/proposed transitions and advance no baseline, but
+//  exercising them confers human standing, so they stay gesture-only):
+//    - performRequestChanges — module-scope fn; reached only via the pane's Request-changes
+//                        button + gesture-gated modal confirm. Never a method/command/tool.
+//    - performWithdraw — module-scope fn; reached only via the Revising section's Withdraw
+//                        button (gesture-gated). Never a method/command/tool.
 //  The BaselineStore (its setBaseline is the raw advance primitive) lives in a module-private
 //  WeakMap keyed by the plugin instance — never `this.store`. getStore is a module-scope fn.
 //  The controller handed to the view carries the accept callables and lives in the view's own
@@ -55,6 +62,7 @@ import {
   type AcceptDeps,
   type LogRecord,
 } from "../kernel/governance/accept.js";
+import { insertRevisionRequest, withdrawRevisionRequests } from "../kernel/governance/revision.js";
 import { contentHash } from "../kernel/governance/hash.js";
 import {
   AUTHORIZED_CLASSES,
@@ -77,6 +85,7 @@ import {
   wireAdoptButton,
   ADOPT_BASELINE_DESC,
   type ReviewController,
+  type RevisingItem,
 } from "./pane.js";
 
 // Top-level areas the plugin must never review or touch (guarded territories / hold zones — they
@@ -385,6 +394,63 @@ async function performAdopt(plugin: Plugin): Promise<number> {
   return n;
 }
 
+// ── revision round-trip (#101) — module-scope, closure-captured only by UI handlers ──
+// The two NEW human dispositions. NOT accept-equivalent — `revising` and `proposed` are
+// agent-legal acceptance-status transitions (only the accepted-family is forbidden) and no
+// baseline moves — but exercising them from the pane confers human standing ("a human asked
+// for changes"), so they keep the performAdopt perimeter: module-scope functions, reached only
+// from gesture-gated pane handlers, never a command / instance method / MCP tool.
+function noteFileOf(plugin: Plugin, path: string): TFile {
+  const file = plugin.app.vault.getAbstractFileByPath(path);
+  if (!(file instanceof TFile)) throw new Error(`not a note: ${path}`);
+  return file;
+}
+// request-changes: insert the reviewer's text as a `[!revision-request]` callout directly below
+// the note's H1 (top of body when there is no H1 — kernel/governance/revision.ts, bound to the
+// shared core frontmatter recognizer), then set acceptance-status: revising via Obsidian's own
+// processFrontMatter. Status stays frontmatter (the Bases queue needs it); the FEEDBACK lives in
+// the note body — there is deliberately NO `requested-changes` property (2026-08-17 amendment).
+async function performRequestChanges(plugin: Plugin, path: string, text: string): Promise<void> {
+  const file = noteFileOf(plugin, path);
+  const nowIso = new Date().toISOString();
+  await plugin.app.vault.process(file, (data) => insertRevisionRequest(data, text, nowIso.slice(0, 10)));
+  await plugin.app.fileManager.processFrontMatter(file, (fm) => {
+    fm["acceptance-status"] = "revising";
+  });
+  // These writes are PROGRAMMATIC, but the human just TYPED (in the modal). If the reviewed note
+  // is also the active editor tab, that typing recorded a genuine-human-input timestamp for this
+  // path — and the debounced reconcile would then misread our write as a human edit and SILENTLY
+  // BASELINE-ADVANCE the agent's unreviewed content without an Accept. Clear the record so the
+  // reconcile classifies these modify events as ambiguous (fail safe: no advance, stays pending).
+  humanInputMap(plugin).delete(path);
+  await appendLog(plugin, { action: "request-changes", path, ts: nowIso, by: LOCAL_USER });
+  await refresh(plugin);
+}
+// withdraw: remove the `[!revision-request]` callout(s) this flow inserted — nothing else in the
+// body — and set acceptance-status back to proposed.
+async function performWithdraw(plugin: Plugin, path: string): Promise<void> {
+  const file = noteFileOf(plugin, path);
+  const nowIso = new Date().toISOString();
+  await plugin.app.vault.process(file, (data) => withdrawRevisionRequests(data).content);
+  await plugin.app.fileManager.processFrontMatter(file, (fm) => {
+    fm["acceptance-status"] = "proposed";
+  });
+  // Same misattribution guard as performRequestChanges: our programmatic writes must not ride a
+  // recent genuine-human-input record into a silent baseline advance.
+  humanInputMap(plugin).delete(path);
+  await appendLog(plugin, { action: "withdraw-request", path, ts: nowIso, by: LOCAL_USER });
+  await refresh(plugin);
+}
+// The Revising listing — read-only, from Obsidian's metadata cache (no file reads). Plain data.
+function listRevising(plugin: Plugin): RevisingItem[] {
+  const out: RevisingItem[] = [];
+  for (const file of governedMarkdownFiles(plugin)) {
+    const fm = plugin.app.metadataCache.getFileCache(file)?.frontmatter as Record<string, unknown> | undefined;
+    if (fm?.["acceptance-status"] === "revising") out.push({ path: file.path, title: file.basename });
+  }
+  return out.sort((a, b) => a.path.localeCompare(b.path));
+}
+
 // The controller handed to the view. Carries accept/revert/adopt/setClassEnabled callables —
 // passed straight into the view constructor (which stows it in a module-private WeakMap) and never
 // stored on the plugin. Built fresh per view instantiation.
@@ -403,6 +469,10 @@ function buildController(plugin: Plugin): ReviewController {
     setClassEnabled: (id, on, evt) => setClassEnabled(plugin, id, on, evt),
     // History browser: read-only log text (display-only in the pane; text nodes only).
     readAcceptanceLog: () => readAcceptanceLog(plugin),
+    // Revision round-trip (#101): the two human dispositions + the read-only revising listing.
+    requestChanges: (path, text) => performRequestChanges(plugin, path, text),
+    withdraw: (path) => performWithdraw(plugin, path),
+    getRevising: () => listRevising(plugin),
   };
 }
 
@@ -675,6 +745,17 @@ function injectStyles(component: Component): void {
   .governance-history-hash{font-family:var(--font-monospace);}
   .governance-history-more{color:var(--text-faint);font-size:11px;text-align:center;
     padding:6px 0;}
+  .history-request-changes .governance-history-kind{color:var(--color-yellow,#d29922);}
+  .governance-revising{margin-top:16px;border-top:1px solid var(--background-modifier-border);
+    padding-top:8px;}
+  .governance-revising-title{font-weight:600;font-size:12px;margin-bottom:4px;}
+  .governance-revising-desc{font-size:11px;color:var(--text-muted);margin-bottom:8px;}
+  .governance-revising-row{display:flex;justify-content:space-between;gap:8px;padding:6px 4px;
+    border-radius:6px;align-items:center;}
+  .governance-revising-controls{display:flex;gap:6px;white-space:nowrap;}
+  .governance-withdraw,.governance-request-changes{font-size:12px;cursor:pointer;}
+  .governance-request-text{width:100%;min-height:110px;font-size:13px;margin:8px 0;
+    font-family:var(--font-interface);}
   `;
   const style = document.createElement("style");
   style.id = "vault-mcp-governance-styles";

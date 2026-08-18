@@ -711,7 +711,10 @@ const FILECLASS_MANIFEST: ModuleManifest = {
 // gesture never touches the bridge. The one MCP read surface — obsidian_pending_review — is
 // registered ALWAYS-ON and read-only in server.ts, DECOUPLED from this toggle (cycle 2 fixed
 // the cycle-1 regression that gated the read surface behind this default-off module). So an
-// agent can always SEE the pending queue; only a human at the pane can accept.
+// agent can always SEE the pending queue; only a human at the pane can accept. #101 adds ONE
+// agent verb — governance_submit_revision — likewise registered always-on in server.ts (an
+// ordinary guarded MUTATING tool, never through this module): it resubmits a revising note as
+// `proposed`, and it cannot accept anything.
 //
 // Posture is "capability", NOT "governance": the ModuleRegistry deliberately REFUSES the
 // "governance" posture in v1 (it is inert). This module clears that gate by contributing NO
@@ -754,11 +757,13 @@ const GOVERNANCE_CONFIG_FIELDS: ConfigField[] = [
 const GOVERNANCE_MANIFEST: ModuleManifest = {
   summary:
     "Governance (Acceptance): the human-only review pane. When enabled, vault-mcp registers an Obsidian " +
-    "review pane where a human reviews agent changes and Accepts / Reverts / Adopts a baseline, plus an " +
-    "auto-accept allowlist for provably-mechanical changes. Every accept-class control is a real-click " +
-    "gesture in the pane — never a command, never an MCP tool, never a method on any object reachable " +
-    "from `app`. This module contributes ZERO tools to the MCP transport: the read-only obsidian_pending_review " +
-    "view is always available regardless of this toggle. Ships disabled — a human enables the accept pane here.",
+    "review pane where a human reviews agent changes and Accepts / Reverts / Requests changes / Adopts a " +
+    "baseline, plus a Revising section (withdraw a revision request) and an auto-accept allowlist for " +
+    "provably-mechanical changes. Every state-changing control is a real-click gesture in the pane — never " +
+    "a command, never an MCP tool, never a method on any object reachable from `app`. This module " +
+    "contributes ZERO tools to the MCP transport: the read-only obsidian_pending_review view and the " +
+    "guarded governance_submit_revision resubmit verb (which can never accept) are registered always-on in " +
+    "server.ts, independent of this toggle. Ships disabled — a human enables the accept pane here.",
   // The `config` block ships two badge-DISPLAY toggles (GOVERNANCE_CONFIG_FIELDS) — the accept
   // pane's only MCP-side knobs, read at pane-wire time from `modules.governance.config` (no
   // ConfigBinding — the default location, exactly where the pane wiring reads them). Default ON,
