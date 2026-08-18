@@ -59,6 +59,59 @@ standing is a human gesture; a mechanical, reversible write is agent-expressible
 stays non-writing on the body: it advances the baseline and touches no callout, so the
 reviewer prunes `[!revision-report]` callouts at review or keeps them as history.
 
+## The acceptance convergence — the pane's Accept is the ONE accept (#221/#164)
+
+The vault used to have **two** acceptance lifecycles: the pane's baseline lifecycle
+(pending → Accept → baseline advanced) and the frontmatter lifecycle
+(`acceptance-status: proposed` → a human stamps `accepted` by hand or via a QuickAdd macro).
+They are now converged: the pane's gesture-gated **Accept is context-aware** and serves both.
+
+| Note's `acceptance-status` | What one Accept click does |
+| --- | --- |
+| `proposed` | Conformance-gate check, then **stamp** `acceptance-status: accepted`, `accepted-by: <configured identity>`, `accepted-on: <YYYY-MM-DDTHH:mm local>` (minutes precision — date-only was a fixed bug) via Obsidian's own `app.fileManager.processFrontMatter`, then advance the baseline **from the post-stamp content** |
+| absent / any other value | Advance the baseline exactly as before — the note is **byte-untouched** |
+| `revising` | Never stamped (baseline advance only) — a revising note goes through withdraw / `governance_submit_revision` back to `proposed` first |
+
+**Ordering is the load-bearing part**: the stamp itself changes the note, so `acceptNote`
+(kernel/governance/accept.ts) stamps FIRST, re-reads, **verifies the fold** (status now
+`accepted`, body byte-identical to pre-stamp — a foreign write racing into the gap aborts
+the accept with no baseline advance), and only then advances the baseline from those
+post-stamp bytes. The stamp therefore can never re-enter the pending queue as a fresh
+unreviewed change, and there is no state where the baseline advanced but the queue
+re-shows the stamp. A failure between the stamp and the baseline advance leaves the note
+stamped with the old baseline; the retry Accept sees `accepted` and takes the advance-only
+branch, so a double-stamp is impossible. The accept also clears the genuine-human-input
+record for the path (#228's race discipline), so a stale human-input record does not launder
+a later unrelated write into a silent baseline advance — the reconciler falls back to its
+fail-safe ambiguous classification instead.
+
+**This does not touch the agent-side guarantee.** The stamp is an in-app,
+human-gesture-gated `processFrontMatter` call (`stampAcceptedFrontmatter`, module-scope and
+unexported in `governance/wiring.ts`, reachable only through the gesture-gated accept
+handler) — it **bypasses MCP entirely** and is exactly the human path the accept-forbidden
+guard reserves. Every agent transport still refuses the accepted family; `@vault-mcp/core`
+is unchanged.
+
+The pane also gains a **Proposed section**: notes with `acceptance-status: proposed` and no
+pending write delta (built from the metadata cache like the Revising section, deduped
+against the pending queue — a pending proposed note shows Accept in its queue row only —
+and respecting the excluded roots). Row actions: the same context-aware Accept, and the
+existing Request changes… disposition. The Accept controls surface what will be stamped
+(tooltip + notice with the configured identity) — still exactly one click.
+
+Two governance config fields parameterize the convergence
+(`modules.governance.config`, rendered in the settings tab like the badge fields —
+human-only by construction):
+
+- **`acceptedBy`** (text, default `local-human`) — the identity stamped as `accepted-by`
+  and recorded in the acceptance log.
+- **`requiredFrontmatterKeys`** (CSV, default **empty = no gate**) — the conformance gate:
+  when set, Accept on a `proposed` note **refuses with no partial write** (no stamp AND no
+  baseline advance) while any listed key is missing or empty. The legacy QuickAdd
+  accept-macro gated acceptance on vault-specific checks (uuid7 `uid`, `title`,
+  `description`); that gate maps onto this config — per-vault configuration, never a
+  hardwired vault convention in the plugin.
+
 ## The accept-forbidden guard
 
 The guarantee is enforced at the **shared write primitive** — the single point every
