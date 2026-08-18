@@ -85,6 +85,14 @@ describe("buildHistory — ordering, cap, filter, tolerance", () => {
     assert.equal(e.path, "");
     assert.equal(typeof e.detail, "string");
   });
+  test("#101: the revision-disposition records map to their own kinds (not 'unknown')", () => {
+    const req = toHistoryEntry({ action: "request-changes", path: "N.md", ts: "2026-08-18T12:00:00Z", by: "local-human" });
+    assert.equal(req.kind, "request-changes");
+    assert.equal(req.detail, "by local-human");
+    const wd = toHistoryEntry({ action: "withdraw-request", path: "N.md", ts: "2026-08-18T12:01:00Z", by: "local-human" });
+    assert.equal(wd.kind, "withdraw-request");
+    assert.equal(wd.path, "N.md");
+  });
 });
 
 // ── the renderer: text nodes ONLY (no innerHTML sink exists in this fake at all) ──
