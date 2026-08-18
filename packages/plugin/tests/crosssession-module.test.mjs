@@ -253,6 +253,30 @@ describe("stamps are opaque ordered strings (orderKey)", () => {
   test("stripFrontmatter leaves an unterminated opener alone", () => {
     assert.equal(stripFrontmatter("---\nno close"), "---\nno close");
   });
+
+  test("stripFrontmatter: a `----` rule inside the block is not a closer", () => {
+    assert.equal(stripFrontmatter("---\nkey: |\n  ----\n---\nbody"), "body");
+  });
+
+  test("fences are marker-matched: a ~~~ block showing ``` lines does not mis-toggle", () => {
+    const text = [
+      "## 2026-08-18T10:00 · a",
+      "",
+      "~~~",
+      "```",
+      "## 2026-08-18T10:01 · phantom",
+      "```",
+      "~~~",
+      "",
+      "## 2026-08-18T10:02 · b",
+      "",
+      "real",
+      "",
+    ].join("\n");
+    const es = parseLogEntries(text, "l");
+    assert.deepEqual(es.map((e) => e.handle), ["a", "b"]);
+    assert.ok(es[0].body.includes("phantom"));
+  });
 });
 
 describe("unreadFor", () => {
@@ -310,7 +334,7 @@ describe("channel discovery is by frontmatter, never by path", () => {
     assert.equal(fleet.uid, FLEET_UID);
     assert.equal(fleet.entry_count, 4); // 3 log sections + 1 per-message note
     assert.equal(fleet.newest_stamp, "2026-08-18T15:10");
-    assert.deepEqual(fleet.log_files, [FLEET_LOG]);
+    assert.deepEqual(fleet.log_candidates, [FLEET_LOG]);
     const proj = chans.find((c) => c.audience === "project");
     assert.deepEqual(proj.projects, ["[[Widget]]"]);
     assert.equal(proj.entry_count, 1);
@@ -379,6 +403,33 @@ describe("crosssession_delta", () => {
     const [ch2] = res2.structuredContent.channels;
     assert.deepEqual(ch2.entries.map((e) => e.stamp), ["2026-08-18T1500", "2026-08-18T15:10"]);
     assert.equal(ch2.more, false);
+  });
+
+  test("the cap never bisects a same-stamp group: the slice extends to complete it", async () => {
+    // Three entries share one minute; a cap of 2 would otherwise cut the run
+    // in half — attesting through next_stamp (strictly-greater coverage on
+    // orderKey) would then mark the unserved third entry read without ever
+    // serving it. The slice must extend through the equal-key group.
+    const files = {
+      "c/c.md": "# note\n",
+      "c/LOG.md": [
+        "## 2026-08-18T12:00 · a\n\none\n",
+        "## 2026-08-18T12:00 · b\n\ntwo\n",
+        "## 2026-08-18T12:00 · c\n\nthree\n",
+        "## 2026-08-18T12:01 · d\n\nfour\n",
+      ].join("\n"),
+    };
+    const fms = { "c/c.md": { fileClass: "Collection/Log", audience: "fleet", uid: "u-run" } };
+    const { call } = build({ files, fms, config: { deltaCap: 2 } });
+    const res = await call("crosssession_delta", { handle: "gamma", channel: "u-run" });
+    const [ch] = res.structuredContent.channels;
+    assert.deepEqual(ch.entries.map((e) => e.handle), ["a", "b", "c"], "the 12:00 group is served whole");
+    assert.equal(ch.more, true);
+    assert.equal(ch.next_stamp, "2026-08-18T12:00");
+    // Attest through next_stamp, call again: the remainder arrives, nothing lost.
+    await call("crosssession_attest", { handle: "gamma", channel: "u-run", through_stamp: ch.next_stamp });
+    const res2 = await call("crosssession_delta", { handle: "gamma", channel: "u-run" });
+    assert.deepEqual(res2.structuredContent.channels[0].entries.map((e) => e.handle), ["d"]);
   });
 
   test("channel accepts uid, folder-note path, or folder; omit ⇒ all visible channels", async () => {
@@ -573,7 +624,7 @@ describe("crosssession_post", () => {
     assert.ok(errText(res2).startsWith("Error [log_ambiguous]:"));
   });
 
-  test("a body that would parse as an entry heading refuses invalid_body", async () => {
+  test("a body that would parse as an entry heading refuses invalid_body; a FENCED excerpt passes", async () => {
     const { call } = build();
     await call("crosssession_attest", { handle: "gamma", channel: FLEET_UID, through_stamp: "2026-08-18T15:10" });
     const res = await call("crosssession_post", {
@@ -583,6 +634,37 @@ describe("crosssession_post", () => {
     });
     assert.equal(res.isError, true);
     assert.ok(errText(res).startsWith("Error [invalid_body]:"));
+    // The same excerpt inside a BALANCED fence is content to the parser, so it
+    // is content to the hygiene check too.
+    const fenced = await call("crosssession_post", {
+      handle: "gamma",
+      channel: FLEET_UID,
+      body: "Quoting:\n```\n## 2026-08-18T13:40 · alpha\n```\ndone",
+    });
+    assert.equal(fenced.isError, undefined);
+  });
+
+  test("a body with an UNBALANCED code fence refuses invalid_body (it would swallow later entries)", async () => {
+    const { call, files } = build();
+    await call("crosssession_attest", { handle: "gamma", channel: FLEET_UID, through_stamp: "2026-08-18T15:10" });
+    const before = files[FLEET_LOG];
+    const res = await call("crosssession_post", {
+      handle: "gamma",
+      channel: FLEET_UID,
+      body: "Half a snippet:\n```\nconsole.log(1)",
+    });
+    assert.equal(res.isError, true);
+    assert.ok(errText(res).startsWith("Error [invalid_body]:"));
+    assert.ok(errText(res).includes("unbalanced"));
+    assert.equal(files[FLEET_LOG], before);
+  });
+
+  test("post reports its discovered append target as effects (filesChanged/files)", async () => {
+    const { call } = build();
+    await call("crosssession_attest", { handle: "gamma", channel: FLEET_UID, through_stamp: "2026-08-18T15:10" });
+    const res = await call("crosssession_post", { handle: "gamma", channel: FLEET_UID, body: "Effects." });
+    assert.equal(res.structuredContent.filesChanged, 1);
+    assert.deepEqual(res.structuredContent.files, [FLEET_LOG]);
   });
 });
 
@@ -683,6 +765,10 @@ describe("post through the guarded registrar (fake kernel): the journal record l
       ["crosssession_post", "ok"],
     ]);
     assert.equal(recs[1].actor.client, "test/1.0");
+    // The append target is a DISCOVERED path (the args name only a channel
+    // ref), so the argument-derived target is empty — the reportedEffects
+    // convention puts the file actually touched on the record instead.
+    assert.deepEqual(recs[1].effects, { filesChanged: 1, paths: [FLEET_LOG] });
   });
 
   test("a stale guarded post journals an error outcome and writes nothing to the vault", async () => {
@@ -729,9 +815,11 @@ describe("helpers", () => {
     assert.equal(handleRefusal("assent-worker-3"), null);
   });
 
-  test("bodyRefusal: an entry-heading-shaped line refuses; quoted excerpts pass", () => {
+  test("bodyRefusal: an entry-heading-shaped line refuses; quoted/fenced excerpts pass; unbalanced fences refuse", () => {
     assert.ok(bodyRefusal("## 2026-08-18T13:40 · alpha"));
     assert.equal(bodyRefusal("> ## 2026-08-18T13:40 · alpha\n\nquoted is fine"), null);
+    assert.equal(bodyRefusal("```\n## 2026-08-18T13:40 · alpha\n```"), null);
+    assert.ok(bodyRefusal("```\nhalf-open"));
     assert.ok(bodyRefusal("   "));
   });
 

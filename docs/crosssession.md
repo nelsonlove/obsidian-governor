@@ -91,9 +91,14 @@ The poster's **own entries are exempt** — you are always current with yourself
 the post **auto-attests** through its own entry, so consecutive posts need no interleaved
 attest calls. The appended text is body-only, at end-of-file: the posting path composes no
 frontmatter, so there is no frontmatter field for it to assert (and the append lands after
-the file's existing content, where a YAML block is inert text). A body line that would
-itself parse as an entry heading refuses `invalid_body` (a pasted log excerpt would
-otherwise mint phantom entries); quote excerpts with `>` instead.
+the file's existing content, where a YAML block is inert text). Body hygiene refuses
+`invalid_body` for the two honest-paste hazards: a line that would itself parse as an entry
+heading outside a fence (it would mint phantom entries — quote excerpts with `>` or a
+balanced code fence instead), and an unbalanced code fence (it would leave the parser's
+fence state open and swallow every later entry). The post's structured result reports
+`filesChanged`/`files` (the reportedEffects convention), so the journal's `effects` field
+names the discovered append target even though the call's arguments carry only a channel
+ref.
 
 `crosssession_attest` is also registered `readOnlyHint: false` even though it writes module
 state rather than a note — the advisory-locks precedent: the journal record of who attested
@@ -114,7 +119,7 @@ check.
 | Tool | R/W | What it does |
 |---|---|---|
 | `crosssession_channels(handle?)` | R | All channels by fileclass + audience: uid, path, audience, projects, entry count, newest stamp, recorded receipts with behind-counts; with `handle`, your position + unread count. |
-| `crosssession_delta(handle, channel?)` | R | Entries newer than your attested position — `{stamp, handle, event?, body, source, form}`, both forms merged, oldest first; per-channel cap (default 20, config `deltaCap`) with `more` + `next_stamp` (attest through it, call again). Own entries omitted. `channel` = uid, folder-note path, or folder; omit for all visible channels. |
+| `crosssession_delta(handle, channel?)` | R | Entries newer than your attested position — `{stamp, handle, event?, body, source, form}`, both forms merged, oldest first; per-channel cap (default 20, config `deltaCap`) with `more` + `next_stamp` (attest through it, call again). The cap never bisects a run of equal stamps — the slice extends to complete the final same-minute group, so the attest-through-`next_stamp` continuation loses nothing. Own entries omitted. `channel` = uid, folder-note path, or folder; omit for all visible channels. |
 | `crosssession_attest(handle, channel, through_stamp)` | W | Record the read receipt. Typed refusals: `channel_unresolved`, `stamp_ahead`, `invalid_handle`. |
 | `crosssession_post(handle, channel, body)` | W | Guarded append of one entry section. Typed refusals: `stale_read` (before any write), `channel_unresolved`, `no_log_file` (a channel with only per-message notes), `log_ambiguous` (more than one entry-bearing log file), `invalid_handle`, `invalid_body`. |
 
@@ -142,3 +147,10 @@ check.
 - **Per-message notes are read, not written:** posting targets the single log file
   (`no_log_file` when a channel has none). Minting per-message notes is a candidate later
   verb once the fleet cuts over.
+- **Folder-membership assumptions (cooperative):** a channel's entries are its folder's
+  DIRECT children, and the module assumes the convention's folder-note shape — the channel
+  note inside its own folder, one channel per folder. Degenerate layouts misbehave in
+  documented ways: entries inside the channel note itself are not read (it is excluded from
+  membership); a channel note at the vault root claims every root-level note as a log
+  candidate; two channel notes sharing one folder each see the other as a log candidate.
+  Follow the convention's shape and none of these arise.

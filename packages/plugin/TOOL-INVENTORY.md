@@ -318,7 +318,7 @@ lock-claim precedent).
 | Tool name | R/W | Description |
 |---|---|---|
 | `crosssession_channels` | R | Discover channels by fileclass + audience frontmatter: uid, path, audience, projects, entry count, newest stamp, recorded receipts (which handles are behind); with `handle`, your position + unread count |
-| `crosssession_delta` | R | Entries newer than your attested position, `{stamp, handle, body}` from both forms, oldest first; capped (default 20) with `more` + `next_stamp`; own entries omitted |
+| `crosssession_delta` | R | Entries newer than your attested position, `{stamp, handle, body}` from both forms, oldest first; capped (default 20, never bisecting a same-stamp group) with `more` + `next_stamp`; own entries omitted |
 | `crosssession_attest` | W | Record a read receipt (`through_stamp` ≤ newest entry; `stamp_ahead` otherwise) — a read-receipt, not authority; mutates module state only |
 | `crosssession_post` | W | Append one `## <stamp> · <handle>` section (run clock, minutes precision) to the channel's log file; **refuses `stale_read` before any write** while unread entries exist; auto-attests through its own entry on success |
 

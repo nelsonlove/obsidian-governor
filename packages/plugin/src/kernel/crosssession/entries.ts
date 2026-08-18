@@ -62,15 +62,17 @@ export function orderKey(stamp: string): string {
 }
 
 /** Strip a leading `---` YAML frontmatter block, returning the body. Tolerant:
- * an unterminated opener is left in place rather than swallowing the file. */
+ * an unterminated opener is left in place rather than swallowing the file. The
+ * closer must be a line that IS `---` (trimmed), not merely one starting with
+ * `---` — a `----` rule inside a multiline YAML string is not a closer. */
 export function stripFrontmatter(text: string): string {
   if (!text.startsWith("---")) return text;
-  const firstNl = text.indexOf("\n");
-  if (firstNl === -1 || text.slice(0, firstNl).trim() !== "---") return text;
-  const close = text.indexOf("\n---", firstNl);
-  if (close === -1) return text;
-  const afterClose = text.indexOf("\n", close + 1);
-  return afterClose === -1 ? "" : text.slice(afterClose + 1);
+  const lines = text.split("\n");
+  if (lines[0].trim() !== "---") return text;
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() === "---") return lines.slice(i + 1).join("\n");
+  }
+  return text;
 }
 
 /**
@@ -88,7 +90,10 @@ export function parseLogEntries(text: string, source: string): ChannelEntry[] {
   // Code-fence tracking: the live file's rules preamble carries a FENCED
   // example of the heading shape (`## <ISO timestamp> · <handle> · <EVENT>`
   // inside ``` … ```) — a line inside a fence is content, never a heading.
-  let inFence = false;
+  // Marker-matched: a fence opened with ``` closes only on ``` and one opened
+  // with ~~~ only on ~~~, so a ~~~ block legitimately SHOWING ``` lines does
+  // not mis-toggle the state.
+  let fence: string | null = null;
   const flush = () => {
     if (current) {
       current.body = bodyLines.join("\n").trim();
@@ -98,12 +103,13 @@ export function parseLogEntries(text: string, source: string): ChannelEntry[] {
     bodyLines = [];
   };
   for (const line of lines) {
-    if (/^\s*(```|~~~)/.test(line)) {
-      inFence = !inFence;
+    const f = /^\s*(```|~~~)/.exec(line);
+    if (f && (fence === null || fence === f[1])) {
+      fence = fence === null ? f[1] : null;
       if (current) bodyLines.push(line);
       continue;
     }
-    const m = inFence ? null : ENTRY_HEADING_RE.exec(line);
+    const m = fence !== null ? null : ENTRY_HEADING_RE.exec(line);
     if (m) {
       flush();
       // The heading text may carry a further ` · <event>` segment; the regex's

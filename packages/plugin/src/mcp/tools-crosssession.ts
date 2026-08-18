@@ -141,14 +141,28 @@ export function handleRefusal(handle: unknown): string | null {
 
 /** Body hygiene for a post: no line may itself parse as an entry heading — an
  * honestly pasted log excerpt would otherwise mint phantom entries on the next
- * parse (the honest-mistake class this module exists to catch). */
+ * parse (the honest-mistake class this module exists to catch) — and code
+ * fences must balance: an unbalanced fence would leave the parser's fence
+ * state open across the entry boundary, swallowing every LATER entry's heading
+ * as fenced content (the same phantom-entry class, in the opposite
+ * direction). */
 export function bodyRefusal(body: string): string | null {
   if (body.trim().length === 0) return "body must be non-empty";
+  let fence: string | null = null;
   for (const line of body.split("\n")) {
-    if (isEntryHeadingLine(line)) {
+    const f = /^\s*(```|~~~)/.exec(line);
+    if (f && (fence === null || fence === f[1])) {
+      fence = fence === null ? f[1] : null;
+      continue;
+    }
+    if (fence === null && isEntryHeadingLine(line)) {
       return `body contains a line that would parse as an entry heading (${JSON.stringify(line.slice(0, 60))}); ` +
         "quote log excerpts with '>' or indentation instead";
     }
+  }
+  if (fence !== null) {
+    return `body contains an unbalanced ${fence} code fence — it would swallow every later entry in the log file; ` +
+      "close the fence";
   }
   return null;
 }
@@ -240,7 +254,10 @@ export function registerCrosssessionTools(server: McpServer, source: Crosssessio
             projects: ch.projects,
             entry_count: entries.length,
             newest_stamp: newestStamp(entries),
-            log_files: members.logFiles,
+            // CANDIDATES, not confirmed logs: every direct child that is not a
+            // per-message note. An entry-less scratch file lists here too; the
+            // post path narrows to the entry-bearing one.
+            log_candidates: members.logFiles,
             receipts: receiptRows,
             ...(handle !== undefined
               ? { read_position: own, unread_count: unreadFor(entries, own, handle).length }
@@ -295,7 +312,19 @@ export function registerCrosssessionTools(server: McpServer, source: Crosssessio
           const key = channelKey(r.channel);
           const through = (await ctx.receipts.get(key, handle))?.through ?? null;
           const unread = unreadFor(r.entries, through, handle);
-          const served = unread.slice(0, cfg.deltaCap);
+          // The cap may never bisect a stamp-equivalence class: the documented
+          // continuation is "attest through next_stamp, call again", and
+          // coverage is strictly-greater on orderKey — a boundary inside a run
+          // of equal stamps (several posts in one minute) would mark the
+          // unserved remainder read without ever serving it. Extend the slice
+          // to complete the final equal-key group instead (runs are small).
+          let served = unread.slice(0, cfg.deltaCap);
+          if (unread.length > served.length && served.length > 0) {
+            const lastKey = orderKey(served[served.length - 1].stamp);
+            let i = served.length;
+            while (i < unread.length && orderKey(unread[i].stamp) === lastKey) i++;
+            served = unread.slice(0, i);
+          }
           const more = unread.length > served.length;
           out.push({
             channel: { uid: r.channel.uid, path: r.channel.path, audience: r.channel.audience },
@@ -305,8 +334,10 @@ export function registerCrosssessionTools(server: McpServer, source: Crosssessio
             entries: served.map(entryView),
             more,
             // Where to continue: attest through the LAST SERVED stamp, then
-            // call again — the next delta starts after it.
-            ...(more ? { next_stamp: served[served.length - 1]?.stamp ?? null } : {}),
+            // call again — the next delta starts after it. `more` implies a
+            // non-empty `served` (the group-completion above only ever grows
+            // the slice), so the stamp always exists.
+            ...(more ? { next_stamp: served[served.length - 1].stamp } : {}),
           });
         }
         return ok({ handle, channels: out });
@@ -451,6 +482,13 @@ export function registerCrosssessionTools(server: McpServer, source: Crosssessio
         return ok({
           posted: { channel: { uid: r.channel.uid, path: r.channel.path }, path: target, stamp, handle },
           attested_through: attested ? newThrough : null,
+          // The reportedEffects convention (guarded.ts / obsidian_repoint_link):
+          // the append target is a DISCOVERED path — the args name only a
+          // channel ref, so the journal's argument-derived `target` is empty;
+          // `filesChanged`/`files` puts the file actually touched into the
+          // record's `effects` field.
+          filesChanged: 1,
+          files: [target],
         });
       } catch (e) {
         return fail(e);
