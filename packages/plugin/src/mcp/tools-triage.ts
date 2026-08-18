@@ -347,6 +347,10 @@ export function registerTriageTools(server: McpServer, source: TriageSource, ctx
         }
 
         const finalPath = plan.moveTo ?? path;
+        // An in-place disposition whose configured patch is empty writes
+        // nothing at all — report zero effects honestly rather than claiming
+        // a file changed.
+        const wrote = patchApplied || plan.trash || plan.moveTo !== null;
         return ok({
           ...base,
           applied: true,
@@ -355,8 +359,8 @@ export function registerTriageTools(server: McpServer, source: TriageSource, ctx
           ...(patchApplied ? { frontmatter_applied: true } : {}),
           // The reportedEffects convention (guarded.ts): the file actually
           // touched — at its final path — lands in the journal's `effects`.
-          filesChanged: 1,
-          files: [finalPath],
+          filesChanged: wrote ? 1 : 0,
+          files: wrote ? [finalPath] : [],
         });
       } catch (e) {
         return fail(e);

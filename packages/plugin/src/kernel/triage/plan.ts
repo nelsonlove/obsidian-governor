@@ -4,11 +4,7 @@
 // a plan, then (only on `dry_run: false`) executes the plan's steps through
 // the injected source. Pure over its inputs: no vault, no Obsidian, no clock.
 
-import {
-  triageDispositionById,
-  type TriageDispositionDescriptor,
-  type TriageDispositionId,
-} from "./descriptors.js";
+import { triageDispositionById, type TriageDispositionDescriptor } from "./descriptors.js";
 import type { TriageConfig } from "./config.js";
 import { inboxFolderOf } from "./inbox.js";
 
@@ -122,7 +118,7 @@ export function planDispose(input: DisposeInput): { refusal: DisposeRefusal } | 
           code: "destination_unresolved",
           message:
             `disposition '${d.id}' has no destination: pass a target folder or configure ` +
-            `modules.triage.config.${d.destinationKey} `,
+            `modules.triage.config.${d.destinationKey}`,
         },
       };
     }
@@ -169,5 +165,3 @@ export function applyFrontmatterPatch(fm: Record<string, unknown>, patch: Record
     }
   }
 }
-
-export type { TriageDispositionId };
