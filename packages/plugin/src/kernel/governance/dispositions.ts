@@ -27,6 +27,19 @@
 //
 //  Obsidian-free, pure data — headless-testable (tests/governance-
 //  dispositions.test.mjs pins completeness + authority classes).
+//
+//  The GENERIC descriptor shape was extracted to the disposition substrate
+//  (kernel/triage/dispositions.ts — #221 phase 2) once the shape had survived
+//  contact here; this file keeps the ACCEPTANCE-SPECIFIC halves — the closed
+//  id/surface unions, the frozen seven-verb table, and the accept-effect
+//  display text — and its exports are unchanged (same names, same shapes,
+//  same behavior). The substrate types are referenced through inline
+//  `import(…)` TYPE positions only, deliberately: this file stays a
+//  pure-data LEAF with no import statement and no runtime module edge (the
+//  governance tripwire pins that), so the shared shape binds at compile time
+//  while reachability is exactly what it was. The substrate's generic
+//  helpers are equivalent to the one-line filters below (the triage instance
+//  uses the shared ones; the equivalence is pinned by test).
 // ============================================================================
 
 export type DispositionId =
@@ -38,7 +51,9 @@ export type DispositionId =
   | "submit-revision"
   | "skip";
 
-export type DispositionAuthority = "human" | "agent";
+/** Re-exported from the substrate (type-position reference only — see the
+ * header comment for why this file carries no import statement). */
+export type DispositionAuthority = import("../triage/dispositions.js").DispositionAuthority;
 
 /** Where a disposition surfaces. */
 export type DispositionSurface =
@@ -53,22 +68,13 @@ export type DispositionSurface =
   /** Stateless navigation (skip/back) — mutates nothing. */
   | "navigation";
 
-export interface DispositionDescriptor {
-  readonly id: DispositionId;
-  /** Who may exercise it. "human" ⇒ gesture-gated pane control ONLY; "agent" ⇒ guarded MCP tool ONLY. */
-  readonly authority: DispositionAuthority;
-  readonly surface: DispositionSurface;
-  /** Button text (human) / display label (agent). */
-  readonly label: string;
-  /** One-line effect description — documentation + log/PR vocabulary, never a callable. */
-  readonly effect: string;
-  /** Human only: additionally confirmation-gated behind a modal (adopt). */
-  readonly confirm?: boolean;
-  /** Human only: captures free text in a modal before acting (request-changes). */
-  readonly input?: boolean;
-  /** True when the disposition mutates NOTHING (skip): exempt from gesture gating. */
-  readonly stateless?: boolean;
-}
+/** The acceptance instance's descriptor: the substrate shape closed over this
+ * instance's own id/surface unions (adopt is the one `confirm` verb,
+ * request-changes the one `input` verb, skip the one `stateless` verb). */
+export type DispositionDescriptor = import("../triage/dispositions.js").DispositionDescriptorShape<
+  DispositionId,
+  DispositionSurface
+>;
 
 /** The agent-facing revision tool's name — derived from the one `authority: "agent"` descriptor. */
 export const SUBMIT_REVISION_TOOL = "governance_submit_revision";
