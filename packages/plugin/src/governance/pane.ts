@@ -30,6 +30,7 @@ import { isRealGesture, runGuardedAdopt } from "../kernel/governance/gesture.js"
 import { badgeVisible } from "../kernel/governance/badge.js";
 import { renderIntent } from "../kernel/governance/intent-view.js";
 import type { ClassId, ClassSpec } from "../kernel/governance/auto-accept/classes.js";
+import { buildHistory, renderHistoryEntries, HISTORY_DEFAULT_CAP } from "../kernel/governance/history.js";
 
 export const VIEW_TYPE_GOVERNANCE = "governance-review";
 
@@ -53,6 +54,10 @@ export interface ReviewController {
   authorizedClasses(): ReadonlyArray<ClassSpec>;
   isClassEnabled(id: ClassId): boolean;
   setClassEnabled(id: ClassId, on: boolean, evt: unknown): Promise<boolean>;
+  // ── history (READ-ONLY) ────────────────────────────────────────────────────
+  // The raw acceptance-log text for the display-only history browser. Reading the log confers
+  // nothing: no accept capability rides on it and the pane never writes it.
+  readAcceptanceLog(): Promise<string>;
 }
 
 // Confirmation modal for the mass-silencing adopt-baseline action. Opens on a human gesture,
@@ -201,6 +206,11 @@ export class GovernanceReviewView extends ItemView {
   // Which rendering the detail view shows: the unified Diff (default), the Before (baseline
   // content) or the After (current content). Read-only display state — confers no capability.
   private detailMode: "diff" | "before" | "after" = "diff";
+  // Whether the pane shows the review queue or the read-only history browser, and the optional
+  // per-note history filter (set when history is opened from a note's detail). Pure display
+  // state — the history view holds no accept capability and never mutates the log.
+  private paneMode: "queue" | "history" = "queue";
+  private historyFilter: string | null = null;
   // The pending-count badge overlaid on this view's TAB HEADER icon (read-only display element —
   // confers no capability).
   private tabBadgeEl: HTMLElement | null = null;
@@ -274,6 +284,24 @@ export class GovernanceReviewView extends ItemView {
     const refreshBtn = header.createEl("button", { cls: "governance-refresh", text: "Refresh" });
     refreshBtn.onclick = async () => { await deps.refresh(); await this.rerender(); };
 
+    // Queue ⇄ History toggle. The history browser is DISPLAY-ONLY (it reads the acceptance log
+    // and renders text nodes; no accept capability, no log mutation), so a plain onclick is safe
+    // here — this is read-only navigation, not an accept-class control.
+    const historyBtn = header.createEl("button", {
+      cls: "governance-history-toggle",
+      text: this.paneMode === "history" ? "Queue" : "History",
+    });
+    historyBtn.onclick = () => {
+      this.paneMode = this.paneMode === "history" ? "queue" : "history";
+      if (this.paneMode === "queue") this.historyFilter = null;
+      void this.rerender();
+    };
+
+    if (this.paneMode === "history") {
+      await this.renderHistory(root, deps);
+      return;
+    }
+
     // Adopt-baseline is a genuine-user-gesture UI action (NOT a command, NOT an instance method).
     // It closes over `deps.adopt` here; the handler is wired via addEventListener (onclick stays
     // null → the function is unreachable to renderer-JS) and is gesture-gated AND confirmation-
@@ -301,6 +329,26 @@ export class GovernanceReviewView extends ItemView {
       // shared renderAllowlist (one implementation, shared with the settings tab).
       renderAllowlist(root, deps);
     }
+  }
+
+  // The read-only history browser: past decisions from the acceptance log, newest first, capped,
+  // optionally filtered to one note. Display-only — every log-derived string lands in a text node
+  // (renderHistoryEntries, kernel/governance/history.ts), and nothing here can accept, revert, or
+  // write the log.
+  private async renderHistory(root: HTMLElement, deps: ReviewController): Promise<void> {
+    const sub = root.createDiv({ cls: "governance-history-sub" });
+    if (this.historyFilter) {
+      // The filter path is agent-influenced — text node only.
+      sub.createSpan({ cls: "governance-history-filter", text: `History for: ${this.historyFilter}` });
+      const clearBtn = sub.createEl("button", { cls: "governance-history-clear", text: "Show all" });
+      clearBtn.onclick = () => { this.historyFilter = null; void this.rerender(); };
+    } else {
+      sub.createSpan({ cls: "governance-history-filter", text: "All recorded decisions" });
+    }
+    let logText = "";
+    try { logText = await deps.readAcceptanceLog(); } catch { logText = ""; }
+    const view = buildHistory(logText, { cap: HISTORY_DEFAULT_CAP, path: this.historyFilter });
+    renderHistoryEntries(root, view);
   }
 
   private renderList(root: HTMLElement, pending: PendingItem[]): void {
@@ -359,6 +407,14 @@ export class GovernanceReviewView extends ItemView {
     openBtn.onclick = async () => {
       const file = this.app.vault.getAbstractFileByPath(item.path);
       if (file instanceof TFile) await this.app.workspace.getLeaf(false).openFile(file);
+    };
+    // Per-note history: opens the display-only history browser pre-filtered to this note.
+    // Read-only navigation (no accept capability), so a plain onclick is safe, like "Open in tab".
+    const historyBtn = nav.createEl("button", { cls: "governance-open", text: "History" });
+    historyBtn.onclick = () => {
+      this.paneMode = "history";
+      this.historyFilter = item.path;
+      void this.rerender();
     };
 
     // Action buttons — the ONLY accept/revert call sites.
