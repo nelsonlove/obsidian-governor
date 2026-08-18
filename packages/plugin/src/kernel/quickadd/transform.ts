@@ -12,6 +12,14 @@ import type {
  *  otherwise treats as read-only, but the id is still visible there). */
 const ID_PREFIX = "qan:";
 
+/** True iff `id` carries the compiler-owned `qan:` prefix — the single
+ *  source of truth for "did this compiler write this choice?", shared by
+ *  the derive* functions above and the glue layer's scoped-merge filter
+ *  (mcp/tools-quickadd.ts), so the two can never drift on the prefix. */
+export function isCompilerOwnedId(id: string): boolean {
+  return id.startsWith(ID_PREFIX);
+}
+
 export function deriveChoiceId(notePath: string): string {
   return `${ID_PREFIX}${notePath}#choice`;
 }

@@ -20,11 +20,10 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { App } from "obsidian";
 import { ok, codedError } from "./helpers.js";
 import type { ServerCtx } from "./tools-core.js";
-import { transformChoices } from "../kernel/quickadd/transform.js";
+import { transformChoices, isCompilerOwnedId } from "../kernel/quickadd/transform.js";
 import type { ChoiceNoteInput, MacroStepResolved, QuickAddMacroChoice } from "../kernel/quickadd/types.js";
 
 const RW = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } as const;
-const ID_PREFIX = "qan:";
 
 /** Extract the link target from a raw `[[target]]` or `[[target|alias]]`
  *  string. Returns null if the string isn't wikilink-shaped at all — a
@@ -102,7 +101,11 @@ export function registerQuickAddTools(server: McpServer, app: App, ctx: ServerCt
     async ({ dry_run }) => {
       // app.plugins is not in the public obsidian types — cast required.
       const quickadd = (app as any).plugins?.plugins?.quickadd;
-      if (!quickadd?.settings || typeof quickadd.saveSettings !== "function") {
+      if (
+        !quickadd?.settings ||
+        typeof quickadd.saveSettings !== "function" ||
+        !Array.isArray(quickadd.settings.choices)
+      ) {
         return codedError("quickadd_unavailable", "QuickAdd is not installed, not enabled, or its API is unavailable.");
       }
 
@@ -120,7 +123,7 @@ export function registerQuickAddTools(server: McpServer, app: App, ctx: ServerCt
       // or managed by another mechanism entirely) never enters this
       // filter's false branch, so it always survives untouched.
       const preserved = (quickadd.settings.choices as QuickAddMacroChoice[]).filter(
-        (c: any) => typeof c.id !== "string" || !c.id.startsWith(ID_PREFIX)
+        (c: any) => typeof c.id !== "string" || !isCompilerOwnedId(c.id)
       );
       quickadd.settings.choices = [...preserved, ...result.choices];
       await quickadd.saveSettings();

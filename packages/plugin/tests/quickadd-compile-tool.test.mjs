@@ -187,4 +187,40 @@ describe("obsidian_quickadd_compile: QuickAdd unavailable", () => {
     assert.equal(res.isError, true);
     assert.match(res.content[0].text, /^Error \[quickadd_unavailable\]/);
   });
+
+  test("a typed refusal when quickadd.settings.choices is missing entirely", async () => {
+    const server = fakeServer();
+    const quickadd = { settings: {}, saveSettings: async () => {} };
+    const app = {
+      vault: { getMarkdownFiles: () => [] },
+      metadataCache: { getFileCache: () => null, getFirstLinkpathDest: () => null },
+      plugins: { plugins: { quickadd } },
+    };
+    const ctx = {
+      pluginVersion: "0.0.0-test", socketPath: "/tmp/x.sock", vaultName: "test",
+      enabledPlugins: () => [], getSettings: () => ({ readOnly: false, allowlist: [] }),
+    };
+    registerQuickAddTools(server, app, ctx);
+    const res = await server.tools.get("obsidian_quickadd_compile").handler({ dry_run: false });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[quickadd_unavailable\]/);
+  });
+
+  test("a typed refusal when quickadd.settings.choices is not an array", async () => {
+    const server = fakeServer();
+    const quickadd = { settings: { choices: "not an array" }, saveSettings: async () => {} };
+    const app = {
+      vault: { getMarkdownFiles: () => [] },
+      metadataCache: { getFileCache: () => null, getFirstLinkpathDest: () => null },
+      plugins: { plugins: { quickadd } },
+    };
+    const ctx = {
+      pluginVersion: "0.0.0-test", socketPath: "/tmp/x.sock", vaultName: "test",
+      enabledPlugins: () => [], getSettings: () => ({ readOnly: false, allowlist: [] }),
+    };
+    registerQuickAddTools(server, app, ctx);
+    const res = await server.tools.get("obsidian_quickadd_compile").handler({ dry_run: false });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[quickadd_unavailable\]/);
+  });
 });

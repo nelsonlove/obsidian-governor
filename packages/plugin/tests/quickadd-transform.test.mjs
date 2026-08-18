@@ -5,6 +5,7 @@ import {
   deriveChoiceId,
   deriveMacroId,
   deriveStepId,
+  isCompilerOwnedId,
 } from "../src/kernel/quickadd/transform.ts";
 
 function userscriptStep(overrides = {}) {
@@ -36,6 +37,16 @@ describe("deriveChoiceId / deriveMacroId / deriveStepId", () => {
     assert.match(deriveChoiceId("a/b.md"), /^qan:/);
     assert.match(deriveMacroId("a/b.md"), /^qan:/);
     assert.match(deriveStepId("a/b.md", 0), /^qan:/);
+  });
+});
+
+describe("isCompilerOwnedId", () => {
+  test("returns true for a derived id", () => {
+    assert.equal(isCompilerOwnedId(deriveChoiceId("a/b.md")), true);
+  });
+
+  test("returns false for an arbitrary string", () => {
+    assert.equal(isCompilerOwnedId("some-uuid"), false);
   });
 });
 
