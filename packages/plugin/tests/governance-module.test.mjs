@@ -114,20 +114,33 @@ describe("governance module: contributes ZERO MCP tools when enabled", () => {
   });
 });
 
-describe("governance module: renders a config-tab section (two badge toggles, empty directory)", () => {
-  test("collect() gives it a section — two badge-display toggles, default ON, no tools, disabled", () => {
+describe("governance module: renders a config-tab section (badge toggles + convergence fields, empty directory)", () => {
+  test("collect() gives it a section — badge toggles + acceptedBy + requiredFrontmatterKeys, no tools, disabled", () => {
     const settings = { modules: {} };
     const hosted = collect(builtinModules(deps(settings)), settings.modules, settings);
     const gov = hosted.find((h) => h.id === "governance");
     assert.ok(gov, "governance not rendered by collect()");
     assert.ok(gov.summary.length > 0, "governance summary is empty");
-    // Gap A: the two badge-display toggles (ribbon + pane-tab), matching the exact keys the pane
-    // wiring reads through governanceDisplaySettings, both defaulting ON.
-    assert.deepEqual(gov.fields.map((f) => f.key), ["showRibbonBadge", "showViewTabBadge"]);
-    for (const f of gov.fields) {
-      assert.equal(f.type, "toggle");
-      assert.equal(f.value, true, `${f.key} should default ON`);
+    // The two badge-display toggles (ribbon + pane-tab, default ON) plus the two
+    // acceptance-convergence fields (#221/#164): the accepted-by identity (text, default
+    // "local-human") and the optional required-frontmatter conformance gate (csv, default
+    // EMPTY = no gate). All four match the exact keys the pane wiring reads through
+    // governanceDisplaySettings / governanceAcceptanceSettings.
+    assert.deepEqual(gov.fields.map((f) => f.key), [
+      "showRibbonBadge",
+      "showViewTabBadge",
+      "acceptedBy",
+      "requiredFrontmatterKeys",
+    ]);
+    const byKey = new Map(gov.fields.map((f) => [f.key, f]));
+    for (const key of ["showRibbonBadge", "showViewTabBadge"]) {
+      assert.equal(byKey.get(key).type, "toggle");
+      assert.equal(byKey.get(key).value, true, `${key} should default ON`);
     }
+    assert.equal(byKey.get("acceptedBy").type, "text");
+    assert.equal(byKey.get("acceptedBy").value, "local-human", "acceptedBy defaults to local-human");
+    assert.equal(byKey.get("requiredFrontmatterKeys").type, "csv");
+    assert.deepEqual(byKey.get("requiredFrontmatterKeys").value, [], "the conformance gate defaults EMPTY (no gate)");
     assert.equal(gov.enabled, false);
     assert.equal(gov.directory.tools.length, 0);
   });
@@ -143,23 +156,36 @@ describe("governance module: renders a config-tab section (two badge toggles, em
   });
 });
 
-describe("governance module: badge config keys match what the pane actually reads", () => {
-  test("the two field keys ARE the governanceDisplaySettings keys (toggling flips the badge)", async () => {
-    const { governanceDisplaySettings, DEFAULT_GOVERNANCE_SETTINGS } = await import(
-      "../src/kernel/governance/settings.ts"
-    );
+describe("governance module: config keys match what the pane actually reads", () => {
+  test("the field keys ARE the governanceDisplaySettings + governanceAcceptanceSettings keys", async () => {
+    const {
+      governanceDisplaySettings,
+      governanceAcceptanceSettings,
+      DEFAULT_GOVERNANCE_SETTINGS,
+      DEFAULT_ACCEPTANCE_SETTINGS,
+    } = await import("../src/kernel/governance/settings.ts");
     const gov = governanceModule();
     const keys = gov.manifest.config.fields.map((f) => f.key).sort();
-    // The pane derives its two booleans from exactly these keys — so a field key that drifted from
-    // them would render a toggle that controls nothing.
-    assert.deepEqual(keys, Object.keys(DEFAULT_GOVERNANCE_SETTINGS).sort());
-    // And the manifest defaults ARE the pane's defaults (both ON), so an untouched config renders
-    // the same state the pane would show.
-    assert.deepEqual(gov.manifest.config.defaults, DEFAULT_GOVERNANCE_SETTINGS);
+    // The pane derives its settings from exactly these keys — so a field key that drifted from
+    // them would render a control that controls nothing.
+    assert.deepEqual(
+      keys,
+      [...Object.keys(DEFAULT_GOVERNANCE_SETTINGS), ...Object.keys(DEFAULT_ACCEPTANCE_SETTINGS)].sort(),
+    );
+    // And the manifest defaults ARE the pane's defaults, so an untouched config renders
+    // the same state the pane would use.
+    assert.deepEqual(gov.manifest.config.defaults, { ...DEFAULT_GOVERNANCE_SETTINGS, ...DEFAULT_ACCEPTANCE_SETTINGS });
     // End-to-end: a config of {showRibbonBadge:false} the field would persist is read back by the
     // pane's own coercion as showRibbonBadge:false.
     assert.equal(governanceDisplaySettings({ showRibbonBadge: false }).showRibbonBadge, false);
     assert.equal(governanceDisplaySettings({ showRibbonBadge: false }).showViewTabBadge, true);
+    // End-to-end for the convergence fields: what the text/csv fields persist is what the accept
+    // path reads back (identity + gate list).
+    assert.equal(governanceAcceptanceSettings({ acceptedBy: "nelson" }).acceptedBy, "nelson");
+    assert.deepEqual(
+      governanceAcceptanceSettings({ requiredFrontmatterKeys: ["uid", "title"] }).requiredFrontmatterKeys,
+      ["uid", "title"],
+    );
   });
 });
 
@@ -235,10 +261,12 @@ describe("governance module: THE TRIPWIRE — source reachability (accept surfac
 
   // The accept-equivalent capabilities. None may be an instance method, a this.<member>, or an MCP
   // reference. Each exists ONLY as a module-scope function / WeakMap value reached through a
-  // gesture-gated pane handler.
+  // gesture-gated pane handler. `stampAcceptedFrontmatter` is the #221/#164 convergence's ONE
+  // production writer of the accepted family (processFrontMatter), replacing the retired pure
+  // stampAcceptance helper.
   const ACCEPT_EQUIVALENT = [
     "performAccept", "performRevert", "performAdopt", "setClassEnabled", "reconcile",
-    "getStore", "setBaseline", "acceptNote", "revertNote", "stampAcceptance",
+    "getStore", "setBaseline", "acceptNote", "revertNote", "stampAcceptedFrontmatter",
   ];
 
   test("wiring.ts: the accept-equivalent capabilities are module-scope, not instance methods or this.<member>", () => {
@@ -247,8 +275,8 @@ describe("governance module: THE TRIPWIRE — source reachability (accept surfac
       assert.ok(!isInstanceMethod(wiring, name), `${name} must NOT be an instance method`);
       assert.ok(!referencesThisMember(wiring, name), `this.${name} must not exist (would be reachable from app)`);
     }
-    // performAccept/performRevert/performAdopt/reconcile/setClassEnabled ARE declared as module-scope functions.
-    for (const fn of ["performAccept", "performRevert", "performAdopt", "reconcile", "setClassEnabled"]) {
+    // The accept-path capabilities ARE declared as module-scope functions.
+    for (const fn of ["performAccept", "performRevert", "performAdopt", "reconcile", "setClassEnabled", "stampAcceptedFrontmatter"]) {
       assert.match(wiring, new RegExp(`\\n(?:async )?function ${fn}\\s*\\(`), `${fn} must be a module-scope function`);
     }
   });
@@ -291,12 +319,15 @@ describe("governance module: THE TRIPWIRE — source reachability (accept surfac
 
   test("pane.ts: every accept-class button is addEventListener-wired, NEVER via .onclick = (so .onclick stays null)", () => {
     const pane = code("governance/pane.ts");
-    for (const el of ["acceptBtn", "revertBtn", "adoptBtn", "checkbox", "confirm"]) {
+    for (const el of ["acceptBtn", "revertBtn", "adoptBtn", "checkbox", "confirm", "proposedAcceptBtn", "proposedRequestBtn"]) {
       assert.ok(!new RegExp(`\\b${el}\\.onclick\\s*=`).test(pane),
         `${el}.onclick = … is the forgeable wiring — must use addEventListener`);
     }
     assert.match(pane, /acceptBtn\.addEventListener\(\s*["']click["']/, "accept via addEventListener");
     assert.match(pane, /revertBtn\.addEventListener\(\s*["']click["']/, "revert via addEventListener");
+    // The Proposed section's two controls (#221/#164) keep the same wiring discipline.
+    assert.match(pane, /proposedAcceptBtn\.addEventListener\(\s*["']click["']/, "Proposed-section accept via addEventListener");
+    assert.match(pane, /proposedRequestBtn\.addEventListener\(\s*["']click["']/, "Proposed-section request-changes via addEventListener");
     // Adopt is now wired by the SHARED wireAdoptButton helper (one implementation, shared with the
     // settings-tab render). That helper wires via `btn.addEventListener('click', …)` — never
     // `.onclick =` — and the pane hands it `adoptBtn`. Both facts are asserted so the adopt wiring
@@ -311,9 +342,10 @@ describe("governance module: THE TRIPWIRE — source reachability (accept surfac
   test("pane.ts: every accept-class handler gates on isRealGesture (directly or via runGuardedAdopt)", () => {
     const paneRaw = readRaw("governance/pane.ts");
     assert.match(paneRaw, /isRealGesture/, "the pane must use the isRealGesture gate");
-    // accept/revert handlers gate directly on isRealGesture.
+    // accept/revert handlers gate directly on isRealGesture — including the Proposed
+    // section's converged Accept and Request-changes (#221/#164).
     const lines = paneRaw.split("\n");
-    for (const el of ["acceptBtn", "revertBtn"]) {
+    for (const el of ["acceptBtn", "revertBtn", "proposedAcceptBtn", "proposedRequestBtn"]) {
       let found = false;
       for (let i = 0; i < lines.length; i++) {
         if (new RegExp(`${el}\\.addEventListener\\(`).test(lines[i])) {
@@ -336,18 +368,53 @@ describe("governance module: THE TRIPWIRE — source reachability (accept surfac
       "setClassEnabled must refuse unless handed a real trusted gesture");
   });
 
-  test("stampAcceptance (the one place that writes `accepted`) is reachable ONLY from the gesture path, never from MCP", () => {
-    // accept.ts (the gesture path) imports stampAcceptance; the MCP transport must NOT.
-    assert.match(readRaw("kernel/governance/accept.ts"), /import \{ stampAcceptance \}/,
-      "acceptNote is the sanctioned caller of stampAcceptance");
+  test("stampAcceptedFrontmatter (the ONE writer of the accepted family, #221/#164) is module-scope, unexported, gesture-path-only", () => {
+    const wiringRaw = readRaw("governance/wiring.ts");
+    const wiring = code("governance/wiring.ts");
+    // Module-scope, NEVER exported: an export would let any importer hold the accepted-family
+    // writer directly, outside the gesture perimeter.
+    assert.match(wiring, /\nasync function stampAcceptedFrontmatter\(/, "must be a module-scope function");
+    assert.ok(!/export\s+(?:async\s+)?function\s+stampAcceptedFrontmatter\b/.test(wiring), "must NOT be exported");
+    assert.ok(!/export\s+\{[^}]*\bstampAcceptedFrontmatter\b/.test(wiring), "must NOT be re-exported");
+    assert.ok(!/\bthis\.stampAcceptedFrontmatter\b/.test(wiring), "must not be an instance member");
+    // It writes via Obsidian's own processFrontMatter, and the `accepted` VALUE is assigned to
+    // acceptance-status in exactly ONE place in the whole wiring — inside this function. The
+    // other processFrontMatter status writes are the agent-legal revising/proposed transitions.
+    const acceptedAssigns = wiringRaw.match(/\bfm\[["']acceptance-status["']\]\s*=\s*(?!fields\.status)["']accepted["']/g) ?? [];
+    assert.equal(acceptedAssigns.length, 0, "no literal 'accepted' status assignment outside the typed fields.status");
+    const stampBody = /async function stampAcceptedFrontmatter\([\s\S]*?\n\}/.exec(wiringRaw);
+    assert.ok(stampBody, "stampAcceptedFrontmatter body found");
+    assert.match(stampBody[0], /processFrontMatter/, "the stamp writes via app.fileManager.processFrontMatter");
+    assert.match(stampBody[0], /fm\["acceptance-status"\] = fields\.status/, "status comes from the typed fields (literal 'accepted' type)");
+    // The ONLY caller is buildAcceptDeps' stampAccepted thunk (the acceptNote dep) — i.e. the
+    // gesture-gated performAccept path. Two references total: declaration + the one thunk.
+    const refs = wiring.match(/\bstampAcceptedFrontmatter\b/g) ?? [];
+    assert.equal(refs.length, 2, "declaration + the buildAcceptDeps thunk — no other caller may exist");
+    assert.match(wiring, /stampAccepted:\s*\(p,\s*fields\)\s*=>\s*stampAcceptedFrontmatter\(plugin,\s*p,\s*fields\)/,
+      "the one call site is acceptNote's injected stampAccepted dep");
+    // The MCP transport must reference NONE of the accept path.
     const mcpLayer = ["mcp/server.ts", ...mcpToolFiles()];
     for (const rel of mcpLayer) {
       const src = code(rel);
-      assert.ok(!/\bstampAcceptance\b/.test(src), `${rel} must not reference stampAcceptance`);
-      for (const name of ["performAccept", "performAdopt", "runGuardedAdopt", "setClassEnabled", "acceptNote", "revertNote"]) {
+      for (const name of [
+        "stampAcceptedFrontmatter", "stampAccepted", "performAccept", "performAdopt",
+        "runGuardedAdopt", "setClassEnabled", "acceptNote", "revertNote",
+      ]) {
         assert.ok(!new RegExp(`\\b${name}\\b`).test(src), `${rel} must not reference the accept-path fn ${name}`);
       }
+      assert.ok(!/kernel\/governance\/accept/.test(readRaw(rel)), `${rel} must not import the accept kernel module`);
     }
+  });
+
+  test("the converged accept clears the human-input record (the #228 race discipline extends to the stamp write)", () => {
+    // The stamp is a programmatic write landing right after a human click (and possibly recent
+    // typing in the same note's editor). A lingering genuine-human-input record would let the
+    // debounced reconcile misattribute a subsequent unrelated agent write as a human edit.
+    const wiringRaw = readRaw("governance/wiring.ts");
+    const m = /async function performAccept\([^)]*\)[^{]*\{([\s\S]*?)\n\}/.exec(wiringRaw);
+    assert.ok(m, "performAccept body found");
+    assert.match(m[1], /humanInputMap\(plugin\)\.delete\(path\)/, "performAccept must clear the human-input record");
+    assert.match(m[1], /finally/, "the clear runs in finally — a partially-failed accept has still written");
   });
 
   test("the MCP transport imports nothing from src/governance/ (the accept pane), and pending-review stays always-on read-only", () => {
@@ -367,7 +434,7 @@ describe("governance module: THE TRIPWIRE — source reachability (accept surfac
     assert.match(main, /wireGovernance\(this,/, "main.ts wires the pane via wireGovernance");
     assert.match(main, /modules\?\.governance\?\.enabled === true/, "gated on the governance module enabled flag");
     // The plugin exposes no accept-equivalent method and registers no accept command.
-    for (const name of ["performAccept", "performAdopt", "setBaseline", "acceptNote", "stampAcceptance"]) {
+    for (const name of ["performAccept", "performAdopt", "setBaseline", "acceptNote", "stampAcceptedFrontmatter"]) {
       assert.ok(!isInstanceMethod(main, name), `${name} must not be a plugin instance method`);
     }
     assert.ok(!/addCommand\([^)]*accept/i.test(readRaw("main.ts")), "no accept command on the plugin");
@@ -423,7 +490,7 @@ describe("#101 dispositions-as-data: THE TRIPWIRE — the wrap adds no reachable
   test("dispositions.ts is a pure-data leaf: no accept import, no accept-path reference, no obsidian import", () => {
     const d = code("kernel/governance/dispositions.ts");
     assert.ok(!/^\s*import /m.test(readRaw("kernel/governance/dispositions.ts")), "dispositions.ts must import nothing");
-    for (const name of ["performAccept", "performAdopt", "acceptNote", "revertNote", "stampAcceptance", "setBaseline", "runGuardedAdopt"]) {
+    for (const name of ["performAccept", "performAdopt", "acceptNote", "revertNote", "stampAcceptedFrontmatter", "setBaseline", "runGuardedAdopt"]) {
       assert.ok(!new RegExp(`\\b${name}\\b`).test(d), `dispositions.ts must not reference ${name}`);
     }
     assert.ok(!/from ["']obsidian["']/.test(readRaw("kernel/governance/dispositions.ts")));
@@ -431,7 +498,7 @@ describe("#101 dispositions-as-data: THE TRIPWIRE — the wrap adds no reachable
 
   test("wiring.ts: performRequestChanges / performWithdraw are module-scope, never instance methods, this.<members>, or exports", () => {
     const wiring = code("governance/wiring.ts");
-    for (const fn of ["performRequestChanges", "performWithdraw", "listRevising"]) {
+    for (const fn of ["performRequestChanges", "performWithdraw", "listRevising", "listProposed"]) {
       assert.match(wiring, new RegExp(`\\n(?:async )?function ${fn}\\s*\\(`), `${fn} must be a module-scope function`);
       assert.ok(!new RegExp(`\\bthis\\.${fn}\\b`).test(wiring), `this.${fn} must not exist`);
       assert.ok(!new RegExp(`export\\s+(?:async\\s+)?function\\s+${fn}\\b`).test(wiring), `${fn} must NOT be exported`);
@@ -487,7 +554,7 @@ describe("#101 dispositions-as-data: THE TRIPWIRE — the wrap adds no reachable
       // The module-scope gesture callables + the modal prompt — the names that would indicate the
       // MCP layer had grown a way to reach the human dispositions. (Prose like the module
       // summary's "withdraw a revision request" is fine; these identifiers are not.)
-      for (const name of ["performRequestChanges", "performWithdraw", "promptRequestChanges", "listRevising"]) {
+      for (const name of ["performRequestChanges", "performWithdraw", "promptRequestChanges", "listRevising", "listProposed", "buildProposedList"]) {
         assert.ok(!new RegExp(`\\b${name}\\b`).test(src), `${rel} must not reference the gesture-path name ${name}`);
       }
     }

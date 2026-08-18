@@ -25,3 +25,47 @@ export function governanceDisplaySettings(config: unknown): GovernanceDisplaySet
     showViewTabBadge: typeof c.showViewTabBadge === "boolean" ? c.showViewTabBadge : DEFAULT_GOVERNANCE_SETTINGS.showViewTabBadge,
   };
 }
+
+// ── acceptance-convergence settings (#221/#164) ──────────────────────────────
+// Two more plain-data config fields on `modules.governance.config`, rendered in the
+// governance settings tab exactly like the badge fields (the generic manifest renderer).
+// Human-only by construction — the settings tab is not agent-reachable, and reading these
+// confers no accept capability: `acceptedBy` is the identity the human's OWN gesture stamps,
+// and `requiredFrontmatterKeys` can only make Accept REFUSE more, never accept more.
+export interface GovernanceAcceptanceSettings {
+  /** Identity stamped as `accepted-by` (and recorded as the accept log's `by`). */
+  acceptedBy: string;
+  /** The conformance gate: keys that must be present + non-empty before a `proposed`
+   * note can be accepted. Empty (default) ⇒ no gate. Per-vault CONFIG — the plugin
+   * hardcodes no vault convention (the legacy QuickAdd macro's uid/title/description
+   * gate maps onto this field). */
+  requiredFrontmatterKeys: string[];
+}
+
+export const DEFAULT_ACCEPTANCE_SETTINGS: GovernanceAcceptanceSettings = {
+  acceptedBy: "local-human",
+  requiredFrontmatterKeys: [],
+};
+
+// Coerce an untrusted config record into acceptance settings. Never throws. `acceptedBy`
+// must be a non-blank string (else the default); `requiredFrontmatterKeys` accepts the
+// renderer's string[] shape OR a raw CSV string (hand-edited data.json), normalized to a
+// trimmed, non-empty list.
+export function governanceAcceptanceSettings(config: unknown): GovernanceAcceptanceSettings {
+  const c = (config ?? {}) as Record<string, unknown>;
+  const by =
+    typeof c.acceptedBy === "string" && c.acceptedBy.trim() !== ""
+      ? c.acceptedBy.trim()
+      : DEFAULT_ACCEPTANCE_SETTINGS.acceptedBy;
+  return { acceptedBy: by, requiredFrontmatterKeys: coerceKeyList(c.requiredFrontmatterKeys) };
+}
+
+function coerceKeyList(v: unknown): string[] {
+  if (Array.isArray(v)) {
+    return v.filter((x): x is string => typeof x === "string").map((s) => s.trim()).filter((s) => s !== "");
+  }
+  if (typeof v === "string") {
+    return v.split(",").map((s) => s.trim()).filter((s) => s !== "");
+  }
+  return [];
+}

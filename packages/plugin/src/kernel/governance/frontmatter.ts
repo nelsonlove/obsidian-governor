@@ -1,19 +1,17 @@
 // Lightweight frontmatter split + top-level key extraction for the diff view and
-// the acceptance-status stamp. This is deliberately NOT a full YAML parser: for the
-// key-by-key diff we only need each top-level key's raw text block, and for stamping
-// we only touch scalar keys. Anything we don't understand is preserved verbatim.
+// the acceptance-lifecycle READS (status lookup + the conformance gate). This is
+// deliberately NOT a full YAML parser: for the key-by-key diff we only need each
+// top-level key's raw text block, and the lifecycle reads only need scalar values.
+// Anything we don't understand is preserved verbatim.
 //
 // Ported from obsidian-stewardship/src/frontmatter.ts as part of the governance
-// (Acceptance) module fold (#83). Cycle 1 moved ONLY the non-accept logic; cycle 2
-// brings over the acceptance-minting helpers (`stampAcceptance`, `hasAcceptanceStatus`)
-// now that the accept gesture folds in under its accept-reachability review.
-//
-// HARD invariant on `stampAcceptance`: it is the ONE place in the whole system that
-// writes `accepted`, and it is reachable ONLY from the accept gesture path
-// (governance/accept.ts's `acceptNote`, itself reached only via a real trusted click on
-// the review pane's Accept button — see governance/wiring.ts). It is NOT wired to any MCP
-// tool, command, plugin/view method, or `app`-walkable object. The tripwire
-// (tests/governance-module.test.mjs) asserts it stays unreachable from every such surface.
+// (Acceptance) module fold (#83). The acceptance convergence (#221/#164) REMOVED the
+// string-rewriting `stampAcceptance` helper this file used to carry: the one production
+// writer of the accepted family is now the module-scope `stampAcceptedFrontmatter` in
+// governance/wiring.ts (Obsidian's own `app.fileManager.processFrontMatter`), reached
+// exclusively through `acceptNote`'s injected `stampAccepted` dep on the gesture-gated
+// accept path. Everything left in this file is READ-ONLY over note content — it can
+// decide, but never write.
 
 export interface ParsedNote {
   hasFrontmatter: boolean;
@@ -74,52 +72,42 @@ export function frontmatterKeys(frontmatterText: string): Map<string, string> {
   return out;
 }
 
-// Does the note carry an `acceptance-status` top-level key?
-export function hasAcceptanceStatus(content: string): boolean {
+// The note's `acceptance-status` scalar value (trimmed, unquoted), or null when the note
+// has no frontmatter or no `acceptance-status` key. READ-ONLY: this is what makes Accept
+// context-aware (the convergence, #221/#164) — `proposed` ⇒ stamp + baseline, anything
+// else (absent / `revising` / already `accepted`) ⇒ baseline advance only.
+export function acceptanceStatusOf(content: string): string | null {
   const { hasFrontmatter, frontmatterText } = parseNote(content);
-  if (!hasFrontmatter) return false;
-  return frontmatterKeys(frontmatterText).has("acceptance-status");
+  if (!hasFrontmatter) return null;
+  const raw = frontmatterKeys(frontmatterText).get("acceptance-status");
+  if (raw === undefined) return null;
+  return unquote(raw.trim());
 }
 
-// Stamp acceptance provenance into an existing frontmatter block, in place, only for
-// keys the note already declares structurally (acceptance-status must exist; accepted-by
-// / accepted-on are added or replaced). Returns the new full note content. If there is no
-// acceptance-status key, the content is returned unchanged (we never inject the field —
-// stamping is only for notes that opted into the vocabulary).
-//
-// SECURITY: this is the one function that writes `accepted`. It is pure and reachable ONLY
-// from acceptNote (governance/accept.ts) on the human-gesture path; see the file header.
-export function stampAcceptance(
-  content: string,
-  by: string,
-  on: string,
-): { content: string; stamped: boolean } {
-  const parsed = parseNote(content);
-  if (!parsed.hasFrontmatter) return { content, stamped: false };
-  const keys = frontmatterKeys(parsed.frontmatterText);
-  if (!keys.has("acceptance-status")) return { content, stamped: false };
+// Raw scalar values that count as EMPTY for the conformance gate below.
+const EMPTY_SCALARS = new Set(["", "null", "~", "[]", "{}"]);
 
-  const lines = parsed.frontmatterText.split("\n");
-  const setScalar = (key: string, value: string) => {
-    const re = new RegExp(`^${escapeRe(key)}:.*$`);
-    let found = false;
-    for (let i = 0; i < lines.length; i++) {
-      if (!/^\s/.test(lines[i]) && re.test(lines[i])) {
-        lines[i] = `${key}: ${value}`;
-        found = true;
-        break;
-      }
-    }
-    if (!found) lines.push(`${key}: ${value}`);
-  };
-  setScalar("acceptance-status", "accepted");
-  setScalar("accepted-by", by);
-  setScalar("accepted-on", on);
-
-  const rebuilt = `${FENCE}\n${lines.join("\n")}\n${FENCE}\n${parsed.body}`;
-  return { content: rebuilt, stamped: true };
+// The conformance gate's check (#221/#164): which of `keys` are missing from — or empty
+// in — the note's frontmatter. Pure and READ-ONLY; the caller (acceptNote) refuses the
+// whole accept when this is non-empty for a `proposed` note. A key present with any
+// substantive value passes; absent, blank, quoted-empty, or an explicit YAML null/empty
+// collection counts as missing. An empty `keys` list gates nothing (the default).
+export function missingRequiredKeys(content: string, keys: string[]): string[] {
+  if (keys.length === 0) return [];
+  const { hasFrontmatter, frontmatterText } = parseNote(content);
+  const fm = hasFrontmatter ? frontmatterKeys(frontmatterText) : new Map<string, string>();
+  return keys.filter((k) => {
+    const raw = fm.get(k);
+    if (raw === undefined) return true;
+    return EMPTY_SCALARS.has(unquote(raw.trim()));
+  });
 }
 
-function escapeRe(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// Strip one layer of matching quotes ("x" / 'x' → x). Local YAML-scalar convenience for
+// the reads above — never used to write anything.
+function unquote(s: string): string {
+  if (s.length >= 2 && ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'")))) {
+    return s.slice(1, -1);
+  }
+  return s;
 }

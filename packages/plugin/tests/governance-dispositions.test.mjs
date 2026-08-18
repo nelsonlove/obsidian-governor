@@ -30,6 +30,7 @@ import {
   dispositionsFor,
   dispositionById,
   gestureGatedDispositions,
+  acceptEffectFor,
   SUBMIT_REVISION_TOOL,
 } from "../src/kernel/governance/dispositions.ts";
 
@@ -78,6 +79,27 @@ describe("the declared set: completeness + authority classes", () => {
   test("the agent verb's tool name is derived from the table", () => {
     assert.equal(SUBMIT_REVISION_TOOL, "governance_submit_revision");
     assert.equal(dispositionById("submit-revision").label, SUBMIT_REVISION_TOOL);
+  });
+
+  test("the accept descriptor declares the CONVERGED semantics (#221/#164): context-aware, stamp on proposed", () => {
+    const accept = dispositionById("accept");
+    assert.match(accept.effect, /context-aware/);
+    assert.match(accept.effect, /proposed/);
+    assert.match(accept.effect, /accepted-by/);
+    assert.match(accept.effect, /minutes/i, "the effect must state minutes precision (date-only was a fixed bug)");
+    assert.match(accept.effect, /revising notes are never stamped/);
+  });
+
+  test("acceptEffectFor surfaces what the one click will do — stamp text ONLY for proposed", () => {
+    const proposed = acceptEffectFor("proposed", "local-human");
+    assert.match(proposed, /stamps acceptance-status: accepted/);
+    assert.match(proposed, /accepted-by: local-human/);
+    assert.match(proposed, /minutes precision/);
+    for (const status of [null, undefined, "revising", "accepted", "anything-else"]) {
+      const other = acceptEffectFor(status, "local-human");
+      assert.match(other, /baseline only/);
+      assert.ok(!/stamps/.test(other), `no stamp text for status ${String(status)}`);
+    }
   });
 });
 

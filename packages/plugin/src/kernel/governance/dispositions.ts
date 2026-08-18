@@ -83,7 +83,12 @@ export const DISPOSITIONS: ReadonlyArray<DispositionDescriptor> = Object.freeze(
     authority: "human",
     surface: "pending-item",
     label: "Accept",
-    effect: "advance this note's baseline to its current content (baseline only — never edits the note)",
+    effect:
+      "the ONE accept, context-aware across both lifecycles (#221/#164 convergence): advance this note's " +
+      "baseline to its current content; iff the note is acceptance-status: proposed, ALSO stamp the accepted " +
+      "family (acceptance-status: accepted, accepted-by: <configured identity>, accepted-on: <local minutes " +
+      "precision>) via processFrontMatter, with the baseline advanced from the post-stamp content. Notes " +
+      "without proposed status get baseline-advance only (byte-untouched); revising notes are never stamped",
   } as const),
   Object.freeze({
     id: "revert",
@@ -153,4 +158,16 @@ export function dispositionById(id: DispositionId): DispositionDescriptor | unde
  */
 export function gestureGatedDispositions(): DispositionDescriptor[] {
   return DISPOSITIONS.filter((d) => d.authority === "human" && !d.stateless);
+}
+
+/**
+ * The context-aware Accept's per-note effect text (#221/#164): what THIS click will do,
+ * surfaced on the button (tooltip/aria) so the human sees what will be stamped before the
+ * one click. Pure display string — no callable, no capability; still exactly one click.
+ */
+export function acceptEffectFor(status: string | null | undefined, acceptedBy: string): string {
+  return status === "proposed"
+    ? "Accept: advances the baseline AND stamps acceptance-status: accepted, " +
+        `accepted-by: ${acceptedBy}, accepted-on: <now, minutes precision> into the note's frontmatter`
+    : "Accept: advances the baseline only — the note itself is not edited";
 }

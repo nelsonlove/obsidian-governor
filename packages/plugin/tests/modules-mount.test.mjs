@@ -421,12 +421,23 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
     assert.equal(skills.fields.find((f) => f.key === "pluginName").value, "vault-skills");
     assert.equal(skills.directory.tools.length, 6);
     // The governance module renders its section too — two badge-display toggles
-    // (ribbon + pane-tab, default ON) and an EMPTY capability directory, because its
-    // capability is the Obsidian review pane (wired in main.ts), not an MCP tool. It
-    // contributes nothing to the transport and ships disabled (opt-in accept pane).
+    // (ribbon + pane-tab, default ON) plus the two acceptance-convergence fields
+    // (#221/#164: acceptedBy text, requiredFrontmatterKeys csv) and an EMPTY capability
+    // directory, because its capability is the Obsidian review pane (wired in main.ts),
+    // not an MCP tool. It contributes nothing to the transport and ships disabled.
     const governance = hosted.find((h) => h.id === "governance");
-    assert.deepEqual(governance.fields.map((f) => f.key), ["showRibbonBadge", "showViewTabBadge"]);
-    assert.ok(governance.fields.every((f) => f.type === "toggle" && f.value === true));
+    assert.deepEqual(governance.fields.map((f) => f.key), [
+      "showRibbonBadge",
+      "showViewTabBadge",
+      "acceptedBy",
+      "requiredFrontmatterKeys",
+    ]);
+    const govField = (k) => governance.fields.find((f) => f.key === k);
+    assert.ok(["showRibbonBadge", "showViewTabBadge"].every((k) => govField(k).type === "toggle" && govField(k).value === true));
+    assert.equal(govField("acceptedBy").type, "text");
+    assert.equal(govField("acceptedBy").value, "local-human");
+    assert.equal(govField("requiredFrontmatterKeys").type, "csv");
+    assert.deepEqual(govField("requiredFrontmatterKeys").value, []);
     assert.equal(governance.enabled, false);
     assert.equal(governance.directory.tools.length, 0);
     // The health module (obsidian-vault-health fold) renders its own config tab:

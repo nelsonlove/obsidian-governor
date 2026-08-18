@@ -3,9 +3,14 @@
 // obsidian-stewardship/src/view.ts as part of the governance (Acceptance) module fold (#83,
 // cycle 2). This is the ONE obsidian-facing accept surface in vault-mcp.
 //
-// SECURITY: the Accept, Revert, Adopt-baseline AND auto-accept allowlist controls below are the
+// SECURITY: the Accept (queue detail view AND Proposed section — the ONE context-aware accept,
+// #221/#164), Revert, Adopt-baseline AND auto-accept allowlist controls below are the
 // ONLY call sites of the baseline-advance / allowlist-mutation code paths in the entire plugin;
-// the request-changes and withdraw dispositions (#101) keep the SAME gesture perimeter (their
+// since the acceptance convergence the Accept click on a `proposed` note ALSO stamps the accepted
+// family into the note's frontmatter (through the module-scope stampAcceptedFrontmatter in
+// wiring.ts, reached only via deps.accept) — so this gesture perimeter now guards a real
+// frontmatter WRITE, not just a baseline advance. The request-changes and withdraw dispositions
+// (#101) keep the SAME gesture perimeter (their
 // state transitions are agent-legal, but exercising them from this pane confers human standing).
 // They are wired with `addEventListener('click', …)` — NEVER `el.onclick = …` — so the handler
 // function is not a reachable property (`btn.onclick` stays null; renderer-JS cannot grab it to
@@ -29,7 +34,9 @@ import { ItemView, Notice, Modal, TFile, type WorkspaceLeaf, type App } from "ob
 import { type PendingItem, groupByAgent } from "../kernel/governance/queue.js";
 import { diffNote, toHunks, type DiffLine, type HunkCollapsed } from "../kernel/governance/diff.js";
 import { isRealGesture, runGuardedAdopt } from "../kernel/governance/gesture.js";
-import { dispositionsFor, dispositionById, type DispositionId } from "../kernel/governance/dispositions.js";
+import { dispositionsFor, dispositionById, acceptEffectFor, type DispositionId } from "../kernel/governance/dispositions.js";
+import type { AcceptResult } from "../kernel/governance/accept.js";
+import type { ProposedItem } from "../kernel/governance/proposed.js";
 import { badgeVisible } from "../kernel/governance/badge.js";
 import { renderIntent } from "../kernel/governance/intent-view.js";
 import type { ClassId, ClassSpec } from "../kernel/governance/auto-accept/classes.js";
@@ -47,7 +54,11 @@ export interface ReviewController {
   getPending(): PendingItem[];
   getBaselineContent(path: string): string | null;
   readCurrent(path: string): Promise<string>;
-  accept(path: string): Promise<void>;
+  // The ONE context-aware accept (#221/#164 convergence): advances the baseline, and — iff
+  // the note is acceptance-status: proposed — first stamps the accepted family via
+  // processFrontMatter, folding the stamp into the accepted snapshot. Returns whether it
+  // stamped so the Notice can say so. Wired to the module-scope performAccept in wiring.ts.
+  accept(path: string): Promise<AcceptResult>;
   revert(path: string): Promise<void>;
   // adopt-baseline: snapshots ALL current content as the reviewed baseline and clears the queue.
   // Wired to the module-scope performAdopt closure in wiring.ts — NOT a method on any instance and
@@ -81,6 +92,17 @@ export interface ReviewController {
   // Read-only listing of notes with `acceptance-status: revising` (metadata cache) for the
   // Revising section. Plain data — confers no capability.
   getRevising(): RevisingItem[];
+  // ── acceptance convergence (#221/#164) — all three are plain READ-ONLY data ──
+  // The Proposed section listing: `acceptance-status: proposed` notes with NO pending write
+  // delta (pending items are deduped out — their queue row already carries Accept), built
+  // from the metadata cache like getRevising and respecting the same excluded roots.
+  getProposed(): ProposedItem[];
+  // The configured accepted-by identity (governance config `acceptedBy`) — display data so
+  // the Accept controls can SURFACE what will be stamped before the one click.
+  acceptedBy(): string;
+  // One note's `acceptance-status` from the metadata cache — display data for the same
+  // context-aware surfacing (proposed ⇒ "will stamp", else ⇒ "baseline only").
+  acceptanceStatus(path: string): string | null;
 }
 
 // Confirmation modal for the mass-silencing adopt-baseline action. Opens on a human gesture,
@@ -415,6 +437,11 @@ export class GovernanceReviewView extends ItemView {
     } else {
       this.selected = null;
       this.renderList(root, pending);
+      // The Proposed section (#221/#164): acceptance-status: proposed notes with NO pending
+      // write delta, each carrying the SAME context-aware Accept (and Request changes…) the
+      // queue rows do — the convergence that makes the pane's Accept the ONE accept across
+      // both lifecycles. Pending proposed notes are deduped into the queue only.
+      this.renderProposed(root, deps);
       // The Revising section (#101): notes with acceptance-status: revising, whether or not
       // they are in the pending queue — the frontmatter-lifecycle visibility that makes this
       // pane a superset of the retired js-engine panel.
@@ -422,6 +449,93 @@ export class GovernanceReviewView extends ItemView {
       // The auto-accept allowlist section — HUMAN-ONLY-MUTABLE, gesture-gated. Rendered via the
       // shared renderAllowlist (one implementation, shared with the settings tab).
       renderAllowlist(root, deps);
+    }
+  }
+
+  // The Proposed section (#221/#164) — notes whose frontmatter says `acceptance-status:
+  // proposed` (metadata cache) that have no pending write delta. Two row actions, BOTH the
+  // full authority-class perimeter (addEventListener-wired so .onclick stays null +
+  // isRealGesture-gated; the accept.ts discipline):
+  //   - Accept: the SAME context-aware accept as the queue detail view (deps.accept →
+  //     module-scope performAccept). The button's tooltip surfaces what will be stamped
+  //     (acceptEffectFor) — still exactly one click.
+  //   - Request changes…: the existing #101 disposition (modal text capture, then
+  //     deps.requestChanges → performRequestChanges).
+  private renderProposed(root: HTMLElement, deps: ReviewController): void {
+    let items: ProposedItem[] = [];
+    try {
+      items = deps.getProposed();
+    } catch {
+      items = [];
+    }
+    if (items.length === 0) return;
+    const acceptDesc = dispositionById("accept")!;
+    const requestDesc = dispositionById("request-changes")!;
+    const identity = deps.acceptedBy();
+    const section = root.createDiv({ cls: "governance-proposed" });
+    section.createDiv({ cls: "governance-proposed-title", text: `Proposed (${items.length})` });
+    // Surface the stamp up front: accepting from this section writes the accepted family
+    // into the note (the one in-app human write path), with the configured identity.
+    section.createDiv({
+      cls: "governance-proposed-desc",
+      text:
+        "Notes proposed for acceptance with no pending write delta. Accept stamps " +
+        `acceptance-status: accepted (accepted-by: ${identity}, accepted-on: minutes precision) ` +
+        "into the note and advances its baseline.",
+    });
+    for (const item of items) {
+      const row = section.createDiv({ cls: "governance-proposed-row" });
+      const main = row.createDiv({ cls: "governance-row-main" });
+      main.createDiv({ cls: "governance-row-title", text: item.title });
+      main.createDiv({ cls: "governance-row-path", text: item.path });
+      const controls = row.createDiv({ cls: "governance-proposed-controls" });
+      // Open in tab — read-only navigation; plain onclick is safe (confers nothing).
+      const openBtn = controls.createEl("button", { cls: "governance-open", text: "Open" });
+      openBtn.onclick = async () => {
+        const file = this.app.vault.getAbstractFileByPath(item.path);
+        if (file instanceof TFile) await this.app.workspace.getLeaf(false).openFile(file);
+      };
+      // Accept — the ONE context-aware accept, gesture-gated exactly like the queue's.
+      const proposedAcceptBtn = controls.createEl("button", {
+        cls: "mod-cta governance-proposed-accept",
+        text: acceptDesc.label,
+      });
+      proposedAcceptBtn.title = acceptEffectFor("proposed", identity);
+      proposedAcceptBtn.addEventListener("click", async (evt) => {
+        if (!isRealGesture(evt)) return; // inert on forged arg or synthesized click
+        proposedAcceptBtn.disabled = true;
+        try {
+          const res = await deps.accept(item.path);
+          new Notice(
+            res.stamped
+              ? `vault-mcp governance: accepted ${item.title} — stamped accepted-by: ${identity}`
+              : `vault-mcp governance: accepted ${item.title}`,
+          );
+          await this.rerender();
+        } catch (e) {
+          new Notice(`vault-mcp governance: accept failed — ${(e as Error).message}`);
+          proposedAcceptBtn.disabled = false;
+        }
+      });
+      // Request changes… — the existing disposition, same modal + gesture perimeter.
+      const proposedRequestBtn = controls.createEl("button", {
+        cls: "governance-request-changes",
+        text: requestDesc.label,
+      });
+      proposedRequestBtn.addEventListener("click", async (evt) => {
+        if (!isRealGesture(evt)) return; // inert on forged arg or synthesized click
+        const text = await promptRequestChanges(this.app, item.title);
+        if (text === null) return; // cancelled — nothing changes
+        proposedRequestBtn.disabled = true;
+        try {
+          await deps.requestChanges(item.path, text);
+          new Notice(`vault-mcp governance: requested changes on ${item.title}`);
+          await this.rerender();
+        } catch (e) {
+          new Notice(`vault-mcp governance: request-changes failed — ${(e as Error).message}`);
+          proposedRequestBtn.disabled = false;
+        }
+      });
     }
   }
 
@@ -590,6 +704,12 @@ export class GovernanceReviewView extends ItemView {
     const acceptBtn = btnFor.get("accept")!;
     const revertBtn = btnFor.get("revert")!;
     const requestBtn = btnFor.get("request-changes")!;
+    // Context-aware surfacing (#221/#164): the Accept tooltip says what THIS click will do —
+    // for a `proposed` note, that it stamps the accepted family with the configured identity;
+    // otherwise that it advances the baseline only. Plain display data; still one click.
+    const noteStatus = deps.acceptanceStatus(item.path);
+    const identity = deps.acceptedBy();
+    acceptBtn.title = acceptEffectFor(noteStatus, identity);
     const setBusy = (busy: boolean): void => {
       for (const b of btnFor.values()) b.disabled = busy;
     };
@@ -600,8 +720,12 @@ export class GovernanceReviewView extends ItemView {
       if (!isRealGesture(evt)) return; // inert on forged arg or synthesized click
       setBusy(true);
       try {
-        await deps.accept(item.path);
-        new Notice(`vault-mcp governance: accepted ${item.title}`);
+        const res = await deps.accept(item.path);
+        new Notice(
+          res.stamped
+            ? `vault-mcp governance: accepted ${item.title} — stamped accepted-by: ${identity}`
+            : `vault-mcp governance: accepted ${item.title}`,
+        );
         this.selected = null;
         await this.rerender();
       } catch (e) {
