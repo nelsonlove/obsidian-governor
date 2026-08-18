@@ -31,7 +31,7 @@
  */
 
 import { TFile, TFolder, getAllTags, type App } from "obsidian";
-import { CHARACTER_LIMIT, deriveJdIdFromPath, parseGuardFrontmatter } from "@vault-mcp/core";
+import { CHARACTER_LIMIT, acceptTransitionNeedsBefore, deriveJdIdFromPath, parseGuardFrontmatter } from "@vault-mcp/core";
 import { backlinkKeys } from "./helpers.js";
 import { AcceptForbiddenError, acceptTransitionReason } from "./write-notes-compose.js";
 import type {
@@ -156,7 +156,10 @@ export class ObsidianBackend implements VaultBackend {
    */
   private async guardWrittenContent(path: string, resultingContent: string): Promise<void> {
     const after = this.fmOf(resultingContent);
-    if (!after || !acceptTransitionReason(null, after)) return;
+    // Result-only shortcut delegated to the shared helper: with declared
+    // protected properties (#224) an ABSENT key can be a removal, decidable
+    // only against the on-disk frontmatter, so the before read is required.
+    if (!acceptTransitionNeedsBefore(after)) return;
     const reason = acceptTransitionReason(await this.diskFrontmatter(path), after);
     if (reason) throw new AcceptForbiddenError(reason);
   }
@@ -434,6 +437,19 @@ export class ObsidianBackend implements VaultBackend {
     }
 
     // op === "delete"
+    // #224: removing a declared protected property is a mutation — route the
+    // RESULTING frontmatter (before with this one field deleted) through the
+    // same transition predicate the set path uses, before anything lands. The
+    // accepted family is untouched: the floor's rule only inspects the RESULT's
+    // keys, so deleting an accepted-* field stays allowed exactly as before.
+    {
+      const beforeFm = this.app.metadataCache.getFileCache(file)?.frontmatter ?? null;
+      if (beforeFm && Object.prototype.hasOwnProperty.call(beforeFm, key)) {
+        const afterFm: Record<string, unknown> = { ...beforeFm };
+        delete afterFm[key];
+        this.guardResultingFrontmatter(beforeFm, afterFm);
+      }
+    }
     let existed = false;
     let previous: FrontmatterEditValue | undefined;
     await this.app.fileManager.processFrontMatter(file, (fm) => {

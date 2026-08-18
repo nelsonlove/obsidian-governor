@@ -4,6 +4,7 @@ import { type App, TFile, getAllTags } from "obsidian";
 import {
   AcceptForbiddenError,
   acceptTransitionReason,
+  acceptTransitionNeedsBefore,
   parseGuardFrontmatter,
   stripLeadingFrontmatter,
 } from "@vault-mcp/core";
@@ -29,7 +30,10 @@ import { runCommandRefusal } from "./cli-policy.js";
 // an existing human-granted accepted value forward UNCHANGED is allowed.
 function guardAppendResult(beforeText: string | null, resultingContent: string): void {
   const after = parseGuardFrontmatter(resultingContent);
-  if (!after || !acceptTransitionReason(null, after)) return;
+  // Result-only shortcut delegated to the shared helper (#224): an absent
+  // declared protected property can be a removal, decidable only against the
+  // before-frontmatter, so the shortcut is safe only with none declared.
+  if (!acceptTransitionNeedsBefore(after)) return;
   let before: Record<string, unknown> | null = null;
   if (beforeText !== null) {
     // A before that itself cannot be parsed is treated as no prior acceptance
