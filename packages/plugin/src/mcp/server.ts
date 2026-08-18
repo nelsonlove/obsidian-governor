@@ -14,6 +14,7 @@ import { registerExternalTools } from "./external-tools.js";
 import { registerLockTools } from "./tools-locks.js";
 import { registerUidTools } from "./tools-uid.js";
 import { registerPendingReviewTools, obsidianPendingReviewSource } from "./tools-pending-review.js";
+import { registerGovernanceRevisionTool } from "./tools-governance-revision.js";
 import { registerLinkTools, obsidianLinkSource } from "./tools-links.js";
 import { registerConformanceDebtTools, registerConformanceDebtRenderTool } from "./tools-conformance-debt.js";
 import { obsidianDebtRenderSource } from "./obsidian-debt-source.js";
@@ -211,6 +212,29 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   registerPendingReviewTools(server, {
     source: obsidianPendingReviewSource(app),
     getSettings: () => ctx.getSettings(),
+  });
+  // ── the revision round-trip's ONE agent verb (#101, phase 1 of #221) ───────
+  // governance_submit_revision: a revising agent resubmits (revising → proposed,
+  // addressed [!revision-request] callouts removed, optional [!revision-report]
+  // inserted). An ORDINARY guarded mutating registration — it rides the patched
+  // registerTool above, so read-only mode, the path allowlist, the queue, the
+  // journal and the kernel args all bind at the standard interception point,
+  // and the accept-forbidden guard re-checks the write inside the handler.
+  // Always-on like obsidian_pending_review (it refuses on any non-revising
+  // note, so it is inert until a human marks one revising via the pane). The
+  // governance MODULE still contributes zero tools — this is a server.ts
+  // registration, the registerVaultWriteTools shape.
+  registerGovernanceRevisionTool(server, {
+    read: async (p) => {
+      const f = app.vault.getAbstractFileByPath(p);
+      return f instanceof TFile ? app.vault.read(f) : null;
+    },
+    write: async (p, content) => {
+      const f = app.vault.getAbstractFileByPath(p);
+      if (!(f instanceof TFile)) throw new Error(`not a note: ${p}`);
+      await app.vault.process(f, () => content);
+    },
+    now: () => new Date(),
   });
   // ── capability modules: scope-provider + vocab + skills ────────────────────
   // Ruled decision #2 realized: the two capability modules register THROUGH
