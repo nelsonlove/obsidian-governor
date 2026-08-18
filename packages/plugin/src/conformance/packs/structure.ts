@@ -18,6 +18,7 @@
 // the pack emits neither, exactly as the ratchet parser dropped them. The pack
 // id IS the `script` field: "conformance_check".
 
+import { leadingFrontmatterBlock, stripLeadingFrontmatter } from "@vault-mcp/core";
 import { DEFAULT_VAULT_CONVENTIONS, type VaultConventions } from "../vault-conventions.js";
 import type { Finding } from "../finding.js";
 import type { RulePack, SourceFile, VaultSnapshot } from "../rule-pack.js";
@@ -36,7 +37,6 @@ export const DEFAULT_BLUEPRINT_ROOT =
 const COMMENT = /{#[\s\S]*?#}/g;
 const INCLUDE = /{%-?\s*include\s+"([^"]+)"\s*-?%}/g;
 const REST = /{%-?\s*section\s+["']___REST___["'][\s\S]*?{%-?\s*endsection\s*-?%}/g;
-const FM_STRIP = /^---\n[\s\S]*?\n---\n/;
 
 /** All literal `## ` headings in a blueprint body (Python's H2 over the whole
  * assembled text — blueprint code fences are NOT skipped here, unlike a note). */
@@ -61,8 +61,10 @@ export function emittedH2s(startPath: string, byPath: Map<string, string>, seen 
   seen.add(startPath);
   let text = byPath.get(startPath);
   if (text === undefined) return { heads: new Set(), dynamic: false, openEnded: false };
-  // Drop the blueprint's own frontmatter (merge payload, not body).
-  text = text.replace(FM_STRIP, "");
+  // Drop the blueprint's own frontmatter (merge payload, not body) — via the
+  // shared recognizer (#189), so a BOM/CRLF-authored blueprint's frontmatter is
+  // stripped rather than scanned for H2s as if it were body.
+  text = stripLeadingFrontmatter(text);
   text = text.replace(COMMENT, "");
   const restStripped = text.replace(REST, "");
   let openEnded = restStripped !== text;
@@ -87,13 +89,18 @@ export function emittedH2s(startPath: string, byPath: Map<string, string>, seen 
  * the body OUTSIDE fenced code blocks. Returns `bp: null` when the note has no
  * leading frontmatter or no `blueprint:` wikilink (→ the note is skipped). */
 export function noteInfo(text: string): { bp: string | null; heads: string[] } {
-  const m = text.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-  if (!m) return { bp: null, heads: [] };
-  const bpm = m[1].match(/^blueprint:\s*"?\[\[([^\]]+?)\]\]"?/m);
+  // Both halves bind to the shared recognizer (#189): `leadingFrontmatterBlock`
+  // for the YAML text, `stripLeadingFrontmatter` for the body — a PAIR, never
+  // re-derived locally, or a BOM/CRLF note is read with its own frontmatter
+  // still inside its body (the split-brain snapshot.ts documents).
+  const block = leadingFrontmatterBlock(text);
+  if (block === null) return { bp: null, heads: [] };
+  const bpm = block.match(/^blueprint:\s*"?\[\[([^\]]+?)\]\]"?/m);
   if (!bpm) return { bp: null, heads: [] };
+  const body = stripLeadingFrontmatter(text);
   const heads: string[] = [];
   let fence: string | null = null;
-  for (const line of m[2].split("\n")) {
+  for (const line of body.split("\n")) {
     const open = line.match(/^(```+|~~~+)/);
     if (fence) {
       if (open && open[1].length >= fence.length) fence = null;
