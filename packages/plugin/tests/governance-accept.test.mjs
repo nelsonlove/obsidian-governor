@@ -252,6 +252,50 @@ describe("partial-failure safety: stamp-then-baseline ordering (#221/#164 invari
     await assert.rejects(() => acceptNote(w.deps, "A.md"), AcceptFoldError);
     assert.equal(w.baselines.get("A.md").content, "old");
   });
+
+  test("fold verification: a foreign frontmatter KEY injected during the stamp aborts the baseline advance", async () => {
+    const w = makeFakeWorld({ "A.md": proposed });
+    w.seedBaseline("A.md", "old");
+    const realStamp = w.deps.stampAccepted;
+    w.deps.stampAccepted = async (p, fields) => {
+      await realStamp(p, fields);
+      // A racing frontmatter-only write injects a NEW key between the stamp and the re-read.
+      const post = w.notes.get(p).replace("---\nbody", "smuggled: payload\n---\nbody");
+      w.notes.set(p, post);
+    };
+    await assert.rejects(() => acceptNote(w.deps, "A.md"), (e) => {
+      assert.ok(e instanceof AcceptFoldError);
+      assert.match(e.message, /frontmatter keys differ/);
+      return true;
+    });
+    assert.equal(w.baselines.get("A.md").content, "old", "an injected key must never be silently folded");
+  });
+
+  test("fold verification: a pre-existing key REMOVED during the stamp aborts the baseline advance", async () => {
+    const withExtra = "---\nuid: u-1\nacceptance-status: proposed\n---\nbody";
+    const w = makeFakeWorld({ "A.md": withExtra });
+    w.seedBaseline("A.md", "old");
+    const realStamp = w.deps.stampAccepted;
+    w.deps.stampAccepted = async (p, fields) => {
+      await realStamp(p, fields);
+      w.notes.set(p, w.notes.get(p).replace("uid: u-1\n", ""));
+    };
+    await assert.rejects(() => acceptNote(w.deps, "A.md"), AcceptFoldError);
+    assert.equal(w.baselines.get("A.md").content, "old");
+  });
+
+  test("fold verification: stale accepted-by/accepted-on carried by a re-proposed note do NOT abort (stamp keys are exempt)", async () => {
+    // An accepted → revising → proposed round-trip leaves old accepted-by/accepted-on in the
+    // frontmatter; the stamp legitimately replaces them. The key-set comparison must exempt
+    // the three stamp keys or every re-accept would false-abort.
+    const reProposed = "---\nuid: u-1\nacceptance-status: proposed\naccepted-by: nelson\naccepted-on: 2026-08-01T09:00\n---\nbody";
+    const w = makeFakeWorld({ "A.md": reProposed });
+    w.seedBaseline("A.md", "old");
+    const res = await acceptNote(w.deps, "A.md");
+    assert.equal(res.stamped, true);
+    assert.match(w.notes.get("A.md"), /accepted-by: test-human/);
+    assert.equal(w.baselines.get("A.md").content, w.notes.get("A.md"));
+  });
 });
 
 describe("revert (unchanged by the convergence)", () => {

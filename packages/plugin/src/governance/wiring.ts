@@ -418,15 +418,18 @@ function buildAcceptDeps(plugin: Plugin): AcceptDeps {
 // section's Accept land here). acceptNote stamps FIRST (proposed notes only) and advances
 // the baseline from the post-stamp content, so the stamp never re-queues; see accept.ts.
 async function performAccept(plugin: Plugin, path: string): Promise<AcceptResult> {
+  // #228 race discipline, extended to the converged accept: the stamp is a PROGRAMMATIC
+  // write, but the human just clicked (and may have typed in this note's editor moments
+  // before). A lingering genuine-human-input record for this path would let the debounced
+  // reconcile misattribute programmatic/agent content as a human edit and silently
+  // baseline-advance it. Clear the record on BOTH sides of the write: at entry, so a
+  // pre-click typing record cannot ride a reconcile that fires MID-accept (a slow stamp +
+  // re-read can outlast the 1200ms debounce), and in `finally`, because a partially-failed
+  // accept (stamp landed, baseline advance threw) has still written.
+  humanInputMap(plugin).delete(path);
   try {
     return await acceptNote(buildAcceptDeps(plugin), path);
   } finally {
-    // #228 race discipline, extended to the converged accept: the stamp is a PROGRAMMATIC
-    // write, but the human just clicked (and may have typed in this note's editor moments
-    // before). A lingering genuine-human-input record for this path would let the debounced
-    // reconcile misattribute a subsequent unrelated agent write as a human edit and silently
-    // baseline-advance it. Clear the record around this write — in `finally`, because a
-    // partially-failed accept (stamp landed, baseline advance threw) has still written.
     humanInputMap(plugin).delete(path);
     await refresh(plugin);
   }

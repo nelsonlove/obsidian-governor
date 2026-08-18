@@ -73,12 +73,23 @@ They are now converged: the pane's gesture-gated **Accept is context-aware** and
 | `revising` | Never stamped (baseline advance only) — a revising note goes through withdraw / `governance_submit_revision` back to `proposed` first |
 
 **Ordering is the load-bearing part**: the stamp itself changes the note, so `acceptNote`
-(kernel/governance/accept.ts) stamps FIRST, re-reads, **verifies the fold** (status now
-`accepted`, body byte-identical to pre-stamp — a foreign write racing into the gap aborts
-the accept with no baseline advance), and only then advances the baseline from those
-post-stamp bytes. The stamp therefore can never re-enter the pending queue as a fresh
-unreviewed change, and there is no state where the baseline advanced but the queue
-re-shows the stamp. A failure between the stamp and the baseline advance leaves the note
+(kernel/governance/accept.ts) stamps FIRST, re-reads, **verifies the fold** — status now
+`accepted`, body byte-identical to pre-stamp, and the non-stamp frontmatter **key set**
+unchanged; a foreign write racing into the accept window that changes the body or adds or
+removes a frontmatter key aborts the accept with no baseline advance — and only then
+advances the baseline from those post-stamp bytes. The stamp therefore can never re-enter
+the pending queue as a fresh unreviewed change, and there is no state where the baseline
+advanced but the queue re-shows the stamp.
+
+*Honest limit of the fold verification:* a foreign **value** change to a pre-existing
+non-stamp key, landing inside the sub-second read→stamp→re-read window of a human's Accept
+click, passes the fold checks and is folded into the accepted snapshot. Verifying value equality would
+false-abort legitimate accepts: `processFrontMatter` re-serializes the whole frontmatter,
+so post-stamp values legitimately differ in form.
+Such a write is journaled (it went through MCP) but no surface flags it; this value-level
+sliver is the same inherent race window the pre-convergence accept already had (which read,
+wrote and baselined without any re-verification at all — and clobbered a racing frontmatter
+write instead of accepting it). A failure between the stamp and the baseline advance leaves the note
 stamped with the old baseline; the retry Accept sees `accepted` and takes the advance-only
 branch, so a double-stamp is impossible. The accept also clears the genuine-human-input
 record for the path (#228's race discipline), so a stale human-input record does not launder

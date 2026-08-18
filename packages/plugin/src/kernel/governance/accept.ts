@@ -51,7 +51,7 @@
 //  command/enumerable/MCP path reaches them.
 // ============================================================================
 
-import { acceptanceStatusOf, missingRequiredKeys, parseNote } from "./frontmatter.js";
+import { acceptanceStatusOf, missingRequiredKeys, parseNote, frontmatterKeys } from "./frontmatter.js";
 import type { Baseline } from "./baseline-store.js";
 
 export interface AcceptStore {
@@ -162,13 +162,33 @@ export class AcceptGateError extends Error {
 
 /** The stamp-fold verification failure: the note's post-stamp bytes are not the pre-stamp
  * note plus the stamp (something else wrote the note mid-accept, or the stamp did not land).
- * Thrown AFTER the stamp write but BEFORE the baseline advance — fail safe: nothing is
- * silently folded into the accepted snapshot; the note stays pending for a fresh review. */
+ * Thrown AFTER the stamp write but BEFORE the baseline advance — fail safe: the baseline is
+ * not advanced over content the human did not review. */
 export class AcceptFoldError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "AcceptFoldError";
   }
+}
+
+// The three keys the stamp itself writes — excluded from the fold verification's
+// frontmatter comparison (they are EXPECTED to change; a pre-stamp note may also carry
+// stale accepted-by/accepted-on from an earlier accepted→revising→proposed round-trip,
+// which the stamp legitimately replaces).
+const STAMP_KEYS = new Set(["acceptance-status", "accepted-by", "accepted-on"]);
+
+// The sorted non-stamp frontmatter KEY SET of a note — the fold verification's frontmatter
+// half. Keys only, not values: processFrontMatter round-trips the whole frontmatter through
+// Obsidian's YAML serializer, which may legitimately re-format unrelated VALUES, so a
+// value-level comparison would false-abort; a key added or removed by a foreign write is
+// the realistic injection shape and survives re-serialization.
+function nonStampKeys(content: string): string {
+  const { hasFrontmatter, frontmatterText } = parseNote(content);
+  if (!hasFrontmatter) return "";
+  return [...frontmatterKeys(frontmatterText).keys()]
+    .filter((k) => !STAMP_KEYS.has(k))
+    .sort()
+    .join("\n");
 }
 
 /** Local minutes-precision timestamp, `YYYY-MM-DDTHH:mm` — the vault's accepted-on
@@ -191,16 +211,25 @@ export function formatLocalMinutes(d: Date): string {
 //
 // ORDERING (the reconcile-correctness invariant): the stamp itself changes the note, so it
 // MUST be folded into the accepted snapshot — stamp FIRST, re-read, VERIFY the fold
-// (post-stamp body identical, status now accepted), and only then advance the baseline from
-// those post-stamp bytes. The stamp therefore can never re-enter the pending queue as a
-// fresh unreviewed change. Partial-failure safety falls out of the same order:
+// (status now accepted, post-stamp BODY byte-identical, non-stamp frontmatter KEY SET
+// unchanged), and only then advance the baseline from those post-stamp bytes. The stamp
+// therefore can never re-enter the pending queue as a fresh unreviewed change.
+// Partial-failure safety falls out of the same order:
 //   - gate refusal / stamp throw  ⇒ nothing advanced, nothing logged;
 //   - fold verification failure   ⇒ stamp may have landed but NO baseline advance — the
-//     note stays pending (fail safe; never a silently-folded foreign write);
+//     baseline never moves over the raced-in content (fail safe);
 //   - setBaseline throw after a landed stamp ⇒ baseline unchanged; the note's status is now
 //     `accepted`, so a retry Accept takes the advance-only branch and cannot double-stamp.
 // There is by construction no state where the baseline advanced but the queue re-shows the
 // stamp as pending: any advanced baseline IS the post-stamp bytes.
+//
+// HONEST LIMIT of the fold verification: it catches a foreign body change and a foreign
+// frontmatter key add/remove landing anywhere in the read→stamp→re-read window, but NOT a
+// foreign VALUE change to a pre-existing non-stamp key in that same sub-second window —
+// processFrontMatter re-serializes every value, so value equality cannot be checked without
+// false-aborting legitimate accepts. Such a write is journaled (it went through MCP) but
+// would be folded. This narrow residual is the value-level sliver of the same race window
+// the pre-convergence accept already had; it is documented in docs/acceptance-model.md.
 export async function acceptNote(deps: AcceptDeps, path: string): Promise<AcceptResult> {
   const pre = await deps.readNote(path);
   const status = acceptanceStatusOf(pre);
@@ -221,6 +250,11 @@ export async function acceptNote(deps: AcceptDeps, path: string): Promise<Accept
     if (parseNote(post).body !== parseNote(pre).body) {
       throw new AcceptFoldError(
         `accept aborted — ${path} changed during the stamp (body differs); baseline NOT advanced — review again`,
+      );
+    }
+    if (nonStampKeys(post) !== nonStampKeys(pre)) {
+      throw new AcceptFoldError(
+        `accept aborted — ${path} changed during the stamp (frontmatter keys differ); baseline NOT advanced — review again`,
       );
     }
     content = post;
