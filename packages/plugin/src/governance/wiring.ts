@@ -417,6 +417,12 @@ async function performRequestChanges(plugin: Plugin, path: string, text: string)
   await plugin.app.fileManager.processFrontMatter(file, (fm) => {
     fm["acceptance-status"] = "revising";
   });
+  // These writes are PROGRAMMATIC, but the human just TYPED (in the modal). If the reviewed note
+  // is also the active editor tab, that typing recorded a genuine-human-input timestamp for this
+  // path — and the debounced reconcile would then misread our write as a human edit and SILENTLY
+  // BASELINE-ADVANCE the agent's unreviewed content without an Accept. Clear the record so the
+  // reconcile classifies these modify events as ambiguous (fail safe: no advance, stays pending).
+  humanInputMap(plugin).delete(path);
   await appendLog(plugin, { action: "request-changes", path, ts: nowIso, by: LOCAL_USER });
   await refresh(plugin);
 }
@@ -429,6 +435,9 @@ async function performWithdraw(plugin: Plugin, path: string): Promise<void> {
   await plugin.app.fileManager.processFrontMatter(file, (fm) => {
     fm["acceptance-status"] = "proposed";
   });
+  // Same misattribution guard as performRequestChanges: our programmatic writes must not ride a
+  // recent genuine-human-input record into a silent baseline advance.
+  humanInputMap(plugin).delete(path);
   await appendLog(plugin, { action: "withdraw-request", path, ts: nowIso, by: LOCAL_USER });
   await refresh(plugin);
 }

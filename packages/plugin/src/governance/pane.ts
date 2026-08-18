@@ -191,7 +191,8 @@ class RequestChangesModal extends Modal {
 }
 
 // The exact request-changes text-capture flow. Resolves the text only on a confirmed gesture.
-export function promptRequestChanges(app: App, noteTitle: string): Promise<string | null> {
+// Module-private on purpose: nothing outside the pane needs it, so nothing outside can open it.
+function promptRequestChanges(app: App, noteTitle: string): Promise<string | null> {
   return new Promise((resolve) => {
     new RequestChangesModal(app, noteTitle, resolve).open();
   });

@@ -493,6 +493,19 @@ describe("#101 dispositions-as-data: THE TRIPWIRE — the wrap adds no reachable
     }
   });
 
+  test("both disposition writes clear the human-input record — a modal keystroke must not launder a silent advance", () => {
+    // performRequestChanges runs right after the human TYPED (in the modal). If the reviewed note
+    // is also the active editor tab, that typing recorded genuine human input for the path, and
+    // reconcile would misread the programmatic write as a human edit — silently baseline-advancing
+    // the agent's unreviewed content without an Accept. Both writes must clear the record.
+    const wiringRaw = readRaw("governance/wiring.ts");
+    for (const fn of ["performRequestChanges", "performWithdraw"]) {
+      const m = new RegExp(`async function ${fn}\\([^)]*\\)[^{]*\\{([\\s\\S]*?)\\n\\}`).exec(wiringRaw);
+      assert.ok(m, `${fn} body found`);
+      assert.match(m[1], /humanInputMap\(plugin\)\.delete\(path\)/, `${fn} must clear the human-input record`);
+    }
+  });
+
   test("no command reaches the new dispositions (wiring/pane register zero commands — re-asserted post-#101)", () => {
     assert.ok(!/\baddCommand\b/.test(code("governance/wiring.ts")));
     assert.ok(!/\baddCommand\b/.test(code("governance/pane.ts")));
