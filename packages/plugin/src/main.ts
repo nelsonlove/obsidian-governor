@@ -168,10 +168,20 @@ export default class VaultMcpPlugin extends Plugin {
       deny: list(this.settings.cliPolicy?.deny),
       allowOpaque: list(this.settings.cliPolicy?.allowOpaque),
     };
-    // #224: sync the declared protected-property list into the core guard
-    // registry (the setter normalizes — floor keys and unknown grades are
-    // dropped loudly, so a tampered data.json can extend the perimeter but
-    // never shrink or restate the hardcoded accepted-family floor).
+    // #224: coerce the declared protected-property rows to the storable shape
+    // first (a hand-edited data.json carrying a non-array or junk rows must not
+    // crash the settings-tab render — the cliPolicy discipline above). Raw
+    // grade STRINGS are preserved as typed so the textarea round-trips; full
+    // validation stays in the registry setter.
+    this.settings.protectedProperties = Array.isArray(this.settings.protectedProperties)
+      ? this.settings.protectedProperties
+          .filter((r): r is { key: string; grade: string } => !!r && typeof (r as { key?: unknown }).key === "string")
+          .map((r) => ({ key: r.key, grade: typeof r.grade === "string" ? r.grade : "agent-forbidden" }))
+      : DEFAULT_PROTECTED_PROPERTIES.map((p) => ({ ...p }));
+    // Sync the list into the core guard registry (the setter normalizes —
+    // floor keys and unknown grades are dropped loudly, so a tampered
+    // data.json can extend the perimeter but never shrink or restate the
+    // hardcoded accepted-family floor).
     setDeclaredProtectedProperties(this.settings.protectedProperties);
   }
   async saveSettings() {
