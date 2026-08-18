@@ -75,7 +75,7 @@ interface VaultMcpSettings {
    * Command policy for the arbitrary-execution surfaces (obsidian_cli +
    * obsidian_run_command): a deny list (always wins) and the per-command
    * re-enable list for the deny-by-default opaque-accept set (quickadd/eval/
-   * command; quickadd:* run_command ids). Human-only by construction — no MCP
+   * command; quickadd:* and js-engine:* run_command ids). Human-only by construction — no MCP
    * surface writes plugin settings, and the surfaces that could reach one
    * indirectly are what this policy denies. See mcp/cli-policy.ts.
    */

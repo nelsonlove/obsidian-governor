@@ -144,8 +144,26 @@ describe("runCommandRefusal: command ids", () => {
     assert.ok(runCommandRefusal("quickadd:runQuickAdd", { deny: ["quickadd:*"], allowOpaque: ["quickadd:runQuickAdd"] }));
   });
 
-  test("the default id set is exactly the QuickAdd prefix", () => {
-    assert.deepEqual([...OPAQUE_ACCEPT_COMMAND_IDS], ["quickadd:*"]);
+  test("the default id set is exactly the QuickAdd and js-engine prefixes", () => {
+    assert.deepEqual([...OPAQUE_ACCEPT_COMMAND_IDS], ["quickadd:*", "js-engine:*"]);
+  });
+
+  test("js-engine:* ids are denied by default — both built-in execute and vault-minted cmd-* ids", () => {
+    // js-engine's commands execute arbitrary vault JS: the built-in file
+    // runner, and the `js-engine:cmd-*` ids a register-commands startup
+    // script mints from files an agent can WRITE through the guarded path
+    // (a JS body carries no acceptance frontmatter, so the accept-guard
+    // rightly passes the write) — the #105 laundering class on a new surface.
+    assert.ok(runCommandRefusal("js-engine:execute-js-file", {}));
+    assert.ok(runCommandRefusal("js-engine:cmd-stamp-accepted", {}));
+    // Ordinary plugin ids stay allowed.
+    assert.equal(runCommandRefusal("editor:toggle-bold", {}), null);
+  });
+
+  test("js-engine re-enable is exact-only, same as quickadd", () => {
+    assert.equal(runCommandRefusal("js-engine:cmd-unfill-paragraph", { allowOpaque: ["js-engine:cmd-unfill-paragraph"] }), null);
+    assert.ok(runCommandRefusal("js-engine:execute-js-file", { allowOpaque: ["js-engine:cmd-unfill-paragraph"] }));
+    assert.ok(runCommandRefusal("js-engine:cmd-other", { allowOpaque: ["js-engine:*"] }));
   });
 });
 

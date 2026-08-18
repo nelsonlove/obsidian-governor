@@ -49,9 +49,16 @@ export const OPAQUE_ACCEPT_CLI_COMMANDS = [
 ] as const;
 
 /** The opaque-accept set for `obsidian_run_command` ids: QuickAdd's commands
- * run macros (arbitrary user-defined JS); everything else a command id can do
- * is bounded by the plugin that registered it and stays allowed. */
-export const OPAQUE_ACCEPT_COMMAND_IDS = ["quickadd:*"] as const;
+ * run macros (arbitrary user-defined JS), and js-engine's commands execute
+ * arbitrary vault JS — both `js-engine:execute-js-file` and the
+ * `js-engine:cmd-*` ids that a vault's register-commands startup script mints
+ * from files in its commands folder. An agent can WRITE such a file through
+ * the ordinary guarded path (a JS body carries no acceptance frontmatter, so
+ * the accept-guard rightly passes it) and would then have an arbitrary-JS
+ * springboard the guard cannot inspect — the same laundering class the
+ * `quickadd:*` deny closed (#105). Everything else a command id can do is
+ * bounded by the plugin that registered it and stays allowed. */
+export const OPAQUE_ACCEPT_COMMAND_IDS = ["quickadd:*", "js-engine:*"] as const;
 
 /** Commands that WRITE note content the acceptance guard cannot inspect before
  * it lands. `history:restore` reinstates a prior version of a note, which can

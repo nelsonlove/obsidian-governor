@@ -335,7 +335,7 @@ Some CLI commands execute **opaque code** whose effect cannot be inspected befor
 
 ```
 OPAQUE_ACCEPT_CLI_COMMANDS = ["quickadd", "quickadd:run", "quickadd:run-template", "eval", "command"]
-OPAQUE_ACCEPT_COMMAND_IDS  = ["quickadd:*"]   // obsidian_run_command ids
+OPAQUE_ACCEPT_COMMAND_IDS  = ["quickadd:*", "js-engine:*"]   // obsidian_run_command ids
 ```
 
 These are now **denied by default — fail closed** — by the settings-driven command policy

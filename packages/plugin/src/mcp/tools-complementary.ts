@@ -219,7 +219,7 @@ export function registerComplementaryTools(server: McpServer, app: App, ctx: Ser
       title: "Run Obsidian command",
       description:
         "Execute an Obsidian command by its ID (see obsidian_get_command_ids). Optionally open file_path first so file-scoped commands have a target. " +
-        "QuickAdd command ids (quickadd:*) run opaque macros the acceptance guard cannot inspect and are DENIED by default (Error [cli_denied]); a human can re-enable a specific id in the vault-mcp settings. " +
+        "Opaque-execution command ids (quickadd:*, js-engine:*) run macros/vault JS the acceptance guard cannot inspect and are DENIED by default (Error [cli_denied]); a human can re-enable a specific id in the vault-mcp settings. " +
         "Pass `variables` to invoke a QuickAdd choice through its own executeChoice API instead of the plain command call — this is how the vault's dual-mode scripts (variables-first, `_invoked-by: \"agent\"` fails fast instead of opening a modal nobody will answer) are meant to be driven headlessly. `_invoked-by` defaults to \"agent\" when `variables` is given, so a missing required input fails fast rather than hanging on a prompt. KNOWN LIMITATION: QuickAdd's own executeChoice API does not return the invoked script's return value — only success/failure (a thrown error surfaces as a normal tool failure). To see a script's result, re-read whatever it changed after this call returns.",
       inputSchema: {
         command_id: z.string().min(1).describe("Obsidian command ID, e.g. 'editor:toggle-bold'. A QuickAdd choice's id is 'quickadd:choice:<uuid>' (see obsidian_get_command_ids)."),
