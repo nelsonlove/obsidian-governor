@@ -153,7 +153,9 @@ function shortHash(h: string | undefined): string {
 
 export function renderHistoryEntries(container: HistoryElFactory, view: HistoryView): void {
   const root = container.createDiv({ cls: "governance-history" });
-  if (view.entries.length === 0) {
+  // "No recorded decisions" only when there truly are none — a capped-to-zero view still shows
+  // its "+N more" marker below rather than masquerading as an empty log.
+  if (view.total === 0) {
     root.createDiv({ cls: "governance-empty", text: "No recorded decisions." });
     return;
   }

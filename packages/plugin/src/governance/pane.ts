@@ -55,9 +55,10 @@ export interface ReviewController {
   isClassEnabled(id: ClassId): boolean;
   setClassEnabled(id: ClassId, on: boolean, evt: unknown): Promise<boolean>;
   // ── history (READ-ONLY) ────────────────────────────────────────────────────
-  // The raw acceptance-log text for the display-only history browser. Reading the log confers
-  // nothing: no accept capability rides on it and the pane never writes it.
-  readAcceptanceLog(): Promise<string>;
+  // The raw acceptance-log text for the display-only history browser ("" = genuinely empty,
+  // null = the log exists but could not be read — shown as unavailable, never as empty).
+  // Reading the log confers nothing: no accept capability rides on it, the pane never writes it.
+  readAcceptanceLog(): Promise<string | null>;
 }
 
 // Confirmation modal for the mass-silencing adopt-baseline action. Opens on a human gesture,
@@ -345,8 +346,17 @@ export class GovernanceReviewView extends ItemView {
     } else {
       sub.createSpan({ cls: "governance-history-filter", text: "All recorded decisions" });
     }
-    let logText = "";
-    try { logText = await deps.readAcceptanceLog(); } catch { logText = ""; }
+    let logText: string | null = null;
+    try { logText = await deps.readAcceptanceLog(); } catch { logText = null; }
+    if (logText === null) {
+      // An unreadable audit log must NOT render as a clean empty history — that would silently
+      // hide every recorded decision from the human auditing them.
+      root.createDiv({
+        cls: "governance-empty",
+        text: "History unavailable — the acceptance log could not be read.",
+      });
+      return;
+    }
     const view = buildHistory(logText, { cap: HISTORY_DEFAULT_CAP, path: this.historyFilter });
     renderHistoryEntries(root, view);
   }

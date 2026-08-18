@@ -298,13 +298,15 @@ async function appendLog(plugin: Plugin, record: LogRecord | AutoAcceptRecord): 
 }
 // Read the acceptance log for the DISPLAY-ONLY history browser. Read-only by construction:
 // nothing derived from it feeds a baseline advance, and the pane renders it via text nodes only.
-async function readAcceptanceLog(plugin: Plugin): Promise<string> {
+// An ABSENT log is genuinely empty history (""), but a read FAILURE returns null so the pane can
+// say "history unavailable" — an unreadable audit log must never render as a clean empty one.
+async function readAcceptanceLog(plugin: Plugin): Promise<string | null> {
   try {
     const p = paths(plugin).logPath;
     if (!(await plugin.app.vault.adapter.exists(p))) return "";
     return await plugin.app.vault.adapter.read(p);
   } catch {
-    return "";
+    return null;
   }
 }
 async function readJournal(plugin: Plugin): Promise<JournalRecord[]> {

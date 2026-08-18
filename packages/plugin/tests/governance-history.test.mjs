@@ -128,8 +128,9 @@ describe("renderHistoryEntries — display-only, text nodes only", () => {
     assert.equal(pathEl._text, MALICIOUS_PATH, "verbatim, inert");
     const detailEl = root.findAll((e) => e.cls === "governance-history-detail")[0];
     assert.equal(detailEl._text, "classes: <script>alert(1)</script>", "hostile class text stays inert");
-    // The whole tree was built exclusively from createDiv/createSpan text — the fake would have
-    // thrown on any other DOM API.
+    // The whole tree consists only of createDiv/createSpan elements. (An innerHTML regression is
+    // caught by the missing-span assertions above and by the static HTML-sink scan below — this
+    // fake accepts content ONLY via the `text` option, which maps to textContent.)
     for (const el of root.findAll(() => true)) {
       assert.ok(el.tag === "div" || el.tag === "span" || el.tag === "root");
     }
@@ -151,6 +152,14 @@ describe("renderHistoryEntries — display-only, text nodes only", () => {
     const root = new FakeEl("root");
     renderHistoryEntries(root, buildHistory(""));
     assert.equal(root.findAll((e) => e.cls === "governance-empty").length, 1);
+  });
+  test("a fully-capped view still shows its +N more marker — never masquerades as an empty log", () => {
+    const root = new FakeEl("root");
+    renderHistoryEntries(root, buildHistory(LOG, { cap: 0 }));
+    assert.equal(root.findAll((e) => e.cls === "governance-empty").length, 0);
+    const more = root.findAll((e) => e.cls === "governance-history-more");
+    assert.equal(more.length, 1);
+    assert.equal(more[0]._text, "+5 more (older)");
   });
   test("entries are plain data — NO callables to grab, nothing to invoke", () => {
     const v = buildHistory(LOG);
