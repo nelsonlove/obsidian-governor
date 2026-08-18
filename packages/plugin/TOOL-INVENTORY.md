@@ -6,16 +6,16 @@ The FULL set is locked by `tests/tool-inventory.test.mjs`: the names documented
 here must equal the names registered in source, both directions, or the suite
 fails (the fs-expressible and scheme sub-locks from #25/task-6 still apply).
 
-**Count summary:** 17 fs-expressible + 42 always-live + 10 module-mounted
-(default enabled, settings-toggleable) = **69 base** tools, plus up to
+**Count summary:** 17 fs-expressible + 41 always-live + 10 module-mounted
+(default enabled, settings-toggleable) = **68 base** tools, plus up to
 6 conditional integration tools, 5 CLI-binary-conditional dedicated tools
 (`obsidian_note_history`, `obsidian_note_diff`, `obsidian_base_create`,
 `obsidian_plugin_install`, `obsidian_plugin_uninstall`), and 1 settings-gated
 CLI-conditional tool (`obsidian_cli`, default OFF)
-= **up to 81 total**.  The 3 Code Mode meta-tools are an alternative
+= **up to 80 total**.  The 3 Code Mode meta-tools are an alternative
 per-connection surface and are not counted (a session sees one surface or the
 other, never both).  Not counted here (outside the locked `obsidian_*` family):
-the always-on `governance_submit_revision` (1 tool, see its section below), and
+the always-on `governance_submit_revision` + `governance_revisions` (2 tools, see their section below), and
 the default-disabled `skills` (`vault_skills_*`), `provenance`
 (`provenance_*`), `fileclass` (`fileclass_*`, 8 tools, plugin+binary-gated),
 `crosssession` (`crosssession_*`, 4 tools), and `triage` (`triage_*`, 2 tools)
@@ -110,7 +110,7 @@ read tools; `dry_run` never mutates.
 |---|---|
 | `obsidian_pending_review` | Read-only view of Stewardship's published review queue (`pending-index.json`); data-only coupling, no accept verb |
 
-### `tools-governance-revision.ts` — `registerGovernanceRevisionTool` (1 tool, #101)
+### `tools-governance-revision.ts` — `registerGovernanceRevisionTool` / `registerGovernanceRevisionsListTool` (2 tools, #101/#221)
 
 Outside the locked `obsidian_*` family (like the module surfaces), but
 registered ALWAYS-ON in `server.ts` through the ordinary guarded registrar.
