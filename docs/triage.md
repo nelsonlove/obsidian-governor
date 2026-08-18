@@ -52,6 +52,12 @@ directory, and this doc's list all derive from it.
 | `archive-as-record` | move | target or `archiveDestination` | — |
 | `escalate` | patch, note stays in place | refused | `escalateFrontmatter` — default `{"tags": ["attention/user"]}` |
 
+**Every moving disposition creates missing parent folders** — that is the
+shared move primitive's behavior, uniformly. `establish-new-home` differs from
+`route` in *intent* (a home that does not exist yet vs a home the note already
+belongs in), not mechanics: a `route` to a typo'd folder will create it, so
+check the destination (or dry-run first — you always are, by default).
+
 `target` always names a destination **folder**; the note keeps its filename.
 Dispositions with a **required** target refuse typed (`target_required`)
 without one; the config-backed four refuse `destination_unresolved` when
@@ -73,7 +79,9 @@ and degrading to defaults at use time:
 
 - **`inboxMarkers`** (default `[" Inbox for "]`, the live vault convention):
   a note is an inbox item when any ancestor folder's name contains one of
-  these substrings; the inbox folder's own folder note is never an item.
+  these substrings. An inbox folder's own folder note (basename equal to its
+  marker-matching parent's name) is never an item — it *is* the inbox; an
+  ordinary subfolder's folder note inside an inbox is still an item.
 - **`actionDestination` / `knowledgeDestination` / `somedayDestination` /
   `archiveDestination`** (default blank = unconfigured): fallback destination
   folders for the config-backed dispositions.

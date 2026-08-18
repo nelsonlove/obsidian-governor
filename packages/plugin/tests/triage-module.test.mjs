@@ -249,6 +249,17 @@ describe("triage config: validated loudly, degrades to defaults, never hardwired
     assert.deepEqual(validateTriageConfig({ actionFrontmatter: '{"acceptance-status": "proposed"}' }), []);
   });
 
+  test("reserved object-machinery keys in a patch are refused loudly and never written", () => {
+    // Loud half: validation names the key.
+    const problems = validateTriageConfig({ escalateFrontmatter: '{"__proto__": {"x": 1}}' });
+    assert.ok(problems.some((p) => p.includes("escalateFrontmatter") && p.includes("__proto__")));
+    // Defensive half: even if such a patch reached the merge, the key is skipped.
+    const fm = {};
+    applyFrontmatterPatch(fm, JSON.parse('{"__proto__": {"x": 1}, "status": "open"}'));
+    assert.deepEqual(fm, { status: "open" });
+    assert.equal(Object.getPrototypeOf(fm), Object.prototype, "the prototype must never be rewired");
+  });
+
   test("triageConfigOf degrades an invalid stored value to its default (validation already reported it)", () => {
     const cfg = triageConfigOf({ ...DEFAULT_TRIAGE_CONFIG, somedayFrontmatter: "{broken", inboxMarkers: 42 });
     assert.deepEqual(cfg.somedayFrontmatter, { status: "someday" });
@@ -280,6 +291,11 @@ describe("inbox recognition (pure)", () => {
     // …but a same-named note one level DEEPER is an ordinary item (its
     // immediate parent is "sub", so it is not the inbox's folder note).
     assert.equal(inboxFolderOf(`${INBOX}/sub/03.10 Inbox for 03 Agents.md`, [" Inbox for "]), INBOX);
+    // An ordinary SUBFOLDER's folder note inside an inbox is still an item —
+    // the exclusion is only for a folder note whose parent itself matches a
+    // marker (it IS an inbox, nested or not).
+    assert.equal(inboxFolderOf(`${INBOX}/sub/sub.md`, [" Inbox for "]), INBOX);
+    assert.equal(inboxFolderOf(`${INBOX}/9 Inbox for sub/9 Inbox for sub.md`, [" Inbox for "]), null);
   });
 
   test("sortQueue: oldest first, unknown created last, path tiebreak", () => {

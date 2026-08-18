@@ -27,8 +27,14 @@ export function inboxFolderOf(path: string, markers: string[]): string | null {
     if (markers.some((m) => m !== "" && seg.includes(m))) match = acc;
   }
   if (match === null) return null;
+  // The inbox folder's OWN folder note is not an item — it IS the inbox. The
+  // exclusion is exactly that: basename equal to the immediate parent's name
+  // AND that parent itself matching a marker (so an ordinary subfolder's
+  // folder note sitting inside an inbox is still a triageable item, while a
+  // nested inbox's folder note is not).
   const basename = segments[segments.length - 1].replace(/\.md$/i, "");
-  if (basename === folders[folders.length - 1]) return null; // the inbox's folder note
+  const parent = folders[folders.length - 1];
+  if (basename === parent && markers.some((m) => m !== "" && parent.includes(m))) return null;
   return match;
 }
 

@@ -155,6 +155,10 @@ export function planDispose(input: DisposeInput): { refusal: DisposeRefusal } | 
  */
 export function applyFrontmatterPatch(fm: Record<string, unknown>, patch: Record<string, unknown>): void {
   for (const [key, value] of Object.entries(patch)) {
+    // Defense in depth beside config.ts's loud refusal: object-machinery keys
+    // are never written (assigning `__proto__` would silently rewire the
+    // frontmatter object rather than set a property).
+    if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
     if (Array.isArray(value)) {
       const existing = fm[key];
       const arr = Array.isArray(existing) ? existing : existing === undefined || existing === null ? [] : [existing];

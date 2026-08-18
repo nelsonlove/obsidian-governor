@@ -96,6 +96,14 @@ export function parseFrontmatterPatch(value: unknown): { patch: Record<string, u
     return { problem: "must be a JSON OBJECT (e.g. {\"status\": \"open\"}), not an array or scalar" };
   }
   const patch = parsed as Record<string, unknown>;
+  // Reserved object-machinery keys can never behave as frontmatter properties
+  // (assigning `__proto__` silently rewires the object instead of writing a
+  // key) — refuse them LOUDLY here rather than letting a patch no-op quietly.
+  for (const k of Object.keys(patch)) {
+    if (k === "__proto__" || k === "constructor" || k === "prototype") {
+      return { problem: `contains the reserved key '${k}', which cannot be written as a frontmatter property` };
+    }
+  }
   const forbidden = acceptForbiddenReason(patch);
   if (forbidden) return { problem: `would write acceptance and is refused: ${forbidden}` };
   return { patch };
