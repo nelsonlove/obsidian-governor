@@ -169,6 +169,20 @@ Known-overstated section instead — see its header for the format.
 - Safety guards that apply: read-only mode always applies (mutating external tools are blocked when read-only is on); the path allowlist scopes arguments under recognized path keys (path, from, to, paths, and a few others) — when an allowlist is active, mutating external tools whose args carry no recognized path key are blocked outright, since vault-mcp cannot scope the call.
 - `readOnly: true` on a published tool is an assertion by a third-party plugin about code vault-mcp cannot inspect — and believing it exempts that tool from the write queue, the journal, the path allowlist, the kernel arguments, and read-only mode, all at once.
 
+## docs/triage.md
+
+Reviewed at authoring time (#221 phase 2). Each claim is substantiated by
+`tests/triage-module.test.mjs`: the all-agent authority table + empty
+gesture-gated set, the acceptance-patch sanitize-at-coercion pin, the
+handler's accept-forbidden re-check, and the computed-destination
+`out_of_allowlist` refusal (dry-run included).
+
+- The **authority axis** sorts every verb with one rule: a disposition that **confers standing** (accept, adopt, revert-of-standing) is a human gesture — never an API; a disposition that is an ordinary reversible write is agent-expressible through the guarded path.
+- **Inbox-triage instance** (`kernel/triage/descriptors.ts`): ten verbs, **all `authority: "agent"`** — none confers standing, every effect is a reversible guarded write — so per Nelson's native-tooling rule there is nothing to gesture-gate and no bespoke UI to build.
+- A patch carrying an acceptance field is refused at validation AND sanitized to the clean default at coercion — it can never reach a note.
+- **Frontmatter transitions go through `processFrontMatter`**, and the shared accept-forbidden rule (`@vault-mcp/core`) is re-checked over every effective patch before it is written.
+- The **computed destination is not a call argument**, so the guard's argument check never sees it — the handler re-checks it against the allowlist itself (the scheme-write discipline), in dry-run and apply alike.
+
 
 ## Known-overstated (tracked, not approved-as-true)
 

@@ -18,8 +18,8 @@ other, never both).  Not counted here (outside the locked `obsidian_*` family):
 the always-on `governance_submit_revision` (1 tool, see its section below), and
 the default-disabled `skills` (`vault_skills_*`), `provenance`
 (`provenance_*`), `fileclass` (`fileclass_*`, 8 tools, plugin+binary-gated),
-and `crosssession` (`crosssession_*`, 4 tools) module surfaces — see Section 2c
-and their own module docs.
+`crosssession` (`crosssession_*`, 4 tools), and `triage` (`triage_*`, 2 tools)
+module surfaces — see Section 2c and their own module docs.
 
 Cross-check: the observed live set with Dataview + Templater + Metadata Menu
 loaded (but NOT Omnisearch, no CLI binary) reported 44 tools — an observation
@@ -235,13 +235,14 @@ session connect.
 
 Registered through the module host like Section 2b, but these modules ship
 `enabled: false` — a human turns them on in the config tab, and the tools appear
-on the next session connect. (The `skills`, `provenance`, `fileclass` and
-`crosssession` modules also ship disabled, but their tools are named
-`vault_skills_*` / `provenance_*` / `fileclass_*` / `crosssession_*`, outside the
-`obsidian_*` family this inventory locks, so the first two are documented in
-their own module docs; `fileclass` and `crosssession` are documented just below —
-fileclass because it is also plugin-gated, crosssession because it is the
-cross-session coordination surface, #232.)
+on the next session connect. (The `skills`, `provenance`, `fileclass`,
+`crosssession` and `triage` modules also ship disabled, but their tools are named
+`vault_skills_*` / `provenance_*` / `fileclass_*` / `crosssession_*` / `triage_*`,
+outside the `obsidian_*` family this inventory locks, so the first two are
+documented in their own module docs; `fileclass`, `crosssession` and `triage` are
+documented just below — fileclass because it is also plugin-gated, crosssession
+because it is the cross-session coordination surface (#232), triage because it is
+the inbox-triage disposition surface, #221 phase 2.)
 
 ### `tools-health.ts` — `registerHealthTools` via the `health` module (2 tools)
 
@@ -321,6 +322,40 @@ lock-claim precedent).
 | `crosssession_delta` | R | Entries newer than your attested position, `{stamp, handle, body}` from both forms, oldest first; capped (default 20, never bisecting a same-stamp group) with `more` + `next_stamp`; own entries omitted |
 | `crosssession_attest` | W | Record a read receipt (`through_stamp` ≤ newest entry; `stamp_ahead` otherwise) — a read-receipt, not authority; mutates module state only |
 | `crosssession_post` | W | Append one `## <stamp> · <handle>` section (run clock, minutes precision) to the channel's log file; **refuses `stale_read` before any write** while unread entries exist; auto-attests through its own entry on success |
+
+### `tools-triage.ts` — `registerTriageTools` via the `triage` module (2 tools)
+
+The inbox-triage surface (#221 phase 2): the disposition substrate's second
+instance, successor to the vault's retired `dispose-inbox-item` QuickAdd flow.
+Ten dispositions declared as data (`kernel/triage/descriptors.ts` — discard,
+route, establish-new-home, convert-to-action, develop-as-knowledge, register,
+curate-as-link, defer-to-someday, archive-as-record, escalate); **none confers
+standing**, so per the #221 authority axis all ten are `authority: "agent"` and
+the module has **no pane UI at all** (queue views for humans are native Bases
+over frontmatter; bespoke pane UI is reserved for gesture-gated authority
+dispositions, of which this instance has none). The single-source table drives
+the `triage_dispose` enum, its description, and the manifest directory.
+
+Inbox recognition, fallback destinations, and the frontmatter patches are all
+**per-vault config** (`modules.triage.config`) whose defaults mirror the legacy
+flow's live-vault behavior (`inboxMarkers: [" Inbox for "]`, action patch
+`tags+note/task, status open, priority normal`, someday patch `status:
+someday`, escalate patch `tags+attention/user`) — nothing vault-semantic is
+hardwired. Moves ride the **shared link-healing move primitive**
+(`tools-vault-write.ts`'s `moveOne` — `fileManager.renameFile`, parents
+created, never overwrites); discard is Obsidian's recoverable trash, never a
+hard delete; frontmatter transitions go through `processFrontMatter` with the
+shared accept-forbidden rule re-checked over every patch. `triage_dispose` is
+**dry-run by default** (the #214 report-first discipline) and its computed
+destination is allowlist-re-checked in the handler (it is not a call
+argument). With the scheme module enabled the dispose report carries a
+`scheme` advisory (the note's own address + expected folder); with scheme
+disabled the field is simply absent.
+
+| Tool name | R/W | Description |
+|---|---|---|
+| `triage_queue` | R | Inbox notes (any ancestor folder matching a configured marker; the inbox's own folder note excluded), allowlist-visible only, with path/inbox/created/modified/age/frontmatter type+status — oldest first, capped (`limit`, default 50) with `truncated` + the total |
+| `triage_dispose` | W | Apply ONE of the ten dispositions to an inbox note (`{path, disposition, target?, dry_run?}`); **dry-run by default**; `target` (a destination folder) required for route/establish-new-home/register/curate-as-link, an override for the config-backed movers, refused for discard/escalate; typed refusals (`not_inbox`, `target_required`, `target_unsupported`, `destination_unresolved`, `destination_occupied`, `out_of_allowlist`, `accept_forbidden`) |
 
 ---
 

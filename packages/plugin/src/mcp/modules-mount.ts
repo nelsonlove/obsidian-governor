@@ -45,7 +45,7 @@ import {
   type ToolRegistrar,
   type VaultModule,
 } from "../kernel/modules/index.js";
-import { makeRegistry, DEFAULT_SCHEMES, validateExcludedRoots, type SchemeInstanceConfig } from "../kernel/scheme/registry.js";
+import { makeRegistry, DEFAULT_SCHEMES, validateExcludedRoots, excludeRoots, type SchemeInstanceConfig } from "../kernel/scheme/registry.js";
 import { validateJdConfig, type JdConfig } from "../kernel/scheme/jd.js";
 import type { VocabInstanceSettings } from "../kernel/index.js";
 import { registerSchemeTools } from "./tools-scheme.js";
@@ -70,6 +70,13 @@ import {
   memoryReceiptStore,
   type ReceiptStoreLike,
 } from "../kernel/crosssession/index.js";
+import { registerTriageTools, emptyTriageSource, type TriageSource, type TriageToolsCtx } from "./tools-triage.js";
+import {
+  DEFAULT_TRIAGE_CONFIG,
+  validateTriageConfig,
+  triageDispositionIds,
+  triageDispositionLines,
+} from "../kernel/triage/index.js";
 
 // ── manifests (#81: config-host — see
 //    docs/superpowers/specs/2026-08-10-config-host-design.md) ──────────────
@@ -954,6 +961,171 @@ const CROSSSESSION_MANIFEST: ModuleManifest = {
   },
 };
 
+// ── triage module manifest (#221 phase 2: the disposition substrate's second
+//    instance — inbox triage) ────────────────────────────────────────────────
+//
+// Successor to the vault's retired `dispose-inbox-item` QuickAdd flow: ten
+// dispositions over inbox notes, declared as data in
+// kernel/triage/descriptors.ts (the SHARED substrate extracted from the
+// acceptance instance's #228 table). NONE confers standing, so per the
+// authority axis all ten are agent verbs and the module has NO pane UI at all
+// — per Nelson's native-tooling rule on #221, queue VIEWS are native (Bases
+// over frontmatter) and bespoke pane UI is reserved for gesture-gated
+// authority dispositions, of which this instance has none. The surface is:
+// descriptors as data + one read-only queue tool + ONE guarded mutating
+// disposition tool (DRY-RUN BY DEFAULT, the #214 report-first discipline).
+//
+// A MUTATING capability module (`mutating: true`): triage_dispose moves notes
+// (through the SAME shared link-healing move primitive every move tool uses),
+// edits frontmatter (processFrontMatter), and trashes (Obsidian trash, never
+// a hard delete) — all through the guard-patched registrar (read-only mode,
+// path allowlist, queue, journal, kernel args), with the shared
+// accept-forbidden rule re-checked over every frontmatter patch. NO
+// ACCEPTANCE SEMANTICS ANYWHERE in the module.
+//
+// Vault semantics are configuration (the standing rule): inbox recognition
+// (inboxMarkers), the fallback destinations, and the frontmatter patches are
+// all per-vault config whose DEFAULTS mirror the legacy flow's live-vault
+// behavior — nothing scheme-semantic is hardwired. Deliberate phase-2 scope
+// reductions vs the legacy flow (documented in docs/triage.md): no on-demand
+// destination-folder materialization via the vault's operations machinery
+// (configure a folder or pass `target` instead), and no dynamic
+// `projects: [[<scope note>]]` stamp (a static config cannot express it).
+// Default DISABLED (opt-in), like every newly-folded mutating surface. Config
+// lives at `modules.triage.config` (a new module, no ConfigBinding).
+const TRIAGE_CONFIG_FIELDS: ConfigField[] = [
+  {
+    key: "inboxMarkers",
+    label: "Inbox folder markers",
+    type: "lines",
+    help:
+      "Substrings (one per line) that mark a folder as an inbox: a note is an inbox item when any ancestor " +
+      'folder\'s name contains one of these. Blank ⇒ the default (" Inbox for ", the live vault convention — ' +
+      'e.g. "03.10 Inbox for 03 Agents"). The inbox folder\'s own folder note is never an item.',
+    caveats: ["Matching is case-sensitive, per folder-name segment."],
+  },
+  {
+    key: "actionDestination",
+    label: "convert-to-action destination",
+    type: "text",
+    help:
+      "Folder notes converted to actions move into when the call names no `target`. Blank ⇒ unconfigured " +
+      "(convert-to-action then refuses without an explicit target).",
+  },
+  {
+    key: "knowledgeDestination",
+    label: "develop-as-knowledge destination",
+    type: "text",
+    help:
+      "Folder notes developed as knowledge move into when the call names no `target`. Blank ⇒ unconfigured " +
+      "(develop-as-knowledge then refuses without an explicit target).",
+  },
+  {
+    key: "somedayDestination",
+    label: "defer-to-someday destination",
+    type: "text",
+    help:
+      "Folder deferred notes move into when the call names no `target`. Blank ⇒ unconfigured (defer-to-someday " +
+      "then refuses without an explicit target).",
+  },
+  {
+    key: "archiveDestination",
+    label: "archive-as-record destination",
+    type: "text",
+    help:
+      "Folder archived notes move into when the call names no `target`. Blank ⇒ unconfigured (archive-as-record " +
+      "then refuses without an explicit target).",
+  },
+  {
+    key: "actionFrontmatter",
+    label: "convert-to-action frontmatter patch",
+    type: "text",
+    help:
+      "JSON object convert-to-action applies to the note's frontmatter before moving it (array values union with " +
+      'the existing value; scalars overwrite). Default: {"tags": ["note/task"], "status": "open", "priority": ' +
+      '"normal"} — the legacy flow\'s stamp. It can never carry an acceptance field (validated, and re-checked at ' +
+      "write time).",
+  },
+  {
+    key: "somedayFrontmatter",
+    label: "defer-to-someday frontmatter patch",
+    type: "text",
+    help:
+      "JSON object defer-to-someday applies before moving the note. Default: " +
+      '{"status": "someday"}. Same union/overwrite semantics and acceptance ban as the action patch.',
+  },
+  {
+    key: "escalateFrontmatter",
+    label: "escalate frontmatter patch",
+    type: "text",
+    help:
+      "JSON object escalate applies — the note stays in place (escalate is a frontmatter flag, the simplest " +
+      'faithful mapping of the legacy verb). Default: {"tags": ["attention/user"]}. Same semantics and acceptance ' +
+      "ban as the other patches.",
+  },
+];
+
+const TRIAGE_MANIFEST: ModuleManifest = {
+  summary:
+    "Inbox triage — the disposition substrate's second instance (#221): the retired dispose-inbox-item flow's ten " +
+    "dispositions (" +
+    triageDispositionIds().join(", ") +
+    ") as ONE guarded mutating tool plus a read-only queue view for agents (humans use native Bases — no pane UI: " +
+    "none of the ten confers standing, so per the authority axis all ten are agent verbs). triage_dispose is " +
+    "DRY-RUN BY DEFAULT; moves ride the shared link-healing move primitive and never overwrite; discard is " +
+    "Obsidian's recoverable trash, never a hard delete; frontmatter patches come from this config and can never " +
+    "carry an acceptance field. Inbox recognition, destinations, and patches are all per-vault config — nothing " +
+    "vault-semantic is hardwired.",
+  config: {
+    fields: TRIAGE_CONFIG_FIELDS,
+    defaults: { ...DEFAULT_TRIAGE_CONFIG },
+    validate: validateTriageConfig,
+  },
+  directory: {
+    tools: [
+      {
+        name: "triage_queue",
+        purpose:
+          "List the notes sitting in inbox positions (any ancestor folder matching an inbox marker): path, inbox, " +
+          "created/modified, age, frontmatter type/status — oldest first, capped.",
+        readOnly: true,
+        options: [{ name: "limit", what: "maximum rows to return (default 50, max 200)" }],
+        caveats: [
+          "The agent's view of the queue — queue VIEWS for humans are native Bases over frontmatter, not this " +
+            "module's job.",
+          "Only allowlist-visible notes are listed or read.",
+        ],
+      },
+      {
+        name: "triage_dispose",
+        purpose:
+          "Apply ONE of the ten dispositions to an inbox note: " + triageDispositionLines().join("; ") + ".",
+        readOnly: false,
+        options: [
+          { name: "path", what: "vault-relative path of the inbox note" },
+          { name: "disposition", what: triageDispositionIds().join(" / ") },
+          {
+            name: "target",
+            what:
+              "destination folder — required for route/establish-new-home/register/curate-as-link, optional " +
+              "override for the config-backed movers, refused for discard/escalate",
+          },
+          { name: "dry_run", what: "DEFAULT TRUE — report only; pass false to apply" },
+        ],
+        caveats: [
+          "DRY-RUN BY DEFAULT — nothing is written until dry_run: false.",
+          "Moves go through the shared link-healing move primitive (fileManager.renameFile), never overwrite " +
+            "(`destination_occupied`), and create missing parent folders; discard is Obsidian's recoverable trash.",
+          "Frontmatter patches route through the shared accept-forbidden rule — the tool can never write an " +
+            "acceptance field.",
+          "With the scheme module enabled the report carries a `scheme` advisory (the note's address + expected " +
+            "folder); with scheme disabled the field is simply absent.",
+        ],
+      },
+    ],
+  },
+};
+
 /** What the mount needs from the live plugin (server.ts supplies the Obsidian
  * adapters; tests supply fakes). The same per-call freshness discipline as
  * the direct registrations it replaces: config the HANDLERS read (allowlist,
@@ -1004,6 +1176,49 @@ export interface MountDeps {
   crosssessionReceipts?: ReceiptStoreLike;
   /** Injectable clock for crosssession post/attest stamps (tests). */
   crosssessionNow?: () => Date;
+  /** The triage module's injected vault reader/writer (obsidianTriageSource
+   * live — the shared moveOne / trashFile / processFrontMatter primitives).
+   * Absent ⇒ an inert empty source, so the settings-UI's stand-in deps and
+   * pre-triage callers still satisfy MountDeps (the module registers, the
+   * queue answers empty, and any write refuses). */
+  triageSource?: TriageSource;
+  /** Injectable clock for triage queue ages (tests). */
+  triageNow?: () => Date;
+}
+
+/**
+ * The triage module's OPTIONAL scheme consultation: the note's own address
+ * plus the folder the scheme expects it in — obsidian_expected_location's
+ * path-direction answer, computed over the same allowlist-visible listing the
+ * scheme tools use. Returns null (clean degradation, never a throw) when the
+ * scheme MODULE is disabled, no configured instance recognizes the path, or
+ * anything at all goes wrong: the advisory is a hint, never load-bearing.
+ */
+function triageSchemeExpected(deps: MountDeps, host: ModuleHostCtx): TriageToolsCtx["schemeExpected"] {
+  return (path: string) => {
+    try {
+      const settings = deps.getSettings();
+      if (settings.modules?.scheme?.enabled === false) return null;
+      const registry = makeRegistry(settings.schemes ?? DEFAULT_SCHEMES);
+      const visible = host.visible ?? ((p: string[]) => p);
+      const notes = visible(deps.schemeNotes());
+      for (const instance of registry.instances()) {
+        const addr = instance.provider.addressOf(path);
+        if (!addr) continue;
+        // An instance does not speak for its own excluded territory — the
+        // obsidian_expected_location fall-through.
+        if (excludeRoots([path], instance.excludedRoots).length === 0) continue;
+        const scoped = excludeRoots(notes, instance.excludedRoots);
+        return {
+          address: instance.provider.format(addr),
+          expected_folder: instance.provider.expectedFolder(addr, scoped),
+        };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  };
 }
 
 /** The ModuleHostCtx modules receive — deliberately minimal (gate point 2).
@@ -1158,6 +1373,31 @@ export function builtinModules(deps: MountDeps): VaultModule[] {
         visible: host.visible,
         receipts: deps.crosssessionReceipts ?? memoryReceiptStore(),
         ...(deps.crosssessionNow ? { now: deps.crosssessionNow } : {}),
+      }),
+    ),
+    // The triage module (#221 phase 2): the disposition substrate's second
+    // instance — inbox triage. A MUTATING capability module (`mutating:
+    // true`): triage_dispose moves (the shared link-healing moveOne), edits
+    // frontmatter (processFrontMatter, accept-forbidden re-checked) and
+    // trashes (Obsidian trash) through the guard-patched registrar (read-only
+    // mode, path allowlist, queue, journal, kernel args); triage_queue is the
+    // read-only agent view of the inbox queue. NO pane UI — per the
+    // native-tooling rule none of the ten dispositions confers standing, so
+    // there is nothing to gesture-gate; human queue views are native Bases.
+    // A NEW module, so it follows the adapters doc: it reads `host`/`config`
+    // and filters with `host.visible`. The scheme consultation is an OPTIONAL
+    // read service that degrades to absent when the scheme module is off.
+    // Default DISABLED (opt-in). Config lives at `modules.triage.config` (no
+    // ConfigBinding).
+    moduleFromRegistrar(
+      { id: "triage", capabilities: ["triage"], enabled: false, mutating: true, manifest: TRIAGE_MANIFEST },
+      (server: any, ctx: TriageToolsCtx) => registerTriageTools(server, deps.triageSource ?? emptyTriageSource(), ctx),
+      (host, config) => ({
+        config,
+        getSettings: deps.getSettings,
+        visible: host.visible,
+        schemeExpected: triageSchemeExpected(deps, host),
+        ...(deps.triageNow ? { now: deps.triageNow } : {}),
       }),
     ),
   ];
