@@ -1,6 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { fakeServer } from "./fake-server.mjs";
+import { parseYaml } from "./obsidian-stub.mjs";
 import { registerJdScaffoldTools } from "../src/mcp/tools-jd-scaffold.ts";
 
 function fakeSource({ allPaths = [], folders = [], now = "2026-08-19", noteContent = {}, folderChildren = {}, clockValue = { date: "2026-08-19", time: "10:30", now: "2026-08-19T10:30" } } = {}) {
@@ -42,7 +43,7 @@ function fakeSource({ allPaths = [], folders = [], now = "2026-08-19", noteConte
 function build({ allowlist = [], ...sourceOpts } = {}) {
   const server = fakeServer();
   const { source, created, renamed, foldersCreated, modified, notes } = fakeSource(sourceOpts);
-  const ctx = { getSettings: () => ({ readOnly: false, allowlist }) };
+  const ctx = { getSettings: () => ({ readOnly: false, allowlist }), parseYaml };
   registerJdScaffoldTools(server, source, ctx);
   return { server, source, created, renamed, foldersCreated, modified, notes };
 }
@@ -658,6 +659,50 @@ describe("obsidian_jd_new_generic_id", () => {
     });
     assert.deepEqual(res.structuredContent.placeholder_warnings, ["nonsense"]);
   });
+
+  test("review fix: refuses to create from a template carrying an accepted fence — the note-creation accept-guard", async () => {
+    // A template's frontmatter is copied through substitution into the new
+    // note verbatim — without this guard, an accepted fence sitting in a
+    // template file (however it got there) would land unscanned in a brand
+    // new note. Same class of gap #79/#172 closed on the other two
+    // "create from template" surfaces in this codebase.
+    const { server, created } = build({
+      folderChildren: { Templates: ["Templates/generic-template.md"] },
+      noteContent: {
+        "Templates/generic-template.md":
+          '---\njd-id: "{{category}}.{{id}}"\nacceptance-status: accepted\naccepted-by: someone\naccepted-on: 2026-01-01\n---\n\n# {{title}}\n',
+      },
+    });
+    const res = await server.tools.get("obsidian_jd_new_generic_id").handler({
+      folder_path: "06 Digital tools", prefix: "06", id: "13", title: "Bar", templates_folder: "Templates", dry_run: false,
+    });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[accept_forbidden\]/);
+    assert.deepEqual(created, []); // never written
+  });
+
+  test("review fix: the accept-guard refusal fires under dry_run too — a preview must never claim a plan this call would refuse", async () => {
+    const { server } = build({
+      folderChildren: { Templates: ["Templates/generic-template.md"] },
+      noteContent: {
+        "Templates/generic-template.md": '---\njd-id: "{{category}}.{{id}}"\nacceptance-status: accepted\n---\n\n# {{title}}\n',
+      },
+    });
+    const res = await server.tools.get("obsidian_jd_new_generic_id").handler({
+      folder_path: "06 Digital tools", prefix: "06", id: "13", title: "Bar", templates_folder: "Templates", dry_run: true,
+    });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[accept_forbidden\]/);
+  });
+
+  test("an ordinary, fence-free template is unaffected by the accept-guard", async () => {
+    const { server, created } = genericFixture();
+    const res = await server.tools.get("obsidian_jd_new_generic_id").handler({
+      folder_path: "06 Digital tools", prefix: "06", id: "13", title: "Bar", templates_folder: "Templates", dry_run: false,
+    });
+    assert.notEqual(res.isError, true);
+    assert.equal(created.length, 1);
+  });
 });
 
 describe("obsidian_jd_new_stem", () => {
@@ -694,5 +739,27 @@ describe("obsidian_jd_new_stem", () => {
     });
     assert.equal(res.isError, true);
     assert.match(res.content[0].text, /^Error \[out_of_allowlist\]/);
+  });
+
+  test("review fix: refuses a stem_code containing a path separator before it ever reaches destPathForStem's string concatenation", async () => {
+    const { server, created, foldersCreated } = stemFixture();
+    const res = await server.tools.get("obsidian_jd_new_stem").handler({
+      folder_path: "06 Digital tools", prefix: "06", stem_code: "../../evil", name: "Foo", templates_folder: "Templates", dry_run: true,
+    });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[invalid_stem_code\]/);
+    assert.deepEqual(created, []);
+    assert.deepEqual(foldersCreated, []);
+  });
+
+  test("a real, regex-valid stem code (letters/digits/hyphen/underscore) is unaffected", async () => {
+    const { server } = build({
+      folderChildren: { Templates: ["Templates/draft-template.md"] },
+      noteContent: { "Templates/draft-template.md": "---\njd-id: XX.00+co-de_2\n---\n\n# {{title}}\n" },
+    });
+    const res = await server.tools.get("obsidian_jd_new_stem").handler({
+      folder_path: "06 Digital tools", prefix: "06", stem_code: "co-de_2", name: "Foo", templates_folder: "Templates", dry_run: true,
+    });
+    assert.notEqual(res.isError, true);
   });
 });

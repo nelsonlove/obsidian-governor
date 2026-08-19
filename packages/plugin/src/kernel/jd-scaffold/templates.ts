@@ -127,26 +127,25 @@ function valueFor(ctx: PlaceholderContext, key: string): string | null {
   }
 }
 
-const PLACEHOLDER_BRACE = /\{\{([a-zA-Z][a-zA-Z-]*)\}\}/g;
-const PLACEHOLDER_PERCENT = /%([a-zA-Z][a-zA-Z-]*)%/g;
+// ONE combined pattern for both dialects, matched in a SINGLE pass — not two
+// sequential .replace() calls. Two sequential passes was the original's own
+// approach (and jd-dashboard's), but it has a real bug: the second pass
+// scans the FIRST pass's OUTPUT, not the original text, so a caller-supplied
+// placeholder VALUE (title/tag — real tool arguments, not template authorship)
+// that happens to contain a literal `%knownkey%` substring gets silently
+// re-substituted a second time. A single pass never re-scans its own
+// replacements, closing the class rather than one instance of it.
+const PLACEHOLDER_ANY = /\{\{([a-zA-Z][a-zA-Z-]*)\}\}|%([a-zA-Z][a-zA-Z-]*)%/g;
 
 /** Substitute placeholders in template content. Both {{var}} and %var% are
  *  accepted. Unknown placeholders are left as-is; `warnings` collects them
  *  so the caller can surface them (the original console.warn's — this pure
  *  function returns them instead so the glue layer decides how to report). */
 export function substitute(content: string, ctx: PlaceholderContext): { text: string; warnings: string[] } {
-  let out = content;
   const unknown = new Set<string>();
 
-  out = out.replace(PLACEHOLDER_BRACE, (m, key) => {
-    const v = valueFor(ctx, key);
-    if (v === null) {
-      unknown.add(key);
-      return m;
-    }
-    return v;
-  });
-  out = out.replace(PLACEHOLDER_PERCENT, (m, key) => {
+  const text = content.replace(PLACEHOLDER_ANY, (m, braceKey, percentKey) => {
+    const key = braceKey ?? percentKey;
     const v = valueFor(ctx, key);
     if (v === null) {
       unknown.add(key);
@@ -155,7 +154,7 @@ export function substitute(content: string, ctx: PlaceholderContext): { text: st
     return v;
   });
 
-  return { text: out, warnings: [...unknown] };
+  return { text, warnings: [...unknown] };
 }
 
 export type TemplateRole = { type: "zero"; zeroId: ZeroId } | { type: "stem"; stemCode: string } | { type: "generic" };
