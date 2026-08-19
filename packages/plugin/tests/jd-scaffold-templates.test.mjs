@@ -98,6 +98,21 @@ describe("substitute", () => {
     const r = substitute("{{title}}", ctx);
     assert.deepEqual(r.warnings, []);
   });
+
+  test("review fix: a %-shaped substring in a substituted VALUE is not re-substituted by the other dialect", () => {
+    // Regression for the cross-dialect bug: two sequential .replace() passes
+    // used to let the SECOND pass (%var%) re-scan the FIRST pass's ({{var}})
+    // own output. A title containing a literal "%tag%" substring must stay
+    // literal — it came from a caller-supplied VALUE, not template authorship.
+    const r = substitute("# {{title}}", { ...ctx, title: "Q1 %tag% Report", tag: "jd/should-not-appear" });
+    assert.equal(r.text, "# Q1 %tag% Report");
+    assert.doesNotMatch(r.text, /jd\/should-not-appear/);
+  });
+
+  test("review fix: the reverse direction also holds — a {{-shaped substring in a %-substituted value stays literal", () => {
+    const r = substitute("# %title%", { ...ctx, title: "Q1 {{tag}} Report", tag: "jd/should-not-appear" });
+    assert.equal(r.text, "# Q1 {{tag}} Report");
+  });
 });
 
 describe("classifyTemplates", () => {

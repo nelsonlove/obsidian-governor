@@ -1440,6 +1440,13 @@ export interface MountDeps {
    *  answer empty, writes refuse with a clear error rather than a silent
    *  no-op — same "registers, degrades cleanly" shape as bases/triage. */
   jdScaffoldSource?: JdScaffoldSource;
+  /** Feeds jd-scaffold's template-creation tools' accept-forbidden content
+   *  scan (same `{parseYaml}` shape `registerCliTools` already takes) —
+   *  without it, a template-created note's frontmatter fence can never be
+   *  verified and every such call refuses. Absent ⇒ every fence-carrying
+   *  template refuses (fails closed, not open — matches the guard's own
+   *  documented "unverifiable = refuse" contract). */
+  jdScaffoldParseYaml?: (yaml: string) => unknown;
 }
 
 /**
@@ -1685,13 +1692,15 @@ export function builtinModules(deps: MountDeps): VaultModule[] {
     // (queue, journal, allowlist, read-only mode). Default DISABLED, matching
     // the skills module's own precedent ("a newly-folded mutating surface
     // stays off until a human turns it on"). No MODULE-level config yet (see
-    // JD_SCAFFOLD_MANIFEST's own comment), so ctxOf needs only getSettings —
-    // no `host`/`config` plumbing, unlike bases above.
+    // JD_SCAFFOLD_MANIFEST's own comment). ctxOf DOES carry parseYaml
+    // (deps.jdScaffoldParseYaml) alongside getSettings — the template-
+    // creation tools' accept-forbidden scan needs it to verify a
+    // frontmatter fence at all; without it every such call fails closed.
     moduleFromRegistrar(
       { id: "jd-scaffold", capabilities: ["scaffolding"], enabled: false, mutating: true, manifest: JD_SCAFFOLD_MANIFEST },
       (server: any, ctx: JdScaffoldToolsCtx) =>
         registerJdScaffoldTools(server, deps.jdScaffoldSource ?? emptyJdScaffoldSource(), ctx),
-      () => ({ getSettings: deps.getSettings }),
+      () => ({ getSettings: deps.getSettings, parseYaml: deps.jdScaffoldParseYaml }),
     ),
     // The triage module (#221 phase 2, phase-3 shape per #241): the
     // disposition substrate's second instance — inbox triage. A MUTATING

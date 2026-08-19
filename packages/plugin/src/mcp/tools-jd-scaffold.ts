@@ -45,6 +45,7 @@ import {
   destPathForStem,
   type TemplateMatch,
 } from "../kernel/jd-scaffold/templates.js";
+import { scanForAcceptFence } from "./tools-cli.js";
 
 const RW = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } as const;
 
@@ -84,6 +85,14 @@ export interface JdScaffoldSource {
 
 export interface JdScaffoldToolsCtx {
   getSettings: () => GuardSettings;
+  /** Feeds the accept-forbidden content scan on template-created notes
+   *  (applyTemplate) — same injection shape `registerCliTools`'s own
+   *  `{parseYaml}` opt uses. Without it, `templateContentAcceptRefusal`
+   *  fails closed on ANY frontmatter-carrying content at all ("carries a
+   *  frontmatter fence that cannot be verified without a YAML parser") —
+   *  so this isn't a nice-to-have, every real template-creation call needs
+   *  it wired to do anything useful. */
+  parseYaml?: (yaml: string) => unknown;
 }
 
 /** MountDeps.jdScaffoldSource's absent-case fallback — matches the
@@ -404,7 +413,7 @@ export function registerJdScaffoldTools(server: McpServer, source: JdScaffoldSou
       const folderName = folder_path.includes("/") ? folder_path.slice(folder_path.lastIndexOf("/") + 1) : folder_path;
       const clock = source.clock();
       const context = buildContext({ prefix, id: zero.id, folder: { path: folder_path, name: folderName }, zero, ...clock });
-      return applyTemplate(source, settings, template, context, destPath, dry_run, discovery.skipped);
+      return applyTemplate(source, settings, template, context, destPath, dry_run, discovery.skipped, ctx.parseYaml);
     }
   );
 
@@ -446,7 +455,7 @@ export function registerJdScaffoldTools(server: McpServer, source: JdScaffoldSou
       const folderName = folder_path.includes("/") ? folder_path.slice(folder_path.lastIndexOf("/") + 1) : folder_path;
       const clock = source.clock();
       const context = buildContext({ prefix, id, folder: { path: folder_path, name: folderName }, customTitle: sanitized, ...clock });
-      return applyTemplate(source, settings, template, context, destPath, dry_run, discovery.skipped);
+      return applyTemplate(source, settings, template, context, destPath, dry_run, discovery.skipped, ctx.parseYaml);
     }
   );
 
@@ -472,6 +481,17 @@ export function registerJdScaffoldTools(server: McpServer, source: JdScaffoldSou
       if (!isVisible(folder_path, settings)) return codedError("out_of_allowlist", `"${folder_path}" is outside the active path allowlist.`);
       if (!isVisible(templates_folder, settings)) return codedError("out_of_allowlist", `"${templates_folder}" is outside the active path allowlist.`);
 
+      // Unlike title/name (sanitizeTitle), stem_code isn't free text — every
+      // REAL stem code was already regex-validated at classification time
+      // (STEM_ID_RE: leading letter, then word chars/hyphens only, no path
+      // separators or dots). Validating it here too, before it ever reaches
+      // destPathForStem's string concatenation, closes a narrow but real gap:
+      // an unvalidated stem_code containing "/" would introduce EXTRA path
+      // segments into the computed destination (destPathForStem doesn't
+      // itself sanitize its `code` parameter) before findStemTemplate's own
+      // "no such template" refusal ever gets a chance to run.
+      if (!/^[A-Za-z][\w-]*$/.test(stem_code)) return codedError("invalid_stem_code", `"${stem_code}" isn't a valid stem code (expected a leading letter, then word characters/hyphens only).`);
+
       const sanitized = sanitizeTitle(name);
       if (!sanitized) return codedError("invalid_title", `"${name}" is empty, leading-dot, or contains invalid characters (/, \\, .., :, etc.).`);
 
@@ -487,7 +507,7 @@ export function registerJdScaffoldTools(server: McpServer, source: JdScaffoldSou
       const folderName = folder_path.includes("/") ? folder_path.slice(folder_path.lastIndexOf("/") + 1) : folder_path;
       const clock = source.clock();
       const context = buildContext({ prefix, id: `+${stem_code}`, folder: { path: folder_path, name: folderName }, customTitle: sanitized, ...clock });
-      return applyTemplate(source, settings, template, context, destPath, dry_run, discovery.skipped);
+      return applyTemplate(source, settings, template, context, destPath, dry_run, discovery.skipped, ctx.parseYaml);
     }
   );
 }
@@ -532,11 +552,45 @@ async function applyTemplate(
   context: ReturnType<typeof buildContext>,
   destPath: string,
   dryRun: boolean,
-  skippedTemplates: string[]
+  skippedTemplates: string[],
+  parseYaml: ((yaml: string) => unknown) | undefined
 ) {
   const raw = await source.read(template.path);
   if (raw === null) return codedError("template_unreadable", `"${template.path}" could not be read.`);
   const { text, warnings } = substitute(raw, context);
+
+  // accept-forbidden guard, PRE-WRITE (same class #79/#172 closed on the
+  // other two "create from template" surfaces in this codebase —
+  // obsidian_cli's `create template=` and obsidian_create_note_from_template
+  // — for the identical reason: a template file's frontmatter would
+  // otherwise be copied into a brand-new note with no content scan ever
+  // seeing it, a two-step laundering path for an accepted fence). Scanned
+  // over `text` — the SUBSTITUTED result, the actual bytes about to be
+  // written — not the raw template: this engine's placeholder values
+  // (title/tag) are caller-controlled tool arguments, unlike Templater's
+  // pre-exec-only concern, so the fence could in principle appear only
+  // after substitution, not just in the template's own raw bytes. Checked
+  // even under dry_run — a preview must never claim a plan this call would
+  // actually refuse to apply.
+  //
+  // Deliberately `scanForAcceptFence` alone, NOT the full
+  // `templateContentAcceptRefusal` (which also runs `templateExpansionRefusal`,
+  // refusing any leftover `{{`/`<%` token unconditionally): that half exists
+  // because Templater/core-Templates RE-PROCESS `{{ }}`/`<% %>` AFTER the
+  // guard's scan, so an unexpanded token is genuinely uninspectable. jd-
+  // scaffold's own substitution has ALREADY fully run by this point — `text`
+  // IS the final, verbatim bytes about to be written, nothing downstream
+  // re-interprets it — so a harmless unresolved `{{typo}}` (this engine's own
+  // documented behavior: an unknown key is left as literal text, reported in
+  // `warnings`) must not trip a check meant for a DIFFERENT, still-to-be-
+  // rendered template engine.
+  const acceptRefusal = scanForAcceptFence(text, parseYaml);
+  if (acceptRefusal) {
+    return codedError(
+      "accept_forbidden",
+      `refusing to create "${destPath}" from "${template.path}": it ${acceptRefusal}. Acceptance is a human gesture only.`
+    );
+  }
 
   if (dryRun) return ok({ dry_run: true, dest_path: destPath, content: text, placeholder_warnings: warnings, skipped_templates: skippedTemplates });
 
