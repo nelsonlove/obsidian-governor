@@ -535,7 +535,18 @@ export function obsidianCrosssessionSource(app: {
 
 /** The receipt store over the plugin's own data directory — beside the journal
  * and install-id.json (see receipts.ts's header for why there and not
- * data.json or the note tree). */
-export function obsidianReceiptStore(app: { vault: { adapter: ReceiptAdapter; configDir: string } }, pluginId = PLUGIN_ID): ReceiptStore {
-  return new ReceiptStore(app.vault.adapter, `${app.vault.configDir}/plugins/${pluginId}`);
+ * data.json or the note tree).
+ *
+ * `pluginDir` comes from the host (`manifest.dir`, threaded as `ctx.pluginDir`)
+ * and MUST be preferred: the folder name and the manifest id diverge after an
+ * in-place id update (folder still `vault-mcp`, id `governor`), and receipts
+ * written to the id-derived path would sit outside the live plugin dir — never
+ * migrated, and silently discarded when the human deletes the stray folder,
+ * which re-serves cross-session entries this session already attested. The
+ * id-derived fallback is only for hosts that report no dir. */
+export function obsidianReceiptStore(
+  app: { vault: { adapter: ReceiptAdapter; configDir: string } },
+  pluginDir?: string,
+): ReceiptStore {
+  return new ReceiptStore(app.vault.adapter, pluginDir ?? `${app.vault.configDir}/plugins/${PLUGIN_ID}`);
 }

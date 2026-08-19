@@ -185,8 +185,25 @@ describe("dedicated plugin tools — danger-gate parity with the raw proxy", () 
     const { server, calls } = build({ allowDangerousCli: true });
     const res = await server.tools.get("obsidian_plugin_uninstall").handler({ plugin_id: "governor" });
     assert.equal(res.isError, true);
-    assert.match(res.content[0].text, /refusing to uninstall governor/);
+    assert.match(res.content[0].text, /refusing to uninstall 'governor'/);
     assert.equal(calls.length, 0);
+  });
+
+  test("uninstalling the LEGACY id is refused too — its folder may still hold un-migrated data", async () => {
+    // After an in-place 0.12.0 update the live folder can still be named
+    // `vault-mcp` (folder name ≠ manifest id), and the runbook tells the human
+    // to delete "the old folder" — an agent must not do it for them.
+    const { server, calls } = build({ allowDangerousCli: true });
+    const res = await server.tools.get("obsidian_plugin_uninstall").handler({ plugin_id: "vault-mcp" });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /refusing to uninstall 'vault-mcp'/);
+    assert.equal(calls.length, 0);
+  });
+
+  test("an unrelated plugin id still uninstalls (the refusal is scoped, not a blanket block)", async () => {
+    const { server, calls } = build({ allowDangerousCli: true });
+    await server.tools.get("obsidian_plugin_uninstall").handler({ plugin_id: "dataview" });
+    assert.equal(calls.length, 1, "a third-party id reaches the CLI as before");
   });
 });
 

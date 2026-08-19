@@ -326,27 +326,56 @@ export default class VaultMcpPlugin extends Plugin {
     // never fatal to the load — see src/id-migration.ts. The old folder is
     // left in place (with a MIGRATED.md marker) for the human to remove after
     // live verification.
+    //
+    // EVERY non-success outcome raises a STICKY Notice (`new Notice(msg, 0)`),
+    // not just a console line. The reason is specific: when adoption does not
+    // happen, `loadSettings()` below falls back to DEFAULT_SETTINGS — socket
+    // enabled, read-only OFF, allowlist EMPTY, acceptance module off — i.e.
+    // the guard config silently resets to OPEN, and the first `saveSettings()`
+    // writes a fresh data.json into the new dir, which permanently closes the
+    // one-shot adoption window (every later load then hits the "already has
+    // its own data.json" skip). A console.error nobody opens is not a signal
+    // for that.
     const migrationPluginDir = this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`;
+    const migrationNotice = (msg: string) => {
+      console.error(`[governor] ${msg}`);
+      try { new Notice(`governor: ${msg}`, 0); } catch { /* pre-layout; the console line stands */ }
+    };
     try {
       const legacyDir = `${this.app.vault.configDir}/plugins/${LEGACY_PLUGIN_ID}`;
-      const result = await runFolderMigration(this.app.vault.adapter, legacyDir, migrationPluginDir);
+      // Obsidian runs the old id and the new id as two DIFFERENT plugins, so
+      // both are live while community-plugins.json lists both. `enabledPlugins`
+      // is the right probe here (not the loaded-instance rule): it is populated
+      // at startup regardless of which of the two loaded first.
+      const legacyPluginEnabled =
+        ((this.app as any).plugins?.enabledPlugins as Set<string> | undefined)?.has(LEGACY_PLUGIN_ID) === true;
+      const result = await runFolderMigration(this.app.vault.adapter, legacyDir, migrationPluginDir, {
+        legacyPluginEnabled,
+      });
       if (result.plan.action === "migrate") {
         if (result.failedEntry) {
-          console.error(
-            `[governor] data-folder migration INCOMPLETE — '${result.failedEntry}' failed to move; ` +
+          migrationNotice(
+            `data-folder migration INCOMPLETE — '${result.failedEntry}' failed to move; ` +
               `moved so far: ${result.moved.join(", ") || "(none)"}. No marker written; ` +
-              `old folder left at ${legacyDir} — reconcile by hand before re-enabling.`,
+              `old folder left at ${legacyDir} — reconcile by hand before re-enabling. ` +
+              `Settings are running at DEFAULTS until this is resolved.`,
           );
         } else {
           console.log(`[governor] adopted legacy plugin data from ${legacyDir}: ${result.moved.join(", ")}`);
         }
       } else if (result.plan.action === "abort") {
-        console.error(`[governor] data-folder migration aborted: ${result.plan.reason}`);
+        migrationNotice(`data-folder migration ABORTED: ${result.plan.reason}`);
+      } else if (result.plan.warn) {
+        // A non-routine skip: the old folder looks half-migrated. Escalated on
+        // EVERY load until a human resolves it — the stranded data here is the
+        // append-only journal, which no later run can reconstruct.
+        migrationNotice(`data-folder migration needs attention: ${result.plan.reason}`);
       }
     } catch (e) {
-      console.error(
-        "[governor] data-folder migration failed — continuing with fresh state; the old folder is untouched",
-        e,
+      migrationNotice(
+        `data-folder migration FAILED — continuing with DEFAULT settings; the old folder is untouched. ${
+          e instanceof Error ? e.message : String(e)
+        }`,
       );
     }
 

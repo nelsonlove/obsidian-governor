@@ -81,12 +81,22 @@ keeps it that way.**
    is always in **Settings → Governor** if you'd rather paste it yourself).
 4. **Restart any open Claude Code session** — MCP servers load at session start.
 
-**Upgrading from ≤0.11 (plugin id `vault-mcp`)?** On first load, Governor adopts the old
-plugin folder's data (settings, journal, install-id, baselines, acceptance log) into
-`.obsidian/plugins/governor/` and leaves a `MIGRATED.md` marker behind; old `vault-mcp`
-Claude Code registrations keep working through a compat surface at `~/.claude/vault-mcp/`.
-When convenient: re-run Connect, remove the old registration (`claude mcp remove vault-mcp`),
-disable/remove the old plugin entry, and delete the old folder after checking the marker.
+**Upgrading from ≤0.11 (plugin id `vault-mcp`)?**
+
+> **Disable the old "Vault MCP" plugin FIRST — this is a prerequisite, not a cleanup step.**
+> Obsidian treats the old id and the new id as two different plugins, so both run while
+> both are enabled. Governor **refuses to migrate** while the old one is enabled (it would
+> keep writing into the folder being moved, splitting the append-only journal) and says so
+> in a sticky notice.
+
+With the old plugin disabled, Governor's first load adopts the old folder's data (settings,
+journal, install-id, baselines, acceptance log, receipts) into `.obsidian/plugins/governor/`
+and leaves a `MIGRATED.md` marker behind. Old `vault-mcp` Claude Code registrations keep
+working meanwhile through a compat surface at `~/.claude/vault-mcp/`. Then: re-run Connect,
+remove the old registration (`claude mcp remove vault-mcp`), remove the old plugin entry, and
+delete the old folder once you've read the marker. **If a migration notice says the adoption
+was aborted or incomplete, resolve it before using the plugin** — until it succeeds, settings
+fall back to defaults (socket on, read-only off, no allowlist).
 
 Running the remote [`obsidian-vault-mcp-server`](https://github.com/nelsonlove/obsidian-vault-mcp-server)
 too? Disconnect it for sessions using this plugin — they share `obsidian_*` tool names by

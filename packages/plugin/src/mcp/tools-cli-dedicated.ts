@@ -23,7 +23,7 @@
 //   - plugin install/uninstall keep the proxy's EXACT danger gate: refused
 //     unless the human-only "Allow dangerous CLI commands" setting is on
 //     (install loads third-party code whose onload() runs immediately;
-//     uninstall can remove plugins — including, guarded separately, vault-mcp
+//     uninstall can remove plugins — including, guarded separately, the governor plugin
 //     itself — out from under every connected session).
 //
 // Transport: the SAME machinery as the proxy — buildCliArgs (vault pinned,
@@ -35,7 +35,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ok, fail, okError, codedError } from "./helpers.js";
-import { PLUGIN_ID } from "../id-migration.js";
+import { PLUGIN_ID, LEGACY_PLUGIN_ID } from "../id-migration.js";
 import type { ServerCtx } from "./tools-core.js";
 import {
   findObsidianBinary,
@@ -76,7 +76,7 @@ export const DEDICATED_CLI_COMMANDS = {
 // gated set, whichever surface names it.
 function dangerRefusal(command: string) {
   return fail(
-    `CLI command '${command}' is dangerous (code execution / app control) and is blocked. Enable "Allow dangerous CLI commands" in the vault-mcp settings to permit it.`
+    `CLI command '${command}' is dangerous (code execution / app control) and is blocked. Enable "Allow dangerous CLI commands" in the Governor settings to permit it.`
   );
 }
 
@@ -310,8 +310,16 @@ export function registerCliDedicatedTools(
         if (!settings.allowDangerousCli) return dangerRefusal(DEDICATED_CLI_COMMANDS.obsidian_plugin_uninstall);
         // Same self-preservation rule as obsidian_plugin_toggle's disable
         // branch: removing the host plugin would sever every connected session.
-        if (args.plugin_id === PLUGIN_ID) {
-          return fail(`refusing to uninstall ${PLUGIN_ID} itself — that would sever every connected session.`);
+        // LEGACY_PLUGIN_ID is refused too, for the 0.12.0 grace period: after
+        // an in-place update the LIVE folder can still be named `vault-mcp`
+        // (folder name ≠ manifest id), and the migration runbook tells the
+        // human to delete "the old folder" — an agent must not do that for
+        // them through this tool, whichever of the two ids they name.
+        if (args.plugin_id === PLUGIN_ID || args.plugin_id === LEGACY_PLUGIN_ID) {
+          return fail(
+            `refusing to uninstall '${args.plugin_id}' — that is this plugin (or its pre-0.12.0 id, whose folder ` +
+              `may still hold un-migrated data); it would sever every connected session. Do it from Obsidian.`,
+          );
         }
         return await runPinned(
           DEDICATED_CLI_COMMANDS.obsidian_plugin_uninstall,

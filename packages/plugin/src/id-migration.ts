@@ -42,7 +42,14 @@ export const LEGACY_PLUGIN_ID = "vault-mcp";
 export const CODE_ARTIFACTS = new Set(["main.js", "manifest.json", "styles.css"]);
 
 export type MigrationPlan =
-  | { action: "skip"; reason: string }
+  | {
+      action: "skip";
+      reason: string;
+      /** True when the skip is NOT routine (fresh install / marker present)
+       * and a human should look — e.g. the old folder looks half-migrated.
+       * The caller escalates these to console.error + a Notice. */
+      warn?: boolean;
+    }
   | { action: "abort"; reason: string }
   | { action: "migrate"; entries: string[] };
 
@@ -57,11 +64,33 @@ export interface FolderListing {
  * Decide what (if anything) to move. Pure — operates on listings only.
  *
  * `oldDir === null` means the old folder does not exist.
+ * `legacyPluginEnabled` is Obsidian's own "is the OLD plugin id still in
+ * community-plugins.json" answer — see the abort below for why it dominates.
  */
 export function planFolderMigration(
   oldDir: FolderListing | null,
   newDir: FolderListing,
+  legacyPluginEnabled = false,
 ): MigrationPlan {
+  // The old id and the new id are DIFFERENT plugins to Obsidian, so both run
+  // concurrently while community-plugins.json lists both — the normal state
+  // right after installing the new one. Migrating out from under a LIVE old
+  // instance is the worst case in this whole feature: it keeps its own
+  // journal/data.json handles, recreates both in the folder we just emptied
+  // (a split-brain append-only journal while MIGRATED.md asserts success),
+  // and its discovery write races our compat copy WITHOUT the `legacy: true`
+  // marker, breaking the bridge's de-duplication. Refuse, move nothing, and
+  // make the human disable it first — the adoption window survives a reload,
+  // a split-brain journal does not.
+  if (legacyPluginEnabled) {
+    return {
+      action: "abort",
+      reason:
+        `the legacy '${LEGACY_PLUGIN_ID}' plugin is still ENABLED — refusing to migrate its data while it is ` +
+        `running (it would keep writing into the folder being moved, splitting the append-only journal). ` +
+        `Disable "Vault MCP" in Settings → Community plugins, then reload this plugin. Nothing was moved.`,
+    };
+  }
   if (oldDir === null) {
     return { action: "skip", reason: "no legacy vault-mcp plugin folder — fresh install" };
   }
@@ -69,6 +98,24 @@ export function planFolderMigration(
     return { action: "skip", reason: `legacy folder already carries ${MIGRATION_MARKER} — migration already ran` };
   }
   if (!oldDir.files.includes("data.json")) {
+    // Detect the half-migrated state a mid-sequence rename failure leaves
+    // behind (data.json moved, some entries stranded, no marker written):
+    // stay hands-off, but say so LOUDLY on every load instead of only once —
+    // a silent skip here is how stranded journal months get forgotten.
+    const leftovers = [
+      ...oldDir.files.filter((f) => f !== MIGRATION_MARKER && !CODE_ARTIFACTS.has(f)),
+      ...oldDir.folders,
+    ];
+    if (leftovers.length > 0 && newDir.files.includes("data.json")) {
+      return {
+        action: "skip",
+        warn: true,
+        reason:
+          `legacy folder has no data.json and no ${MIGRATION_MARKER}, but still holds: ${leftovers.join(", ")} — ` +
+          `this looks like an earlier PARTIAL migration. Move those entries into the governor plugin dir by hand ` +
+          `(or delete them if they are truly stale), then leave a ${MIGRATION_MARKER} note.`,
+      };
+    }
     return { action: "skip", reason: "legacy folder has no data.json — nothing to adopt" };
   }
   if (newDir.files.includes("data.json")) {
@@ -156,8 +203,14 @@ export async function runFolderMigration(
   fs: MigrationFs,
   oldDir: string,
   newDir: string,
-  now: () => Date = () => new Date(),
+  opts: { now?: () => Date; legacyPluginEnabled?: boolean } = {},
 ): Promise<MigrationResult> {
+  const now = opts.now ?? (() => new Date());
+  // Checked BEFORE any listing: a live old instance is a refusal, not a
+  // condition to be reconciled against what happens to be on disk right now.
+  if (opts.legacyPluginEnabled) {
+    return { plan: planFolderMigration(null, { files: [], folders: [] }, true), moved: [] };
+  }
   const oldListing = await listing(fs, oldDir);
   const newListing = (await listing(fs, newDir)) ?? { files: [], folders: [] };
   const plan = planFolderMigration(oldListing, newListing);

@@ -310,7 +310,14 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
     // source; read-receipt state in the plugin dir beside the journal
     // (`crosssession-receipts.json` — the install-id precedent), NOT data.json.
     crosssessionSource: obsidianCrosssessionSource(app as any),
-    crosssessionReceipts: obsidianReceiptStore(app as any),
+    // `ctx.pluginDir` (manifest.dir), NOT the id-derived default — the two
+    // diverge after an in-place 0.12.0 update where the folder is still named
+    // `vault-mcp` while the manifest id is `governor`. Receipts landing in a
+    // stray `plugins/governor/` folder outside the live plugin dir would never
+    // migrate, and deleting that stray (it looks empty) re-serves already
+    // attested cross-session entries. Same threading as the sibling
+    // `obsidianPendingReviewSource(app, ctx.pluginDir)` above.
+    crosssessionReceipts: obsidianReceiptStore(app as any, ctx.pluginDir),
     // The triage module (#221 phase 2): reads via the metadata cache, writes
     // via the SHARED primitives — moveOne (link-healing renameFile),
     // fileManager.trashFile, processFrontMatter — see obsidian-triage-source.ts.

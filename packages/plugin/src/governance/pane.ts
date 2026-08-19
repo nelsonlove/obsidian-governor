@@ -23,7 +23,7 @@
 //
 // REACHABILITY: the controller (which carries the accept/revert/adopt/setClassEnabled callables)
 // is NOT stored as an instance field — a `private readonly controller` is an enumerable own
-// property at runtime, so `getLeavesOfType('governance-review')[0].view.controller.accept(path)`
+// property at runtime, so `getLeavesOfType(VIEW_TYPE_GOVERNANCE)[0].view.controller.accept(path)`
 // would be a self-approval gadget for renderer-JS. Instead the controller lives in the
 // module-scope `viewDeps` WeakMap below, keyed by the view instance. The WeakMap reference is
 // module-private (unreachable from `app`), and its entries are not enumerable. The only live
@@ -43,7 +43,15 @@ import { renderIntent } from "../kernel/governance/intent-view.js";
 import type { ClassId, ClassSpec } from "../kernel/governance/auto-accept/classes.js";
 import { buildHistory, renderHistoryEntries, HISTORY_DEFAULT_CAP } from "../kernel/governance/history.js";
 
-export const VIEW_TYPE_GOVERNANCE = "acceptance-review";
+/**
+ * The pane's registered view type. Deliberately kept at the pre-0.12.0 string:
+ * it is PERSISTED in `workspace.json`, so renaming it turns every open pane
+ * into a dead leaf on upgrade — a real cost for zero user-visible benefit,
+ * since the type is internal plumbing nobody reads. Historical spelling, like
+ * the `governance_*` tool names and the `src/governance/` dirs; the module id
+ * (`acceptance`), the pane title, and the ribbon label all carry the new name.
+ */
+export const VIEW_TYPE_GOVERNANCE = "governance-review";
 
 /** One note currently in the revising state — plain display data for the Revising section. */
 export interface RevisingItem {

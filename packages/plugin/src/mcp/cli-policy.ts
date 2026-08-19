@@ -129,13 +129,13 @@ function refusal(
   surface: string,
 ): string | null {
   if (matchesAny(name, policy?.deny)) {
-    return `${surface} '${name}' is denied by the vault-mcp command policy (settings › Security › "Denied commands").`;
+    return `${surface} '${name}' is denied by the Governor command policy (settings › Security › "Denied commands").`;
   }
   for (const set of denySets) {
     if (matchesAny(name, set.patterns) && !allowedOpaque(name, policy)) {
       return (
         `${surface} '${name}' ${set.reason}, and is denied by default (fail closed). A human can re-enable ` +
-        `this specific command in the vault-mcp settings (Security › "Re-enabled opaque commands") — there ` +
+        `this specific command in the Governor settings (Security › "Re-enabled opaque commands") — there ` +
         `is no agent-writable path to that setting.`
       );
     }

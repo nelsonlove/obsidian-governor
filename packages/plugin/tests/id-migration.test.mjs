@@ -17,12 +17,16 @@
  */
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   planFolderMigration,
   runFolderMigration,
   markerText,
   MIGRATION_MARKER,
   CODE_ARTIFACTS,
+  PLUGIN_ID,
   LEGACY_PLUGIN_ID,
 } from "../src/id-migration.ts";
 
@@ -96,6 +100,62 @@ describe("planFolderMigration", () => {
     assert.equal(plan.action, "abort");
     assert.match(plan.reason, /install-id\.json/);
   });
+
+  // The old id and the new id are two DIFFERENT plugins to Obsidian, so both
+  // run while community-plugins.json lists both. Migrating out from under a
+  // LIVE old instance splits the append-only journal (it keeps writing into
+  // the folder we emptied) and races the discovery compat copy without the
+  // `legacy: true` marker. This abort dominates every other branch.
+  test("legacy plugin still ENABLED ⇒ abort, whatever the folders look like", () => {
+    const plan = planFolderMigration({ files: LEGACY_FILES, folders: LEGACY_FOLDERS }, FRESH_NEW, true);
+    assert.equal(plan.action, "abort");
+    assert.match(plan.reason, /still ENABLED/);
+    assert.match(plan.reason, /Disable/);
+  });
+
+  test("the enabled-legacy abort outranks even the otherwise-routine skips", () => {
+    // Marker present would normally be a quiet skip; a live old instance is
+    // still a refusal, because it may be re-creating data behind the marker.
+    const plan = planFolderMigration(
+      { files: [...LEGACY_FILES, MIGRATION_MARKER], folders: LEGACY_FOLDERS },
+      { files: ["main.js", "data.json"], folders: [] },
+      true,
+    );
+    assert.equal(plan.action, "abort");
+  });
+
+  // The state a mid-sequence rename failure leaves behind: data.json already
+  // across, some entries stranded, no marker. The routine "nothing to adopt"
+  // skip would bury the stranded (irreplaceable, append-only) journal forever.
+  test("half-migrated old folder ⇒ skip that carries warn:true and names the leftovers", () => {
+    const plan = planFolderMigration(
+      { files: ["main.js", "manifest.json", "acceptance-log.jsonl"], folders: ["journal"] },
+      { files: ["main.js", "manifest.json", "data.json"], folders: [] },
+    );
+    assert.equal(plan.action, "skip");
+    assert.equal(plan.warn, true, "a half-migrated folder must escalate, not skip quietly");
+    assert.match(plan.reason, /journal/);
+    assert.match(plan.reason, /acceptance-log\.jsonl/);
+    assert.match(plan.reason, /PARTIAL migration/);
+  });
+
+  test("a genuinely empty old folder (code artifacts only) stays a QUIET skip", () => {
+    const plan = planFolderMigration(
+      { files: ["main.js", "manifest.json", "styles.css"], folders: [] },
+      { files: ["main.js", "manifest.json", "data.json"], folders: [] },
+    );
+    assert.equal(plan.action, "skip");
+    assert.notEqual(plan.warn, true, "no leftovers ⇒ nothing to escalate");
+  });
+
+  test("leftovers but NO new-side data.json is not the half-migrated case (pre-migration state)", () => {
+    const plan = planFolderMigration(
+      { files: ["main.js", "acceptance-log.jsonl"], folders: ["journal"] },
+      FRESH_NEW,
+    );
+    assert.equal(plan.action, "skip");
+    assert.notEqual(plan.warn, true);
+  });
 });
 
 // ── runFolderMigration over an injected fake fs ─────────────────────────────
@@ -132,7 +192,7 @@ describe("runFolderMigration", () => {
       [OLD]: { files: LEGACY_FILES, folders: LEGACY_FOLDERS },
       [NEW]: FRESH_NEW,
     });
-    const r = await runFolderMigration(fs, OLD, NEW, () => new Date("2026-08-19T00:00:00Z"));
+    const r = await runFolderMigration(fs, OLD, NEW, { now: () => new Date("2026-08-19T00:00:00Z") });
     assert.equal(r.plan.action, "migrate");
     assert.equal(r.failedEntry, undefined);
     assert.deepEqual(r.moved.sort(), ["acceptance-log.jsonl", "baselines", "data.json", "install-id.json", "journal", "receipts"]);
@@ -194,6 +254,22 @@ describe("runFolderMigration", () => {
     assert.equal(fs.writes.length, 0, "NO marker after a partial move");
   });
 
+  test("legacyPluginEnabled ⇒ abort BEFORE any listing; zero fs reads and zero mutations", async () => {
+    const fs = fakeFs({
+      [OLD]: { files: LEGACY_FILES, folders: LEGACY_FOLDERS },
+      [NEW]: FRESH_NEW,
+    });
+    let listed = 0;
+    const origList = fs.list;
+    fs.list = async (p) => { listed += 1; return origList(p); };
+    const r = await runFolderMigration(fs, OLD, NEW, { legacyPluginEnabled: true });
+    assert.equal(r.plan.action, "abort");
+    assert.match(r.plan.reason, /still ENABLED/);
+    assert.equal(listed, 0, "a live old instance is refused before the folders are even read");
+    assert.equal(fs.renames.length, 0);
+    assert.equal(fs.writes.length, 0);
+  });
+
   test("markerText names the destination and every moved entry", () => {
     const body = markerText(new Date("2026-08-19T12:00:00Z"), OLD, NEW, ["data.json", "journal"]);
     assert.match(body, /2026-08-19T12:00:00/);
@@ -204,5 +280,23 @@ describe("runFolderMigration", () => {
 
   test("LEGACY_PLUGIN_ID is the old folder name", () => {
     assert.equal(LEGACY_PLUGIN_ID, "vault-mcp");
+  });
+});
+
+describe("PLUGIN_ID is pinned to the manifest", () => {
+  // PLUGIN_ID backs three self-preservation refusals (obsidian_plugin_toggle
+  // disable, obsidian_plugin_reload, obsidian_plugin_uninstall). Those compare
+  // it against the id Obsidian passes in — so if it ever drifts from
+  // manifest.json's id, all three stop matching SILENTLY and an agent can
+  // disable, reload, or uninstall its own host mid-response. Cheap pin.
+  test("PLUGIN_ID === manifest.json's id", () => {
+    const manifest = JSON.parse(
+      readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "manifest.json"), "utf8"),
+    );
+    assert.equal(PLUGIN_ID, manifest.id);
+  });
+
+  test("PLUGIN_ID and LEGACY_PLUGIN_ID are different (the migration has two sides)", () => {
+    assert.notEqual(PLUGIN_ID, LEGACY_PLUGIN_ID);
   });
 });

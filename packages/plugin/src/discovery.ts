@@ -36,6 +36,14 @@ export function writeDiscovery(slug: string, d: Discovery): void {
   // so existing `vault-mcp` registrations (old bridge bytes reading the old
   // dir) keep working until the fleet re-registers. Best-effort — a failure
   // here must never take down the canonical discovery.
+  //
+  // TODO (grace-period removal, tracked with #266): this MKDIRS the legacy dir
+  // unconditionally — so it is created even on a machine that never ran the
+  // old id, and it reappears after a human cleans it up. Delete this block,
+  // the legacy bridge copy in `writeBridge`, the legacy unlink in
+  // `removeDiscovery`, the bridge's + health probe's second-dir read, and the
+  // `vault-mcp:ready` event together, once both Macs are re-registered under
+  // the `governor` server name.
   try {
     fs.mkdirSync(legacyStateDir(), { recursive: true });
     fs.writeFileSync(
