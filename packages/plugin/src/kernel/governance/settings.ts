@@ -3,8 +3,8 @@
 // badge is painted. Ported from obsidian-stewardship/src/settings.ts (#83, cycle 2). Kept in a
 // dedicated module (no obsidian import) so DEFAULT_GOVERNANCE_SETTINGS is headless-testable.
 //
-// In vault-mcp these live in the governance module's config
-// (`settings.modules.governance.config`), read at pane-wire time; the pane defaults them ON
+// These live in the acceptance module's config (module id `acceptance` since 0.12.0)
+// (`settings.modules.acceptance.config`), read at pane-wire time; the pane defaults them ON
 // when the config is absent. They are deliberately NOT part of the accept surface.
 export interface GovernanceDisplaySettings {
   showRibbonBadge: boolean;
@@ -27,7 +27,7 @@ export function governanceDisplaySettings(config: unknown): GovernanceDisplaySet
 }
 
 // ── acceptance-convergence settings (#221/#164) ──────────────────────────────
-// Two more plain-data config fields on `modules.governance.config`, rendered in the
+// Two more plain-data config fields on `modules.acceptance.config`, rendered in the
 // governance settings tab exactly like the badge fields (the generic manifest renderer).
 // Human-only by construction — the settings tab is not agent-reachable, and reading these
 // confers no accept capability: `acceptedBy` is the identity the human's OWN gesture stamps,

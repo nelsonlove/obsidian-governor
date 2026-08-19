@@ -41,7 +41,7 @@ export function openToolRunner(app: App, buildRegistry: () => CapturedRegistry):
   try {
     registry = buildRegistry();
   } catch (e) {
-    new Notice(`vault-mcp: tool-runner failed to build the tool registry — ${(e as Error).message}`);
+    new Notice(`governor: tool-runner failed to build the tool registry — ${(e as Error).message}`);
     return;
   }
   new ToolPickerModal(app, registry).open();
@@ -62,7 +62,7 @@ async function execute(
 class ToolPickerModal extends FuzzySuggestModal<RunnerToolSummary> {
   constructor(app: App, private readonly registry: CapturedRegistry) {
     super(app);
-    this.setPlaceholder("Run a vault-mcp tool…");
+    this.setPlaceholder("Run a Governor tool…");
   }
 
   getItems(): RunnerToolSummary[] {
@@ -237,7 +237,7 @@ class ToolResultModal extends Modal {
     new Setting(contentEl).addButton((b) =>
       b.setButtonText("Copy result").onClick(async () => {
         await navigator.clipboard.writeText(resultText);
-        new Notice("vault-mcp: result copied.");
+        new Notice("governor: result copied.");
       })
     );
   }

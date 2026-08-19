@@ -117,7 +117,7 @@ export class UnixSocketListener {
       } catch (e) {
         // A failed server build must kill only this connection, not strand it
         // half-open (the bridge's reconnect loop handles the drop).
-        console.error("[vault-mcp] connection handoff failed", e);
+        console.error("[governor] connection handoff failed", e);
         conn.destroy();
       }
     };
@@ -159,7 +159,7 @@ export class UnixSocketListener {
           reject(e as Error);
           return;
         }
-        server.on("error", (e) => console.error("[vault-mcp] socket server error", e));
+        server.on("error", (e) => console.error("[governor] socket server error", e));
         resolve();
       });
     });

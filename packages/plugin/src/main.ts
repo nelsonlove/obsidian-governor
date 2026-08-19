@@ -9,13 +9,14 @@ import { writeDiscovery, removeDiscovery, writeBridge, type Discovery } from "./
 import { ConnectionSetupModal, VaultMcpSettingTab } from "./connection-ui.js";
 import { findClaudeBinary, claudeIsRegistered, claudeRegister, claudeRemove, claudeEnsureConnectPlugin } from "./claude-cli.js";
 import { ExternalToolRegistry, type VaultMcpApi } from "./mcp/external-tools.js";
-import { Kernel, WriteQueue, WriteJournal, IdempotencyStore, LockStore, UidIndex, loadInstallId, DEFAULT_VOCABULARIES, type VocabInstanceSettings, type ModuleSettings } from "./kernel/index.js";
+import { Kernel, WriteQueue, WriteJournal, IdempotencyStore, LockStore, UidIndex, loadInstallId, migrateLegacyModuleIds, DEFAULT_VOCABULARIES, type VocabInstanceSettings, type ModuleSettings } from "./kernel/index.js";
 import { obsidianProbe, obsidianServerIdentity, obsidianUidSource } from "./kernel/obsidian-probe.js";
 import { DEFAULT_SCHEMES, type SchemeInstanceConfig } from "./kernel/scheme/registry.js";
 import { DEFAULT_PROTECTED_PROPERTIES, setDeclaredProtectedProperties } from "@vault-mcp/core";
 import { wireGovernance, nudgeGovernanceQueue } from "./governance/wiring.js";
 import { mountAction } from "./governance/mount-state.js";
 import { wireSkills } from "./skills/wiring.js";
+import { runFolderMigration, LEGACY_PLUGIN_ID } from "./id-migration.js";
 
 interface VaultMcpSettings {
   setupAcknowledged: boolean;
@@ -139,7 +140,7 @@ const DEFAULT_SETTINGS: VaultMcpSettings = {
 class DiagnosticsModal extends Modal {
   constructor(app: any, private readonly lines: string[]) { super(app); }
   onOpen() {
-    this.titleEl.setText("vault-mcp diagnostics");
+    this.titleEl.setText("governor diagnostics");
     for (const l of this.lines) this.contentEl.createEl("p", { text: l });
   }
   onClose() { this.contentEl.empty(); }
@@ -156,7 +157,10 @@ export default class VaultMcpPlugin extends Plugin {
   // enable→disable can't interleave a half-finished mount with a teardown.
   private governanceComponent: Component | null = null;
   private governanceReconcile: Promise<void> = Promise.resolve();
-  // Public plugin-to-plugin API: app.plugins.plugins['vault-mcp'].api
+  // Public plugin-to-plugin API: app.plugins.plugins['governor'].api (the
+  // property rides the plugin instance, so it moved with the 0.12.0 id
+  // migration automatically; the old 'vault-mcp' lookup finds nothing once
+  // the old plugin entry is removed — SDK consumers need a dual-id read).
   api: VaultMcpApi = {
     apiVersion: 1,
     registerTools: (owner, tools) => this.externalRegistry.registerTools(owner, tools),
@@ -171,6 +175,12 @@ export default class VaultMcpPlugin extends Plugin {
     // property normalization below, where a dropped malformed entry can only
     // mean more denied, never less).
     this.settings.enforceRecordImmutability = this.settings.enforceRecordImmutability !== false;
+    // 0.12.0 module-id rename (`governance` → `acceptance`): adopt a legacy
+    // `modules.governance` row under the new id when no `modules.acceptance`
+    // row exists yet, dropping the old key so the next save persists the new
+    // shape (one-time migrate-on-save; the row's live config rides across
+    // verbatim). Pinned by tests/settings-migration.test.mjs.
+    this.settings.modules = migrateLegacyModuleIds(this.settings.modules);
     // Object.assign is shallow: a hand-edited data.json carrying a PARTIAL
     // cliPolicy (one list, not both) would leave the other undefined and
     // crash the settings tab; a WRONG-TYPED one (a string where a list
@@ -215,7 +225,7 @@ export default class VaultMcpPlugin extends Plugin {
   async autoRegister(force = false): Promise<void> {
     const bin = findClaudeBinary();
     if (!bin) {
-      if (force) new Notice("vault-mcp: `claude` CLI not found. Use the manual command in settings.");
+      if (force) new Notice("governor: `claude` CLI not found. Use the manual command in settings.");
       else this.showFallbackOnce();
       return;
     }
@@ -223,15 +233,18 @@ export default class VaultMcpPlugin extends Plugin {
     try {
       if (await claudeIsRegistered(bin)) {
         // `claude mcp add` errors on a duplicate name, so never re-add.
-        if (force) new Notice("vault-mcp: already connected to Claude Code.");
+        if (force) new Notice("governor: already connected to Claude Code.");
         this.ensureConnectPlugin(bin, force);
         return;
       }
       await claudeRegister(bin, bridgeDestPath(), this.app.vault.getName());
-      new Notice("vault-mcp: connected to Claude Code. Restart any open Claude Code session to use it.");
+      new Notice(
+        "governor: connected to Claude Code (server name 'governor'). Restart any open Claude Code session to use it. " +
+          "If this vault was registered under the old 'vault-mcp' name, remove that entry: claude mcp remove vault-mcp.",
+      );
       this.ensureConnectPlugin(bin, force);
     } catch (e) {
-      new Notice(`vault-mcp: auto-register failed — ${(e as Error).message}. Use the manual command in settings.`);
+      new Notice(`governor: auto-register failed — ${(e as Error).message}. Use the manual command in settings.`);
       this.showFallbackOnce();
     }
   }
@@ -243,19 +256,19 @@ export default class VaultMcpPlugin extends Plugin {
   private ensureConnectPlugin(bin: string, force: boolean): void {
     void claudeEnsureConnectPlugin(bin)
       .then((r) => {
-        if (r === "installed") new Notice("vault-mcp: installed the vault-mcp-connect Claude Code plugin.");
-        else if (force) new Notice("vault-mcp: vault-mcp-connect plugin already installed.");
+        if (r === "installed") new Notice("governor: installed the vault-mcp-connect Claude Code plugin.");
+        else if (force) new Notice("governor: vault-mcp-connect plugin already installed.");
       })
       .catch((e: unknown) => {
-        console.error("vault-mcp: connect-plugin provisioning skipped —", e instanceof Error ? e.message : e);
+        console.error("governor: connect-plugin provisioning skipped —", e instanceof Error ? e.message : e);
       });
   }
 
   async claudeRemoveRegistration(): Promise<void> {
     const bin = findClaudeBinary();
-    if (!bin) { new Notice("vault-mcp: `claude` CLI not found."); return; }
+    if (!bin) { new Notice("governor: `claude` CLI not found."); return; }
     await claudeRemove(bin);
-    new Notice("vault-mcp: removed Claude Code registration.");
+    new Notice("governor: removed Claude Code registration.");
   }
 
   private showFallbackOnce(): void {
@@ -305,6 +318,67 @@ export default class VaultMcpPlugin extends Plugin {
   }
 
   async onload() {
+    // 0.12.0 plugin-id migration (vault-mcp → governor, #266): adopt the OLD
+    // plugin folder's data (settings, journal, install-id, baselines,
+    // acceptance log, receipts) into this plugin's own dir BEFORE settings
+    // load and before the kernel opens the journal. Idempotent (marker /
+    // no-data.json / already-provisioned ⇒ skip), abort-don't-overwrite, and
+    // never fatal to the load — see src/id-migration.ts. The old folder is
+    // left in place (with a MIGRATED.md marker) for the human to remove after
+    // live verification.
+    //
+    // EVERY non-success outcome raises a STICKY Notice (`new Notice(msg, 0)`),
+    // not just a console line. The reason is specific: when adoption does not
+    // happen, `loadSettings()` below falls back to DEFAULT_SETTINGS — socket
+    // enabled, read-only OFF, allowlist EMPTY, acceptance module off — i.e.
+    // the guard config silently resets to OPEN, and the first `saveSettings()`
+    // writes a fresh data.json into the new dir, which permanently closes the
+    // one-shot adoption window (every later load then hits the "already has
+    // its own data.json" skip). A console.error nobody opens is not a signal
+    // for that.
+    const migrationPluginDir = this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`;
+    const migrationNotice = (msg: string) => {
+      console.error(`[governor] ${msg}`);
+      try { new Notice(`governor: ${msg}`, 0); } catch { /* pre-layout; the console line stands */ }
+    };
+    try {
+      const legacyDir = `${this.app.vault.configDir}/plugins/${LEGACY_PLUGIN_ID}`;
+      // Obsidian runs the old id and the new id as two DIFFERENT plugins, so
+      // both are live while community-plugins.json lists both. `enabledPlugins`
+      // is the right probe here (not the loaded-instance rule): it is populated
+      // at startup regardless of which of the two loaded first.
+      const legacyPluginEnabled =
+        ((this.app as any).plugins?.enabledPlugins as Set<string> | undefined)?.has(LEGACY_PLUGIN_ID) === true;
+      const result = await runFolderMigration(this.app.vault.adapter, legacyDir, migrationPluginDir, {
+        legacyPluginEnabled,
+      });
+      if (result.plan.action === "migrate") {
+        if (result.failedEntry) {
+          migrationNotice(
+            `data-folder migration INCOMPLETE — '${result.failedEntry}' failed to move; ` +
+              `moved so far: ${result.moved.join(", ") || "(none)"}. No marker written; ` +
+              `old folder left at ${legacyDir} — reconcile by hand before re-enabling. ` +
+              `Settings are running at DEFAULTS until this is resolved.`,
+          );
+        } else {
+          console.log(`[governor] adopted legacy plugin data from ${legacyDir}: ${result.moved.join(", ")}`);
+        }
+      } else if (result.plan.action === "abort") {
+        migrationNotice(`data-folder migration ABORTED: ${result.plan.reason}`);
+      } else if (result.plan.warn) {
+        // A non-routine skip: the old folder looks half-migrated. Escalated on
+        // EVERY load until a human resolves it — the stranded data here is the
+        // append-only journal, which no later run can reconstruct.
+        migrationNotice(`data-folder migration needs attention: ${result.plan.reason}`);
+      }
+    } catch (e) {
+      migrationNotice(
+        `data-folder migration FAILED — continuing with DEFAULT settings; the old folder is untouched. ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
+    }
+
     // Load settings FIRST so the enabled gate and guard settings are available.
     await this.loadSettings();
 
@@ -315,13 +389,14 @@ export default class VaultMcpPlugin extends Plugin {
     const adapter = this.app.vault.adapter;
     const basePath = adapter instanceof FileSystemAdapter ? adapter.getBasePath() : "";
 
-    // Write the build-time-embedded bridge into ~/.claude/vault-mcp/.
+    // Write the build-time-embedded bridge into ~/.claude/governor/ (and a
+    // grace-period copy into the legacy ~/.claude/vault-mcp/ — see discovery.ts).
     try { writeBridge(); }
-    catch (e) { console.error("[vault-mcp] writeBridge failed", e); }
+    catch (e) { console.error("[governor] writeBridge failed", e); }
 
     // Kernel v0 — ONE queue and ONE journal per plugin instance, shared by
     // every per-connection server built below. The journal lives beside the
-    // plugin's own data (`.obsidian/plugins/vault-mcp/journal/YYYY-MM.jsonl`),
+    // plugin's own data (`.obsidian/plugins/governor/journal/YYYY-MM.jsonl`),
     // out of the note tree so it can never be mistaken for vault content.
     const pluginDir = this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`;
     // The identity substrate's uid index — one per plugin instance, like the
@@ -401,7 +476,7 @@ export default class VaultMcpPlugin extends Plugin {
       // background agents share the plugin without evicting each other.
       this.listener = new UnixSocketListener(sock, (transport, connOpts) => {
         const server = buildMcpServer(this.app, ctx, { codeMode: connOpts.codeMode });
-        server.connect(transport).catch((e) => console.error("[vault-mcp] connect failed", e));
+        server.connect(transport).catch((e) => console.error("[governor] connect failed", e));
       });
       await this.listener.listen();
 
@@ -415,15 +490,16 @@ export default class VaultMcpPlugin extends Plugin {
         capabilities: ["preamble"],
       };
       writeDiscovery(this.slug, discovery);
-      console.log(`[vault-mcp] listening on ${sock}`);
+      console.log(`[governor] listening on ${sock}`);
     } else {
-      console.log("[vault-mcp] disabled in settings; socket not started");
+      console.log("[governor] disabled in settings; socket not started");
     }
 
     this.addSettingTab(new VaultMcpSettingTab(this.app, this));
 
-    // ── governance (Acceptance) review pane (#83, cycle 2) ─────────────────────
-    // Mounted when the governance module is enabled (default OFF — the module default is
+    // ── acceptance review pane (#83, cycle 2; module id `acceptance` since 0.12.0,
+    // historically `governance` — the src/governance/ dirs keep the old name) ────
+    // Mounted when the acceptance module is enabled (default OFF — the module default is
     // `enabled: false`, so an absent settings row means off). This is the human-only Accept
     // surface: an Obsidian review pane whose Accept / Revert / Adopt / auto-accept-allowlist
     // controls are gesture-gated closures — NEVER a command, an MCP tool, or a method on this
@@ -431,11 +507,11 @@ export default class VaultMcpPlugin extends Plugin {
     // even with the transport off. The read-only obsidian_pending_review MCP view is registered
     // always-on in server.ts, separate from this toggle.
     //
-    // The mount FOLLOWS the toggle LIVE: flipping the governance-enabled toggle in the settings tab
+    // The mount FOLLOWS the toggle LIVE: flipping the acceptance-enabled toggle in the settings tab
     // mounts or unmounts the pane + gavel ribbon immediately, with NO plugin reload (see
     // `setGovernanceMounted` and connection-ui.ts's per-module enable hook). Here at onload we mount
     // it once if it starts enabled. See src/governance/.
-    if (this.settings.modules?.governance?.enabled === true) {
+    if (this.settings.modules?.acceptance?.enabled === true) {
       void this.setGovernanceMounted(true);
     }
 
@@ -453,7 +529,7 @@ export default class VaultMcpPlugin extends Plugin {
           getConfig: () => (this.settings.modules?.skills?.config ?? {}) as Record<string, unknown>,
         });
       } catch (e) {
-        console.error("[vault-mcp] skills GUI wiring failed", e);
+        console.error("[governor] skills GUI wiring failed", e);
       }
     }
 
@@ -526,18 +602,23 @@ export default class VaultMcpPlugin extends Plugin {
     });
 
     // Signal publishers (vault-mcp-api SDK) that the api is (re-)available.
+    // Both events fire during the 0.12.0 id-migration grace period: `governor:ready`
+    // is the canonical event going forward; `vault-mcp:ready` is kept for any
+    // publisher built against the old id (the SDK needs a dual-id read or a
+    // major bump before the legacy event can be dropped).
+    this.app.workspace.trigger("governor:ready", this.api);
     this.app.workspace.trigger("vault-mcp:ready", this.api);
   }
 
   /**
    * The settings tab calls this when a module's enable toggle flips (connection-ui.ts's per-module
-   * "Enabled" toggle). Governance is the ONE module whose Obsidian surface — the review pane + gavel
+   * "Enabled" toggle). Acceptance is the ONE module whose Obsidian surface — the review pane + gavel
    * ribbon — mounts/unmounts LIVE from here, with no plugin reload. Every other module is tool-only:
    * its MCP surface mounts per connection, so its toggle still takes effect on the next session
    * connect (unchanged semantics) and there is nothing to mount or unmount in-app.
    */
   async onModuleEnabledChanged(moduleId: string, enabled: boolean): Promise<void> {
-    if (moduleId === "governance") await this.setGovernanceMounted(enabled);
+    if (moduleId === "acceptance") await this.setGovernanceMounted(enabled);
   }
 
   /**
@@ -564,10 +645,10 @@ export default class VaultMcpPlugin extends Plugin {
     if (action === "mount") {
       try {
         this.governanceComponent = await wireGovernance(this, {
-          getConfig: () => (this.settings.modules?.governance?.config ?? {}) as Record<string, unknown>,
+          getConfig: () => (this.settings.modules?.acceptance?.config ?? {}) as Record<string, unknown>,
         });
       } catch (e) {
-        console.error("[vault-mcp] governance pane wiring failed", e);
+        console.error("[governor] governance pane wiring failed", e);
         this.governanceComponent = null;
       }
     } else {

@@ -66,7 +66,9 @@ function hostWorld() {
       offref: () => {},
       trigger: () => {},
     },
-    plugins: { plugins: { "vault-mcp": { api } } },
+    // Mounted under the host's CURRENT plugin id (0.12.0+). The legacy
+    // `vault-mcp` id is covered in publish-tools.test.ts.
+    plugins: { plugins: { governor: { api } } },
   };
   const plugin = { app, manifest: { id: "contract-probe" } } as never;
   return { registry, plugin };

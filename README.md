@@ -2,7 +2,7 @@
 
 **Let AI agents do real work in your Obsidian vault — without giving up control of it.**
 
-*Formerly “vault-mcp.” The plugin **id** stays `vault-mcp` (it is plumbing — folder, socket namespace, tool prefixes, the plugin-to-plugin API key); **Governor** is the product. Like a mechanical governor: the device that lets a powerful engine run hard while keeping it inside limits you set.*
+*Formerly “vault-mcp” — since 0.12.0 the plugin **id** is `governor` too (the data folder self-migrates; a grace-period compat surface keeps old `vault-mcp` registrations working until you re-register). One name for the product, the project, and the framework. Like a mechanical governor: the device that lets a powerful engine run hard while keeping it inside limits you set.*
 
 Governor is an Obsidian plugin that connects AI agents (Claude Code, or anything that speaks
 MCP) to your vault the *governed* way: agents see your vault the way Obsidian does, every change
@@ -21,7 +21,7 @@ text between a chat window and your notes. Every existing middle ground is a hal
 read-only access (the agent can't help), git archaeology (that's not review), or prompt
 discipline ("please don't touch my frontmatter" is not a security model).
 
-vault-mcp is the whole measure: **agents propose, you decide, and the machinery — not a prompt —
+Governor is the whole measure: **agents propose, you decide, and the machinery — not a prompt —
 keeps it that way.**
 
 ## What you get
@@ -37,7 +37,7 @@ keeps it that way.**
 - **Nothing gets accepted without you.** An agent may mark its work `proposed`; a guard at the
   shared write path rejects any attempt — through any tool, any value type, any smuggling route
   we've found (and we keep looking) — to write `accepted`. Reviewing and accepting is meant to
-  happen only in a human-only review pane (the companion **Acceptance** plugin) — never through
+  happen only in the plugin's human-only review pane (the **acceptance module**) — never through
   the API on the surfaces the guard covers today; the surfaces it doesn't cover yet are named,
   tracked gaps, not silent ones (see [Honest limits](#honest-limits)).
 - **Notes that don't get lost.** Address a note by its frontmatter `uid:` and the reference
@@ -55,12 +55,12 @@ keeps it that way.**
 
 ## Five minutes in
 
-1. Install and enable the plugin, run **`vault-mcp: Connect to Claude Code`**, restart your
+1. Install and enable the plugin, run **`Governor: Connect to Claude Code`**, restart your
    Claude Code session.
 2. Ask the agent to do something real — "triage my inbox notes into the right projects."
 3. Watch it work with real tools instead of raw file writes — and check
    `obsidian_pending_review`: the agent can see which notes await your review and stays off them.
-4. Open the journal (or the Acceptance pane, if installed): every change is there, attributed,
+4. Open the journal (or the review pane, if the acceptance module is enabled): every change is there, attributed,
    diffable, waiting for your verdict. Accept, revert, or shrug — your call, made once, in one
    place.
 
@@ -72,13 +72,31 @@ keeps it that way.**
    ```
 2. **Copy into your vault** and enable it:
    ```bash
-   cp main.js manifest.json <vault>/.obsidian/plugins/vault-mcp/
+   cp main.js manifest.json <vault>/.obsidian/plugins/governor/
    ```
-   Then Settings → Community plugins → enable **Vault MCP**.
-3. **Connect Claude Code** — run **`vault-mcp: Connect to Claude Code`** from the command
-   palette (one-time; it registers the bridge with `--vault <this vault>` pinned; the exact line
-   is always in **Settings → Vault MCP** if you'd rather paste it yourself).
+   Then Settings → Community plugins → enable **Governor**.
+3. **Connect Claude Code** — run **`Governor: Connect to Claude Code`** from the command
+   palette (one-time; it registers the bridge under the server name `governor` with
+   `--vault <this vault>` pinned; the exact line
+   is always in **Settings → Governor** if you'd rather paste it yourself).
 4. **Restart any open Claude Code session** — MCP servers load at session start.
+
+**Upgrading from ≤0.11 (plugin id `vault-mcp`)?**
+
+> **Disable the old "Vault MCP" plugin FIRST — this is a prerequisite, not a cleanup step.**
+> Obsidian treats the old id and the new id as two different plugins, so both run while
+> both are enabled. Governor **refuses to migrate** while the old one is enabled (it would
+> keep writing into the folder being moved, splitting the append-only journal) and says so
+> in a sticky notice.
+
+With the old plugin disabled, Governor's first load adopts the old folder's data (settings,
+journal, install-id, baselines, acceptance log, receipts) into `.obsidian/plugins/governor/`
+and leaves a `MIGRATED.md` marker behind. Old `vault-mcp` Claude Code registrations keep
+working meanwhile through a compat surface at `~/.claude/vault-mcp/`. Then: re-run Connect,
+remove the old registration (`claude mcp remove vault-mcp`), remove the old plugin entry, and
+delete the old folder once you've read the marker. **If a migration notice says the adoption
+was aborted or incomplete, resolve it before using the plugin** — until it succeeds, settings
+fall back to defaults (socket on, read-only off, no allowlist).
 
 Running the remote [`obsidian-vault-mcp-server`](https://github.com/nelsonlove/obsidian-vault-mcp-server)
 too? Disconnect it for sessions using this plugin — they share `obsidian_*` tool names by
@@ -93,7 +111,7 @@ rejects any write that would introduce `acceptance-status: accepted` (or `accept
 leaving your own existing accepted values untouched. A handful of surfaces don't route through
 it yet; those are named, tracked gaps, not silent ones — see [Honest limits](#honest-limits).
 Accepting stays a person's gesture in the
-[Acceptance](docs/README.md#the-acceptance-review-surface) review pane.
+[acceptance module](docs/README.md#the-acceptance-module)'s review pane.
 
 This is the heart of the design — documented in full, including its honest limits and the
 currently-open hardening work, in **[docs/acceptance-model.md](docs/acceptance-model.md)**.
@@ -119,25 +137,26 @@ currently-open hardening work, in **[docs/acceptance-model.md](docs/acceptance-m
   couple of lower-severity paths can currently introduce or resurrect acceptance without going
   through the guarded primitive. Each is a public, tracked issue; the full residual list lives
   in [docs/acceptance-model.md](docs/acceptance-model.md).
-- **The review pane ships separately today** (the Acceptance plugin, folding into vault-mcp as
-  a governance module). vault-mcp is fully useful without it — you just read the journal
+- **The review pane is opt-in** (the acceptance module, default off — enable it in settings).
+  Governor is fully useful without it — you just read the journal
   instead of clicking a queue.
 
 ## How it works
 
 ```
 ┌─ Obsidian (renderer) ─────────┐        ┌─ Claude Code session ──────┐
-│  vault-mcp plugin             │        │  MCP client (stdio)        │
+│  Governor plugin              │        │  MCP client (stdio)        │
 │   ├─ MCP server (app.* direct)│        │       │                    │
 │   └─ Unix socket  ◄───────────┼────────┼─ bridge.mjs (spawned)      │
-│      ~/.claude/vault-mcp/     │  socket│   reads discovery, proxies │
+│      ~/.claude/governor/      │  socket│   reads discovery, proxies │
 │      <vault>.sock (chmod 600) │        │   stdio ↔ socket           │
 └───────────────────────────────┘        └────────────────────────────┘
 ```
 
 - The plugin runs an MCP server in Obsidian's renderer and listens on a per-vault **Unix
-  socket** (`~/.claude/vault-mcp/<vault-slug>.sock`, `chmod 600` — the only auth boundary).
-- A tiny bundled **`bridge.mjs`** (written to `~/.claude/vault-mcp/` on load) is what Claude
+  socket** (`~/.claude/governor/<vault-slug>.sock`, `chmod 600` — the only auth boundary).
+- A tiny bundled **`bridge.mjs`** (written to `~/.claude/governor/` on load, plus a
+  grace-period copy at the legacy `~/.claude/vault-mcp/`) is what Claude
   Code spawns; it proxies stdio ↔ the socket.
 - A fresh MCP server is built **per connection**, so multiple sessions and background agents
   share the plugin without evicting each other.
@@ -159,7 +178,7 @@ The full tool-by-tool breakdown, and the precise semantics of addressing, the wr
 journal, the path allowlist, and third-party tool trust, live in
 **[docs/reference.md](docs/reference.md)**.
 
-## Settings (Settings → Vault MCP)
+## Settings (Settings → Governor)
 
 - **Claude Code connection** — status + the `claude mcp add` line + copy button.
 - **Read-only mode** — blocks all mutating tools; reads still work.

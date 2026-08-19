@@ -70,13 +70,13 @@ const CONN_EPOCH = Date.now().toString(36);
 
 export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): McpServer {
   // serverInfo, as returned by `initialize`. `title` carries the vault name so a
-  // client with two vault-mcp servers attached can tell them apart at the
+  // client with two governor servers attached can tell them apart at the
   // handshake, without a tool call — the same assertion the journal's
   // `actor.server` makes, made once at connect time.
   const server = new McpServer({
-    name: "vault-mcp",
+    name: "governor",
     version: ctx.pluginVersion,
-    ...(ctx.vaultName ? { title: `vault-mcp (${ctx.vaultName})` } : {}),
+    ...(ctx.vaultName ? { title: `governor (${ctx.vaultName})` } : {}),
   });
   const connectionId = `${CONN_EPOCH}-${++connSeq}`;
 
@@ -310,7 +310,14 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
     // source; read-receipt state in the plugin dir beside the journal
     // (`crosssession-receipts.json` — the install-id precedent), NOT data.json.
     crosssessionSource: obsidianCrosssessionSource(app as any),
-    crosssessionReceipts: obsidianReceiptStore(app as any),
+    // `ctx.pluginDir` (manifest.dir), NOT the id-derived default — the two
+    // diverge after an in-place 0.12.0 update where the folder is still named
+    // `vault-mcp` while the manifest id is `governor`. Receipts landing in a
+    // stray `plugins/governor/` folder outside the live plugin dir would never
+    // migrate, and deleting that stray (it looks empty) re-serves already
+    // attested cross-session entries. Same threading as the sibling
+    // `obsidianPendingReviewSource(app, ctx.pluginDir)` above.
+    crosssessionReceipts: obsidianReceiptStore(app as any, ctx.pluginDir),
     // The triage module (#221 phase 2): reads via the metadata cache, writes
     // via the SHARED primitives — moveOne (link-healing renameFile),
     // fileManager.trashFile, processFrontMatter — see obsidian-triage-source.ts.
@@ -330,7 +337,7 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   // finding) lands loudly in the console rather than evaporating with the
   // discarded registry. console.error, not a throw — a degraded module
   // surface must not cost the connection (the journal's own convention).
-  for (const p of moduleRegistry.problems) console.error("[vault-mcp] module host:", p);
+  for (const p of moduleRegistry.problems) console.error("[governor] module host:", p);
   // ── link drift, reported not repaired (slice 2.2) ──────────────────────────
   // Read-only by construction: moves already heal their own links through
   // fileManager.renameFile, so this reports the drift that came from OUTSIDE.

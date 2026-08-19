@@ -105,7 +105,7 @@ export function registerGovernanceRevisionTool(server: McpServer, source: Revisi
         "channel for human review like any other agent write. Refuses with Error [not_revising] when the note is " +
         "not in the revising state (nothing to submit). This tool cannot accept anything: it writes only " +
         "`proposed`, and the accept-forbidden guard re-checks the write — acceptance is a human gesture in the " +
-        "governance pane, never an API call. Pass `intent` (the standard kernel argument) if you want the write " +
+        "review pane, never an API call. Pass `intent` (the standard kernel argument) if you want the write " +
         "journal to carry your summary of why.",
       inputSchema: {
         path: z.string().describe("Vault-relative path of the revising note (uid:/jd: addressing works)."),
@@ -141,7 +141,7 @@ export function registerGovernanceRevisionTool(server: McpServer, source: Revisi
         return codedError(
           "not_revising",
           `${path} has acceptance-status ${status === null ? "(none)" : `'${status}'`} — nothing to submit. ` +
-            "Only a note a human marked 'revising' (via the governance pane's Request changes) can be resubmitted."
+            "Only a note a human marked 'revising' (via the review pane's Request changes) can be resubmitted."
         );
       }
 
