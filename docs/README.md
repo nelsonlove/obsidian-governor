@@ -93,6 +93,23 @@ unreachability* (no commands, gesture-gated handlers, module-scope closures) —
 `governance_revisions`, and the agent-facing `governance_submit_revision` are the module's
 only transport-visible surfaces; none exposes an accept verb.
 
+## README lives in the vault too
+
+`README.md` is symlinked into the Obsidian vault (`00.89 Assent/Build/vault-mcp README.md`),
+where vault machinery (the Linter, fileclass stamps) may add YAML frontmatter to it. A git
+**clean filter** (`scripts/strip-frontmatter.sh`, bound via `.gitattributes`) strips any
+leading frontmatter block when git reads the file, so the committed blob never carries it and
+`git status`/`diff` treat the working file as unmodified however much frontmatter the vault
+side adds. One-time setup per clone:
+
+```bash
+git config filter.stripfm.clean "sh scripts/strip-frontmatter.sh"
+```
+
+A clone without that config still works — committed content is already clean. Body edits
+made from the vault side DO show as ordinary git diffs (by design: inbound suggestions to
+review, commit, or discard).
+
 ## Release history note
 
 Tags begin at `0.4.x` and jump to `0.7.0`: **0.5.0 and 0.6.0 were built and deployed
