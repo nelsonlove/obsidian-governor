@@ -123,6 +123,7 @@ export {
   moduleFromRegistrar,
   DEFAULT_MODULE_SETTINGS,
   mergeModuleConfig,
+  migrateLegacyModuleIds,
   toolDocDrift,
   toolDocReadOnlyDrift,
   safeValidate,

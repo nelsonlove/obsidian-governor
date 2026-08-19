@@ -125,7 +125,7 @@ const HUMAN_INPUT_WINDOW_MS = 5_000;
 const JOURNAL_POLL_MS = 2500;
 
 /** What wireGovernance needs from the host plugin beyond the base Plugin surface: a reader for
- * the governance module's config (`settings.modules.governance.config`), from which the badge
+ * the acceptance module's config (`settings.modules.acceptance.config`), from which the badge
  * display prefs are derived. Plain data — confers no accept capability. */
 export interface GovernanceWireDeps {
   getConfig: () => Record<string, unknown>;
@@ -1098,7 +1098,7 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
   // Ribbon icon + badge. The ribbon only OPENS the pane (read-only navigation); it advances no
   // baseline. `addRibbonIcon` removes the element on plugin unload; we ALSO remove it on live
   // unmount via the component so a disable makes the gavel disappear without a reload.
-  const ribbonEl = plugin.addRibbonIcon("gavel", "Governance review", async () => {
+  const ribbonEl = plugin.addRibbonIcon("gavel", "Acceptance review", async () => {
     await activateView(plugin);
   });
   component.register(() => ribbonEl.remove());

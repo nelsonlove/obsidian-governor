@@ -43,7 +43,7 @@ import { renderIntent } from "../kernel/governance/intent-view.js";
 import type { ClassId, ClassSpec } from "../kernel/governance/auto-accept/classes.js";
 import { buildHistory, renderHistoryEntries, HISTORY_DEFAULT_CAP } from "../kernel/governance/history.js";
 
-export const VIEW_TYPE_GOVERNANCE = "governance-review";
+export const VIEW_TYPE_GOVERNANCE = "acceptance-review";
 
 /** One note currently in the revising state — plain display data for the Revising section. */
 export interface RevisingItem {
@@ -419,7 +419,7 @@ export class GovernanceReviewView extends ItemView {
   }
 
   getViewType(): string { return VIEW_TYPE_GOVERNANCE; }
-  getDisplayText(): string { return "Governance review"; }
+  getDisplayText(): string { return "Acceptance review"; }
   getIcon(): string { return "gavel"; }
 
   async onOpen(): Promise<void> { await this.rerender(); }
@@ -476,7 +476,7 @@ export class GovernanceReviewView extends ItemView {
     this.updateTabBadge(pending.length, deps.showTabBadge());
 
     const header = root.createDiv({ cls: "governance-header" });
-    header.createEl("h3", { text: "Governance" });
+    header.createEl("h3", { text: "Acceptance" });
     header.createSpan({ cls: "governance-count", text: `${pending.length} pending` });
     const refreshBtn = header.createEl("button", { cls: "governance-refresh", text: "Refresh" });
     refreshBtn.onclick = async () => { await deps.refresh(); await this.rerender(); };
