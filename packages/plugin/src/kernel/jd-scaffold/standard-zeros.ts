@@ -54,7 +54,7 @@ linter-yaml-title-alias: ${zero.name}
 }
 
 export function planStandardZeros(input: PlanStandardZerosInput): PlanStandardZerosResult {
-  const { folderPath, folderName, prefix, now, existingPaths } = input;
+  const { folderPath, folderName, prefix, now, exists } = input;
   const suffix = suffixFor(prefix);
   const zeros = standardZeros(prefix, suffix);
 
@@ -65,7 +65,7 @@ export function planStandardZeros(input: PlanStandardZerosInput): PlanStandardZe
     const basename = `${prefix}.${zero.id} ${zero.name}`;
     const path = zero.hasDir ? `${folderPath}/${basename}/${basename}.md` : `${folderPath}/${basename}.md`;
 
-    if (existingPaths.has(path)) {
+    if (exists(path)) {
       skipped.push(path);
       continue;
     }
