@@ -475,11 +475,15 @@ mutation-free `disposition_dry_run`. Registered like the integration tools
 **version-gated**: any installed importer version outside the known-good set
 (currently 2.6.2) refuses `importer_version_unsupported` — the tool rides
 undocumented importer internals with no stability contract. Mutating
-(`readOnlyHint: false`, `openWorldHint: true` — reads the Notes database and,
-with a disposition, drives Notes.app), so it gets the queue, journal, kernel
-args and read-only-mode blocking; `output_folder` is allowlist-checked
-in-handler (not a `PATH_KEYS` name), and `dry_run` (mandatory) reports the
-folder selection + note counts without importing.
+(`readOnlyHint: false`; `destructiveHint: true` per the
+destructive-but-recoverable convention — the "delete" disposition sends
+source notes to Recently Deleted; `openWorldHint: true` — reads the Notes
+database and, with a disposition, drives Notes.app), so it gets the queue,
+journal, kernel args and read-only-mode blocking; `output_folder` is a
+recognized `PATH_KEYS` name and schema-defaulted, so the guard
+allowlist-checks it, the journal records it as the target, and advisory
+locks over it are disclosed. `dry_run` (mandatory) reports the folder
+selection + note counts without importing.
 
 | Tool name | R/W | Gating plugin | Plugin ID |
 |---|---|---|---|

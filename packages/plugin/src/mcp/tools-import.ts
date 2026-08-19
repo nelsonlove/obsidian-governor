@@ -58,9 +58,11 @@
 // Mutating (`readOnlyHint: false`), so the guard gives it read-only-mode
 // blocking, the write queue, the journal and the kernel args for free. The
 // import's blast radius is bounded by `output_folder` (every created file
-// lands under it), which is not a recognized PATH_KEYS argument name — so the
-// handler checks it against the allowlist itself via `isVisible`, refusing
-// `out_of_allowlist` before anything runs.
+// lands under it), which IS a recognized PATH_KEYS argument name (guard.ts)
+// and schema-defaulted so it is present on every parsed call — the journal's
+// `target` names it and advisory locks over it are consulted. The handler
+// additionally checks the trimmed value via `isVisible` and refuses path
+// escapes even with no allowlist active.
 //
 // Kernel caveat, documented rather than worked around: a large import (or a
 // large AppleScript disposition) can exceed the write queue's 30s operation
@@ -437,10 +439,13 @@ function defaultRunAppleScript(script: string): Promise<string> {
 
 // Mutating; `openWorldHint: true` because it reaches outside the vault — it
 // reads the Apple Notes database and, with a disposition, drives Notes.app
-// via AppleScript. `destructiveHint: false`: vault writes are creations
-// (duplicates skip, never overwrite), and the "delete" disposition sends
-// source notes to Recently Deleted (30-day recovery).
-const IMPORT_RW = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true };
+// via AppleScript. `destructiveHint: true` follows the house convention for
+// destructive-but-recoverable capability (core's DESTRUCTIVE_RECOVERABLE /
+// obsidian_trash): the annotation describes what the tool CAN do, not its
+// default — `source_disposition: "delete"` sends source notes to Recently
+// Deleted (30-day recovery), even though the default disposition is "none"
+// and vault writes are creations (duplicates skip, never overwrite).
+const IMPORT_RW = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };
 
 export function registerImportTools(server: McpServer, app: App, ctx: ImportToolsCtx): void {
   // Register only when the importer plugin's instance is actually LOADED —
@@ -477,7 +482,7 @@ export function registerImportTools(server: McpServer, app: App, ctx: ImportTool
         output_folder: z
           .string()
           .min(1)
-          .optional()
+          .default("Apple Notes")
           .describe('Vault folder to import into (created if missing). Default "Apple Notes".'),
         file_prefix_format: z
           .string()
@@ -537,15 +542,21 @@ export function registerImportTools(server: McpServer, app: App, ctx: ImportTool
         const outputFolder = output_folder?.trim() || "Apple Notes";
         const filePrefixFormat = file_prefix_format ?? "YYYY-MM-DD";
         const disposition = source_disposition;
-        // Sanitized ONCE (quotes/backslashes stripped) and used for BOTH the
-        // move-mode import exclusion and the AppleScript, so the folder the
-        // script targets and the folder the next import skips cannot diverge.
+        // Sanitized up front (quotes/backslashes stripped) and this ONE value
+        // used for BOTH the move-mode import exclusion and the AppleScript
+        // (which re-applies the same idempotent strip defensively), so the
+        // folder the script targets and the folder the next import skips
+        // cannot diverge.
         const exportedFolder = (exported_folder?.trim() || "Exported").replace(/["\\]/g, "") || "Exported";
 
-        // Every imported file lands under `output_folder`, but that argument
-        // name is not in the guard's PATH_KEYS — so this handler bounds its
-        // own blast radius: normalize, refuse escapes, and under an active
-        // allowlist require the output folder to be covered by it.
+        // Every imported file lands under `output_folder`. The argument name
+        // IS in the guard's PATH_KEYS (and schema-defaulted, so it is present
+        // on every parsed call): the interception point allowlist-checks it,
+        // the kernel journals it as the operation's target, and advisory
+        // locks over it are consulted and disclosed. The checks below are
+        // belt-and-suspenders for what the guard doesn't cover: escape
+        // refusal with NO allowlist active, and the trimmed/defaulted value
+        // (the guard sees the raw argument).
         const normalizedOutput = posix.normalize(outputFolder);
         if (posix.isAbsolute(normalizedOutput) || normalizedOutput === ".." || normalizedOutput.startsWith("../")) {
           return codedError("invalid_output_folder", `output_folder '${outputFolder}' is not a vault-relative folder path`);
