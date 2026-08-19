@@ -325,7 +325,7 @@ describe("obsidianPendingReviewSource", () => {
     assert.deepEqual(JSON.parse(raw), INDEX);
   });
 
-  test("no plugin dir supplied ⇒ falls back to <configDir>/plugins/vault-mcp (not hardwired .obsidian)", async () => {
+  test("no plugin dir supplied ⇒ falls back to <configDir>/plugins/governor (not hardwired .obsidian)", async () => {
     const seen = [];
     const fakeApp = {
       vault: {
@@ -337,7 +337,7 @@ describe("obsidianPendingReviewSource", () => {
       },
     };
     await obsidianPendingReviewSource(fakeApp).read();
-    assert.deepEqual(seen, [`.my-config/plugins/vault-mcp/${PENDING_INDEX_REL}`]);
+    assert.deepEqual(seen, [`.my-config/plugins/governor/${PENDING_INDEX_REL}`]);
   });
 
   test("absent file ⇒ null (never reads)", async () => {
