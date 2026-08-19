@@ -1,7 +1,9 @@
 // kernel/triage — the disposition substrate (#221) and its second instance,
-// INBOX TRIAGE. `dispositions.ts` is the substrate both instances declare
-// against (the acceptance instance lives in kernel/governance); the rest is
-// the triage instance itself: descriptors, config, queue predicate, planner.
+// INBOX TRIAGE (#241 phase 3 shape: three built-in primitives + human-declared
+// rows). `dispositions.ts` is the substrate both instances declare against
+// (the acceptance instance lives in kernel/governance); the rest is the
+// triage instance itself: built-in descriptors + the merged table, config,
+// queue predicate, planner.
 
 export {
   dispositionsForSurface,
@@ -13,32 +15,43 @@ export {
 
 export {
   TRIAGE_DISPOSITIONS,
-  triageDispositionById,
-  triageDispositionIds,
-  triageDispositionLines,
+  TRIAGE_BUILTIN_IDS,
+  defaultEscalateRow,
+  mergedDispositionsOf,
+  mergedById,
+  mergedIds,
+  mergedLines,
+  targetPolicyOf,
+  type DeclaredDispositionRow,
+  type MergedDisposition,
+  type MergeInputs,
   type TriageAction,
-  type TriageDestinationKey,
+  type TriageBuiltinId,
   type TriageDispositionDescriptor,
-  type TriageDispositionId,
-  type TriageFrontmatterKey,
+  type TriageDispositionSurface,
   type TriageTargetPolicy,
 } from "./descriptors.js";
 
 export {
   DEFAULT_TRIAGE_CONFIG,
-  DESTINATION_KEYS,
-  FRONTMATTER_KEYS,
+  builtinDescriptionsOf,
+  declaredRowsOf,
   destinationProblem,
   parseFrontmatterPatch,
+  patchObjectProblem,
+  prefixListOf,
+  queuesOf,
   triageConfigOf,
   validateTriageConfig,
   type TriageConfig,
+  type TriageQueueDecl,
 } from "./config.js";
 
 export { inboxFolderOf, sortQueue, type QueueRow } from "./inbox.js";
 
 export {
   applyFrontmatterPatch,
+  moveDenied,
   planDispose,
   type DisposeInput,
   type DisposePlan,
