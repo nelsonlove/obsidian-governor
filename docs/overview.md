@@ -196,8 +196,9 @@ guard-patched interception point as hand-registered tools. See [modules.md](modu
   would misreport orphans and duplicates).
 - **`fileclass`** (default off, mutating, doubly gated) — proxies the standalone `fileclass`
   CLI (#188): registers only when the Fileclass plugin is loaded AND the CLI binary is
-  found; six read tools plus `fileclass_set` / `fileclass_set_where` (dry-run by default),
-  the writes accept-guarded before the CLI runs; the whole surface refuses while a path
+  found; six read tools plus the two writers `fileclass_set` and `fileclass_set_where`
+  (the bulk `set_where` is dry-run by default, `apply: true` to commit), both
+  accept-guarded before the CLI runs; the whole surface refuses while a path
   allowlist is active (CLI output can't be path-scoped).
 - **`crosssession`** (default off, mutating) — the cross-session channel surface
   ([crosssession.md](crosssession.md), #232): channels discovered by fileclass +
@@ -241,7 +242,8 @@ refused without `force: true`.
 
 ## The dev tool-runner
 
-One palette command — **"Vault MCP: Run tool…"** — gives a human the agent surface inside
+One palette command — **"Run tool…"** (shown prefixed with the plugin's display name:
+"Governor: Run tool…") — gives a human the agent surface inside
 Obsidian: fuzzy picker, schema-rendered args form, an explicit confirm step for mutating
 tools, result modal. It invokes through the identical captured-registry path a Code Mode
 `obsidian_call_tool` call takes, so the guard wrapper binds the same way, and its journal

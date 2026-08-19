@@ -1,7 +1,8 @@
-# The dev tool-runner — "Vault MCP: Run tool…"
+# The dev tool-runner — "Run tool…"
 
 An in-Obsidian way to invoke the plugin's own tool surface by hand (#217): **one** palette
-command over the whole surface, not one command per tool — ~70 commands would spam the
+command — registered as "Run tool…", shown in the palette prefixed with the plugin's
+display name ("Governor: Run tool…") — over the whole surface, not one command per tool — ~70 commands would spam the
 palette and, since Obsidian commands are agent-reachable via `obsidian_run_command`, would
 multiply the policy surface for zero gain.
 
