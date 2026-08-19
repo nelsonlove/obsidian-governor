@@ -31,6 +31,7 @@
 // closure, closed over the specific displayed row.
 
 import { ItemView, Notice, Modal, TFile, type WorkspaceLeaf, type App } from "obsidian";
+import { AcceptGateError, type AcceptOpts } from "../kernel/governance/accept.js";
 import { type PendingItem, groupByAgent } from "../kernel/governance/queue.js";
 import { diffNote, toHunks, type DiffLine, type HunkCollapsed } from "../kernel/governance/diff.js";
 import { isRealGesture, runGuardedAdopt } from "../kernel/governance/gesture.js";
@@ -58,7 +59,9 @@ export interface ReviewController {
   // the note is acceptance-status: proposed — first stamps the accepted family via
   // processFrontMatter, folding the stamp into the accepted snapshot. Returns whether it
   // stamped so the Notice can say so. Wired to the module-scope performAccept in wiring.ts.
-  accept(path: string): Promise<AcceptResult>;
+  accept(path: string, opts?: AcceptOpts): Promise<AcceptResult>;
+  /** The configured conformance-gate response mode (settings; "soft" default). */
+  gateMode(): "soft" | "hard" | "off";
   revert(path: string): Promise<void>;
   // adopt-baseline: snapshots ALL current content as the reviewed baseline and clears the queue.
   // Wired to the module-scope performAdopt closure in wiring.ts — NOT a method on any instance and
@@ -153,6 +156,82 @@ class ConfirmModal extends Modal {
 }
 
 // The exact adopt-baseline confirmation flow. Returns true only if the human confirmed.
+
+// ── the soft conformance gate (Nelson's ruling, 2026-08-19) ───────────────────
+// The kernel's gate refuses an under-filled `proposed` note (AcceptGateError,
+// nothing written). Instead of a dead-end Notice, the pane turns that refusal
+// into a three-way HUMAN choice: Accept anyway (a second real gesture — the
+// only path to `gateOverride`, unreachable to any transport since accept
+// itself is), Open note (go fix the missing fields), or Cancel. The modal
+// holds no capability: the override runs in the SAME gesture-gated closure
+// that owns the accept call.
+class GateModal extends Modal {
+  private decided = false;
+  constructor(
+    app: App,
+    private readonly title_: string,
+    private readonly missing: string[],
+    private readonly done: (choice: "accept" | "open" | null) => void,
+  ) { super(app); }
+  onOpen(): void {
+    this.titleEl.setText("Missing required frontmatter");
+    this.contentEl.createEl("p", {
+      text: `${this.title_} is missing: ${this.missing.join(", ")}.`,
+    });
+    this.contentEl.createEl("p", {
+      cls: "setting-item-description",
+      text: "Accept it as-is, open it to fill the fields in, or cancel.",
+    });
+    const row = this.contentEl.createDiv({ cls: "modal-button-container" });
+    const mk = (text: string, cls: string, choice: "accept" | "open" | null) => {
+      const b = row.createEl("button", { text, cls });
+      b.addEventListener("click", (evt) => {
+        if (!isRealGesture(evt)) return; // forged/synthesized click is inert
+        this.decided = true;
+        this.close();
+        this.done(choice);
+      });
+      return b;
+    };
+    mk("Accept anyway", "mod-warning", "accept");
+    mk("Open note", "", "open");
+    mk("Cancel", "", null);
+  }
+  onClose(): void {
+    if (!this.decided) this.done(null); // Escape / backdrop = cancel
+    this.contentEl.empty();
+  }
+}
+
+/**
+ * Run an accept through the soft gate: on AcceptGateError, ask the human.
+ * Returns the result, or null when nothing was accepted (open / cancel).
+ * Any non-gate error rethrows to the caller's existing handler.
+ */
+async function acceptThroughGate(
+  app: App,
+  deps: ReviewController,
+  path: string,
+  title: string,
+): Promise<AcceptResult | null> {
+  try {
+    return await deps.accept(path);
+  } catch (e) {
+    // "hard" mode keeps today's behavior: the refusal surfaces via the caller's
+    // Notice handler. ("off" never throws the gate — wiring empties the key list.)
+    if (!(e instanceof AcceptGateError) || deps.gateMode() === "hard") throw e;
+    const choice = await new Promise<"accept" | "open" | null>((resolve) =>
+      new GateModal(app, title, e.missing, resolve).open(),
+    );
+    if (choice === "accept") return await deps.accept(path, { gateOverride: true });
+    if (choice === "open") {
+      await app.workspace.openLinkText(path, "", false);
+      return null;
+    }
+    return null;
+  }
+}
+
 export function confirmAdopt(app: App): Promise<boolean> {
   return new Promise((resolve) => {
     new ConfirmModal(
@@ -511,7 +590,8 @@ export class GovernanceReviewView extends ItemView {
         if (!isRealGesture(evt)) return; // inert on forged arg or synthesized click
         proposedAcceptBtn.disabled = true;
         try {
-          const res = await deps.accept(item.path);
+          const res = await acceptThroughGate(this.app, deps, item.path, item.title);
+          if (res === null) { proposedAcceptBtn.disabled = false; return; } // gate: open/cancel — nothing happened
           new Notice(
             res.stamped
               ? `vault-mcp governance: accepted ${item.title} — stamped accepted-by: ${identity}`
@@ -739,7 +819,8 @@ export class GovernanceReviewView extends ItemView {
       if (!isRealGesture(evt)) return; // inert on forged arg or synthesized click
       setBusy(true);
       try {
-        const res = await deps.accept(item.path);
+        const res = await acceptThroughGate(this.app, deps, item.path, item.title);
+        if (res === null) { setBusy(false); return; } // gate: opened-to-fix or cancelled — nothing happened
         new Notice(
           res.stamped
             ? `vault-mcp governance: accepted ${item.title} — stamped accepted-by: ${identity}`

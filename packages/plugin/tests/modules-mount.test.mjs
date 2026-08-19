@@ -470,6 +470,7 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
       "showRibbonBadge",
       "showViewTabBadge",
       "acceptedBy",
+      "gateMode",
       "requiredFrontmatterKeys",
     ]);
     const govField = (k) => governance.fields.find((f) => f.key === k);
