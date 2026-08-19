@@ -15,7 +15,9 @@ CLI-conditional tool (`obsidian_cli`, default OFF)
 = **up to 80 total**.  The 3 Code Mode meta-tools are an alternative
 per-connection surface and are not counted (a session sees one surface or the
 other, never both).  Not counted here (outside the locked `obsidian_*` family):
-the always-on `governance_submit_revision` + `governance_revisions` (2 tools, see their section below), and
+the always-on `governance_submit_revision` + `governance_revisions` (2 tools, see their section below),
+the default-ENABLED `bases` module (`base_list` + `base_query`, 2 tools,
+Bases-API-gated — see Section 2b), and
 the default-disabled `skills` (`vault_skills_*`), `provenance`
 (`provenance_*`), `fileclass` (`fileclass_*`, 8 tools, plugin+binary-gated),
 `crosssession` (`crosssession_*`, 4 tools), and `triage` (`triage_*`, 2 tools)
@@ -206,9 +208,12 @@ journaled, and read-only mode or an allowlist blocks both mutators.
 Registered through the module host (`modules-mount.ts` → `ModuleRegistry`), not
 directly: `server.ts` calls `mountModules`, and each module's tools register
 only when the module is enabled (`settings.modules.<id>.enabled`, defaulting to
-the module's own `enabled: true`).  Both modules ship default-ON, so these 9
-are present on a stock connection; a settings toggle takes effect on the next
-session connect.
+the module's own `enabled: true`).  These modules ship default-ON, so the 10
+`obsidian_*` tools below are present on a stock connection; a settings toggle
+takes effect on the next session connect.  The `bases` module is also
+default-ON but its two tools are named `base_*`, outside the locked
+`obsidian_*` family and the (10) count — documented in its subsection below,
+locked by `tests/bases-module.test.mjs`'s own inventory check.
 
 ### `tools-scheme.ts` — `registerSchemeTools` via the `scheme` module (6 tools)
 
@@ -229,6 +234,36 @@ session connect.
 | `obsidian_resolve_term` | Token → canonical entry; path → its terms; parse-only mode |
 | `obsidian_validate_terms` | One note's frontmatter → vocabulary findings, report-only |
 | `obsidian_list_vocabulary` | Entries of a kind (tag/property/type/term), optionally scoped |
+
+### `tools-bases.ts` — `registerBasesTools` via the `bases` module (2 tools, #243)
+
+Evaluated Base result sets for agents. Obsidian's public Bases API (1.10+)
+evaluates a `.base` query only into a rendered view, so `base_query` opens the
+base in a **hidden background leaf** (detached `WorkspaceLeaf` parented under
+an invisible fixed-position host — real to the engine, absent from the
+human's workspace: no tab, no flash, no focus steal), waits for the engine's
+first completed data push, materializes the rows via the public
+`BasesEntry.getValue`, and detaches the leaf in a `finally` — success,
+failure, and timeout alike. **Full engine fidelity** (base + view filters,
+formulas, sort, the view's own limit): Obsidian computes; the module never
+parses the Bases expression language. Read-only module, **default ENABLED**
+(a pure read surface over rows the session could already assemble
+note-by-note); **feature-gated** — the registrar registers nothing on an
+Obsidian without the public Bases API. Queries are **serialized** (one
+capture at a time — the hidden leaf is a global resource) and **time-boxed**
+(`modules.bases.config.queryTimeoutMs`, default 30000ms — the engine's scan
+is heavily throttled while the window is hidden) with a typed, retryable
+`base_timeout` refusal; rows are capped (`rowCap`, default 500; the tool's
+`limit` clamps to it) with `truncated` + the pre-cap total. Allowlist: a
+hidden `.base` file is invisible to `base_list` and refused
+(`out_of_allowlist`) by `base_query`; result rows for hidden notes drop
+silently, disclosed only as a boolean `some_rows_hidden` (never a count —
+the visible-totals precedent against cardinality oracles).
+
+| Tool name | R/W | Description |
+|---|---|---|
+| `base_list` | R | Every visible `.base` file with its declared views (name, type, column count); per-file `parse_error` / `invalid_shape` markers for broken YAML |
+| `base_query` | R | Evaluate one declared view (`{path, view?, limit?}`; default the file's first view) → `{columns, rows: [{path, properties}], total, truncated}`; values stringified via the engine's own `Value.toString()`; typed refusals `not_a_base` / `out_of_allowlist` / `not_found` / `base_parse_error` / `view_not_found` / `base_timeout` |
 
 ---
 

@@ -85,6 +85,17 @@ const healthSource = {
   noteBody: async () => null,
 };
 
+/** An inert-but-AVAILABLE bases source — the (read-only, default-enabled,
+ * feature-gated) bases module registers its two tools over it in these
+ * registration-only tests (its own suite is bases-module.test.mjs). Available
+ * so the drift checks see the contributed tools; capture is never called. */
+const basesSource = {
+  available: () => true,
+  listBasePaths: () => [],
+  readBaseConfig: async () => ({ exists: false }),
+  capture: async () => ({ columns: [], rows: [] }),
+};
+
 function deps(overrides = {}) {
   return {
     getSettings: () => ({ ...(overrides.settings ?? {}) }),
@@ -103,6 +114,7 @@ function deps(overrides = {}) {
     fileclassBinary: "/usr/local/bin/fileclass",
     crosssessionSource,
     crosssessionReceipts: memoryReceiptStore(),
+    basesSource,
     ...overrides.deps,
   };
 }
@@ -139,8 +151,9 @@ describe("mountModules: the two built-in modules register through the registry",
     // governance (#83), crosssession (#232, the cross-session channel
     // module) and triage (#221 phase 2, the inbox-triage module) all ship
     // DISABLED (opt-in surfaces a human turns on), so
-    // they contribute nothing here — scheme + vocab are the live pair.
-    assert.deepEqual(described.map((d) => d.id), ["scheme", "vocab", "skills", "provenance", "health", "fileclass", "governance", "crosssession", "triage"]);
+    // they contribute nothing here — scheme + vocab + bases (#243, the
+    // read-only default-enabled Bases surface) are the live trio.
+    assert.deepEqual(described.map((d) => d.id), ["scheme", "vocab", "skills", "provenance", "health", "fileclass", "governance", "crosssession", "bases", "triage"]);
     for (const d of described) {
       if (["skills", "provenance", "health", "fileclass", "governance", "crosssession", "triage"].includes(d.id)) {
         assert.equal(d.enabled, false);
@@ -262,7 +275,7 @@ describe("mount gate 2: the host ctx handed to modules is minimal", () => {
     assert.deepEqual(host.visible(["Projects/a.md", "Archive/b.md"]), ["Projects/a.md"]);
   });
 
-  test("builtinModules declares the nine capability modules (skills + provenance + fileclass + crosssession + triage mutating; health/governance NOT)", () => {
+  test("builtinModules declares the ten capability modules (skills + provenance + fileclass + crosssession + triage mutating; health/governance/bases NOT)", () => {
     const mods = builtinModules(deps());
     assert.deepEqual(mods.map((m) => [m.id, m.posture]), [
       ["scheme", "capability"],
@@ -281,6 +294,10 @@ describe("mount gate 2: the host ctx handed to modules is minimal", () => {
       // crosssession (#232) is a MUTATING capability module (post appends a log
       // entry; attest writes the module's receipt state).
       ["crosssession", "capability"],
+      // bases (#243) is a READ-ONLY capability module (evaluated Base rows via
+      // the hidden-leaf capture) — no `mutating` flag, both tools
+      // readOnlyHint:true, and DEFAULT ENABLED (the scheme/vocab precedent).
+      ["bases", "capability"],
       // triage (#221 phase 2) is a MUTATING capability module (dispose moves /
       // retypes / trashes inbox notes through the shared guarded primitives).
       ["triage", "capability"],
@@ -430,7 +447,7 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
     const settings = { schemes: [{ id: "jd", provider: "johnny-decimal", config: { contentDecimalFloor: 20 } }], modules: {} };
     const mods = builtinModules(deps({ settings }));
     const hosted = collect(mods, settings.modules, settings);
-    assert.deepEqual(hosted.map((h) => h.id), ["scheme", "vocab", "skills", "provenance", "health", "fileclass", "governance", "crosssession", "triage"]);
+    assert.deepEqual(hosted.map((h) => h.id), ["scheme", "vocab", "skills", "provenance", "health", "fileclass", "governance", "crosssession", "bases", "triage"]);
     const scheme = hosted.find((h) => h.id === "scheme");
     assert.equal(scheme.fields.find((f) => f.key === "contentDecimalFloor").value, 20);
     const vocab = hosted.find((h) => h.id === "vocab");
