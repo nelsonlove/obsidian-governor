@@ -227,8 +227,9 @@ guard-patched interception point as hand-registered tools. See [modules.md](modu
 - **The QuickAdd compile tool** — `obsidian_quickadd_compile` ("QuickAdd macros
   as notes") registers directly in `server.ts`, not through the module host, because it
   mutates QuickAdd's own config rather than a vault note: it compiles Macro/UserScript,
-  Template, and Capture choice notes (frontmatter `quickadd-type: macro`, `template`, or
-  `capture`) into QuickAdd's live config via a scoped
+  Template, Capture and Multi choice notes (frontmatter `quickadd-type: macro`, `template`,
+  `capture`, or `multi` — a Multi note anchors its own parent folder and nests the choice
+  notes inside it) into QuickAdd's live config via a scoped
   merge (only compiler-owned `qan:`-prefixed choices are touched), reports the diff in both
   modes, refuses `suspicious_mass_removal` and refuses outright under an active path
   allowlist.

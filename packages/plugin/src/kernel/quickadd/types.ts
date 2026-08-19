@@ -395,9 +395,22 @@ export interface QuickAddCaptureChoice {
  *  decompiled source (class `ng`). The whole shape: base fields plus
  *  `choices` (RECURSIVE — any choice type, including another Multi) and
  *  `collapsed` (UI-only; not exposed via frontmatter this stage, always
- *  false). `command` is always `false`, matching real QuickAdd's own
- *  restriction that a Multi choice cannot run non-interactively — never a
- *  configurable field on this type. */
+ *  false).
+ *
+ *  `command` is always `false` here — a DELIBERATE COMPILER CHOICE, not a
+ *  restriction QuickAdd imposes. Verified against QuickAdd's installed
+ *  source: its base choice class sets `command` on EVERY choice type
+ *  (Macro, Template, Capture and Multi alike), its choice context menu
+ *  offers "Enable in command palette" unconditionally for every type, and
+ *  `addCommandForChoice` registers a real `choice:<id>` palette command for
+ *  a Multi exactly like any other type. (The one place QuickAdd does refuse
+ *  a Multi is its own CLI surface — "Multi choices are interactive and
+ *  cannot be run via CLI" — which is that surface's rule, not the
+ *  runtime's: `ChoiceExecutor.execute` has a real `case "Multi"` that opens
+ *  the Multi's picker.) A palette command that can only ever open an
+ *  interactive picker buys this compiler's automation-oriented use case
+ *  nothing, so the compiler fixes it at `false` rather than exposing it —
+ *  never a configurable field on this type. */
 export interface QuickAddMultiChoice {
   id: string;
   name: string;

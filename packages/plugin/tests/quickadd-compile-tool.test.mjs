@@ -482,7 +482,7 @@ describe("obsidian_quickadd_compile — Multi discovery", () => {
     });
     const res = await handler({ dry_run: true });
     assert.equal(res.structuredContent.errors.length, 1);
-    assert.match(res.structuredContent.errors[0].message, /does not declare a quickadd-type this compiler compiles/);
+    assert.match(res.structuredContent.errors[0].message, /does not declare a quickadd-type a choice step may target/);
   });
 
   test("an empty Multi folder (no members) compiles a Multi with an empty choices array", async () => {
@@ -1080,6 +1080,82 @@ describe("obsidian_quickadd_compile: mass-removal guard", () => {
     assert.equal(saveSettingsCalls.length, 1);
     assert.equal(res.structuredContent.removed.length, 3);
   });
+
+  // The OTHER shape of the same risk: the Multi is not removed at all — its
+  // id is on both sides, so it is neither `added` nor `removed`, merely
+  // `changed` — while every one of its 40 members went missing from this
+  // compile's discovery (a partially-warm metadata cache that handed over the
+  // anchor note but none of its siblings). Weighing only top-level
+  // disappearances saw nothing here and applied a 40-choice deletion silently.
+  test("a SURVIVING Multi whose members all vanished trips the guard", async () => {
+    const nested = [];
+    for (let i = 0; i < 40; i++) {
+      nested.push({ id: `qan:Choices/Big/N${i}.md#choice`, name: `N${i}`, type: "Capture" });
+    }
+    const bigMulti = { id: "qan:Choices/Big/Big.md#choice", name: "Big", type: "Multi", choices: nested };
+    // Discovery finds ONLY the anchor note — its 40 siblings are invisible.
+    const { handler, quickadd, saveSettingsCalls, removedCommands } = build({
+      notes: [multiNote("Choices/Big/Big.md", "Big")],
+      existingChoices: [bigMulti],
+    });
+    const dry = await handler({ dry_run: true });
+    // Nothing in the DIFF flags it: the Multi survives with the same id.
+    assert.deepEqual(dry.structuredContent.removed, []);
+    assert.deepEqual(dry.structuredContent.added, []);
+    assert.equal(dry.structuredContent.choices[0].choices.length, 0);
+
+    const res = await handler({ dry_run: false });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[suspicious_mass_removal\]/);
+    assert.match(res.content[0].text, /40 nested choices in total/);
+    assert.deepEqual(saveSettingsCalls, []);
+    assert.deepEqual(quickadd.settings.choices, [bigMulti]);
+    assert.deepEqual(removedCommands, []);
+  });
+
+  // Below the threshold, the surviving-Multi case applies like any other.
+  test("a surviving Multi that empties out of only 2 members stays below the threshold", async () => {
+    const smallMulti = {
+      id: "qan:Choices/Small/Small.md#choice",
+      name: "Small",
+      type: "Multi",
+      choices: [
+        { id: "qan:Choices/Small/A.md#choice", name: "A", type: "Capture" },
+        { id: "qan:Choices/Small/B.md#choice", name: "B", type: "Capture" },
+      ],
+    };
+    const { handler, quickadd, saveSettingsCalls } = build({
+      notes: [multiNote("Choices/Small/Small.md", "Small")],
+      existingChoices: [smallMulti],
+    });
+    const res = await handler({ dry_run: false });
+    assert.notEqual(res.isError, true);
+    assert.equal(saveSettingsCalls.length, 1);
+    assert.equal(quickadd.settings.choices[0].choices.length, 0);
+  });
+
+  // The guard is EMPTY-only on purpose (it has no override argument, so a
+  // refusal is unappliable until the vault changes): genuinely deleting some
+  // members of a Multi must still apply. One surviving member is enough.
+  test("a surviving Multi that keeps one member applies even when many members went away", async () => {
+    const nested = [{ id: "qan:Choices/Big/Kept.md#choice", name: "Kept", type: "Capture" }];
+    for (let i = 0; i < 40; i++) {
+      nested.push({ id: `qan:Choices/Big/N${i}.md#choice`, name: `N${i}`, type: "Capture" });
+    }
+    const bigMulti = { id: "qan:Choices/Big/Big.md#choice", name: "Big", type: "Multi", choices: nested };
+    const { handler, quickadd, saveSettingsCalls } = build({
+      notes: [
+        multiNote("Choices/Big/Big.md", "Big"),
+        captureNote("Choices/Big/Kept.md", "Kept", { target: "Log.md" }),
+      ],
+      existingChoices: [bigMulti],
+    });
+    const res = await handler({ dry_run: false });
+    assert.notEqual(res.isError, true);
+    assert.equal(saveSettingsCalls.length, 1);
+    assert.equal(quickadd.settings.choices[0].choices.length, 1);
+    assert.equal(quickadd.settings.choices[0].choices[0].name, "Kept");
+  });
 });
 
 describe("obsidian_quickadd_compile: partial-failure signaling", () => {
@@ -1251,7 +1327,7 @@ describe("obsidian_quickadd_compile: choice step", () => {
     assert.equal(res.structuredContent.choices.length, 0);
     assert.equal(res.structuredContent.errors.length, 1);
     assert.match(res.structuredContent.errors[0].message, /Notes\/Plain\.md/);
-    assert.match(res.structuredContent.errors[0].message, /quickadd-type this compiler compiles/);
+    assert.match(res.structuredContent.errors[0].message, /quickadd-type a choice step may target/);
   });
 
   // QuickAdd's ChoiceExecutor.execute() switches on the referenced choice's
@@ -1293,8 +1369,10 @@ describe("obsidian_quickadd_compile: choice step", () => {
   // Stage D: quickadd-type: multi notes are now discovered and compiled (a
   // Multi choice, here an empty one — see the "Multi discovery" describe
   // block above), so the Multi note itself DOES appear in `choices`. What's
-  // still rejected is using it as a choice: step TARGET (native QuickAdd's
-  // own restriction — a Multi is opened, not invoked from a Macro step).
+  // still rejected is using it as a choice: step TARGET — matching QuickAdd's
+  // own macro-builder UI, whose Choice-step picker flattens Multi containers
+  // away, so a Multi is opened, never invoked from a Macro step. (QuickAdd's
+  // RUNTIME has no such restriction — see CHOICE_STEP_TARGET_TYPES.)
   test("a choice: link to a quickadd-type: multi note is rejected as a choice: step target", async () => {
     const { handler } = build({
       notes: [
@@ -1312,7 +1390,7 @@ describe("obsidian_quickadd_compile: choice step", () => {
     assert.equal(res.structuredContent.choices.length, 1);
     assert.equal(res.structuredContent.choices[0].type, "Multi");
     assert.equal(res.structuredContent.errors.length, 1);
-    assert.match(res.structuredContent.errors[0].message, /quickadd-type this compiler compiles/);
+    assert.match(res.structuredContent.errors[0].message, /quickadd-type a choice step may target/);
     assert.match(res.structuredContent.errors[0].message, /macro, template, capture/);
   });
 
@@ -1325,7 +1403,7 @@ describe("obsidian_quickadd_compile: choice step", () => {
     });
     const res = await handler({ dry_run: true });
     assert.equal(res.structuredContent.choices.length, 0);
-    assert.match(res.structuredContent.errors[0].message, /quickadd-type this compiler compiles/);
+    assert.match(res.structuredContent.errors[0].message, /quickadd-type a choice step may target/);
   });
 });
 
