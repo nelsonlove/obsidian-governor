@@ -30,6 +30,21 @@ import {
 import { planPromoteToFolder } from "../kernel/jd-scaffold/promote-to-folder.js";
 import type { CategoryFolderInput, PlannedCreate } from "../kernel/jd-scaffold/types.js";
 import { planReindexCategory, reindexTier, isIndexFilePath } from "../kernel/jd-scaffold/category-index.js";
+import { standardZeros, suffixFor } from "../kernel/jd-scaffold/standard-zeros.js";
+import {
+  extractJdId,
+  classifyTemplates,
+  findZeroTemplate,
+  findGenericTemplate,
+  findStemTemplate,
+  buildContext,
+  substitute,
+  sanitizeTitle,
+  destPathForZero,
+  destPathForGenericId,
+  destPathForStem,
+  type TemplateMatch,
+} from "../kernel/jd-scaffold/templates.js";
 
 const RW = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } as const;
 
@@ -57,6 +72,14 @@ export interface JdScaffoldSource {
   /** Overwrite a note's content in place — the file already exists (unlike
    *  `create`, which is for NEW notes). */
   modify(path: string, content: string): Promise<void>;
+  /** Vault paths of a folder's own direct `.md` children (not recursive) —
+   *  for discovering a templates folder's own template files. Empty array
+   *  for a non-existent or non-folder path, never throws. */
+  listFolderChildren(folderPath: string): string[];
+  /** Pre-formatted date/time for template placeholder substitution — the
+   *  same fixed-format precedent as `today()`, just all three fields the
+   *  templates module's `buildContext` wants at once. */
+  clock(): { date: string; time: string; now: string };
 }
 
 export interface JdScaffoldToolsCtx {
@@ -80,6 +103,8 @@ export function emptyJdScaffoldSource(): JdScaffoldSource {
     allNotePaths: () => [],
     read: async () => null,
     modify: async () => unwired(),
+    listFolderChildren: () => [],
+    clock: () => ({ date: "", time: "", now: "" }),
   };
 }
 
@@ -341,6 +366,191 @@ export function registerJdScaffoldTools(server: McpServer, source: JdScaffoldSou
       return ok({ dry_run: false, preserved: plan.preserved, filesChanged: 1, files: [path], scoped_to_allowlist: scoped });
     }
   );
+
+  server.registerTool(
+    "obsidian_jd_new_standard_zero",
+    {
+      title: "Create one standard-zero note from a template",
+      description:
+        "Creates a single standard-zero note (e.g. the `06.01 Inbox` slot) from a template classified " +
+        '`jd-id: "{{category}}.NN"` in `templates_folder`. Refuses if the slot already exists or no matching ' +
+        "template is found. `dry_run: true` reports the plan without writing.",
+      inputSchema: {
+        folder_path: z.string().describe('Vault path of the category folder (e.g. "10-19 Personal/06 Digital tools").'),
+        prefix: z.string().describe('The category\'s two-digit prefix (e.g. "06").'),
+        zero_id: z.string().describe('Which standard-zero slot to create (e.g. "01" for Inbox).'),
+        templates_folder: z.string().describe("Vault path of the folder containing template notes."),
+        dry_run: z.boolean().describe("If true, report the plan without writing anything."),
+      },
+      annotations: RW,
+    },
+    async ({ folder_path, prefix, zero_id, templates_folder, dry_run }) => {
+      const settings = ctx.getSettings();
+      if (!isVisible(folder_path, settings)) return codedError("out_of_allowlist", `"${folder_path}" is outside the active path allowlist.`);
+      if (!isVisible(templates_folder, settings)) return codedError("out_of_allowlist", `"${templates_folder}" is outside the active path allowlist.`);
+
+      const zero = standardZeros(prefix, suffixFor(prefix)).find((z) => z.id === zero_id);
+      if (!zero) return codedError("invalid_zero_id", `"${zero_id}" is not one of the 10 standard-zero slots (00-09).`);
+
+      const destPath = destPathForZero(folder_path, prefix, zero);
+      if (!isVisible(destPath, settings)) return codedError("out_of_allowlist", `the computed destination for "${zero_id}" is outside the active path allowlist.`);
+      if (source.exists(destPath)) return codedError("already_exists", `"${destPath}" already exists.`);
+
+      const discovery = await discoverTemplates(source, settings, templates_folder);
+      if (!discovery.ok) return discovery.error;
+      const template = findZeroTemplate(discovery.matches, zero.id);
+      if (!template) return codedError("template_not_found", `No template classified for zero slot "${zero.id}" in "${templates_folder}".`);
+
+      const folderName = folder_path.includes("/") ? folder_path.slice(folder_path.lastIndexOf("/") + 1) : folder_path;
+      const clock = source.clock();
+      const context = buildContext({ prefix, id: zero.id, folder: { path: folder_path, name: folderName }, zero, ...clock });
+      return applyTemplate(source, settings, template, context, destPath, dry_run, discovery.skipped);
+    }
+  );
+
+  server.registerTool(
+    "obsidian_jd_new_generic_id",
+    {
+      title: "Create a generic-id note from a template",
+      description:
+        'Creates an `XX.YY Title` note from a template classified `jd-id: "{{category}}.{{id}}"` in ' +
+        "`templates_folder`. `dry_run: true` reports the plan without writing.",
+      inputSchema: {
+        folder_path: z.string().describe("Vault path of the category folder."),
+        prefix: z.string().describe('The category\'s two-digit prefix (e.g. "06").'),
+        id: z.string().describe('Two-digit id for the new note (e.g. "13").'),
+        title: z.string().describe("Title for the new note — sanitized before use (no path separators, leading dot, or Windows-forbidden characters)."),
+        templates_folder: z.string().describe("Vault path of the folder containing template notes."),
+        dry_run: z.boolean().describe("If true, report the plan without writing anything."),
+      },
+      annotations: RW,
+    },
+    async ({ folder_path, prefix, id, title, templates_folder, dry_run }) => {
+      const settings = ctx.getSettings();
+      if (!isVisible(folder_path, settings)) return codedError("out_of_allowlist", `"${folder_path}" is outside the active path allowlist.`);
+      if (!isVisible(templates_folder, settings)) return codedError("out_of_allowlist", `"${templates_folder}" is outside the active path allowlist.`);
+
+      if (!/^\d{2}$/.test(id)) return codedError("invalid_id", `"${id}" must be exactly two digits.`);
+      const sanitized = sanitizeTitle(title);
+      if (!sanitized) return codedError("invalid_title", `"${title}" is empty, leading-dot, or contains invalid characters (/, \\, .., :, etc.).`);
+
+      const destPath = destPathForGenericId(folder_path, prefix, id, sanitized);
+      if (!isVisible(destPath, settings)) return codedError("out_of_allowlist", `the computed destination is outside the active path allowlist.`);
+      if (source.exists(destPath)) return codedError("already_exists", `"${destPath}" already exists.`);
+
+      const discovery = await discoverTemplates(source, settings, templates_folder);
+      if (!discovery.ok) return discovery.error;
+      const template = findGenericTemplate(discovery.matches);
+      if (!template) return codedError("template_not_found", `No generic-id template found in "${templates_folder}".`);
+
+      const folderName = folder_path.includes("/") ? folder_path.slice(folder_path.lastIndexOf("/") + 1) : folder_path;
+      const clock = source.clock();
+      const context = buildContext({ prefix, id, folder: { path: folder_path, name: folderName }, customTitle: sanitized, ...clock });
+      return applyTemplate(source, settings, template, context, destPath, dry_run, discovery.skipped);
+    }
+  );
+
+  server.registerTool(
+    "obsidian_jd_new_stem",
+    {
+      title: "Create a stem note from a template",
+      description:
+        'Creates an `XX.00+CODE Name` note from a template classified `jd-id: "XX.00+CODE"` in `templates_folder`. ' +
+        "`dry_run: true` reports the plan without writing.",
+      inputSchema: {
+        folder_path: z.string().describe("Vault path of the category folder."),
+        prefix: z.string().describe('The category\'s two-digit prefix (e.g. "06").'),
+        stem_code: z.string().describe('The stem code (e.g. "DRAFT" for a template whose jd-id is "XX.00+DRAFT").'),
+        name: z.string().describe("Name for the new note — sanitized before use, same rules as a generic-id title."),
+        templates_folder: z.string().describe("Vault path of the folder containing template notes."),
+        dry_run: z.boolean().describe("If true, report the plan without writing anything."),
+      },
+      annotations: RW,
+    },
+    async ({ folder_path, prefix, stem_code, name, templates_folder, dry_run }) => {
+      const settings = ctx.getSettings();
+      if (!isVisible(folder_path, settings)) return codedError("out_of_allowlist", `"${folder_path}" is outside the active path allowlist.`);
+      if (!isVisible(templates_folder, settings)) return codedError("out_of_allowlist", `"${templates_folder}" is outside the active path allowlist.`);
+
+      const sanitized = sanitizeTitle(name);
+      if (!sanitized) return codedError("invalid_title", `"${name}" is empty, leading-dot, or contains invalid characters (/, \\, .., :, etc.).`);
+
+      const destPath = destPathForStem(folder_path, prefix, stem_code, sanitized);
+      if (!isVisible(destPath, settings)) return codedError("out_of_allowlist", `the computed destination is outside the active path allowlist.`);
+      if (source.exists(destPath)) return codedError("already_exists", `"${destPath}" already exists.`);
+
+      const discovery = await discoverTemplates(source, settings, templates_folder);
+      if (!discovery.ok) return discovery.error;
+      const template = findStemTemplate(discovery.matches, stem_code);
+      if (!template) return codedError("template_not_found", `No template classified for stem code "${stem_code}" in "${templates_folder}".`);
+
+      const folderName = folder_path.includes("/") ? folder_path.slice(folder_path.lastIndexOf("/") + 1) : folder_path;
+      const clock = source.clock();
+      const context = buildContext({ prefix, id: `+${stem_code}`, folder: { path: folder_path, name: folderName }, customTitle: sanitized, ...clock });
+      return applyTemplate(source, settings, template, context, destPath, dry_run, discovery.skipped);
+    }
+  );
+}
+
+type DiscoveryResult = { ok: true; matches: TemplateMatch[]; skipped: string[] } | { ok: false; error: ReturnType<typeof codedError> };
+
+/** Reads `templates_folder`'s own direct .md children, classifies each by
+ *  its jd-id frontmatter (extractJdId + classifyTemplates, both pure).
+ *  Read-boundary containment: a discovered template's OWN path is checked
+ *  against the allowlist too, not just the input folder — a hidden template
+ *  file's content must never reach a visible note via substitution (the
+ *  same class of gap PR review found and fixed on obsidian_jd_reindex_
+ *  category's sibling reads; applied here from the start instead). Hidden
+ *  templates are silently excluded from discovery, not reported — same
+ *  disclosure discipline as every other hidden-content case in this
+ *  codebase (absence, not an error naming what's hidden). */
+async function discoverTemplates(source: JdScaffoldSource, settings: GuardSettings, templatesFolder: string): Promise<DiscoveryResult> {
+  const childPaths = visiblePaths(source.listFolderChildren(templatesFolder), settings);
+  if (childPaths.length === 0 && !source.exists(templatesFolder)) {
+    return { ok: false, error: codedError("templates_folder_not_found", `Templates folder not found: "${templatesFolder}".`) };
+  }
+  const candidates = [];
+  for (const path of childPaths) {
+    const content = await source.read(path);
+    if (content === null) continue;
+    candidates.push({ path, jdId: extractJdId(content) });
+  }
+  const { matches, skipped } = classifyTemplates(candidates);
+  return { ok: true, matches, skipped };
+}
+
+/** Shared apply: read the template, substitute, and either report the
+ *  preview (dry_run) or write it (auto-creating the parent folder first,
+ *  matching the original's createFromTemplate — source.createFolder is a
+ *  no-op-safe call here since destPath's own parent was already implied
+ *  visible/checked by the caller). Any unresolved placeholders are surfaced
+ *  in the result rather than only console.warn'd. */
+async function applyTemplate(
+  source: JdScaffoldSource,
+  settings: GuardSettings,
+  template: TemplateMatch,
+  context: ReturnType<typeof buildContext>,
+  destPath: string,
+  dryRun: boolean,
+  skippedTemplates: string[]
+) {
+  const raw = await source.read(template.path);
+  if (raw === null) return codedError("template_unreadable", `"${template.path}" could not be read.`);
+  const { text, warnings } = substitute(raw, context);
+
+  if (dryRun) return ok({ dry_run: true, dest_path: destPath, content: text, placeholder_warnings: warnings, skipped_templates: skippedTemplates });
+
+  const parentPath = destPath.slice(0, destPath.lastIndexOf("/"));
+  if (parentPath && !source.exists(parentPath)) await source.createFolder(parentPath);
+  await source.create(destPath, text);
+  return ok({
+    dry_run: false,
+    dest_path: destPath,
+    placeholder_warnings: warnings,
+    skipped_templates: skippedTemplates,
+    filesChanged: 1,
+    files: [destPath],
+  });
 }
 
 function promoteRefusalMessage(reason: "not_id_note" | "already_cover_note" | "folder_exists", path: string): string {

@@ -1267,20 +1267,25 @@ const BASES_MANIFEST: ModuleManifest = {
   },
 };
 
-// jd-scaffold, Stage A + Stage A2 of the jd-dashboard fold
-// (docs/superpowers/specs/2026-08-19-jd-dashboard-fold-design.md): four
+// jd-scaffold, Stage A + Stage A2 + Stage A3 of the jd-dashboard fold
+// (docs/superpowers/specs/2026-08-19-jd-dashboard-fold-design.md): seven
 // mutating tools ported from obsidian-jd-dashboard's standard-zeros.ts,
-// promote-to-folder.ts, and category-index.ts. No config fields yet — no
-// per-vault knobs to expose (unlike scheme's prefix/area config,
-// jd-scaffold's shape is fixed: the standard-zeros set and the ID-note
-// regex are not user-configurable at this stage).
+// promote-to-folder.ts, category-index.ts, and templates.ts/
+// new-from-template.ts. No config fields yet — templates_folder is an
+// explicit argument on each of the three template-creation tools instead of
+// a module-level setting (agents pass it per call; a human UI would want a
+// setting, but nothing here needs one yet), so jd-scaffold still has no
+// per-vault knobs at the MODULE level (unlike scheme's prefix/area config).
 const JD_SCAFFOLD_MANIFEST: ModuleManifest = {
   summary:
     "Johnny Decimal category scaffolding, ported from obsidian-jd-dashboard: create the fixed standard-zeros set " +
     "(XX.00-XX.09) in a category, self-heal a vault-wide missing XX.00, promote a leaf id note into a " +
-    "same-named folder, and rebuild an XX.00 index file's Contents section from vault truth. No jd-id: " +
-    "frontmatter is written — vault-mcp's scheme module is path-canonical, the filename already carries the " +
-    "address (same call already made for the jd-numbering fold).",
+    "same-named folder, rebuild an XX.00 index file's Contents section from vault truth, and create standard-" +
+    "zero/generic-id/stem notes from templates classified by their own jd-id frontmatter. This module never " +
+    "SYNTHESIZES jd-id: frontmatter itself (standard-zeros' own notes carry none — vault-mcp's scheme module is " +
+    "path-canonical, the filename already carries the address, same call already made for the jd-numbering " +
+    "fold); a template-created note's frontmatter is whatever the user's own template file contains, copied " +
+    "through substitution like every other placeholder in the file.",
   directory: {
     tools: [
       {
@@ -1323,6 +1328,42 @@ const JD_SCAFFOLD_MANIFEST: ModuleManifest = {
           "Descriptions written as `[[link]] *(note)*` are preserved across every regen, at every tier.",
           "Area-management and system tiers read every sibling XX.00 file's current content to consolidate them; " +
             "the ordinary tier reads only the target's own content.",
+        ],
+      },
+      {
+        name: "obsidian_jd_new_standard_zero",
+        purpose: "Create a single standard-zero note (e.g. the `06.01 Inbox` slot) from a template classified `jd-id: \"{{category}}.NN\"`.",
+        readOnly: false,
+        options: [
+          { name: "folder_path", what: "vault path of the category folder" },
+          { name: "prefix", what: "the category's two-digit prefix" },
+          { name: "zero_id", what: "which standard-zero slot to create" },
+          { name: "templates_folder", what: "vault path of the folder containing template notes" },
+        ],
+        caveats: ["Refuses if the slot already exists or no matching template is found."],
+      },
+      {
+        name: "obsidian_jd_new_generic_id",
+        purpose: "Create an `XX.YY Title` note from a template classified `jd-id: \"{{category}}.{{id}}\"`.",
+        readOnly: false,
+        options: [
+          { name: "folder_path", what: "vault path of the category folder" },
+          { name: "prefix", what: "the category's two-digit prefix" },
+          { name: "id", what: "two-digit id for the new note" },
+          { name: "title", what: "title for the new note — sanitized before use" },
+          { name: "templates_folder", what: "vault path of the folder containing template notes" },
+        ],
+      },
+      {
+        name: "obsidian_jd_new_stem",
+        purpose: "Create an `XX.00+CODE Name` note from a template classified `jd-id: \"XX.00+CODE\"`.",
+        readOnly: false,
+        options: [
+          { name: "folder_path", what: "vault path of the category folder" },
+          { name: "prefix", what: "the category's two-digit prefix" },
+          { name: "stem_code", what: "the stem code (e.g. DRAFT)" },
+          { name: "name", what: "name for the new note — sanitized before use" },
+          { name: "templates_folder", what: "vault path of the folder containing template notes" },
         ],
       },
     ],
@@ -1635,14 +1676,15 @@ export function builtinModules(deps: MountDeps): VaultModule[] {
         visible: host.visible,
       }),
     ),
-    // jd-scaffold (Stage A + A2 of the jd-dashboard fold): another MUTATING
-    // capability module (skills' own reasoning applies here too) — it declares
-    // `mutating: true` so its four write tools (standard_zeros,
-    // ensure_category_indexes, promote_to_folder, reindex_category) register
-    // with `readOnlyHint: false`, still through the guard-patched registrar
+    // jd-scaffold (Stage A + A2 + A3 of the jd-dashboard fold): another
+    // MUTATING capability module (skills' own reasoning applies here too) —
+    // it declares `mutating: true` so its seven write tools (standard_zeros,
+    // ensure_category_indexes, promote_to_folder, reindex_category,
+    // new_standard_zero, new_generic_id, new_stem) register with
+    // `readOnlyHint: false`, still through the guard-patched registrar
     // (queue, journal, allowlist, read-only mode). Default DISABLED, matching
     // the skills module's own precedent ("a newly-folded mutating surface
-    // stays off until a human turns it on"). No config yet (see
+    // stays off until a human turns it on"). No MODULE-level config yet (see
     // JD_SCAFFOLD_MANIFEST's own comment), so ctxOf needs only getSettings —
     // no `host`/`config` plumbing, unlike bases above.
     moduleFromRegistrar(
