@@ -316,7 +316,7 @@ export class ConnectionSetupModal extends Modal {
   constructor(app: App, private onAck?: () => void) { super(app); }
   onOpen() {
     const { contentEl, titleEl } = this;
-    titleEl.setText("Connect vault-mcp to Claude Code (manual fallback)");
+    titleEl.setText("Connect Governor to Claude Code (manual fallback)");
     contentEl.createEl("p", {
       text: "Couldn't auto-register (claude CLI not found or multiple vaults). Run this once in a terminal:",
     });
@@ -468,7 +468,11 @@ export class VaultMcpSettingTab extends PluginSettingTab {
     // Connect / Disconnect buttons.
     new Setting(containerEl)
       .setName("Registration")
-      .setDesc("Connect or disconnect this vault's MCP server from Claude Code.")
+      .setDesc(
+        "Connect or disconnect this vault's MCP server from Claude Code (server name 'governor'; tools appear " +
+          "as mcp__governor__*). Registrations made before 0.12.0 under the old 'vault-mcp' name should be " +
+          "removed: claude mcp remove vault-mcp.",
+      )
       .addButton((b) =>
         b.setButtonText("Connect to Claude Code").setCta().onClick(() => this.plugin.autoRegister(true))
       )
@@ -500,7 +504,7 @@ export class VaultMcpSettingTab extends PluginSettingTab {
         b.onClick(async () => {
           this.plugin.settings.enabled = !this.plugin.settings.enabled;
           await this.plugin.saveSettings();
-          new Notice("vault-mcp: reload the plugin (or restart Obsidian) for this change to take effect.");
+          new Notice("governor: reload the plugin (or restart Obsidian) for this change to take effect.");
           this.display();
         });
       });
@@ -704,12 +708,32 @@ export class VaultMcpSettingTab extends PluginSettingTab {
           const effective = normalizeProtectedProperties(raw, () => {});
           if (effective.length < raw.length) {
             new Notice(
-              `vault-mcp: ${raw.length - effective.length} protected-property line(s) ignored ` +
+              `governor: ${raw.length - effective.length} protected-property line(s) ignored ` +
                 `(floor keys and unknown grades cannot be declared) — see the console for details.`
             );
           }
         });
       });
+
+    // Record immutability (#264) — the write-perimeter sibling of the
+    // protected-property list above: a whole-note rule rather than a per-key
+    // one. Default ON; the toggle exists as the escape hatch for the check's
+    // deliberate over-inclusiveness (it refuses on any NAMED path).
+    new Setting(containerEl)
+      .setName("Enforce record immutability")
+      .setDesc(
+        "Refuse non-append writes to notes whose frontmatter carries `record: true` — historical, byte-verified " +
+          "archives are extended by a dated end-of-file append (obsidian_append_note) and never edited, moved, or " +
+          "deleted. Refusals are typed (record_immutable) and journaled. Turn OFF only to unblock a legitimate " +
+          "operation the check over-blocks; it refuses on any path a call names, including one it only reads. " +
+          "Takes effect immediately."
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.enforceRecordImmutability).onChange(async (value) => {
+          this.plugin.settings.enforceRecordImmutability = value;
+          await this.plugin.saveSettings();
+        })
+      );
 
     // Developer affordances. The tool-runner defaults ON because it grants no
     // capability beyond the MCP surface itself: it invokes the same guarded
@@ -802,11 +826,11 @@ export class VaultMcpSettingTab extends PluginSettingTab {
 
     new Setting(section)
       .setName("Enabled")
-      // Governance's Obsidian surface (review pane + gavel ribbon) mounts/unmounts LIVE from this
+      // Acceptance's Obsidian surface (review pane + gavel ribbon) mounts/unmounts LIVE from this
       // toggle — no reload. Every other module is tool-only: its surface mounts per connection, so
       // its toggle takes effect on the next session connect.
       .setDesc(
-        mod.id === "governance"
+        mod.id === "acceptance"
           ? "Mounts or unmounts the review pane and gavel ribbon live — no plugin reload needed."
           : "Takes effect on the next session connect."
       )
@@ -817,14 +841,14 @@ export class VaultMcpSettingTab extends PluginSettingTab {
             [mod.id]: { ...this.plugin.settings.modules[mod.id], enabled: value },
           };
           await this.plugin.saveSettings();
-          // Let modules whose in-app surface follows this toggle mount/unmount live (governance's
+          // Let modules whose in-app surface follows this toggle mount/unmount live (acceptance's
           // pane + ribbon). Tool-only modules are unaffected — they take effect on the next connect.
           await this.plugin.onModuleEnabledChanged(mod.id, value);
-          // Governance's live mount also decides whether its settings-tab section (adopt-baseline +
+          // Acceptance's live mount also decides whether its settings-tab section (adopt-baseline +
           // auto-accept) can render its gesture-gated controls vs. a hint — so re-render the tab now
           // that the mount has settled, mirroring the socket-toggle re-render. (Other modules are
           // tool-only: nothing in their section changes on toggle, so no re-render is needed.)
-          if (mod.id === "governance") this.display();
+          if (mod.id === "acceptance") this.display();
         })
       );
 
@@ -848,12 +872,12 @@ export class VaultMcpSettingTab extends PluginSettingTab {
     // generic renderer; every other module renders from its manifest alone.
     if (mod.id === "vocab") this.renderVocabInstances(section);
 
-    // Governance's second bespoke branch: the module EXPOSES a render function that builds its
+    // Acceptance's second bespoke branch: the module EXPOSES a render function that builds its
     // gesture-gated adopt-baseline + auto-accept controls internally, from its own module-private
     // accept-capable controller. We only hand it a container — connection-ui never receives, holds,
     // or can walk the accept-capable deps (that is what keeps the accept boundary intact across
-    // this new surface). It renders the live controls only when governance is mounted, else a hint.
-    if (mod.id === "governance") renderGovernanceSettings(this.plugin, section);
+    // this new surface). It renders the live controls only when acceptance is mounted, else a hint.
+    if (mod.id === "acceptance") renderGovernanceSettings(this.plugin, section);
 
     const dir = hosted.directory;
     if (dir.tools.length > 0) {

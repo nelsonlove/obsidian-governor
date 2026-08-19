@@ -125,7 +125,7 @@ const HUMAN_INPUT_WINDOW_MS = 5_000;
 const JOURNAL_POLL_MS = 2500;
 
 /** What wireGovernance needs from the host plugin beyond the base Plugin surface: a reader for
- * the governance module's config (`settings.modules.governance.config`), from which the badge
+ * the acceptance module's config (`settings.modules.acceptance.config`), from which the badge
  * display prefs are derived. Plain data — confers no accept capability. */
 export interface GovernanceWireDeps {
   getConfig: () => Record<string, unknown>;
@@ -138,7 +138,7 @@ export interface GovernanceWireDeps {
 const baselineStores = new WeakMap<Plugin, BaselineStore>();
 function getStore(plugin: Plugin): BaselineStore {
   const s = baselineStores.get(plugin);
-  if (!s) throw new Error("vault-mcp governance: baseline store not initialised");
+  if (!s) throw new Error("governor acceptance: baseline store not initialised");
   return s;
 }
 
@@ -168,7 +168,7 @@ interface PluginPaths {
 const pluginPaths = new WeakMap<Plugin, PluginPaths>();
 function paths(plugin: Plugin): PluginPaths {
   const p = pluginPaths.get(plugin);
-  if (!p) throw new Error("vault-mcp governance: paths not initialised");
+  if (!p) throw new Error("governor acceptance: paths not initialised");
   return p;
 }
 
@@ -265,7 +265,7 @@ async function saveAllowlist(plugin: Plugin): Promise<void> {
   try {
     await plugin.app.vault.adapter.write(paths(plugin).allowlistPath, serializeAllowlist(getEnabledClasses(plugin)));
   } catch (e) {
-    console.error("vault-mcp governance: failed to persist auto-accept allowlist", e);
+    console.error("governor acceptance: failed to persist auto-accept allowlist", e);
   }
 }
 // The ONLY allowlist mutator. Accept-equivalent authority, so it is gesture-gated exactly like
@@ -323,7 +323,7 @@ async function loadRenameRecords(plugin: Plugin): Promise<void> {
       data = pruneRenameRecords(deserializeRenameRecords(await plugin.app.vault.adapter.read(p)), Date.now());
     }
   } catch (e) {
-    console.error("vault-mcp governance: failed to load rename records", e);
+    console.error("governor acceptance: failed to load rename records", e);
     data = [];
   }
   renameRecords.set(
@@ -346,7 +346,7 @@ async function persistRenameRecords(plugin: Plugin): Promise<void> {
       );
       await plugin.app.vault.adapter.write(paths(plugin).renameRecordsPath, serializeRenameRecords(pruned));
     } catch (e) {
-      console.error("vault-mcp governance: failed to persist rename records", e);
+      console.error("governor acceptance: failed to persist rename records", e);
     }
   });
   renamePersistTails.set(plugin, next);
@@ -649,7 +649,7 @@ function scheduleReconcile(plugin: Plugin, file: TFile): void {
   const existing = timers.get(path);
   if (existing) clearTimeout(existing);
   timers.set(path, setTimeout(() => {
-    void reconcile(plugin, file).catch((e) => console.error(`vault-mcp governance: reconcile failed for ${path}`, e));
+    void reconcile(plugin, file).catch((e) => console.error(`governor acceptance: reconcile failed for ${path}`, e));
   }, SILENT_ADVANCE_DEBOUNCE_MS));
 }
 async function reconcile(plugin: Plugin, file: TFile): Promise<void> {
@@ -751,7 +751,7 @@ async function maybeAutoAccept(plugin: Plugin, path: string): Promise<boolean> {
   } catch (e) {
     // Fail safe — never let an exception advance a baseline. But NEVER silently (#261):
     // a swallowed throw here made the whole sweep undiagnosable from outside.
-    console.error(`vault-mcp governance: auto-accept check failed for ${path}`, e);
+    console.error(`governor acceptance: auto-accept check failed for ${path}`, e);
     return false;
   }
 }
@@ -763,7 +763,7 @@ function logRefusalOnce(plugin: Plugin, path: string, key: string, policy: AutoA
   if (!m) { m = new Map(); refusalLogState.set(plugin, m); }
   if (m.get(path) === key) return;
   m.set(path, key);
-  console.warn(`vault-mcp governance: auto-accept (policy: ${policy}) declined for ${path}: ${reason}`);
+  console.warn(`governor acceptance: auto-accept (policy: ${policy}) declined for ${path}: ${reason}`);
 }
 // Sweep the (agent-attributed) pending queue for auto-accept-eligible changes. Driven by the
 // journal-growth poll — the interval timer plus, since #261, the kernel's post-append nudge
@@ -822,7 +822,7 @@ async function refresh(plugin: Plugin): Promise<void> {
         serializePendingIndex(pending, new Date().toISOString()),
       );
     } catch (e) {
-      console.error("vault-mcp governance: failed to publish pending index", e);
+      console.error("governor acceptance: failed to publish pending index", e);
     }
   }
   updateBadge(plugin, pending.length);
@@ -882,7 +882,7 @@ async function pollJournal(plugin: Plugin): Promise<void> {
  */
 export function nudgeGovernanceQueue(plugin: Plugin): void {
   if (!mountedPlugins.has(plugin)) return;
-  pollJournal(plugin).catch((e) => console.error("vault-mcp governance: journal-nudged poll failed", e));
+  pollJournal(plugin).catch((e) => console.error("governor acceptance: journal-nudged poll failed", e));
 }
 
 // ── view activation ──────────────────────────────────────────────────────────
@@ -1055,7 +1055,7 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
   try {
     if (!(await plugin.app.vault.adapter.exists(govDir))) await plugin.app.vault.adapter.mkdir(govDir);
   } catch (e) {
-    console.error("vault-mcp governance: failed to ensure governance dir", e);
+    console.error("governor acceptance: failed to ensure governance dir", e);
   }
 
   const store = new BaselineStore(new AdapterBlobFs(plugin.app.vault.adapter), paths(plugin).baseDir);
@@ -1083,7 +1083,7 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
   try {
     plugin.registerView(VIEW_TYPE_GOVERNANCE, (leaf) => new GovernanceReviewView(leaf, buildController(plugin)));
   } catch (e) {
-    console.warn("vault-mcp governance: review view type already registered — reusing it", e);
+    console.warn("governor acceptance: review view type already registered — reusing it", e);
   }
   // Live-unmount teardown of the view: detach any open governance leaves (drops the sole reference
   // to their accept-capable controller) and unregister the type so a later re-mount can register
@@ -1092,13 +1092,13 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
   component.register(() => {
     for (const leaf of plugin.app.workspace.getLeavesOfType(VIEW_TYPE_GOVERNANCE)) leaf.detach();
     try { viewRegistryOf(plugin)?.unregisterView(VIEW_TYPE_GOVERNANCE); }
-    catch (e) { console.warn("vault-mcp governance: view unregister failed", e); }
+    catch (e) { console.warn("governor acceptance: view unregister failed", e); }
   });
 
   // Ribbon icon + badge. The ribbon only OPENS the pane (read-only navigation); it advances no
   // baseline. `addRibbonIcon` removes the element on plugin unload; we ALSO remove it on live
   // unmount via the component so a disable makes the gavel disappear without a reload.
-  const ribbonEl = plugin.addRibbonIcon("gavel", "Governance review", async () => {
+  const ribbonEl = plugin.addRibbonIcon("gavel", "Acceptance review", async () => {
     await activateView(plugin);
   });
   component.register(() => ribbonEl.remove());
@@ -1171,7 +1171,7 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
     // unhandled rejection — the poll is the auto-accept sweep's only driver and it must survive
     // any one tick failing.
     component.registerInterval(window.setInterval(() => {
-      pollJournal(plugin).catch((e) => console.error("vault-mcp governance: journal poll failed", e));
+      pollJournal(plugin).catch((e) => console.error("governor acceptance: journal poll failed", e));
     }, JOURNAL_POLL_MS));
   });
 
@@ -1218,7 +1218,7 @@ export function renderGovernanceSettings(plugin: Plugin, containerEl: HTMLElemen
     adoptBtn,
     () => confirmAdopt(plugin.app),
     async () => { adoptedCount = await performAdopt(plugin); },
-    () => { new Notice(`vault-mcp governance: adopted baseline for ${adoptedCount} note(s).`); },
+    () => { new Notice(`governor acceptance: adopted baseline for ${adoptedCount} note(s).`); },
   );
 
   // Auto-accept allowlist — the SAME gesture-gated section the pane renders, built from the

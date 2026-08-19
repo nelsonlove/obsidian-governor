@@ -91,7 +91,7 @@ function scopeRefusal(scope: string, settings?: GuardSettings): { code: string; 
     return {
       code: "out_of_allowlist",
       message:
-        "a whole-vault claim is outside the vault-mcp allowlist — claim a scope inside it instead. Nothing was claimed.",
+        "a whole-vault claim is outside the governor allowlist — claim a scope inside it instead. Nothing was claimed.",
     };
   }
   const blocked = guardCall({ isMutating: false, args: { path: normalized }, settings });

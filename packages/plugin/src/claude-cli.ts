@@ -42,9 +42,15 @@ export function findClaudeBinary(opts?: {
   return findBinary(candidates, opts?.fileExists);
 }
 
+/** The Claude Code MCP server name — tool prefixes become `mcp__governor__*`.
+ * Renamed from `vault-mcp` in 0.12.0; the plugin never removes a stale
+ * `vault-mcp` registration itself (that is a deliberate human step at
+ * cutover: `claude mcp remove vault-mcp`). */
+export const MCP_SERVER_NAME = "governor";
+
 export async function claudeIsRegistered(bin: string): Promise<boolean> {
   try {
-    await pexecFile(bin, ["mcp", "get", "vault-mcp"], { env: spawnEnv() });
+    await pexecFile(bin, ["mcp", "get", MCP_SERVER_NAME], { env: spawnEnv() });
     return true; // exit 0 => present
   } catch {
     return false;
@@ -55,7 +61,7 @@ export async function claudeIsRegistered(bin: string): Promise<boolean> {
 // so the bridge is unambiguous once a second vault starts serving MCP (without
 // it, the bridge aborts with "multiple vaults open; specify --vault").
 export function registerArgs(bridgePath: string, vaultName?: string): string[] {
-  const args = ["mcp", "add", "--scope", "user", "vault-mcp", "--", "node", bridgePath];
+  const args = ["mcp", "add", "--scope", "user", MCP_SERVER_NAME, "--", "node", bridgePath];
   if (vaultName) args.push("--vault", vaultName);
   return args;
 }
@@ -66,7 +72,7 @@ export async function claudeRegister(bin: string, bridgePath: string, vaultName?
 }
 
 export async function claudeRemove(bin: string): Promise<void> {
-  await pexecFile(bin, ["mcp", "remove", "vault-mcp"], { env: spawnEnv() }).catch(() => { /* ignore if absent */ });
+  await pexecFile(bin, ["mcp", "remove", MCP_SERVER_NAME], { env: spawnEnv() }).catch(() => { /* ignore if absent */ });
 }
 
 // ── #38: auto-provision the vault-mcp-connect Claude Code plugin ──────────────
@@ -74,7 +80,7 @@ export async function claudeRemove(bin: string): Promise<void> {
 // the nelsonlove/claude-code-plugins marketplace at packages/plugin/cc-plugin.
 // The MCP server itself stays a DIRECT `claude mcp add` registration — bundling
 // it into a CC plugin would rename the tools to mcp__plugin_*, breaking every
-// mcp__vault-mcp__* allowlist reference (decision 2026-07-10).
+// mcp__governor__* allowlist reference (decision 2026-07-10; prefix was mcp__vault-mcp__* before the 0.12.0 id migration).
 
 export const CONNECT_MARKETPLACE_NAME = "claude-code-plugins-mac";
 export const CONNECT_MARKETPLACE_SOURCE = "nelsonlove/claude-code-plugins";

@@ -74,7 +74,7 @@ function mount(settings = {}) {
 }
 
 function governanceModule() {
-  return builtinModules(deps()).find((m) => m.id === "governance");
+  return builtinModules(deps()).find((m) => m.id === "acceptance");
 }
 
 describe("governance module: shape + default-off", () => {
@@ -91,7 +91,7 @@ describe("governance module: shape + default-off", () => {
 
   test("disabled by default: the module contributes nothing", () => {
     const { server, registry } = mount();
-    const gov = registry.describe().find((d) => d.id === "governance");
+    const gov = registry.describe().find((d) => d.id === "acceptance");
     assert.equal(gov.enabled, false);
     assert.deepEqual(gov.tools, []);
     // obsidian_pending_review is always-on in server.ts, NOT a module tool — never on the mount.
@@ -101,9 +101,9 @@ describe("governance module: shape + default-off", () => {
 
 describe("governance module: contributes ZERO MCP tools when enabled", () => {
   test("enabling it adds NO tool to the surface (the accept surface is an Obsidian pane)", () => {
-    const { server, registry } = mount({ modules: { governance: { enabled: true } } });
+    const { server, registry } = mount({ modules: { acceptance: { enabled: true } } });
     assert.deepEqual(registry.problems, []);
-    const gov = registry.describe().find((d) => d.id === "governance");
+    const gov = registry.describe().find((d) => d.id === "acceptance");
     assert.equal(gov.enabled, true);
     assert.deepEqual(gov.tools, []);
     // Nothing forbidden — and specifically no accept tool — reached the transport.
@@ -118,7 +118,7 @@ describe("governance module: renders a config-tab section (badge toggles + conve
   test("collect() gives it a section — badge toggles + acceptedBy + requiredFrontmatterKeys, no tools, disabled", () => {
     const settings = { modules: {} };
     const hosted = collect(builtinModules(deps(settings)), settings.modules, settings);
-    const gov = hosted.find((h) => h.id === "governance");
+    const gov = hosted.find((h) => h.id === "acceptance");
     assert.ok(gov, "governance not rendered by collect()");
     assert.ok(gov.summary.length > 0, "governance summary is empty");
     // The two badge-display toggles (ribbon + pane-tab, default ON) plus the two
@@ -149,9 +149,9 @@ describe("governance module: renders a config-tab section (badge toggles + conve
   });
 
   test("a stored `false` overrides the default-on toggle (the pane honors it)", () => {
-    const settings = { modules: { governance: { config: { showRibbonBadge: false } } } };
+    const settings = { modules: { acceptance: { config: { showRibbonBadge: false } } } };
     const hosted = collect(builtinModules(deps(settings)), settings.modules, settings);
-    const gov = hosted.find((h) => h.id === "governance");
+    const gov = hosted.find((h) => h.id === "acceptance");
     const ribbon = gov.fields.find((f) => f.key === "showRibbonBadge");
     const tab = gov.fields.find((f) => f.key === "showViewTabBadge");
     assert.equal(ribbon.value, false, "stored false must override the default-on");
@@ -207,8 +207,8 @@ describe("governance module: THE TRIPWIRE — structural (module + registry)", (
   });
 
   test("nothing forbidden is reachable from the module's contributed tool list or the whole surface", () => {
-    const { server, registry } = mount({ modules: { governance: { enabled: true } } });
-    const gov = registry.describe().find((d) => d.id === "governance");
+    const { server, registry } = mount({ modules: { acceptance: { enabled: true } } });
+    const gov = registry.describe().find((d) => d.id === "acceptance");
     for (const name of gov.tools) assert.ok(!FORBIDDEN.test(name), `governance contributed a forbidden tool: ${name}`);
     for (const name of server.tools.keys()) assert.ok(!FORBIDDEN.test(name), `a forbidden-named tool reached the surface: ${name}`);
   });
@@ -234,7 +234,7 @@ describe("governance module: THE TRIPWIRE — structural (module + registry)", (
   test("the registry REFUSES a governance-shaped module that tries to add an accept/baseline tool", () => {
     const server = fakeServer();
     const hostile = {
-      id: "governance",
+      id: "acceptance",
       posture: "capability",
       capabilities: ["acceptance"],
       enabled: true,
@@ -243,12 +243,12 @@ describe("governance module: THE TRIPWIRE — structural (module + registry)", (
         reg("obsidian_advance_baseline", { annotations: { readOnlyHint: true } }, () => ({}));
       },
     };
-    const registry = new ModuleRegistry([hostile], { governance: { enabled: true } });
+    const registry = new ModuleRegistry([hostile], { acceptance: { enabled: true } });
     registry.registerAll((n, d, h) => server.registerTool(n, d, h), mountHost(deps()));
     assert.ok(!server.tools.has("obsidian_accept_note"));
     assert.ok(!server.tools.has("obsidian_advance_baseline"));
     assert.equal(registry.problems.filter((p) => p.includes("refused")).length, 2);
-    assert.deepEqual(registry.describe().find((d) => d.id === "governance").tools, []);
+    assert.deepEqual(registry.describe().find((d) => d.id === "acceptance").tools, []);
   });
 });
 
@@ -435,7 +435,7 @@ describe("governance module: THE TRIPWIRE — source reachability (accept surfac
   test("main.ts wires the pane ONLY via wireGovernance behind the module-enabled flag — no accept method/command/tool on the plugin", () => {
     const main = code("main.ts");
     assert.match(main, /wireGovernance\(this,/, "main.ts wires the pane via wireGovernance");
-    assert.match(main, /modules\?\.governance\?\.enabled === true/, "gated on the governance module enabled flag");
+    assert.match(main, /modules\?\.acceptance\?\.enabled === true/, "gated on the acceptance module enabled flag");
     // The plugin exposes no accept-equivalent method and registers no accept command.
     for (const name of ["performAccept", "performAdopt", "setBaseline", "acceptNote", "stampAcceptedFrontmatter"]) {
       assert.ok(!isInstanceMethod(main, name), `${name} must not be a plugin instance method`);
@@ -473,8 +473,8 @@ describe("history browser (#135): a READ-ONLY surface that confers nothing", () 
   });
 
   test("history adds no command and no forbidden-named tool (the module still contributes ZERO tools)", () => {
-    const { server, registry } = mount({ modules: { governance: { enabled: true } } });
-    assert.deepEqual(registry.describe().find((d) => d.id === "governance").tools, []);
+    const { server, registry } = mount({ modules: { acceptance: { enabled: true } } });
+    assert.deepEqual(registry.describe().find((d) => d.id === "acceptance").tools, []);
     for (const name of server.tools.keys()) {
       assert.ok(!/history/i.test(name), `no history tool may reach the MCP surface: ${name}`);
       assert.ok(!FORBIDDEN.test(name), `a forbidden-named tool reached the surface: ${name}`);
@@ -584,8 +584,8 @@ describe("#101 dispositions-as-data: THE TRIPWIRE — the wrap adds no reachable
   test("governance_submit_revision is the ONE new agent surface — NOT a governance-module tool, not accept-shaped", () => {
     // It registers in server.ts (the registerVaultWriteTools shape); the governance MODULE still
     // contributes ZERO tools, and the mounted module surface never sees it.
-    const { server, registry } = mount({ modules: { governance: { enabled: true } } });
-    assert.deepEqual(registry.describe().find((d) => d.id === "governance").tools, []);
+    const { server, registry } = mount({ modules: { acceptance: { enabled: true } } });
+    assert.deepEqual(registry.describe().find((d) => d.id === "acceptance").tools, []);
     assert.ok(!server.tools.has("governance_submit_revision"));
     // The name deliberately does NOT match the forbidden matcher: submit-revision supplies a
     // candidate; it is not an accept/adopt/baseline verb.
@@ -659,7 +659,7 @@ describe("governance settings-tab surface: the accept path stays module-private 
     const ui = code("connection-ui.ts");
     // It calls the module's render fn with (this.plugin, section) — a container — and does NOT
     // capture a return value (renderGovernanceSettings returns void; there is nothing to capture).
-    assert.match(ui, /if\s*\(mod\.id === "governance"\)\s*renderGovernanceSettings\(this\.plugin,\s*\w+\)/,
+    assert.match(ui, /if\s*\(mod\.id === "acceptance"\)\s*renderGovernanceSettings\(this\.plugin,\s*\w+\)/,
       "the governance branch passes only a container, mirroring the vocab branch");
     assert.ok(!/=\s*renderGovernanceSettings\(/.test(ui),
       "connection-ui must not assign renderGovernanceSettings' result to anything");

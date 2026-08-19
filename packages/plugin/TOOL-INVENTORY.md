@@ -1,4 +1,8 @@
-# vault-mcp Plugin — Authoritative Tool Inventory
+# Governor Plugin — Authoritative Tool Inventory
+
+(Plugin id `governor` since 0.12.0; `vault-mcp` is the retired historical id.
+The always-on `governance_*` tool-name prefix is historical spelling — the
+module is the acceptance module.)
 
 Source of record for every tool the plugin's MCP server registers.  Generated
 by reading `packages/plugin/src/mcp/server.ts` and all `tools-*.ts` files.
@@ -107,7 +111,7 @@ Folded in from the standalone `obsidian-jd-survey` plugin. A note's mirror
 directory defaults to the same relative path under `mirror_root` as the
 note's own vault folder; `survey-mirror` frontmatter overrides it per note.
 Both are checked against a declared content-root boundary
-(`ASSENT_CONTENT_ROOT`/`ASSENT_VAULT_ROOT`, same env vars
+(`GOVERNOR_CONTENT_ROOT`/`GOVERNOR_VAULT_ROOT`, legacy `ASSENT_*` aliases honored — same env vars
 `conformance/snapshot.ts` uses) before anything is read — neither is a vault
 path, so `guard.ts`'s allowlist never sees them otherwise.
 `obsidian_survey_slot` refuses to touch a section last stamped
@@ -123,7 +127,7 @@ Claude Code round trip).
 | `obsidian_survey_status` | Report whether a note's `## Contents (Filesystem)` section is stale relative to its mirror directory. Read-only |
 | `obsidian_survey_slot` | Regenerate the section (bare skeleton, or pass `snapshot_body` for pre-written prose) and stamp `survey:` frontmatter. `dry_run: true` (mandatory, no default) reports the plan only |
 
-### `tools-quickadd.ts` — `registerQuickAddTools` (1 tool, Stage A of "QuickAdd macros as notes")
+### `tools-quickadd.ts` — `registerQuickAddTools` (1 tool, "QuickAdd macros as notes")
 
 Registered directly in `server.ts`, alongside `registerSchemeWriteTools` — same
 reason: this tool mutates another plugin's config (QuickAdd's own `data.json`,
@@ -133,7 +137,7 @@ tool whose `readOnlyHint !== true`).
 
 | Tool name | Description |
 |---|---|
-| `obsidian_quickadd_compile` | Compiles every Macro/UserScript choice note (frontmatter `quickadd-type: macro`) into QuickAdd's live config. Both modes report the would-be diff (`added`/`changed`/`removed` compiler-owned choices) plus per-note `errors` (a non-empty `errors` sets `isError: true`, so a partial compile is distinguishable from a clean one). `dry_run: true` touches nothing; `dry_run: false` applies via a scoped merge — only choices this tool itself generated (a stable `qan:`-prefixed id derived from the note's path) are added/updated/removed, every other choice is left untouched — then (de)registers the Obsidian commands via QuickAdd's own `removeCommandForChoice`/`addCommandForChoice` (`commandsRegistered: false` ⇒ config written but that API was unavailable). Refuses `suspicious_mass_removal` when a non-dry-run would find 0 choices while deleting 3+ (a cold metadata cache), and `out_of_allowlist` outright while a path allowlist is active |
+| `obsidian_quickadd_compile` | Compiles every Macro/UserScript, Template, and Capture choice note (frontmatter `quickadd-type: macro`, `template`, or `capture`) into QuickAdd's live config. Both modes report the would-be diff (`added`/`changed`/`removed` compiler-owned choices) plus per-note `errors` (a non-empty `errors` sets `isError: true`, so a partial compile is distinguishable from a clean one). `dry_run: true` touches nothing; `dry_run: false` applies via a scoped merge — only choices this tool itself generated (a stable `qan:`-prefixed id derived from the note's path) are added/updated/removed, every other choice is left untouched — then (de)registers the Obsidian commands via QuickAdd's own `removeCommandForChoice`/`addCommandForChoice` (`commandsRegistered: false` ⇒ config written but that API was unavailable). Refuses `suspicious_mass_removal` when a non-dry-run would find 0 choices while deleting 3+ (a cold metadata cache), and `out_of_allowlist` outright while a path allowlist is active |
 
 ### `tools-write-notes.ts` — `registerWriteNotesTool` (1 tool, kernel B1)
 
@@ -339,7 +343,7 @@ standalone `obsidian-jd-dashboard`'s `standard-zeros.ts`/`promote-to-folder.ts`/
 `category-index.ts`/`templates.ts`+`new-from-template.ts`. All seven are
 `readOnlyHint: false`; `dry_run` is mandatory (no default) on all seven,
 matching `tools-scheme-write.ts`'s convention. This module never SYNTHESIZES
-`jd-id:` frontmatter itself (standard-zeros' own notes carry none — vault-mcp's
+`jd-id:` frontmatter itself (standard-zeros' own notes carry none — Governor's
 scheme module is path-canonical, the filename already carries the address,
 same call already made for the jd-numbering fold); a template-created note's
 frontmatter is whatever the user's own template file contains, copied through
@@ -456,7 +460,7 @@ the disposition id ONLY — the binding is human-only-mutable config, so the
 `quickadd:*`/`js-engine:*` opaque-execution denies are not weakened. Choice
 rows **cannot dry-run** (typed `choice_dry_run_unsupported` without an
 explicit `dry_run: false`) and report `effects_unknown` (script writes
-surface in the governance review queue via non-human attribution).
+surface in the acceptance review queue via non-human attribution).
 
 Moves ride the **shared link-healing move primitive** (`moveOne`), never
 overwrite, and honor the configured **`moveWhitelist`/`moveBlacklist`**
@@ -540,7 +544,7 @@ the restored bytes cannot be scanned pre-exec (#110).
 | `obsidian_note_diff` | R | `diff` | List/diff local/sync versions of one note (`from`/`to`/`filter`); `path` is allowlist-scoped |
 | `obsidian_base_create` | W | `base:create` | Create an item in a Bases file; content runs the standard accept scan; refuses under an active allowlist (the landing folder is the base's config, not an argument) |
 | `obsidian_plugin_install` | W | `plugin:install` | DANGEROUS — gated behind "Allow dangerous CLI commands" exactly like the proxy; `openWorldHint: true` (network fetch); installs without enabling |
-| `obsidian_plugin_uninstall` | W | `plugin:uninstall` | DANGEROUS + `destructiveHint: true` — same gate; refuses to uninstall vault-mcp itself |
+| `obsidian_plugin_uninstall` | W | `plugin:uninstall` | DANGEROUS + `destructiveHint: true` — same gate; refuses to uninstall the governor plugin itself |
 
 ### Settings-gated raw proxy — conditional on the CLI binary AND the "Raw CLI proxy" setting (1, default OFF)
 

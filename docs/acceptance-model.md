@@ -10,7 +10,7 @@ An agent may *propose* a change to the vault. It may write notes, edit frontmatt
 its reasoning, and mark its own work `acceptance-status: proposed`. What it may **never** do
 is declare that a change has been **accepted**. Acceptance — the moment a human blesses a
 proposed change as canonical — is made by a person, in the
-[Acceptance](README.md#the-acceptance-review-surface) review pane, and **nowhere else**.
+[acceptance module](README.md#the-acceptance-module) review pane, and **nowhere else**.
 
 The design scar, stated exactly as it appears throughout the source:
 
@@ -110,8 +110,8 @@ and respecting the excluded roots). Row actions: the same context-aware Accept, 
 existing Request changes… disposition. The Accept controls surface what will be stamped
 (tooltip + notice with the configured identity) — still exactly one click.
 
-Two governance config fields parameterize the convergence
-(`modules.governance.config`, rendered in the settings tab like the badge fields —
+Two acceptance-module config fields parameterize the convergence
+(`modules.acceptance.config`, rendered in the settings tab like the badge fields —
 human-only by construction):
 
 - **`acceptedBy`** (text, default `local-human`) — the identity stamped as `accepted-by`
@@ -287,7 +287,7 @@ Two grades per declared property:
   an `auto_accept` written beside an existing `auto-accept` is a change, not a carry-forward.
 - **`authority-conferring`** — agent-forbidden **plus honor-only-if-blessed**: the value only
   takes *effect* once the write that set it is attributed to a human (the reconciler's
-  isTrusted human-input capture) or accepted in review. The governance module's
+  isTrusted human-input capture) or accepted in review. The acceptance module's
   `honoredValueFromBlessed` reads the accepted **baseline** — never the raw frontmatter — so
   a value sneaked in through a side door (another plugin, a script, Sync) is **inert** until
   blessed. A side-door change to any declared property also **surfaces in the review queue**

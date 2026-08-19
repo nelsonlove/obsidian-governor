@@ -11,13 +11,16 @@
 //
 // So the values are unchanged (parity keys are byte-identical by construction —
 // the defaults ARE the former literals) but they are now named, discoverable in
-// one file, and overridable via `ASSENT_VAULT_CONVENTIONS` (a JSON object) for
+// one file, and overridable via `GOVERNOR_VAULT_CONVENTIONS` (a JSON object;
+// legacy alias `ASSENT_VAULT_CONVENTIONS`) for
 // a vault that arranges itself differently.
 //
 // This does NOT make the packs vault-agnostic — a pack that checks "registry
 // entries are named consistently" is meaningful only where such a registry
 // exists. It makes the coupling explicit and configurable rather than baked in,
 // which is the difference between a documented assumption and a hidden one.
+
+import { envAliased } from "../env-alias.js";
 
 export interface VaultConventions {
   /** Root under which the registry families (action/property/type/tag) live. */
@@ -46,20 +49,21 @@ export const DEFAULT_VAULT_CONVENTIONS: VaultConventions = {
 };
 
 /**
- * Conventions for this invocation. `ASSENT_VAULT_CONVENTIONS` is a JSON object
+ * Conventions for this invocation. `GOVERNOR_VAULT_CONVENTIONS` (legacy alias
+ * `ASSENT_VAULT_CONVENTIONS`) is a JSON object
  * merged key-wise over the defaults; malformed JSON falls back to the defaults
  * and warns rather than throwing — a bad override must not take the rail down,
  * and a SILENT fallback would be the absence-read-as-emptiness mistake again.
  */
 export function vaultConventionsFrom(env: Record<string, string | undefined>): VaultConventions {
-  const raw = (env.ASSENT_VAULT_CONVENTIONS ?? "").trim();
+  const raw = (envAliased(env, "VAULT_CONVENTIONS") ?? "").trim();
   if (!raw) return DEFAULT_VAULT_CONVENTIONS;
   try {
     const parsed = JSON.parse(raw) as Partial<VaultConventions>;
     return { ...DEFAULT_VAULT_CONVENTIONS, ...parsed };
   } catch (e) {
     console.error(
-      `conformance: ASSENT_VAULT_CONVENTIONS is not valid JSON — using defaults. ${
+      `conformance: GOVERNOR_VAULT_CONVENTIONS (or legacy ASSENT_VAULT_CONVENTIONS) is not valid JSON — using defaults. ${
         e instanceof Error ? e.message : String(e)
       }`,
     );

@@ -230,7 +230,7 @@ export class WriteJournal {
 
   constructor(
     private readonly adapter: JournalAdapter,
-    /** Directory for journal files, vault-relative (e.g. `.obsidian/plugins/vault-mcp/journal`). */
+    /** Directory for journal files, vault-relative (e.g. `.obsidian/plugins/governor/journal`). */
     private readonly dir: string,
     private readonly now: () => Date = () => new Date()
   ) {}
@@ -255,7 +255,7 @@ export class WriteJournal {
     const next = this.tail
       .then(() => this.writeLine(file, line))
       .catch((e: unknown) => {
-        console.error("[vault-mcp] journal append failed", e);
+        console.error("[governor] journal append failed", e);
       });
     this.tail = next;
     return next;

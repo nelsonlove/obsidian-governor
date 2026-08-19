@@ -732,9 +732,13 @@ const FILECLASS_MANIFEST: ModuleManifest = {
   },
 };
 
-// ── governance (Acceptance) module manifest (#83, cycle 2: the accept gesture + pane) ─
+// ── acceptance module manifest (#83, cycle 2: the accept gesture + pane) ─────────────
 //
-// The governance module's enabled-flag gates the Obsidian REVIEW PANE — the human-only
+// Module id `acceptance` since 0.12.0 (historically `governance` — the source dirs
+// src/governance/ + src/kernel/governance/ and the shipped governance_* tool names keep
+// the old word; the settings key migrated via migrateLegacyModuleIds).
+//
+// The acceptance module's enabled-flag gates the Obsidian REVIEW PANE — the human-only
 // Accept / Revert / Adopt / auto-accept-allowlist surface (src/governance/{pane,wiring}.ts,
 // wired in main.ts, NOT here). It contributes ZERO tools to the MCP transport: the accept
 // gesture never touches the bridge. The one MCP read surface — obsidian_pending_review — is
@@ -756,7 +760,7 @@ const FILECLASS_MANIFEST: ModuleManifest = {
 //
 // The config fields below are the accept pane's ONLY MCP-side knobs — display prefs and
 // acceptance-convergence parameters, not accept capabilities. They live at
-// `modules.governance.config.*`, the exact keys the pane wiring reads through
+// `modules.acceptance.config.*`, the exact keys the pane wiring reads through
 // `governanceDisplaySettings` / `governanceAcceptanceSettings` (kernel/governance/settings.ts):
 // the two pending-count badges (default ON), the `acceptedBy` identity the human's own Accept
 // gesture stamps into a `proposed` note (#221/#164 convergence — settings are human-only by
@@ -768,13 +772,13 @@ const FILECLASS_MANIFEST: ModuleManifest = {
 // capability — `acceptedBy` only labels the human's own gesture and `requiredFrontmatterKeys`
 // can only make Accept refuse MORE; the human-only accept controls remain gesture-gated pane
 // buttons, never settings.
-const GOVERNANCE_CONFIG_FIELDS: ConfigField[] = [
+const ACCEPTANCE_CONFIG_FIELDS: ConfigField[] = [
   {
     key: "showRibbonBadge",
     label: "Ribbon pending-count badge",
     type: "toggle",
     help:
-      "Show the pending-review count as a badge on the governance ribbon icon. Off ⇒ the ribbon icon still " +
+      "Show the pending-review count as a badge on the acceptance ribbon icon. Off ⇒ the ribbon icon still " +
       "opens the pane, just without the count badge. Takes effect on the next queue refresh (the badge prefs " +
       "are read live).",
   },
@@ -821,9 +825,9 @@ const GOVERNANCE_CONFIG_FIELDS: ConfigField[] = [
   },
 ];
 
-const GOVERNANCE_MANIFEST: ModuleManifest = {
+const ACCEPTANCE_MANIFEST: ModuleManifest = {
   summary:
-    "Governance (Acceptance): the human-only review pane. When enabled, vault-mcp registers an Obsidian " +
+    "Acceptance: the human-only review pane. When enabled, the plugin registers an Obsidian " +
     "review pane where a human reviews agent changes and Accepts / Reverts / Requests changes / Adopts a " +
     "baseline, plus a Proposed section (the context-aware Accept: accepting a proposed note also stamps " +
     "the accepted family into its frontmatter — the ONE accept across both lifecycles), a Revising section " +
@@ -834,16 +838,16 @@ const GOVERNANCE_MANIFEST: ModuleManifest = {
     "guarded governance_submit_revision resubmit verb (which can never accept) are registered always-on in " +
     "server.ts, independent of this toggle. Ships disabled — a human enables the accept pane here.",
   // The `config` block ships the two badge-DISPLAY toggles plus the two acceptance-convergence
-  // fields (GOVERNANCE_CONFIG_FIELDS) — the accept
-  // pane's only MCP-side knobs, read at pane-wire time from `modules.governance.config` (no
+  // fields (ACCEPTANCE_CONFIG_FIELDS) — the accept
+  // pane's only MCP-side knobs, read at pane-wire time from `modules.acceptance.config` (no
   // ConfigBinding — the default location, exactly where the pane wiring reads them). They confer
   // NO accept capability. The auto-accept ALLOWLIST and adopt-baseline are NOT
   // manifest config fields (they are not scalar knobs) — they are gesture-gated, human-only-mutable
-  // controls the governance module RENDERS itself, into BOTH the review pane and the settings tab
+  // controls the acceptance module RENDERS itself, into BOTH the review pane and the settings tab
   // (connection-ui.ts calls the module's renderGovernanceSettings, which builds them from its own
   // module-private accept-capable controller — never surfaced as data here).
   config: {
-    fields: GOVERNANCE_CONFIG_FIELDS,
+    fields: ACCEPTANCE_CONFIG_FIELDS,
     defaults: { ...DEFAULT_GOVERNANCE_SETTINGS, ...DEFAULT_ACCEPTANCE_SETTINGS } as Record<string, unknown>,
   },
   //
@@ -1623,7 +1627,8 @@ export function builtinModules(deps: MountDeps): VaultModule[] {
         ...(deps.fileclassBinary !== undefined ? { binary: deps.fileclassBinary } : {}),
       }),
     ),
-    // The governance (Acceptance) module (#83, cycle 2): the accept pane's toggle. It
+    // The acceptance module (#83, cycle 2; id `acceptance` since 0.12.0, historically
+    // `governance`): the accept pane's toggle. It
     // contributes ZERO MCP tools — its registrar is a NO-OP on the transport. Its
     // enabled-flag is read by main.ts (NOT here) to decide whether to wire the Obsidian
     // review pane (src/governance/wiring.ts). Deliberately NOT `mutating`: it registers no
@@ -1633,8 +1638,8 @@ export function builtinModules(deps: MountDeps): VaultModule[] {
     // accept pane is opt-in (a human enables it in the config tab). The read-only
     // obsidian_pending_review view is registered always-on in server.ts, independent of this.
     moduleFromRegistrar(
-      { id: "governance", capabilities: ["acceptance"], enabled: false, manifest: GOVERNANCE_MANIFEST },
-      // No-op registrar: the governance capability is an Obsidian UI pane (wired in main.ts),
+      { id: "acceptance", capabilities: ["acceptance"], enabled: false, manifest: ACCEPTANCE_MANIFEST },
+      // No-op registrar: the acceptance capability is an Obsidian UI pane (wired in main.ts),
       // not an MCP tool. Contributing nothing keeps the transport read-only by construction.
       () => { /* contributes no MCP tools */ },
       () => ({}),

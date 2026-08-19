@@ -33,7 +33,7 @@ export interface SdkToolSpec {
   description: string;
   /** A zod raw shape ({ path: z.string() }) or a plain JSON Schema object. */
   inputSchema?: Record<string, z.ZodTypeAny> | JsonSchemaObject;
-  /** Omitted or false ⇒ the tool counts as MUTATING (blocked by vault-mcp read-only mode). */
+  /** Omitted or false ⇒ the tool counts as MUTATING (blocked by Governor's read-only mode). */
   readOnly?: boolean;
   /** Set true if the tool can destroy user data (delete/overwrite); advisory hint surfaced to MCP clients. */
   destructive?: boolean;
@@ -42,7 +42,19 @@ export interface SdkToolSpec {
   handler: (args: Record<string, unknown>) => Promise<unknown> | unknown;
 }
 
-const VAULT_MCP_ID = "vault-mcp";
+/**
+ * The host plugin's id, newest first. Governor renamed its plugin id
+ * `vault-mcp` → `governor` in 0.12.0; the npm package name of this SDK did
+ * NOT change (it is a published contract). So the SDK reads BOTH ids and
+ * subscribes to BOTH ready events — one SDK build works against a host on
+ * either side of the migration, exactly mirroring the host, which fires
+ * `governor:ready` and the legacy `vault-mcp:ready` during the grace period.
+ * Order is significant: on a vault that still has a stale (disabled-but-
+ * present) legacy install, the new id must win.
+ */
+const HOST_PLUGIN_IDS = ["governor", "vault-mcp"] as const;
+/** Ready events, same order and same reason as HOST_PLUGIN_IDS. */
+const HOST_READY_EVENTS = ["governor:ready", "vault-mcp:ready"] as const;
 const API_VERSION = 1;
 
 function isJsonSchema(s: NonNullable<SdkToolSpec["inputSchema"]>): s is JsonSchemaObject {
@@ -80,24 +92,30 @@ function toExternalSpec(t: SdkToolSpec): ExternalToolSpec {
 }
 
 /**
- * Publish MCP tools through vault-mcp. Call from your plugin's onload() and
+ * Publish MCP tools through Governor. Call from your plugin's onload() and
  * hand the returned disposer to this.register(). Handles load order (registers
- * now or on `vault-mcp:ready`), re-registration when vault-mcp reloads, cleanup.
+ * now or on the host's ready event), re-registration when the host reloads,
+ * cleanup. Works against a host on either side of the 0.12.0 `vault-mcp` →
+ * `governor` id migration — see HOST_PLUGIN_IDS.
  */
 export function publishTools(plugin: Plugin, tools: SdkToolSpec[]): () => void {
   const specs = tools.map(toExternalSpec);
   let unregister: (() => void) | null = null;
 
   const getApi = (): VaultMcpApi | null => {
-    const api = (plugin.app as unknown as {
+    const loaded = (plugin.app as unknown as {
       plugins?: { plugins?: Record<string, { api?: VaultMcpApi }> };
-    }).plugins?.plugins?.[VAULT_MCP_ID]?.api;
-    if (!api) return null;
-    if (api.apiVersion !== API_VERSION) {
-      console.warn(`[vault-mcp-api] vault-mcp apiVersion ${api.apiVersion} ≠ supported ${API_VERSION}; not registering '${plugin.manifest.id}' tools`);
-      return null;
+    }).plugins?.plugins;
+    for (const id of HOST_PLUGIN_IDS) {
+      const api = loaded?.[id]?.api;
+      if (!api) continue;
+      if (api.apiVersion !== API_VERSION) {
+        console.warn(`[vault-mcp-api] '${id}' apiVersion ${api.apiVersion} ≠ supported ${API_VERSION}; not registering '${plugin.manifest.id}' tools`);
+        return null;
+      }
+      return api;
     }
-    return api;
+    return null;
   };
 
   const register = () => {
@@ -107,13 +125,19 @@ export function publishTools(plugin: Plugin, tools: SdkToolSpec[]): () => void {
     catch (e) { console.error(`[vault-mcp-api] registerTools failed for '${plugin.manifest.id}'`, e); }
   };
 
-  register(); // vault-mcp may already be loaded
-  // On vault-mcp reload the old registry died with the old plugin instance —
-  // drop the stale unregister (don't call it) and register into the new one.
-  const ref = plugin.app.workspace.on("vault-mcp:ready" as never, () => { unregister = null; register(); });
+  register(); // the host may already be loaded
+  // On host reload the old registry died with the old plugin instance — drop
+  // the stale unregister (don't call it) and register into the new one.
+  // Subscribing to both events means a single 0.12.0+ host load runs this
+  // twice; that is harmless by the host's own contract — same-owner
+  // re-registration REPLACES by tool name, and the superseded disposer is
+  // object-identity guarded, so it cannot delete the newer entries.
+  const refs = HOST_READY_EVENTS.map((evt) =>
+    plugin.app.workspace.on(evt as never, () => { unregister = null; register(); }),
+  );
 
   return () => {
-    plugin.app.workspace.offref(ref);
+    for (const ref of refs) plugin.app.workspace.offref(ref);
     try { unregister?.(); } catch { /* registry may already be gone */ }
     unregister = null;
   };

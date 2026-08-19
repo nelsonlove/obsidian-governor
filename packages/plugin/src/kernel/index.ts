@@ -38,6 +38,7 @@ import {
 } from "./journal.js";
 import { fingerprintArgs, IdempotencyMismatchError, IdempotencyStore, type IdempotencySettlement } from "./idempotency.js";
 import { holderOf, lockNoticeText, LockStore, expiresInSeconds, type Lock, type LockNotice } from "./locks.js";
+import { recordImmutableRefusal } from "./record-guard.js";
 import type { UidIndex } from "./uid-index.js";
 
 export { WriteQueue, WriteTimeoutError, WRITE_TIMEOUT_MS } from "./write-queue.js";
@@ -81,6 +82,12 @@ export {
 } from "./locks.js";
 export type { Lock, LockClaim, LockNotice } from "./locks.js";
 export {
+  RecordImmutableError,
+  recordImmutableRefusal,
+  isRecordFlag,
+  RECORD_EXEMPT_OPS,
+} from "./record-guard.js";
+export {
   UidIndex,
   UidUnresolvedError,
   UidAmbiguousError,
@@ -116,6 +123,7 @@ export {
   moduleFromRegistrar,
   DEFAULT_MODULE_SETTINGS,
   mergeModuleConfig,
+  migrateLegacyModuleIds,
   toolDocDrift,
   toolDocReadOnlyDrift,
   safeValidate,
@@ -191,6 +199,15 @@ export interface TargetProbe {
   uid(path: string): string | undefined;
   /** Revision token for a vault path — file mtime in ms. Undefined when absent. */
   rev(path: string): number | undefined;
+  /**
+   * Whether the note's frontmatter marks it a record (`record: true` —
+   * record-guard.ts's `isRecordFlag` decides what counts). `undefined` when the
+   * flag cannot be read (no file, frontmatter not in the cache) — the record
+   * check FAILS OPEN on it, so absence of an answer never refuses an
+   * operation. Optional: a probe without it (older fakes, bare embeds) simply
+   * doesn't enforce record immutability.
+   */
+  record?(path: string): boolean | undefined;
 }
 
 export interface MutationContext {
@@ -282,7 +299,7 @@ function safeEffects(mc: MutationContext, result: unknown): JournalEffects | und
   try {
     return mc.effectsOf?.(result);
   } catch (e) {
-    console.error("[vault-mcp] journal effects failed", e);
+    console.error("[governor] journal effects failed", e);
     return undefined;
   }
 }
@@ -483,6 +500,23 @@ export class Kernel {
             // failure — say so, or the journal blames a write that never ran.
             throw new ProbeError(e);
           }
+          // Record immutability (#264): a note whose frontmatter carries
+          // `record: true` refuses every mutation except the append tool
+          // (exemption by TOOL identity — see record-guard.ts). Checked at
+          // dequeue like `if_rev`, over EVERY named path like the lock consult
+          // below (a move ONTO a record overwrites it as surely as a write to
+          // it), and against live cache state through the probe. FAIL OPEN:
+          // no probe, no `record` method, or an unreadable flag never refuses
+          // — the check is protective, not load-bearing, and its own
+          // try/catch sits inside recordImmutableRefusal so a throwing record
+          // probe is not promoted to a ProbeError that would fail the call.
+          // Checked BEFORE `if_rev`: a categorically forbidden operation
+          // should say so rather than report staleness.
+          const recordProbe = this.probe?.record?.bind(this.probe);
+          if (recordProbe) {
+            const refusal = recordImmutableRefusal(mc.op, paths, recordProbe);
+            if (refusal) throw refusal;
+          }
           // The precondition, checked HERE and nowhere earlier: an enqueue-time
           // check would compare against a world the operations ahead of us in
           // the queue have already changed, which is precisely the lost update
@@ -664,7 +698,7 @@ export class Kernel {
     try {
       return this.probe?.rev(target.path);
     } catch (e) {
-      console.error("[vault-mcp] revAfter probe failed", e);
+      console.error("[governor] revAfter probe failed", e);
       return undefined;
     }
   }

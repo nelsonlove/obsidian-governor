@@ -142,7 +142,7 @@ export function registerCodeModeTools(
     {
       title: "Search available vault tools",
       description:
-        "This session runs in Code Mode: the full vault-mcp tool set is behind three meta-tools. " +
+        "This session runs in Code Mode: the full Governor tool set is behind three meta-tools. " +
         "Search the available tools by keyword (matched against name, title, and description); no query lists all. " +
         "Then obsidian_describe_tool for a tool's parameters, and obsidian_call_tool to run it.",
       inputSchema: {
@@ -178,7 +178,7 @@ export function registerCodeModeTools(
     {
       title: "Call a vault tool by name",
       description:
-        "Invoke any vault-mcp tool by exact name with a JSON args object (shape per obsidian_describe_tool). " +
+        "Invoke any Governor tool by exact name with a JSON args object (shape per obsidian_describe_tool). " +
         "Safety rails (read-only mode, path allowlist) apply to the target tool exactly as on the full surface.",
       inputSchema: {
         name: z.string().min(1).describe("Exact tool name from obsidian_search_tools."),

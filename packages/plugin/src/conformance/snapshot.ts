@@ -26,6 +26,7 @@ import { parseAllFrontmatter, stripLeadingFrontmatter } from "@vault-mcp/core";
 import type { VocabNote } from "../kernel/vocab/blueprint.js";
 import type { SourceFile, VaultSnapshot } from "./rule-pack.js";
 import { intendedRealPath, isInside } from "./path-identity.js";
+import { envAliased } from "../env-alias.js";
 
 export interface SnapshotOpts {
   /** Absolute content root to walk. */
@@ -33,7 +34,8 @@ export interface SnapshotOpts {
   /**
    * The boundary `root` must resolve inside (or equal). NOT optional in
    * effect: if this is omitted, `buildSnapshot` falls back to reading
-   * `ASSENT_CONTENT_ROOT` / `ASSENT_VAULT_ROOT` from the environment, and if
+   * `GOVERNOR_CONTENT_ROOT` / `GOVERNOR_VAULT_ROOT` (legacy `ASSENT_*`
+   * aliases accepted) from the environment, and if
    * NEITHER is present it refuses outright — see `assertRootPermitted`. There
    * is no further fallback: never `$HOME`, never the current working
    * directory, never a hardcoded path, and no upward filesystem walk to find
@@ -125,7 +127,12 @@ function deniedTerritory(realPath: string): string | null {
  * refusal, decided by the caller (`assertRootPermitted`), not a default
  * decided here. */
 function declaredBoundary(opts: SnapshotOpts): string | null {
-  return opts.boundary ?? process.env.ASSENT_CONTENT_ROOT ?? process.env.ASSENT_VAULT_ROOT ?? null;
+  return (
+    opts.boundary ??
+    envAliased(process.env, "CONTENT_ROOT") ??
+    envAliased(process.env, "VAULT_ROOT") ??
+    null
+  );
 }
 
 /**
@@ -176,7 +183,8 @@ function assertRootPermitted(opts: SnapshotOpts): string {
   if (!boundary) {
     throw new Error(
       "buildSnapshot: refusing to walk — no content-root boundary declared. Pass `boundary` explicitly, or set " +
-        "ASSENT_CONTENT_ROOT (or ASSENT_VAULT_ROOT). There is no default to $HOME, the current working " +
+        "GOVERNOR_CONTENT_ROOT (or GOVERNOR_VAULT_ROOT; the legacy ASSENT_* spellings are accepted too). " +
+        "There is no default to $HOME, the current working " +
         "directory, or any hardcoded path, and no upward filesystem walk to find one.",
     );
   }

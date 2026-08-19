@@ -22,6 +22,7 @@ export { moduleFromRegistrar, type AdapterMeta, type RegistrarServer } from "./a
 export {
   DEFAULT_MODULE_SETTINGS,
   mergeModuleConfig,
+  migrateLegacyModuleIds,
   type ModuleInstanceSettings,
   type ModuleSettings,
 } from "./settings.js";

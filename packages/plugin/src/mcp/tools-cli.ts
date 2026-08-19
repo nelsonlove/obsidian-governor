@@ -958,7 +958,7 @@ export function registerCliTools(
         }
         if (isDangerousCliCommand(command) && !settings.allowDangerousCli) {
           return fail(
-            `CLI command '${command}' is dangerous (code execution / app control) and is blocked. Enable "Allow dangerous CLI commands" in the vault-mcp settings to permit it.`
+            `CLI command '${command}' is dangerous (code execution / app control) and is blocked. Enable "Allow dangerous CLI commands" in the Governor settings to permit it.`
           );
         }
         // Accept-forbidden guard — the scar "the accept verb goes in no API",

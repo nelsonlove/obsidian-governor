@@ -1,16 +1,19 @@
-# Governor — the whole-system map (0.11.0)
+# Governor — the whole-system map (0.12.0)
 
 One document to orient a newcomer or a fresh agent session. It names each part of the
 system in a paragraph or two and links out to the per-domain doc that carries the depth.
 Claims here are checkable against `packages/plugin/src/` and the source-locked
 [`TOOL-INVENTORY.md`](../packages/plugin/TOOL-INVENTORY.md); these docs track `main`
-(current release **0.11.0**).
+(current release **0.12.0**).
 
-**Naming** (ruled 2026-08-19, see [docs/README.md](README.md)): the product is **Governor**;
-the plugin **id** stays `vault-mcp` permanently (folder, socket namespace,
-`mcp__vault-mcp__*` tool prefixes, the plugin-to-plugin API key); ***Assent*** is the broader
-framework the plugin realizes; **`governance`** is the id of the acceptance module — the
-in-Obsidian review pane where a human accepts.
+**Naming** (Nelson's 0.12.0 ruling — one brand; see [docs/README.md](README.md)):
+**Governor** is the product, the project, and the framework (*Assent* is the legacy,
+former name of the framework). The plugin **id** is `governor` — `vault-mcp` is the retired
+historical id, migrated in 0.12.0 (self-migrating data folder; `~/.claude/governor/` state
+namespace with a grace-period compat surface at the old path; server name `governor`,
+`mcp__governor__*` tool prefixes). **`acceptance`** is the id of the acceptance module —
+the in-Obsidian review pane where a human accepts (its historical id `governance` survives
+only in the `governance_*` tool names and the `src/governance/` source dirs).
 
 ## What Governor is
 
@@ -25,9 +28,9 @@ full, residuals included, in [acceptance-model.md](acceptance-model.md).
 ## Transport — socket, bridge, per-connection servers
 
 - **Unix socket + bundled bridge, not HTTP.** The plugin listens on a per-vault socket
-  (`~/.claude/vault-mcp/<vault-slug>.sock`, `chmod 600` — the only auth boundary; no token,
+  (`~/.claude/governor/<vault-slug>.sock`, `chmod 600` — the only auth boundary; no token,
   no TCP port). A bundled `bridge.mjs` (embedded in `main.js`, written to
-  `~/.claude/vault-mcp/` on load) is what Claude Code spawns; it proxies stdio ↔ socket and
+  `~/.claude/governor/` on load) is what Claude Code spawns; it proxies stdio ↔ socket and
   survives Obsidian restarts by queueing and replaying the `initialize` handshake.
 - **A fresh `McpServer` per connection** (`buildMcpServer` in `src/mcp/server.ts`), so
   concurrent sessions and background agents share the plugin without evicting each other.
@@ -55,7 +58,7 @@ construction. The kernel primitives ([kernel-v0.md](kernel-v0.md),
   don't queue. Each operation has a 30-second budget; expiry abandons that one call
   (`Error [write_timeout]`) and the queue moves on.
 - **Write journal** — one JSONL record per mutating operation in
-  `.obsidian/plugins/vault-mcp/journal/YYYY-MM.jsonl`: op, target (path + uid), actor
+  `.obsidian/plugins/governor/journal/YYYY-MM.jsonl`: op, target (path + uid), actor
   (transport / client / connection / server identity), args digest (bodies collapsed to
   `<N chars>`), outcome, timings, `effects` where an operation discovers its own blast
   radius. Append-only by design — late-settling operations get corrective `late-ok` /
@@ -108,7 +111,7 @@ On top of the floor, two generalizations:
   may not introduce, change, or remove the property; byte-identical carry-forward passes)
   and **`authority-conferring`** (agent-forbidden *plus honor-only-if-blessed*: the value
   takes effect only once the write that set it is human-attributed or accepted in review —
-  the governance module reads honored values from the blessed baseline, not raw
+  the acceptance module reads honored values from the blessed baseline, not raw
   frontmatter, so a side-door value stays inert until blessed, and surfaces in the review
   queue as a `(side-door)` row). The floor is not config: accepted-family checks run
   independently of the list, and config entries naming floor keys are dropped loudly.
@@ -119,9 +122,9 @@ On top of the floor, two generalizations:
   blessed baseline, and each policy-driven auto-accept is logged with `policy: appends|all`
   in the acceptance log.
 
-## The governance module (the Acceptance capability)
+## The acceptance module
 
-The `governance` module contributes **zero MCP tools** — its `enabled` flag (default off)
+The `acceptance` module (id `governance` before 0.12.0) contributes **zero MCP tools** — its `enabled` flag (default off)
 gates the in-Obsidian review surface, which mounts/unmounts live on toggle
 (`src/governance/{pane,wiring}.ts`). What the pane gives the human:
 
@@ -221,10 +224,11 @@ guard-patched interception point as hand-registered tools. See [modules.md](modu
 - **`bases`** (default on, read-only, feature-gated) — evaluated Base result sets:
   `base_list` + `base_query` via a hidden detached-leaf capture of Obsidian's own Bases
   engine. Full doc: [bases.md](bases.md).
-- **The QuickAdd compile tool** — `obsidian_quickadd_compile` (Stage A of "QuickAdd macros
+- **The QuickAdd compile tool** — `obsidian_quickadd_compile` ("QuickAdd macros
   as notes") registers directly in `server.ts`, not through the module host, because it
-  mutates QuickAdd's own config rather than a vault note: it compiles Macro/UserScript
-  choice notes (frontmatter `quickadd-type: macro`) into QuickAdd's live config via a scoped
+  mutates QuickAdd's own config rather than a vault note: it compiles Macro/UserScript,
+  Template, and Capture choice notes (frontmatter `quickadd-type: macro`, `template`, or
+  `capture`) into QuickAdd's live config via a scoped
   merge (only compiler-owned `qan:`-prefixed choices are touched), reports the diff in both
   modes, refuses `suspicious_mass_removal` and refuses outright under an active path
   allowlist.
@@ -236,7 +240,7 @@ staleness of a note's `## Contents (Filesystem)` section against its filesystem 
 directory) and **`obsidian_survey_slot`** (regenerate that section and stamp `survey:`
 frontmatter; `dry_run` mandatory with no default). Mirror paths are real filesystem paths
 the vault allowlist can't see, so both are checked against a declared content-root boundary
-(`ASSENT_CONTENT_ROOT` / `ASSENT_VAULT_ROOT`) before any read; the slot write routes through
+(`GOVERNOR_CONTENT_ROOT` / `GOVERNOR_VAULT_ROOT`; legacy `ASSENT_*` aliases accepted) before any read; the slot write routes through
 the shared append guard, and a section last stamped `by: "claude-code"` or `by: "human"` is
 refused without `force: true`.
 
@@ -274,10 +278,12 @@ note whose frontmatter is a derivation stamp, accept-checked before writing).
 
 ## External tools + trust
 
-Other Obsidian plugins publish MCP tools via `app.plugins.plugins['vault-mcp'].api`
+Other Obsidian plugins publish MCP tools via `app.plugins.plugins['governor'].api`
 (`apiVersion: 1`; SDK: `vault-mcp-api`, in this monorepo at
 [`packages/vault-mcp-api`](../packages/vault-mcp-api) since #86, published to npm under
-the unchanged name). The boundary is pure data: plain JSON Schema in,
+the unchanged name — it reads the new id with a fallback to the legacy `vault-mcp` one and
+waits on both `governor:ready` and the legacy `vault-mcp:ready`, which both fire during the
+grace period). The boundary is pure data: plain JSON Schema in,
 plain JSON out, registered through the guarded path per connection. A published
 `readOnly: true` is **distrusted by default** — believing it would exempt third-party code
 from the queue, the journal, the allowlist, the kernel args and read-only mode at once — so
@@ -289,7 +295,7 @@ blocked outright while an allowlist is active. See
 ## Module defaults
 
 `modules.<id>.enabled` overrides each default; toggles take effect on the next session
-connect, except governance, whose pane mounts/unmounts live. Source of truth:
+connect, except acceptance, whose pane mounts/unmounts live. Source of truth:
 `builtinModules` in `src/mcp/modules-mount.ts`.
 
 | Module | Default | Mutating? | Additional gate |
@@ -301,7 +307,7 @@ connect, except governance, whose pane mounts/unmounts live. Source of truth:
 | `provenance` | off | mutating | — |
 | `health` | off | read-only | — |
 | `fileclass` | off | mutating | Fileclass plugin loaded + `fileclass` CLI binary found |
-| `governance` | off | zero MCP tools (Obsidian pane only) | — |
+| `acceptance` | off | zero MCP tools (Obsidian pane only) | — |
 | `crosssession` | off | mutating | — |
 | `triage` | off | mutating | Base-backed queues additionally need the bases module |
 

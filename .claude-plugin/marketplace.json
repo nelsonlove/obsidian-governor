@@ -8,8 +8,8 @@
     {
       "name": "vault-mcp-connect",
       "source": "./packages/plugin/cc-plugin",
-      "description": "SessionStart health check + /vault-mcp-status for the vault-mcp Obsidian bridge, plus the record-class write guard (PreToolUse: refuses non-append Bash/MCP writes under 'Machinery record/').",
-      "version": "0.2.0",
+      "description": "SessionStart health check + /vault-mcp-status for the Governor Obsidian bridge (plugin id 'governor'; historically 'vault-mcp'), plus the record-class write guard (PreToolUse: refuses non-append Bash/MCP writes under 'Machinery record/').",
+      "version": "0.2.1",
       "author": {
         "name": "Nelson Love"
       }

@@ -7,7 +7,7 @@ README can stay an introduction. Every heading keeps its original anchor. Deeper
 
 ### Code Mode (token-lean surface)
 
-Registering ~40+ tool schemas costs context in every session. A connection whose bridge runs with **`--code-mode`** (append it to the registered command: `… node ~/.claude/vault-mcp/bridge.mjs --vault <name> --code-mode`, or set `VAULT_MCP_CODE_MODE=1`) gets just **3 meta-tools** over the same registry: `obsidian_search_tools` (keyword discovery), `obsidian_describe_tool` (input JSON Schema), `obsidian_call_tool` (invoke by name, args validated against the target's schema). Read-only mode and the path allowlist bind on the target tool exactly as on the full surface. The mode is chosen per connection via a one-line preamble the bridge sends before the MCP stream — old bridges and full-surface sessions are wire-compatible, and both kinds of session can run concurrently against the same vault. If the vault's plugin build predates preamble support, the bridge warns on stderr and falls back to the full surface rather than failing.
+Registering ~40+ tool schemas costs context in every session. A connection whose bridge runs with **`--code-mode`** (append it to the registered command: `… node ~/.claude/governor/bridge.mjs --vault <name> --code-mode`, or set `VAULT_MCP_CODE_MODE=1`) gets just **3 meta-tools** over the same registry: `obsidian_search_tools` (keyword discovery), `obsidian_describe_tool` (input JSON Schema), `obsidian_call_tool` (invoke by name, args validated against the target's schema). Read-only mode and the path allowlist bind on the target tool exactly as on the full surface. The mode is chosen per connection via a one-line preamble the bridge sends before the MCP stream — old bridges and full-surface sessions are wire-compatible, and both kinds of session can run concurrently against the same vault. If the vault's plugin build predates preamble support, the bridge warns on stderr and falls back to the full surface rather than failing.
 
 ## Addressing notes by uid
 
@@ -116,6 +116,16 @@ Every **mutating** tool call (write, append, patch, move, delete, trash, frontma
 
 Each queued operation gets a **30-second budget** (a constant, not a setting). If it hasn't finished by then it is abandoned, that *one* call fails with `Error [write_timeout]: …`, and the queue immediately moves on — a wedged operation can never take the bridge, or anyone else's session, down with it. The vault may or may not have been modified when this happens; re-read before retrying.
 
+### Record notes are append-only (`record: true`)
+
+A note whose frontmatter carries **`record: true`** is a **record** — historical, never edited in place. The kernel refuses **every mutating operation that names one** (write, patch, frontmatter edit, move, trash, delete — and a move whose *destination* is a record, which would overwrite it) with `Error [record_immutable]: …` before the handler runs, journaled like any other refused operation. The **one exemption is `obsidian_append_note`** — the pure end-of-file append, which is how a record grows: a new dated `## YYYY-MM-DD …` section at the bottom. The exemption is by **tool identity**, not by what the arguments look like.
+
+The check runs at the front of the write queue (same point as `if_rev`), reads the flag from Obsidian's already-parsed metadata cache, and **fails open**: a missing file, an unparsed cache, or an unreadable frontmatter never refuses anything — this guard is protective, and an unreadable note must not turn into a vault-wide write outage. It exists for fallible agents, not adversaries: the same threat model as the [accept guard](acceptance-model.md).
+
+Enforcement is on by default and toggleable in the settings tab (*Enforce record immutability*) — the check is deliberately over-inclusive, refusing on any path a call **names**, so the switch is the escape hatch for a legitimate operation it blocks — concretely, `obsidian_repoint_link` refuses when its `target_path` is a record, even though the record is only the link *destination* and is never written.
+
+The scope is *addressed* mutation — the paths an operation **names**. An operation that *discovers* its blast radius can still touch a record's body as a side effect: `obsidian_repoint_link` rewrites whatever notes carry the matching wikilink, and a move's link-healing rename rewrites backlinks wherever they live (`update_backlinks: false` is advisory). Byte-exactness against that class is what a record's git history and backups are for.
+
 ### Conditional writes (`if_rev`) and safe retries (`idempotency_key`)
 
 Every mutating tool takes two optional arguments beyond its own. They are declared on every mutating schema automatically, so they work on the full surface, in Code Mode, and on mutating tools published by other plugins alike; no handler ever sees them.
@@ -127,17 +137,17 @@ Every mutating tool takes two optional arguments beyond its own. They are declar
 
   A key's identity is (**key**, **operation**, **arguments**, **`if_rev`**). Reusing one key for a different tool — for the same tool with different arguments — or for the same call under a *different* `if_rev`, including dropping or adding one — fails with `Error [idempotency_mismatch]: …` and runs nothing, rather than replaying and silently discarding the second call's write. The precondition counts because it is half of what the caller asked for: replaying a keyed call across a changed `if_rev` would report that a condition held when it was never evaluated. (The error names which half diverged: the operation, the arguments, or the precondition.) **Keys live in memory, per plugin instance**: reloading the plugin (or restarting Obsidian) clears them, after which the same key executes again. That is the v0 boundary — the store collapses retries within a session's lifetime, it does not make an operation exactly-once forever.
 
-Every mutating operation also appends **one JSONL line** to `.obsidian/plugins/vault-mcp/journal/YYYY-MM.jsonl` (rolled monthly, inside the plugin's own folder rather than the note tree):
+Every mutating operation also appends **one JSONL line** to `.obsidian/plugins/governor/journal/YYYY-MM.jsonl` (rolled monthly, inside the plugin's own folder rather than the note tree):
 
 ```json
 {"ts":"2026-08-08T19:04:11.427Z","op":"obsidian_write_note","target":{"path":"Inbox/Idea.md","uid":"019f…"},
  "actor":{"transport":"mcp","client":"claude-code/1.0.0","connection":"m1x8g-3",
-          "server":{"vault":"Assent","install":"3f7c…","version":"0.9.2"}},
+          "server":{"vault":"obsidian","install":"3f7c…","version":"0.9.2"}},
  "argsDigest":{"path":"Inbox/Idea.md","content":"<812 chars>","overwrite":true},
  "outcome":"ok","durationMs":37,"queueWaitMs":0,"revBefore":1754680000000,"revAfter":1754680051427}
 ```
 
-It records the *operation* — what happened, to what, on whose behalf — not the bytes; git already covers the bytes. `actor.server` is the transport's own assertion of identity: which **vault**, which **install** (a persistent id in `.obsidian/plugins/vault-mcp/install-id.json`, minted once and kept beside the journal), and which plugin **version** — so a journal copied off the machine, or two vaults' journals read together, stays attributable. The `initialize` handshake carries the vault name too, in `serverInfo.title`. `durationMs` is the handler alone and `queueWaitMs` is the time spent waiting behind other writes, so a slow operation and a queued one are distinguishable; `revBefore` is probed when the operation reaches the front of the queue, not when it was enqueued. Operations that name no vault path (running a command, toggling a plugin, an `obsidian_cli` invocation) record `target.ref`, e.g. `"command:editor:toggle-bold"`. `target` says what was *asked for*; where an operation discovers its own blast radius — `obsidian_repoint_link` scans notes to find the links it rewrites — the record also carries **`effects`**: `{"filesChanged": 12, "paths": [...]}`, the exact count plus the changed paths (capped at 20). A dry run records none: nothing changed, so nothing is claimed.
+It records the *operation* — what happened, to what, on whose behalf — not the bytes; git already covers the bytes. `actor.server` is the transport's own assertion of identity: which **vault**, which **install** (a persistent id in `.obsidian/plugins/governor/install-id.json`, minted once and kept beside the journal), and which plugin **version** — so a journal copied off the machine, or two vaults' journals read together, stays attributable. The `initialize` handshake carries the vault name too, in `serverInfo.title`. `durationMs` is the handler alone and `queueWaitMs` is the time spent waiting behind other writes, so a slow operation and a queued one are distinguishable; `revBefore` is probed when the operation reaches the front of the queue, not when it was enqueued. Operations that name no vault path (running a command, toggling a plugin, an `obsidian_cli` invocation) record `target.ref`, e.g. `"command:editor:toggle-bold"`. `target` says what was *asked for*; where an operation discovers its own blast radius — `obsidian_repoint_link` scans notes to find the links it rewrites — the record also carries **`effects`**: `{"filesChanged": 12, "paths": [...]}`, the exact count plus the changed paths (capped at 20). A dry run records none: nothing changed, so nothing is claimed.
 
 ### Advisory scope claims
 
@@ -195,7 +205,7 @@ With no allowlist configured, every one of these behaves exactly as it always di
 
 ## Publishing tools from other plugins
 
-Other Obsidian plugins can publish their own MCP tools through vault-mcp's bridge. Add the SDK — `vault-mcp-api`, which lives in this monorepo at [`packages/vault-mcp-api`](../packages/vault-mcp-api) (folded from the standalone `github:nelsonlove/vault-mcp-api` repo, #86):
+Other Obsidian plugins can publish their own MCP tools through Governor's bridge. Add the SDK — `vault-mcp-api`, which lives in this monorepo at [`packages/vault-mcp-api`](../packages/vault-mcp-api) (folded from the standalone `github:nelsonlove/vault-mcp-api` repo, #86):
 
     npm install vault-mcp-api
 
@@ -216,11 +226,11 @@ then in your plugin's `onload()`:
       }])
     );
 
-The SDK handles load order (registers now or on the `vault-mcp:ready` event), re-registration when vault-mcp reloads, and cleanup. Tools appear to new Claude Code sessions on their next connect. Safety guards that apply: read-only mode always applies (mutating external tools are blocked when read-only is on); the path allowlist scopes arguments under recognized path keys (path, from, to, paths, and a few others) — when an allowlist is active, mutating external tools whose args carry no recognized path key are blocked outright, since vault-mcp cannot scope the call. To pass the allowlist check, use a recognized path argument name or clear the allowlist.
+The SDK handles load order (registers now or on the ready event — the plugin fires both `governor:ready` and the legacy `vault-mcp:ready`), re-registration when the plugin reloads, and cleanup. Tools appear to new Claude Code sessions on their next connect. Safety guards that apply: read-only mode always applies (mutating external tools are blocked when read-only is on); the path allowlist scopes arguments under recognized path keys (path, from, to, paths, and a few others) — when an allowlist is active, mutating external tools whose args carry no recognized path key are blocked outright, since Governor cannot scope the call. To pass the allowlist check, use a recognized path argument name or clear the allowlist.
 
 ### External tool trust
 
-`readOnly: true` on a published tool is an assertion by a third-party plugin about code vault-mcp cannot inspect — and believing it exempts that tool from the write queue, the journal, the path allowlist, the kernel arguments, and read-only mode, all at once. So **vault-mcp does not believe it by default**.
+`readOnly: true` on a published tool is an assertion by a third-party plugin about code Governor cannot inspect — and believing it exempts that tool from the write queue, the journal, the path allowlist, the kernel arguments, and read-only mode, all at once. So **Governor does not believe it by default**.
 
 An external tool that claims read-only is treated as **mutating** — queued, journaled, allowlist-scoped, given `if_rev`/`idempotency_key`, and **blocked entirely while read-only mode is on** — unless its publishing plugin id appears in the **Trusted read-only plugins** setting (`trustedReadOnlyPlugins` in the plugin's `data.json`; an array of plugin ids, empty by default). Matching is exact on the raw plugin id, and the setting is read when a session connects, so changes take effect on the next connect.
 
