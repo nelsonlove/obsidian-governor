@@ -28,7 +28,7 @@ import { ok, okError, codedError } from "./helpers.js";
 import type { ServerCtx } from "./tools-core.js";
 import { RW } from "./tools-vault-write.js";
 import type { GuardSettings } from "../guard.js";
-import { transformChoices, isCompilerOwnedId } from "../kernel/quickadd/transform.js";
+import { transformChoices, isCompilerOwnedId, deriveChoiceId } from "../kernel/quickadd/transform.js";
 import type { ChoiceNoteInput, MacroStepResolved, QuickAddMacroChoice, EditorCommandType } from "../kernel/quickadd/types.js";
 
 /** 0 fresh choices AND this many about-to-be-deleted ones reads as a cold
@@ -116,7 +116,7 @@ function resolveChoiceStep(app: App, notePath: string, step: any): MacroStepReso
   // need to wait for that note to be compiled in this same run. Whether it
   // actually compiles into a valid choice is unchecked (see types.ts's
   // ChoiceStepOk doc comment).
-  return { kind: "choice", ok: true, choiceId: `qan:${dest.path}#choice` };
+  return { kind: "choice", ok: true, choiceId: deriveChoiceId(dest.path) };
 }
 
 function resolveWaitStep(_app: App, _notePath: string, step: any): MacroStepResolved {
