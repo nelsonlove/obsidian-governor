@@ -201,8 +201,10 @@ export function declaredRowsOf(value: unknown): { rows: DeclaredDispositionRow[]
       return;
     }
     const r = raw as Record<string, unknown>;
-    const id = r.id;
-    if (typeof id !== "string" || id.trim() === "") {
+    // Ids are TRIMMED before anything else — " move" must collide with the
+    // built-in `move`, not slip past as a whitespace-distinct sibling.
+    const id = typeof r.id === "string" ? r.id.trim() : r.id;
+    if (typeof id !== "string" || id === "") {
       problems.push(`${at} needs a non-empty string id`);
       return;
     }

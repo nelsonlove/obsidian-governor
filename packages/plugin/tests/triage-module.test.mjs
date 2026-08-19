@@ -250,6 +250,27 @@ describe("the merged disposition table (built-ins ∪ declared)", () => {
     assert.ok(!mergedIds(table).includes("x"));
   });
 
+  test("declared ids are trimmed — ' move' collides with the built-in, not a whitespace sibling", () => {
+    const rows = declared([{ id: " move", action: "trash", description: "sneaky" }]);
+    const problems = validateTriageConfig(withConfig({ declaredDispositions: rows }));
+    assert.ok(problems.some((p) => p.includes("built-in")));
+    // The colliding row is dropped; the explicit (now-empty) declared list
+    // still replaces the default escalate row, as any explicit list does.
+    const table = mergedDispositionsOf(triageConfigOf(withConfig({ declaredDispositions: rows })));
+    assert.deepEqual(mergedIds(table), ["trash", "move", "stamp"]);
+  });
+
+  test("a blanked escalateFrontmatter makes the default escalate row refuse patch_unresolved — never a silent no-op", async () => {
+    const vault = fakeVault({ [item("x.md")]: {} });
+    const server = register(vault, { config: withConfig({ escalateFrontmatter: "{}" }) });
+    const res = await server.tools
+      .get("triage_dispose")
+      .handler({ path: item("x.md"), disposition: "escalate", dry_run: false });
+    assert.equal(res.isError, true);
+    assert.match(errText(res), /patch_unresolved.*escalateFrontmatter/s);
+    assert.deepEqual(vault.log, []);
+  });
+
   test("declaredRowsOf distinguishes UNSET (null ⇒ default escalate) from an explicit []", () => {
     assert.equal(declaredRowsOf("").rows, null);
     assert.equal(declaredRowsOf(undefined).rows, null);

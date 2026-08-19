@@ -163,21 +163,27 @@ export function planDispose(input: DisposeInput): { refusal: DisposeRefusal } | 
 
   // ── the effective patch ───────────────────────────────────────────────────
   // A declared row carries its own patch; the built-in `stamp` resolves from
-  // config, and refuses typed while unconfigured (an empty stamp writes
-  // nothing — that call is a mistake, not a no-op success).
+  // config. EVERY stamp with an empty effective patch refuses typed — an
+  // empty stamp writes nothing, and that call is a mistake, not a no-op
+  // success. (Declared stamp rows are guaranteed a non-empty patch by
+  // config-time validation; the empty case reaches here only through the
+  // built-in's stampFrontmatter or the DEFAULT escalate row's blanked
+  // escalateFrontmatter.)
   let patch: Record<string, unknown> | null = d.patch;
   if (d.builtin && d.action === "stamp") {
     patch = Object.keys(input.config.stampFrontmatter).length > 0 ? input.config.stampFrontmatter : null;
-    if (patch === null) {
-      return {
-        refusal: {
-          code: "patch_unresolved",
-          message:
-            "built-in 'stamp' has no configured patch — set modules.triage.config.stampFrontmatter, or declare " +
-            "a stamp disposition row with its own patch",
-        },
-      };
-    }
+  }
+  if (d.action === "stamp" && patch === null) {
+    return {
+      refusal: {
+        code: "patch_unresolved",
+        message: d.builtin
+          ? "built-in 'stamp' has no configured patch — set modules.triage.config.stampFrontmatter, or declare " +
+            "a stamp disposition row with its own patch"
+          : `disposition '${d.id}' has an empty patch — nothing would change; configure its patch ` +
+            "(for the default escalate row: modules.triage.config.escalateFrontmatter)",
+      },
+    };
   }
 
   // ── the plan ──────────────────────────────────────────────────────────────
