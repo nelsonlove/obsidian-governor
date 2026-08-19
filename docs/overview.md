@@ -304,12 +304,14 @@ connect, except governance, whose pane mounts/unmounts live. Source of truth:
 | `triage` | off | mutating | Base-backed queues additionally need the bases module |
 
 Non-module conditional surfaces: the six plugin-gated integration tools (Dataview ×2,
-Templater, Omnisearch, Metadata Menu ×2), the five CLI-binary-conditional dedicated tools,
+Templater, Omnisearch, Metadata Menu ×2), the Importer-plugin-gated
+`obsidian_import_apple_notes` (version-gated headless Apple Notes import), the five
+CLI-binary-conditional dedicated tools,
 the settings-gated `obsidian_cli` raw proxy (default off), the dev tool-runner
 (`devToolRunner` setting, default on — an in-Obsidian command, not an MCP tool), and Code
 Mode (chosen per connection). The full source-locked tool census is
 [`TOOL-INVENTORY.md`](../packages/plugin/TOOL-INVENTORY.md): 71 base `obsidian_*` tools
-(17 fs-expressible + 44 always-live + 10 module-mounted default-on), up to 83 with the
+(17 fs-expressible + 44 always-live + 10 module-mounted default-on), up to 84 with the
 conditional surfaces, plus the always-on `governance_*` pair and the module surfaces named
 outside the `obsidian_*` family.
 
