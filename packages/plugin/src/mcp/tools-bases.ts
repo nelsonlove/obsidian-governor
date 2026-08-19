@@ -138,10 +138,114 @@ function pathVisible(visible: BasesToolsCtx["visible"], path: string): boolean {
   return !visible || visible([path]).length === 1;
 }
 
-function allowlistActive(ctx: BasesToolsCtx): boolean {
+/** Whether a path allowlist is active — gates whether `some_rows_hidden` is
+ * disclosed at all (with no allowlist it is a constant false and says
+ * nothing). Exported for the triage module's base-backed queues, which follow
+ * the identical disclosure rule. */
+export function allowlistActive(ctx: Pick<BasesToolsCtx, "getSettings">): boolean {
   const s = ctx.getSettings?.();
   const allow = (s as { allowlist?: string[] } | undefined)?.allowlist;
   return Array.isArray(allow) && allow.length > 0;
+}
+
+// ── the shared evaluated-rows seam (#241) ───────────────────────────────────
+//
+// The WHOLE base_query evaluation path — validation, view selection, the
+// serialized + belt-deadlined capture, and the allowlist row bound — as one
+// reusable function, so the triage module's base-backed queues consume the
+// SAME machinery (same serializer, same hidden-leaf capture, same typed
+// refusals) instead of duplicating any of it. base_query's own handler is a
+// thin shell over this.
+
+export type BaseRowsRefusal = {
+  code:
+    | "bases_unavailable"
+    | "not_a_base"
+    | "out_of_allowlist"
+    | "not_found"
+    | "base_parse_error"
+    | "view_not_found"
+    | "base_timeout";
+  message: string;
+};
+
+export interface BaseRowsResult {
+  view: string;
+  viewType: string;
+  columns: string[];
+  rows: CapturedRow[];
+  total: number;
+  truncated: boolean;
+  someRowsHidden: boolean;
+}
+
+export async function queryBaseRows(
+  source: BasesSource,
+  ctx: { config: Record<string, unknown>; visible?: (paths: string[]) => string[] },
+  args: { path: string; view?: string; limit?: number },
+): Promise<{ refusal: BaseRowsRefusal } | { result: BaseRowsResult }> {
+  const refuse = (code: BaseRowsRefusal["code"], message: string) => ({ refusal: { code, message } });
+  // The feature gate, callable-level: registerBasesTools checks this before
+  // registering, but the triage module reaches this function directly and
+  // must get a TYPED refusal (not a hang) on a pre-Bases Obsidian.
+  if (!source.available()) {
+    return refuse(
+      "bases_unavailable",
+      "the running Obsidian does not expose the public Bases API (1.10+) — base-backed queries are unavailable",
+    );
+  }
+  const cfg = basesConfigOf(ctx.config);
+  const { path, view, limit } = args;
+  if (!path.endsWith(".base")) return refuse("not_a_base", `base queries evaluate .base files; got: ${path}`);
+  // Belt to the guard's own path-arg allowlist check (the handler is also
+  // reachable through module-host tests with no guard in front, and the
+  // triage queue's `base` argument is not a guard-recognized path key).
+  if (!pathVisible(ctx.visible, path)) {
+    return refuse("out_of_allowlist", `path is outside the configured allowlist: ${path}`);
+  }
+  const read = await source.readBaseConfig(path);
+  if (!read.exists) return refuse("not_found", `no such base: ${path}`);
+  if (read.parseError !== undefined) {
+    return refuse("base_parse_error", `${path} is not valid YAML: ${read.parseError}`);
+  }
+  const views = baseViewsOf(read.config);
+  if (views === null) return refuse("base_parse_error", `${path} does not look like a Bases config (not a YAML mapping)`);
+  const selected = selectView(views, view);
+  if (!selected) {
+    const names = views.map((v) => v.name).filter(Boolean);
+    return refuse(
+      "view_not_found",
+      view === undefined
+        ? `${path} declares no views`
+        : `${path} has no view named "${view}" — declared: ${names.length ? names.join(", ") : "(none)"}`,
+    );
+  }
+  const columns = selected.order ? selected.order.map(normalizePropertyId) : null;
+  let captured: CaptureResult;
+  try {
+    captured = await captureSerializer(() =>
+      withBeltDeadline(
+        source.capture(path, view === undefined ? undefined : selected.name, columns, cfg.queryTimeoutMs),
+        cfg.queryTimeoutMs,
+      ),
+    );
+  } catch (e) {
+    if (e instanceof BaseTimeoutError) return refuse("base_timeout", e.message);
+    throw e;
+  }
+  const cap = Math.min(limit ?? cfg.rowCap, cfg.rowCap);
+  const bounded = boundRows(captured.rows, ctx.visible, cap);
+  return {
+    result: {
+      view: selected.name,
+      viewType: selected.type,
+      columns: captured.columns,
+      rows: bounded.rows,
+      total: bounded.total,
+      truncated: bounded.truncated,
+      someRowsHidden: bounded.someRowsHidden,
+    },
+  };
 }
 
 export function registerBasesTools(server: McpServer, source: BasesSource, ctx: BasesToolsCtx): void {
@@ -149,8 +253,6 @@ export function registerBasesTools(server: McpServer, source: BasesSource, ctx: 
   // surface is absent, not broken. Checked once per connection build, like
   // every other conditional registration.
   if (!source.available()) return;
-
-  const cfg = basesConfigOf(ctx.config);
 
   server.registerTool(
     "base_list",
@@ -213,54 +315,24 @@ export function registerBasesTools(server: McpServer, source: BasesSource, ctx: 
     },
     async ({ path, view, limit }: { path: string; view?: string; limit?: number }) => {
       try {
-        if (!path.endsWith(".base")) {
-          return codedError("not_a_base", `base_query evaluates .base files; got: ${path}`);
-        }
-        // Belt to the guard's own path-arg allowlist check (the handler is
-        // also reachable through module-host tests with no guard in front).
-        if (!pathVisible(ctx.visible, path)) {
-          return codedError("out_of_allowlist", `path is outside the configured allowlist: ${path}`);
-        }
-        const read = await source.readBaseConfig(path);
-        if (!read.exists) return codedError("not_found", `no such base: ${path}`);
-        if (read.parseError !== undefined) {
-          return codedError("base_parse_error", `${path} is not valid YAML: ${read.parseError}`);
-        }
-        const views = baseViewsOf(read.config);
-        if (views === null) return codedError("base_parse_error", `${path} does not look like a Bases config (not a YAML mapping)`);
-        const selected = selectView(views, view);
-        if (!selected) {
-          const names = views.map((v) => v.name).filter(Boolean);
-          return codedError(
-            "view_not_found",
-            view === undefined
-              ? `${path} declares no views`
-              : `${path} has no view named "${view}" — declared: ${names.length ? names.join(", ") : "(none)"}`,
-          );
-        }
-        const columns = selected.order ? selected.order.map(normalizePropertyId) : null;
-        const captured = await captureSerializer(() =>
-          withBeltDeadline(
-            source.capture(path, view === undefined ? undefined : selected.name, columns, cfg.queryTimeoutMs),
-            cfg.queryTimeoutMs,
-          ),
-        );
-        const cap = Math.min(limit ?? cfg.rowCap, cfg.rowCap);
-        const bounded = boundRows(captured.rows, ctx.visible, cap);
+        // The whole evaluation path lives in queryBaseRows — the seam shared
+        // with the triage module's base-backed queues (#241).
+        const outcome = await queryBaseRows(source, { config: ctx.config, visible: ctx.visible }, { path, view, limit });
+        if ("refusal" in outcome) return codedError(outcome.refusal.code, outcome.refusal.message);
+        const r = outcome.result;
         return ok({
           path,
-          view: selected.name,
-          view_type: selected.type,
-          columns: captured.columns,
-          rows: bounded.rows.map((r) => ({ path: r.path, properties: r.values })),
-          total: bounded.total,
-          truncated: bounded.truncated,
+          view: r.view,
+          view_type: r.viewType,
+          columns: r.columns,
+          rows: r.rows.map((row) => ({ path: row.path, properties: row.values })),
+          total: r.total,
+          truncated: r.truncated,
           // Only meaningful (and only disclosed) when an allowlist is active:
           // with no allowlist the field is a constant false and says nothing.
-          ...(allowlistActive(ctx) ? { some_rows_hidden: bounded.someRowsHidden } : {}),
+          ...(allowlistActive(ctx) ? { some_rows_hidden: r.someRowsHidden } : {}),
         });
       } catch (e) {
-        if (e instanceof BaseTimeoutError) return codedError("base_timeout", e.message);
         return fail(e);
       }
     },
