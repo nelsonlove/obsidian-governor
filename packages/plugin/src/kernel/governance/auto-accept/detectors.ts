@@ -249,6 +249,15 @@ function segmentize(body: string): Seg[] {
 
 export interface BodyEvalResult { ok: boolean; healed: boolean; reason: string; }
 
+/**
+ * Body evaluation with append composition (#261) — the same conservative rules as
+ * `evaluateLinkHeal`, PLUS (`appended`) the body may carry a byte-appended TAIL after
+ * the (byte-identical or healed-only) existing content. Consulted ONLY when the
+ * caller holds an honored `auto-accept: appends` policy for the note (eligibility.ts);
+ * the class-only path keeps the strict equal-structure evaluation.
+ */
+export interface BodyAppendEvalResult { ok: boolean; healed: boolean; appended: boolean; reason: string; }
+
 // Body is either byte-identical (healed:false, ok:true) or differs ONLY by confirmed link-target
 // rewrites (healed:true, ok:true). Anything else → ok:false (stays pending).
 export function evaluateLinkHeal(
@@ -256,8 +265,34 @@ export function evaluateLinkHeal(
   curBody: string,
   index: RenameIndex | null | undefined,
 ): BodyEvalResult {
-  if (baseBody === curBody) return { ok: true, healed: false, reason: "body-identical" };
-  if (!index) return { ok: false, healed: false, reason: "no-rename-index" };
+  const r = evaluateBodyChange(baseBody, curBody, index, false);
+  return { ok: r.ok, healed: r.healed, reason: r.reason };
+}
+
+// The append-composing variant (see BodyAppendEvalResult). `allowAppend` callers get the
+// EXTRA acceptance mode; `evaluateLinkHeal` above delegates with allowAppend=false and is
+// byte-identical to its historical behavior.
+export function evaluateBodyWithAppend(
+  baseBody: string,
+  curBody: string,
+  index: RenameIndex | null | undefined,
+): BodyAppendEvalResult {
+  return evaluateBodyChange(baseBody, curBody, index, true);
+}
+
+function evaluateBodyChange(
+  baseBody: string,
+  curBody: string,
+  index: RenameIndex | null | undefined,
+  allowAppend: boolean,
+): BodyAppendEvalResult {
+  const fail = (reason: string): BodyAppendEvalResult => ({ ok: false, healed: false, appended: false, reason });
+  if (baseBody === curBody) return { ok: true, healed: false, appended: false, reason: "body-identical" };
+  // Pure byte-append: needs no rename index — nothing existing was touched.
+  if (allowAppend && curBody.length > baseBody.length && curBody.startsWith(baseBody)) {
+    return { ok: true, healed: false, appended: true, reason: "body-appended" };
+  }
+  if (!index) return fail("no-rename-index");
 
   let baseSegs: Seg[];
   let curSegs: Seg[];
@@ -265,21 +300,26 @@ export function evaluateLinkHeal(
     baseSegs = segmentize(baseBody);
     curSegs = segmentize(curBody);
   } catch {
-    return { ok: false, healed: false, reason: "segmentize-error" };
+    return fail("segmentize-error");
   }
-  // Structure (count + link-vs-text at each position) must match exactly.
-  if (baseSegs.length !== curSegs.length) return { ok: false, healed: false, reason: "structure-changed" };
+  // Structure (count + link-vs-text at each position) must match exactly — except that under
+  // allowAppend the CURRENT body may carry EXTRA trailing segments (the appended tail).
+  if (!allowAppend && baseSegs.length !== curSegs.length) return fail("structure-changed");
+  if (allowAppend && curSegs.length < baseSegs.length) return fail("structure-changed");
 
+  // Every base segment except the FINAL one (segmentize always ends with a text segment) must
+  // match positionally: text byte-identical, links unchanged or confirmed-rewrite only.
+  const n = baseSegs.length;
   let healed = false;
-  for (let i = 0; i < baseSegs.length; i++) {
+  for (let i = 0; i < n - 1; i++) {
     const b = baseSegs[i];
     const c = curSegs[i];
     const bIsLink = b.link !== null;
     const cIsLink = c.link !== null;
-    if (bIsLink !== cIsLink) return { ok: false, healed: false, reason: "structure-changed" };
+    if (bIsLink !== cIsLink) return fail("structure-changed");
     if (!bIsLink) {
       // Text segment: must be byte-identical (no smuggled prose).
-      if (b.text !== c.text) return { ok: false, healed: false, reason: "body-text-changed" };
+      if (b.text !== c.text) return fail("body-text-changed");
       continue;
     }
     const bl = b.link!;
@@ -287,18 +327,38 @@ export function evaluateLinkHeal(
     if (bl.raw === cl.raw) continue; // unchanged link
     // A changed link is eligible ONLY as a confirmed target rewrite, alias preserved or dropped.
     const aliasOk = cl.alias === null || cl.alias === bl.alias;
-    if (!aliasOk) return { ok: false, healed: false, reason: "alias-changed" };
+    if (!aliasOk) return fail("alias-changed");
     let confirmed = false;
     try {
       confirmed = index.confirms(bl.target, cl.target) === true;
     } catch {
       confirmed = false; // an index that throws is treated as "cannot confirm"
     }
-    if (!confirmed) return { ok: false, healed: false, reason: "unconfirmed-link" };
+    if (!confirmed) return fail("unconfirmed-link");
     healed = true;
   }
-  if (!healed) return { ok: false, healed: false, reason: "body-changed-no-heal" };
-  return { ok: true, healed: true, reason: "ok" };
+
+  // The final base segment is always TEXT (possibly empty). Strict mode: the current final
+  // segment must be the identical text. Append mode: the REMAINDER of the current body
+  // (reconstructed losslessly from the current segments at and after this position) must
+  // START with that text — anything beyond it is the appended tail.
+  const baseTail = baseSegs[n - 1].text;
+  if (!allowAppend) {
+    const c = curSegs[n - 1];
+    if (c.link !== null) return fail("structure-changed");
+    if (c.text !== baseTail) return fail("body-text-changed");
+    if (!healed) return fail("body-changed-no-heal");
+    return { ok: true, healed: true, appended: false, reason: "ok" };
+  }
+  let remainder = "";
+  for (let i = n - 1; i < curSegs.length; i++) {
+    const s = curSegs[i];
+    remainder += s.link !== null ? s.link.raw : s.text;
+  }
+  if (!remainder.startsWith(baseTail)) return fail("body-text-changed");
+  const appended = remainder.length > baseTail.length;
+  if (!healed && !appended) return fail("body-changed-no-heal");
+  return { ok: true, healed, appended, reason: healed && appended ? "healed+appended" : healed ? "ok" : "body-appended" };
 }
 
 // ---------------------------------------------------------------------------

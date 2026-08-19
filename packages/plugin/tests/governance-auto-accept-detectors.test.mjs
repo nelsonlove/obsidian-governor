@@ -10,6 +10,8 @@ import {
   detectTimestamp,
   detectCanonicalOrder,
   detectLinkHeal,
+  evaluateLinkHeal,
+  evaluateBodyWithAppend,
   isValidUuidV7,
   isValidTimestamp,
 } from "../src/kernel/governance/auto-accept/detectors.ts";
@@ -252,4 +254,65 @@ test("no-change is never any class", () => {
   assert.equal(detectTimestamp(same, same), false);
   assert.equal(detectCanonicalOrder(same, same), false);
   assert.equal(detectLinkHeal(same, same, CONFIRM_OLD_NEW), false);
+});
+
+// ---------------------------------------------------------------------------
+// #261 — evaluateBodyWithAppend: the append-composing body evaluator.
+// Same conservative rules as evaluateLinkHeal PLUS an optionally appended tail.
+// ---------------------------------------------------------------------------
+test("append-composer: identical body → ok, not healed, not appended", () => {
+  const r = evaluateBodyWithAppend("log\n", "log\n", null);
+  assert.deepEqual({ ok: r.ok, healed: r.healed, appended: r.appended }, { ok: true, healed: false, appended: false });
+});
+
+test("append-composer: pure byte-append needs NO rename index", () => {
+  const r = evaluateBodyWithAppend("log\n", "log\nnew entry\n", null);
+  assert.deepEqual({ ok: r.ok, healed: r.healed, appended: r.appended }, { ok: true, healed: false, appended: true });
+});
+
+test("append-composer: confirmed heal + appended tail compose (the #261 live shape)", () => {
+  const r = evaluateBodyWithAppend("see [[Old]] here\n", "see [[New]] here\nappended\n", CONFIRM_OLD_NEW);
+  assert.deepEqual({ ok: r.ok, healed: r.healed, appended: r.appended }, { ok: true, healed: true, appended: true });
+});
+
+test("append-composer: heal-only (no tail) still ok, appended false", () => {
+  const r = evaluateBodyWithAppend("see [[Old]] here\n", "see [[New]] here\n", CONFIRM_OLD_NEW);
+  assert.deepEqual({ ok: r.ok, healed: r.healed, appended: r.appended }, { ok: true, healed: true, appended: false });
+});
+
+test("append-composer: UNCONFIRMED rewrite + tail → refused (unconfirmed-link)", () => {
+  const r = evaluateBodyWithAppend("see [[Old]] here\n", "see [[Nope]] here\nappended\n", CONFIRM_OLD_NEW);
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, "unconfirmed-link");
+});
+
+test("append-composer: an edit INSIDE existing text + tail → refused", () => {
+  const r = evaluateBodyWithAppend("log line\n", "log line EDITED\nappended\n", CONFIRM_OLD_NEW);
+  assert.equal(r.ok, false);
+});
+
+test("append-composer: a PREPEND is not an append", () => {
+  const r = evaluateBodyWithAppend("log\n", "prefix\nlog\n", CONFIRM_OLD_NEW);
+  assert.equal(r.ok, false);
+});
+
+test("append-composer: appended tail may itself contain wikilinks", () => {
+  const r = evaluateBodyWithAppend("see [[Old]]!\n", "see [[New]]!\nnow also [[Other note]]\n", CONFIRM_OLD_NEW);
+  assert.deepEqual({ ok: r.ok, healed: r.healed, appended: r.appended }, { ok: true, healed: true, appended: true });
+});
+
+test("append-composer: a deletion at the end is not an append", () => {
+  const r = evaluateBodyWithAppend("see [[Old]] here and more\n", "see [[New]] here\n", CONFIRM_OLD_NEW);
+  assert.equal(r.ok, false);
+});
+
+test("append-composer: alias change on a healed link still refuses, even with a tail", () => {
+  const r = evaluateBodyWithAppend("see [[Old|the old name]]\n", "see [[New|a new alias]]\nappended\n", CONFIRM_OLD_NEW);
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, "alias-changed");
+});
+
+test("append-composer: evaluateLinkHeal keeps its strict historical behavior (tail is residual)", () => {
+  const r = evaluateLinkHeal("see [[Old]] here\n", "see [[New]] here\nappended\n", CONFIRM_OLD_NEW);
+  assert.equal(r.ok, false);
 });
