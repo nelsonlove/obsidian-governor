@@ -20,7 +20,12 @@ agent. Reads never queue, so a slow write never stalls a session's reads.
   setting; `packages/plugin/src/kernel/write-queue.ts`). If an operation hasn't settled by
   then it is **abandoned**, that one call fails with `Error [write_timeout]`, and the queue
   immediately moves on — a wedged operation can never take down the bridge or anyone else's
-  session. The vault may or may not have been modified; re-read before retrying.
+  session. The vault may or may not have been modified; re-read before retrying. The deadline
+  is **wall-clock math re-evaluated on queue activity** (a new enqueue, a journal append,
+  an explicit nudge), not just a timer — Chromium suspends renderer timers while the Obsidian
+  window is occluded, so a timer-only deadline went unfired in exactly the unattended
+  conditions agents operate in (#272). A per-operation timer still arms as the best-effort
+  prompt path in the foreground.
 - **Late settlement.** Because an abandoned operation may still finish afterwards, the queue
   reports its eventual outcome via an `onLate` hook, which the kernel turns into a
   **corrective journal record** (see below) rather than dropping the settlement silently.
