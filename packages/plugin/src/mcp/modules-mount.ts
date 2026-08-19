@@ -71,6 +71,8 @@ import {
   type ReceiptStoreLike,
 } from "../kernel/crosssession/index.js";
 import { registerTriageTools, emptyTriageSource, type TriageSource, type TriageToolsCtx } from "./tools-triage.js";
+import { registerBasesTools, emptyBasesSource, type BasesSource, type BasesToolsCtx } from "./tools-bases.js";
+import { DEFAULT_BASES_CONFIG, validateBasesConfig } from "../kernel/bases/index.js";
 import {
   DEFAULT_TRIAGE_CONFIG,
   validateTriageConfig,
@@ -1126,6 +1128,84 @@ const TRIAGE_MANIFEST: ModuleManifest = {
   },
 };
 
+// ── bases module manifest (#243: evaluated Base rows for agents) ────────────
+//
+// A READ-ONLY capability module (like health): both tools readOnlyHint: true,
+// no `mutating` flag, no write path anywhere. Unlike health it ships DEFAULT
+// ENABLED — it is a pure read surface over content the session could already
+// read note-by-note (the scheme/vocab precedent for read-only default-on),
+// and its rows are allowlist-filtered like every other read. Feature-gated
+// like fileclass: the registrar registers NOTHING when the running Obsidian
+// lacks the public Bases API (pre-1.10), so an enabled module on an old
+// Obsidian is absent, not broken. Config lives at `modules.bases.config`
+// (a new module, no ConfigBinding).
+const BASES_CONFIG_FIELDS: ConfigField[] = [
+  {
+    key: "queryTimeoutMs",
+    label: "Query timeout (ms)",
+    type: "number",
+    help:
+      "Hard deadline for one base_query evaluation. The Bases engine's scan is heavily throttled while the " +
+      "Obsidian window is hidden, so slow answers are normal in the background — expiry refuses with a typed, " +
+      `retryable base_timeout. Blank ⇒ the default (${DEFAULT_BASES_CONFIG.queryTimeoutMs}).`,
+  },
+  {
+    key: "rowCap",
+    label: "Row cap",
+    type: "number",
+    help:
+      "Maximum rows one base_query returns (the tool's `limit` argument clamps to this). Blank ⇒ the default " +
+      `(${DEFAULT_BASES_CONFIG.rowCap}).`,
+  },
+];
+
+const BASES_MANIFEST: ModuleManifest = {
+  summary:
+    "Evaluated Base result sets for agents: enumerate the vault's `.base` files and their declared views, and " +
+    "evaluate a view — Obsidian's own Bases engine computes the rows (base + view filters, formulas, sort) in a " +
+    "hidden background leaf that is detached whatever happens; this module never parses the Bases expression " +
+    "language and never writes anything. Registers only when the running Obsidian exposes the public Bases API " +
+    "(1.10+); queries are serialized (one capture at a time) and time-boxed with a typed base_timeout refusal.",
+  config: {
+    fields: BASES_CONFIG_FIELDS,
+    defaults: { ...DEFAULT_BASES_CONFIG } as Record<string, unknown>,
+    validate: validateBasesConfig,
+  },
+  directory: {
+    tools: [
+      {
+        name: "base_list",
+        purpose: "Enumerate every visible `.base` file with its declared views (name, type, column count).",
+        readOnly: true,
+        caveats: ["A base outside the path allowlist is invisible — absent from the answer, not refused."],
+      },
+      {
+        name: "base_query",
+        purpose:
+          "Evaluate one declared view of a `.base` file via the engine and return its rows: note path + the view's " +
+          "columns' values.",
+        readOnly: true,
+        options: [
+          { name: "path", what: 'vault-relative `.base` path, e.g. "Views/Tasks.base"' },
+          { name: "view", what: "declared view name (default: the file's first view)" },
+          { name: "limit", what: "maximum rows to return (clamped to the module's rowCap)" },
+        ],
+        caveats: [
+          "Full engine fidelity — Obsidian computes filters/formulas/sort; nothing is re-implemented — but the " +
+            "scan is throttled while the window is hidden, so a busy vault can take tens of seconds (typed " +
+            "base_timeout on expiry, retryable).",
+          "Rows for notes outside the path allowlist are dropped silently; the response then carries " +
+            "`some_rows_hidden: true` (a boolean, never a count).",
+          "Residual under an allowlist, inherent to \"Obsidian computes\" (the check_links resolution-oracle " +
+            "class): the engine evaluates over the WHOLE vault before rows are filtered, so a formula value on a " +
+            "visible row can be computed from hidden notes, and a view's own `limit` consumes slots on hidden " +
+            "rows — visible rows past that limit silently never appear.",
+        ],
+      },
+    ],
+  },
+};
+
 /** What the mount needs from the live plugin (server.ts supplies the Obsidian
  * adapters; tests supply fakes). The same per-call freshness discipline as
  * the direct registrations it replaces: config the HANDLERS read (allowlist,
@@ -1176,6 +1256,12 @@ export interface MountDeps {
   crosssessionReceipts?: ReceiptStoreLike;
   /** Injectable clock for crosssession post/attest stamps (tests). */
   crosssessionNow?: () => Date;
+  /** The bases module's injected vault/engine adapter (obsidianBasesSource
+   * live — the hidden-leaf capture). Absent ⇒ an inert unavailable source, so
+   * the settings-UI's stand-in deps and pre-bases callers still satisfy
+   * MountDeps (the module's registrar then registers nothing, exactly like a
+   * pre-1.10 Obsidian). */
+  basesSource?: BasesSource;
   /** The triage module's injected vault reader/writer (obsidianTriageSource
    * live — the shared moveOne / trashFile / processFrontMatter primitives).
    * Absent ⇒ an inert empty source, so the settings-UI's stand-in deps and
@@ -1373,6 +1459,26 @@ export function builtinModules(deps: MountDeps): VaultModule[] {
         visible: host.visible,
         receipts: deps.crosssessionReceipts ?? memoryReceiptStore(),
         ...(deps.crosssessionNow ? { now: deps.crosssessionNow } : {}),
+      }),
+    ),
+    // The bases module (#243): evaluated Base rows for agents. A READ-ONLY
+    // capability module — both tools readOnlyHint: true, so the mount's
+    // read-only-only registrar gate passes them without any exemption, and
+    // there is no write tool, write guard, or accept verb anywhere in the
+    // module. DEFAULT ENABLED (the scheme/vocab precedent: a pure read
+    // surface over rows the session could already assemble note-by-note,
+    // allowlist-filtered like every other read); feature-gated like fileclass
+    // (its registrar registers nothing when the public Bases API is absent).
+    // A NEW module, so it follows the adapters doc: it reads `host`/`config`
+    // and filters with `host.visible`. Config lives at `modules.bases.config`
+    // (no ConfigBinding).
+    moduleFromRegistrar(
+      { id: "bases", capabilities: ["bases"], enabled: true, manifest: BASES_MANIFEST },
+      (server: any, ctx: BasesToolsCtx) => registerBasesTools(server, deps.basesSource ?? emptyBasesSource(), ctx),
+      (host, config) => ({
+        config,
+        getSettings: deps.getSettings,
+        visible: host.visible,
       }),
     ),
     // The triage module (#221 phase 2): the disposition substrate's second
