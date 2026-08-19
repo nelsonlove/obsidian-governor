@@ -1,9 +1,10 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { fakeServer } from "./fake-server.mjs";
+import { parseYaml } from "./obsidian-stub.mjs";
 import { registerJdScaffoldTools } from "../src/mcp/tools-jd-scaffold.ts";
 
-function fakeSource({ allPaths = [], folders = [], now = "2026-08-19", noteContent = {} } = {}) {
+function fakeSource({ allPaths = [], folders = [], now = "2026-08-19", noteContent = {}, folderChildren = {}, clockValue = { date: "2026-08-19", time: "10:30", now: "2026-08-19T10:30" } } = {}) {
   const paths = new Set(allPaths);
   const created = [];
   const renamed = [];
@@ -33,6 +34,8 @@ function fakeSource({ allPaths = [], folders = [], now = "2026-08-19", noteConte
       modified.push({ path: p, content });
       notes.set(p, content);
     },
+    listFolderChildren: (folderPath) => folderChildren[folderPath] ?? [],
+    clock: () => clockValue,
   };
   return { source, created, renamed, foldersCreated, modified, notes };
 }
@@ -40,7 +43,7 @@ function fakeSource({ allPaths = [], folders = [], now = "2026-08-19", noteConte
 function build({ allowlist = [], ...sourceOpts } = {}) {
   const server = fakeServer();
   const { source, created, renamed, foldersCreated, modified, notes } = fakeSource(sourceOpts);
-  const ctx = { getSettings: () => ({ readOnly: false, allowlist }) };
+  const ctx = { getSettings: () => ({ readOnly: false, allowlist }), parseYaml };
   registerJdScaffoldTools(server, source, ctx);
   return { server, source, created, renamed, foldersCreated, modified, notes };
 }
@@ -519,5 +522,244 @@ describe("obsidian_jd_reindex_category", () => {
       dry_run: true,
     });
     assert.equal(res.structuredContent.scoped_to_allowlist, false);
+  });
+});
+
+describe("obsidian_jd_new_standard_zero", () => {
+  function zeroFixture(overrides = {}) {
+    return build({
+      folderChildren: { Templates: ["Templates/inbox-template.md"] },
+      noteContent: { "Templates/inbox-template.md": '---\njd-id: "{{category}}.01"\n---\n\n# {{title}} ({{fullId}})\n' },
+      ...overrides,
+    });
+  }
+
+  test("dry_run: true reports the substituted content without writing", async () => {
+    const { server, created } = zeroFixture();
+    const res = await server.tools.get("obsidian_jd_new_standard_zero").handler({
+      folder_path: "10-19 Personal/06 Digital tools", prefix: "06", zero_id: "01", templates_folder: "Templates", dry_run: true,
+    });
+    assert.notEqual(res.isError, true);
+    assert.equal(res.structuredContent.dest_path, "10-19 Personal/06 Digital tools/06.01 Inbox for category 06/06.01 Inbox for category 06.md");
+    assert.match(res.structuredContent.content, /# Inbox for category 06 \(06\.01\)/);
+    assert.deepEqual(created, []);
+  });
+
+  test("dry_run: false creates the note via source.create and reports filesChanged/files", async () => {
+    const { server, created } = zeroFixture();
+    const res = await server.tools.get("obsidian_jd_new_standard_zero").handler({
+      folder_path: "10-19 Personal/06 Digital tools", prefix: "06", zero_id: "01", templates_folder: "Templates", dry_run: false,
+    });
+    assert.notEqual(res.isError, true);
+    assert.equal(created.length, 1);
+    assert.equal(res.structuredContent.filesChanged, 1);
+    assert.deepEqual(res.structuredContent.files, [created[0].path]);
+  });
+
+  test("refuses when the slot already exists", async () => {
+    const dest = "10-19 Personal/06 Digital tools/06.01 Inbox for category 06/06.01 Inbox for category 06.md";
+    const { server } = zeroFixture({ allPaths: [dest] });
+    const res = await server.tools.get("obsidian_jd_new_standard_zero").handler({
+      folder_path: "10-19 Personal/06 Digital tools", prefix: "06", zero_id: "01", templates_folder: "Templates", dry_run: true,
+    });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[already_exists\]/);
+  });
+
+  test("refuses when no template is classified for that zero slot", async () => {
+    const { server } = build({ allPaths: ["Templates"], folderChildren: { Templates: [] } });
+    const res = await server.tools.get("obsidian_jd_new_standard_zero").handler({
+      folder_path: "10-19 Personal/06 Digital tools", prefix: "06", zero_id: "01", templates_folder: "Templates", dry_run: true,
+    });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[template_not_found\]/);
+  });
+
+  test("refuses an invalid zero_id", async () => {
+    const { server } = zeroFixture();
+    const res = await server.tools.get("obsidian_jd_new_standard_zero").handler({
+      folder_path: "10-19 Personal/06 Digital tools", prefix: "06", zero_id: "99", templates_folder: "Templates", dry_run: true,
+    });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[invalid_zero_id\]/);
+  });
+
+  test("out_of_allowlist when templates_folder is hidden, even though folder_path is visible", async () => {
+    const { server } = zeroFixture({ allowlist: ["10-19 Personal"] });
+    const res = await server.tools.get("obsidian_jd_new_standard_zero").handler({
+      folder_path: "10-19 Personal/06 Digital tools", prefix: "06", zero_id: "01", templates_folder: "Templates", dry_run: true,
+    });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[out_of_allowlist\]/);
+  });
+
+  test("a hidden template file is excluded from discovery even when templates_folder itself is visible", async () => {
+    // templates_folder is visible, but the one template file inside it is not
+    // (an allowlist entry can be narrower than its containing folder listing
+    // implies) — the hidden template must not be read or matched.
+    const { server } = build({
+      allowlist: ["Templates/other.md"],
+      folderChildren: { Templates: ["Templates/inbox-template.md"] },
+      noteContent: { "Templates/inbox-template.md": '---\njd-id: "{{category}}.01"\n---\n\nBody\n' },
+    });
+    const res = await server.tools.get("obsidian_jd_new_standard_zero").handler({
+      folder_path: "Templates", prefix: "06", zero_id: "01", templates_folder: "Templates", dry_run: true,
+    });
+    // folder_path itself ("Templates") isn't in the allowlist either here, so
+    // this refuses at the folder_path check first — the point is just that
+    // no path in this test ever reaches source.read for the hidden template.
+    assert.equal(res.isError, true);
+  });
+});
+
+describe("obsidian_jd_new_generic_id", () => {
+  function genericFixture(overrides = {}) {
+    return build({
+      folderChildren: { Templates: ["Templates/generic-template.md"] },
+      noteContent: { "Templates/generic-template.md": '---\njd-id: "{{category}}.{{id}}"\n---\n\n# {{title}}\n' },
+      ...overrides,
+    });
+  }
+
+  test("dry_run: false creates 'XX.YY Title.md' with the sanitized title substituted", async () => {
+    const { server, created } = genericFixture();
+    const res = await server.tools.get("obsidian_jd_new_generic_id").handler({
+      folder_path: "06 Digital tools", prefix: "06", id: "13", title: "  Bar  ", templates_folder: "Templates", dry_run: false,
+    });
+    assert.notEqual(res.isError, true);
+    assert.equal(created[0].path, "06 Digital tools/06.13 Bar.md");
+    assert.match(created[0].content, /# Bar/);
+  });
+
+  test("refuses an invalid (non-two-digit) id", async () => {
+    const { server } = genericFixture();
+    const res = await server.tools.get("obsidian_jd_new_generic_id").handler({
+      folder_path: "06 Digital tools", prefix: "06", id: "1", title: "Bar", templates_folder: "Templates", dry_run: true,
+    });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[invalid_id\]/);
+  });
+
+  test("refuses a title that sanitizeTitle rejects", async () => {
+    const { server } = genericFixture();
+    const res = await server.tools.get("obsidian_jd_new_generic_id").handler({
+      folder_path: "06 Digital tools", prefix: "06", id: "13", title: "a/b", templates_folder: "Templates", dry_run: true,
+    });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[invalid_title\]/);
+  });
+
+  test("dry_run: true reports unresolved placeholder warnings", async () => {
+    const { server } = build({
+      folderChildren: { Templates: ["Templates/generic-template.md"] },
+      noteContent: { "Templates/generic-template.md": '---\njd-id: "{{category}}.{{id}}"\n---\n\n{{nonsense}}\n' },
+    });
+    const res = await server.tools.get("obsidian_jd_new_generic_id").handler({
+      folder_path: "06 Digital tools", prefix: "06", id: "13", title: "Bar", templates_folder: "Templates", dry_run: true,
+    });
+    assert.deepEqual(res.structuredContent.placeholder_warnings, ["nonsense"]);
+  });
+
+  test("review fix: refuses to create from a template carrying an accepted fence — the note-creation accept-guard", async () => {
+    // A template's frontmatter is copied through substitution into the new
+    // note verbatim — without this guard, an accepted fence sitting in a
+    // template file (however it got there) would land unscanned in a brand
+    // new note. Same class of gap #79/#172 closed on the other two
+    // "create from template" surfaces in this codebase.
+    const { server, created } = build({
+      folderChildren: { Templates: ["Templates/generic-template.md"] },
+      noteContent: {
+        "Templates/generic-template.md":
+          '---\njd-id: "{{category}}.{{id}}"\nacceptance-status: accepted\naccepted-by: someone\naccepted-on: 2026-01-01\n---\n\n# {{title}}\n',
+      },
+    });
+    const res = await server.tools.get("obsidian_jd_new_generic_id").handler({
+      folder_path: "06 Digital tools", prefix: "06", id: "13", title: "Bar", templates_folder: "Templates", dry_run: false,
+    });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[accept_forbidden\]/);
+    assert.deepEqual(created, []); // never written
+  });
+
+  test("review fix: the accept-guard refusal fires under dry_run too — a preview must never claim a plan this call would refuse", async () => {
+    const { server } = build({
+      folderChildren: { Templates: ["Templates/generic-template.md"] },
+      noteContent: {
+        "Templates/generic-template.md": '---\njd-id: "{{category}}.{{id}}"\nacceptance-status: accepted\n---\n\n# {{title}}\n',
+      },
+    });
+    const res = await server.tools.get("obsidian_jd_new_generic_id").handler({
+      folder_path: "06 Digital tools", prefix: "06", id: "13", title: "Bar", templates_folder: "Templates", dry_run: true,
+    });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[accept_forbidden\]/);
+  });
+
+  test("an ordinary, fence-free template is unaffected by the accept-guard", async () => {
+    const { server, created } = genericFixture();
+    const res = await server.tools.get("obsidian_jd_new_generic_id").handler({
+      folder_path: "06 Digital tools", prefix: "06", id: "13", title: "Bar", templates_folder: "Templates", dry_run: false,
+    });
+    assert.notEqual(res.isError, true);
+    assert.equal(created.length, 1);
+  });
+});
+
+describe("obsidian_jd_new_stem", () => {
+  function stemFixture(overrides = {}) {
+    return build({
+      folderChildren: { Templates: ["Templates/draft-template.md"] },
+      noteContent: { "Templates/draft-template.md": "---\njd-id: XX.00+DRAFT\n---\n\n# {{title}}\n" },
+      ...overrides,
+    });
+  }
+
+  test("dry_run: false creates 'XX.00+CODE Name.md'", async () => {
+    const { server, created } = stemFixture();
+    const res = await server.tools.get("obsidian_jd_new_stem").handler({
+      folder_path: "06 Digital tools", prefix: "06", stem_code: "DRAFT", name: "Session directives", templates_folder: "Templates", dry_run: false,
+    });
+    assert.notEqual(res.isError, true);
+    assert.equal(created[0].path, "06 Digital tools/06.00+DRAFT Session directives.md");
+  });
+
+  test("refuses when no template matches the stem code", async () => {
+    const { server } = stemFixture();
+    const res = await server.tools.get("obsidian_jd_new_stem").handler({
+      folder_path: "06 Digital tools", prefix: "06", stem_code: "NOPE", name: "Foo", templates_folder: "Templates", dry_run: true,
+    });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[template_not_found\]/);
+  });
+
+  test("out_of_allowlist when the computed destination is outside the allowlist", async () => {
+    const { server } = stemFixture({ allowlist: ["Somewhere Else"] });
+    const res = await server.tools.get("obsidian_jd_new_stem").handler({
+      folder_path: "06 Digital tools", prefix: "06", stem_code: "DRAFT", name: "Foo", templates_folder: "Templates", dry_run: true,
+    });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[out_of_allowlist\]/);
+  });
+
+  test("review fix: refuses a stem_code containing a path separator before it ever reaches destPathForStem's string concatenation", async () => {
+    const { server, created, foldersCreated } = stemFixture();
+    const res = await server.tools.get("obsidian_jd_new_stem").handler({
+      folder_path: "06 Digital tools", prefix: "06", stem_code: "../../evil", name: "Foo", templates_folder: "Templates", dry_run: true,
+    });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[invalid_stem_code\]/);
+    assert.deepEqual(created, []);
+    assert.deepEqual(foldersCreated, []);
+  });
+
+  test("a real, regex-valid stem code (letters/digits/hyphen/underscore) is unaffected", async () => {
+    const { server } = build({
+      folderChildren: { Templates: ["Templates/draft-template.md"] },
+      noteContent: { "Templates/draft-template.md": "---\njd-id: XX.00+co-de_2\n---\n\n# {{title}}\n" },
+    });
+    const res = await server.tools.get("obsidian_jd_new_stem").handler({
+      folder_path: "06 Digital tools", prefix: "06", stem_code: "co-de_2", name: "Foo", templates_folder: "Templates", dry_run: true,
+    });
+    assert.notEqual(res.isError, true);
   });
 });

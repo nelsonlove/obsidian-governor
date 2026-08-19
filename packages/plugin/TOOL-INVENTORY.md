@@ -311,12 +311,12 @@ slots on hidden rows — visible rows past that limit silently never appear.
 
 ---
 
-## Section 2c — module-mounted, default DISABLED (6)
+## Section 2c — module-mounted, default DISABLED (9)
 
 Registered through the module host like Section 2b, but these modules ship
 `enabled: false` — a human turns them on in the config tab, and the tools appear
-on the next session connect. `health` (2 tools) and `jd-scaffold` (4 tools,
-Stage A + A2 of the jd-dashboard fold) both use the locked `obsidian_*`
+on the next session connect. `health` (2 tools) and `jd-scaffold` (7 tools,
+Stage A + A2 + A3 of the jd-dashboard fold) both use the locked `obsidian_*`
 naming, so both are documented here in full. (The `skills`, `provenance`, `fileclass`, `crosssession`
 and `triage` modules also ship disabled, but their tools are named
 `vault_skills_*` / `provenance_*` / `fileclass_*` / `crosssession_*` / `triage_*`,
@@ -336,17 +336,25 @@ Both tools are `readOnlyHint: true`; the module has no write path.
 | `obsidian_health` | Full tiered vault health scan → findings by fix risk (auto-safe repointable links / approval-gated empty notes + orphan attachments / report-only dangling links + duplicate groups + low-signal tags) plus summary counts. Read-only, whole-vault |
 | `obsidian_lint` | The same scan restricted to one folder or note (`scope`); link resolution + orphan inbound-set stay vault-wide, low-signal tags omitted |
 
-### `tools-jd-scaffold.ts` — `registerJdScaffoldTools` via the `jd-scaffold` module (4 tools)
+### `tools-jd-scaffold.ts` — `registerJdScaffoldTools` via the `jd-scaffold` module (7 tools)
 
-Stage A + Stage A2 of the jd-dashboard fold — ported from the standalone
-`obsidian-jd-dashboard`'s `standard-zeros.ts`/`promote-to-folder.ts`/
-`category-index.ts`. All four are `readOnlyHint: false`; `dry_run` is
-mandatory (no default) on all four, matching `tools-scheme-write.ts`'s
-convention. No `jd-id:` frontmatter is written — Governor's scheme module is
-path-canonical, the filename already carries the address (same call already
-made for the jd-numbering fold).
+Stage A + Stage A2 + Stage A3 of the jd-dashboard fold — ported from the
+standalone `obsidian-jd-dashboard`'s `standard-zeros.ts`/`promote-to-folder.ts`/
+`category-index.ts`/`templates.ts`+`new-from-template.ts`. All seven are
+`readOnlyHint: false`; `dry_run` is mandatory (no default) on all seven,
+matching `tools-scheme-write.ts`'s convention. This module never SYNTHESIZES
+`jd-id:` frontmatter itself (standard-zeros' own notes carry none — Governor's
+scheme module is path-canonical, the filename already carries the address,
+same call already made for the jd-numbering fold); a template-created note's
+frontmatter is whatever the user's own template file contains, copied through
+substitution like any other placeholder.
 Takes an injected `JdScaffoldSource` (mirroring `vocabSource`/`skillsSource`),
-not a raw `App` — the live adapter is `obsidian-jd-scaffold-source.ts`.
+not a raw `App` — the live adapter is `obsidian-jd-scaffold-source.ts`. The
+three template-creation tools take `templates_folder` as an explicit argument
+(no module-level config yet) and check it against the allowlist same as
+`path`/`folder_path` — a discovered template's OWN path is checked too, not
+just the input folder, so a hidden template's content can never reach a
+visible note via substitution.
 
 | Tool name | Description |
 |---|---|
@@ -354,6 +362,9 @@ not a raw `App` — the live adapter is `obsidian-jd-scaffold-source.ts`.
 | `obsidian_jd_ensure_category_indexes` | Vault-wide: create a minimal `XX.00` JDex index for every depth-2 `XX <name>` category folder that lacks one (accepts `XX.00 Title.md` / `XX.00.md` / `XX.00+SUF Title.md` as already-present) |
 | `obsidian_jd_promote_to_folder` | Convert an `XX.YY` (or 5-digit expanded-area id) note into a same-named folder with the note moved inside as the folder's cover note, via link-healing rename. Refuses (`not_id_note` / `already_cover_note` / `folder_exists`) rather than guessing |
 | `obsidian_jd_reindex_category` | Rebuild an `XX.00` index file's `## Contents` section from vault truth (not `jd-index.yaml`), at the tier its own prefix dispatches to (ordinary per-category / area-management `X0` / system `00`). Descriptions written as `[[link]] *(note)*` are preserved across every regen at every tier; area-management and system tiers read every sibling `XX.00` file's current content to consolidate them, the ordinary tier reads only its own |
+| `obsidian_jd_new_standard_zero` | Create a single standard-zero note (e.g. the `06.01 Inbox` slot) from a template classified `jd-id: "{{category}}.NN"` in `templates_folder`. Refuses if the slot already exists or no matching template is found |
+| `obsidian_jd_new_generic_id` | Create an `XX.YY Title` note from a template classified `jd-id: "{{category}}.{{id}}"`. Title is sanitized (no path separators, leading dot, or Windows-forbidden characters) |
+| `obsidian_jd_new_stem` | Create an `XX.00+CODE Name` note from a template classified `jd-id: "XX.00+CODE"` |
 
 ### `tools-fileclass.ts` — `registerFileclassTools` via the `fileclass` module (8 tools)
 

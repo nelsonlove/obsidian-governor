@@ -65,5 +65,17 @@ export function obsidianJdScaffoldSource(app: App): JdScaffoldSource {
       if (!(file instanceof TFile)) throw new Error(`"${path}" no longer exists.`);
       await app.vault.modify(file, content);
     },
+    listFolderChildren(folderPath: string): string[] {
+      const folder = app.vault.getAbstractFileByPath(folderPath);
+      if (!(folder instanceof TFolder)) return [];
+      return folder.children.filter((c): c is TFile => c instanceof TFile && c.extension === "md").map((c) => c.path);
+    },
+    clock(): { date: string; time: string; now: string } {
+      const now = new Date();
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+      const time = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+      return { date, time, now: `${date}T${time}` };
+    },
   };
 }
