@@ -258,7 +258,12 @@ is heavily throttled while the window is hidden) with a typed, retryable
 hidden `.base` file is invisible to `base_list` and refused
 (`out_of_allowlist`) by `base_query`; result rows for hidden notes drop
 silently, disclosed only as a boolean `some_rows_hidden` (never a count —
-the visible-totals precedent against cardinality oracles).
+the visible-totals precedent against cardinality oracles). **Residual under
+an allowlist**, inherent to "Obsidian computes" (the same class as
+`obsidian_check_links`' documented resolution oracle): the engine evaluates
+over the whole vault BEFORE the row filter, so a formula value on a visible
+row can be computed from hidden notes, and a view's own `limit` consumes
+slots on hidden rows — visible rows past that limit silently never appear.
 
 | Tool name | R/W | Description |
 |---|---|---|

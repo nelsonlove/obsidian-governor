@@ -115,6 +115,24 @@ export interface BasesToolsCtx {
 // resource and buildMcpServer constructs a fresh source per connection.
 const captureSerializer = makeSerializer();
 
+// Belt over the source's own deadline: `BasesSource.capture` MUST settle
+// within timeoutMs, but that contract is the adapter's to honor — and a
+// future non-conforming source would otherwise wedge the module-wide chain
+// permanently, for every connection (independent-review finding). The race
+// settles the SERIALIZER TASK at deadline + grace even if the capture
+// promise never settles, so the chain always moves on; a zombie capture's
+// own cleanup remains the adapter's responsibility.
+const BELT_GRACE_MS = 5_000;
+function withBeltDeadline<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  return Promise.race([
+    work.finally(() => clearTimeout(timer)),
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new BaseTimeoutError(timeoutMs + BELT_GRACE_MS)), timeoutMs + BELT_GRACE_MS);
+    }),
+  ]);
+}
+
 /** True iff the allowlist filter passes this single path through. */
 function pathVisible(visible: BasesToolsCtx["visible"], path: string): boolean {
   return !visible || visible([path]).length === 1;
@@ -222,7 +240,10 @@ export function registerBasesTools(server: McpServer, source: BasesSource, ctx: 
         }
         const columns = selected.order ? selected.order.map(normalizePropertyId) : null;
         const captured = await captureSerializer(() =>
-          source.capture(path, view === undefined ? undefined : selected.name, columns, cfg.queryTimeoutMs),
+          withBeltDeadline(
+            source.capture(path, view === undefined ? undefined : selected.name, columns, cfg.queryTimeoutMs),
+            cfg.queryTimeoutMs,
+          ),
         );
         const cap = Math.min(limit ?? cfg.rowCap, cfg.rowCap);
         const bounded = boundRows(captured.rows, ctx.visible, cap);

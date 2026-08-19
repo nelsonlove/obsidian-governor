@@ -82,13 +82,24 @@ interface BasesViewLike {
 
 export function obsidianBasesSource(app: App): BasesSource {
   return {
-    available: () =>
+    available: () => {
       // The canonical 1.10+ marker per #243: the public registration hook on
       // the Plugin prototype (probed, never called — see finding 3 above for
       // why registering a capture view type would be dead surface), plus the
       // leaf class the capture constructs.
-      typeof (Plugin.prototype as unknown as { registerBasesView?: unknown }).registerBasesView === "function" &&
-      typeof WorkspaceLeaf === "function",
+      if (typeof (Plugin.prototype as unknown as { registerBasesView?: unknown }).registerBasesView !== "function") return false;
+      if (typeof WorkspaceLeaf !== "function") return false;
+      // The API marker survives the user toggling the Bases CORE PLUGIN off,
+      // but the "bases" view type does not — and without it every capture
+      // would spin a hidden leaf into a 30s timeout that misdiagnoses a
+      // permanent condition as transient (independent-review finding). Probe
+      // the extension→view-type registry (undocumented, hence duck-typed and
+      // FAIL-OPEN on an unknown registry shape: the registerBasesView probe
+      // above already established the API generation).
+      const reg = (app as { viewRegistry?: { getTypeByExtension?: (ext: string) => string | undefined } }).viewRegistry;
+      if (typeof reg?.getTypeByExtension !== "function") return true;
+      return reg.getTypeByExtension("base") === "bases";
+    },
 
     listBasePaths: () =>
       app.vault

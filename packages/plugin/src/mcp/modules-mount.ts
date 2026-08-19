@@ -1196,6 +1196,10 @@ const BASES_MANIFEST: ModuleManifest = {
             "base_timeout on expiry, retryable).",
           "Rows for notes outside the path allowlist are dropped silently; the response then carries " +
             "`some_rows_hidden: true` (a boolean, never a count).",
+          "Residual under an allowlist, inherent to \"Obsidian computes\" (the check_links resolution-oracle " +
+            "class): the engine evaluates over the WHOLE vault before rows are filtered, so a formula value on a " +
+            "visible row can be computed from hidden notes, and a view's own `limit` consumes slots on hidden " +
+            "rows — visible rows past that limit silently never appear.",
         ],
       },
     ],

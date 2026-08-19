@@ -452,6 +452,54 @@ describe("base_query success path", () => {
     assert.ok(!("rows_hidden" in res.structuredContent), "never a hidden-row COUNT (cardinality oracle)");
   });
 
+  test("serialization is MODULE-WIDE: captures on two separately-registered servers (two connections) still run one at a time", async () => {
+    // The serializer is module-scoped, not per-registration — the hidden leaf
+    // is a global resource and buildMcpServer registers a fresh source per
+    // connection. This would fail if makeSerializer() ever moved inside
+    // registerBasesTools (independent-review finding: the single-server test
+    // below cannot catch that regression).
+    let releaseFirst;
+    let starts = 0;
+    const captureImpl = async () => {
+      starts++;
+      if (starts === 1) await new Promise((r) => (releaseFirst = r));
+      return { columns: [], rows: [] };
+    };
+    const serverA = register(fakeSource({ bases: { "Views/Q.base": QUEUE_BASE }, captureImpl }));
+    const serverB = register(fakeSource({ bases: { "Views/Q.base": QUEUE_BASE }, captureImpl }));
+    const q1 = serverA.tools.get("base_query").handler({ path: "Views/Q.base" });
+    const q2 = serverB.tools.get("base_query").handler({ path: "Views/Q.base" });
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(starts, 1, "connection B's capture must wait for connection A's");
+    releaseFirst();
+    const [r1, r2] = await Promise.all([q1, q2]);
+    assert.equal(r1.isError, undefined);
+    assert.equal(r2.isError, undefined);
+    assert.equal(starts, 2);
+  });
+
+  test("belt deadline: a NON-CONFORMING source whose capture never settles cannot wedge the chain — the query refuses base_timeout and the next query still runs", async () => {
+    const never = new Promise(() => {});
+    let calls = 0;
+    const source = fakeSource({
+      bases: { "Views/Q.base": QUEUE_BASE },
+      captureImpl: () => {
+        calls++;
+        return calls === 1 ? never : Promise.resolve({ columns: [], rows: [] });
+      },
+    });
+    const server = fakeServer();
+    // Tiny timeout so the belt (timeout + grace) fires fast enough for a test.
+    registerBasesTools(server, source, { config: { queryTimeoutMs: 1000 } });
+    const t0 = Date.now();
+    const res = await server.tools.get("base_query").handler({ path: "Views/Q.base" });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[base_timeout\]/);
+    assert.ok(Date.now() - t0 < 30_000, "the belt must fire at timeout+grace, not hang");
+    const res2 = await server.tools.get("base_query").handler({ path: "Views/Q.base" });
+    assert.equal(res2.isError, undefined, "the chain must move on past the wedged capture");
+  });
+
   test("two concurrent queries SERIALIZE: the second capture starts only after the first settles", async () => {
     let releaseFirst;
     let starts = 0;
