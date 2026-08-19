@@ -17,6 +17,7 @@
 // are excluded, exactly as `--editable-violations` did. The pack id IS the
 // `script` field: "ste_lint".
 
+import { stripLeadingBom, stripLeadingFrontmatter } from "@vault-mcp/core";
 import type { Finding } from "../finding.js";
 import type { RulePack, VaultSnapshot } from "../rule-pack.js";
 import { requireSources } from "../rule-pack.js";
@@ -26,7 +27,17 @@ export const STE_PACK_ID = "ste_lint";
 
 /** The four mechanical checks, verbatim from ste_lint.py's CHECKS. `name`
  * becomes the token half of the key. MODAL / PERFECT are case-insensitive;
- * CONTRACTION is case-SENSITIVE (as in the Python); SEMI is a bare `;`. */
+ * CONTRACTION is case-SENSITIVE (as in the Python); SEMI is a bare `;`.
+ *
+ * PINNED (#112a): `\b`/`\w` here are JS's ASCII-only classes, where Python's
+ * `re` (which ste_lint.py used) treated `\w` as Unicode — so a token glued to
+ * a NON-ASCII letter ("shouldé") matches here where the Python did not. The
+ * Python rail is retired, so these ASCII semantics ARE the rail's own now,
+ * kept deliberately: switching to Unicode-aware boundaries (`\b` has no `u`-
+ * aware form; it would need a rewrite) changes what the lint reports and
+ * re-keys findings, which is a human behavior decision, not a port fix.
+ * Pinned by "ASCII word boundaries are the rail's own semantics" in
+ * tests/conformance-legacy-packs.test.mjs. */
 const CHECKS: ReadonlyArray<{ name: string; rx: RegExp }> = [
   { name: "semicolon", rx: /;/ },
   { name: "modal", rx: /\b(should|would|may|might|could)\b/i },
@@ -39,21 +50,34 @@ const CHECKS: ReadonlyArray<{ name: string; rx: RegExp }> = [
 
 /** ste_lint.py's `prose_lines`: yield (lineno, strippedLine) for prose only —
  * frontmatter skipped, fenced code skipped, inline code + wikilink aliases +
- * double-quoted spans stripped. `text` is universal-newline-normalized. */
+ * double-quoted spans stripped. `text` is universal-newline-normalized.
+ *
+ * The frontmatter skip binds to core's shared recognizer (`stripLeadingBom` +
+ * `stripLeadingFrontmatter`, #189/#223) — NOT the Python's literal
+ * `lines[0] === "---"` scan this ported. That scan was BOM-blind (a BOM'd
+ * note's frontmatter was linted as prose, #227), kept at port time only for
+ * byte-parity with the Python rail; the rail is retired, so parity is
+ * historical and the recognizer is the vault's own. Consequence, noted
+ * honestly: a note whose fence only the shared recognizer sees (leading BOM,
+ * trailing whitespace on the opener, a `----`-style closer) now has its
+ * frontmatter exempted, so its ste finding keys can shift (typically:
+ * frontmatter-only hits disappear) — those re-bless at the next human
+ * rebaseline. Keys for notes with an ordinary exact-`---` fence, and for
+ * notes with no (or unterminated) frontmatter, are byte-stable (pinned in
+ * tests/conformance-legacy-packs.test.mjs). */
 export function proseLines(text: string): { line: number; text: string }[] {
-  const lines = text.split("\n");
-  let i = 0;
-  if (lines.length && lines[0] === "---") {
-    for (let j = 1; j < lines.length; j++) {
-      if (lines[j] === "---") {
-        i = j + 1;
-        break;
-      }
-    }
-  }
+  const bomless = stripLeadingBom(text);
+  const body = stripLeadingFrontmatter(text);
+  // Lines the recognized fence consumed — prose line numbers stay 1-based
+  // positions in the ORIGINAL text (they feed `detail`, not the key). No
+  // recognized fence (none, or unterminated) ⇒ offset 0 and the whole text is
+  // scanned, exactly as the Python scanned it.
+  const offset =
+    body === bomless ? 0 : bomless.slice(0, bomless.length - body.length).split("\n").length - 1;
+  const lines = body.split("\n");
   const out: { line: number; text: string }[] = [];
   let fence: string | null = null;
-  for (let n = i; n < lines.length; n++) {
+  for (let n = 0; n < lines.length; n++) {
     const line = lines[n];
     const open = line.match(/^(```+|~~~+)/);
     if (fence) {
@@ -69,7 +93,7 @@ export function proseLines(text: string): { line: number; text: string }[] {
     let stripped = line.replace(/`[^`]*`/g, "");
     stripped = stripped.replace(/\[\[([^\]|]*)\|/g, "[[");
     stripped = stripped.replace(/"[^"]*"/g, "");
-    out.push({ line: n + 1, text: stripped });
+    out.push({ line: n + 1 + offset, text: stripped });
   }
   return out;
 }
