@@ -4,10 +4,12 @@ import type {
   MacroChoiceNoteInput,
   TemplateChoiceNoteInput,
   CaptureChoiceNoteInput,
+  MultiChoiceNoteInput,
   QuickAddMacro,
   QuickAddMacroChoice,
   QuickAddTemplateChoice,
   QuickAddCaptureChoice,
+  QuickAddMultiChoice,
   TransformResult,
 } from "./types.js";
 
@@ -37,18 +39,61 @@ export function deriveStepId(notePath: string, index: number): string {
   return `${ID_PREFIX}${notePath}#step${index}`;
 }
 
+/** The union every compiled choice shape belongs to — named here once so
+ *  `flattenAll`/`pruneCyclic`/`transformChoices` don't each re-spell it. */
+type QuickAddChoice = QuickAddMacroChoice | QuickAddTemplateChoice | QuickAddCaptureChoice | QuickAddMultiChoice;
+
+/** Recovers the original note path from a compiler-owned choice id — the
+ *  exact reverse of `deriveChoiceId`. Always exact (not a search — undoing a
+ *  known prefix+suffix concatenation), regardless of what characters appear
+ *  in the note path itself. Used for cycle-error messages so they name the
+ *  note a human edits, not the compiler-owned id. */
+function notePathOfChoiceId(id: string): string {
+  return id.slice(ID_PREFIX.length, id.length - "#choice".length);
+}
+
+/** Recursively walks a compiled choice tree (a Multi's own `choices` array,
+ *  arbitrarily deep) into one flat list. Cycle detection must see this full
+ *  set, not just the top level: a Macro choice nested inside a Multi is
+ *  exactly as capable of participating in a choice-step reference cycle as
+ *  a top-level one — resolveChoiceStep's target validation never
+ *  distinguishes nested from top-level, only "does this compiler produce a
+ *  choice for that note." */
+function flattenAll(choices: QuickAddChoice[]): QuickAddChoice[] {
+  const out: QuickAddChoice[] = [];
+  for (const c of choices) {
+    out.push(c);
+    if (c.type === "Multi") out.push(...flattenAll(c.choices));
+  }
+  return out;
+}
+
+/** Recursively rebuilds a compiled choice tree with every id in `cyclic`
+ *  removed, wherever it lives — the top-level array, or nested inside any
+ *  Multi's own `choices` array at any depth. A Multi that loses a cyclic
+ *  MEMBER simply has a smaller `choices` array; the Multi itself is only
+ *  removed if the Multi's OWN id is in `cyclic` (which cannot happen today,
+ *  since Multi choices carry no `macro.commands` and so can never be a node
+ *  in detectChoiceCycles' graph — this function stays correct regardless,
+ *  rather than assuming that invariant). */
+function pruneCyclic(choices: QuickAddChoice[], cyclic: Set<string>): QuickAddChoice[] {
+  const out: QuickAddChoice[] = [];
+  for (const c of choices) {
+    if (cyclic.has(c.id)) continue;
+    out.push(c.type === "Multi" ? { ...c, choices: pruneCyclic(c.choices, cyclic) } : c);
+  }
+  return out;
+}
+
 export function transformChoices(inputs: ChoiceNoteInput[]): TransformResult {
-  const compiled: Array<QuickAddMacroChoice | QuickAddTemplateChoice | QuickAddCaptureChoice> = [];
+  const compiled: QuickAddChoice[] = [];
   const errors: ChoiceError[] = [];
-  /** Compiled choice id → the note it came from, so a cycle can be reported
-   *  in the note paths a human edits rather than in compiler-owned ids. */
-  const noteOf = new Map<string, { notePath: string; name: string }>();
 
   for (const input of inputs) {
     const result = transformOne(input);
     if (result.ok) {
       compiled.push(result.choice);
-      noteOf.set(result.choice.id, { notePath: input.notePath, name: input.name });
+      errors.push(...result.nestedErrors);
     } else {
       errors.push({ notePath: input.notePath, message: result.message });
     }
@@ -58,29 +103,26 @@ export function transformChoices(inputs: ChoiceNoteInput[]): TransformResult {
   // executeChoice has NO cycle detection — no visited set, no depth cap — so
   // running any choice in a cycle loops forever in Obsidian. The glue layer
   // already rejects the DIRECT case (a choice step pointing at its own note)
-  // with a more specific message, but it can only see one step of one note at
-  // a time; a cycle spanning two or more notes is only visible over the whole
-  // compiled set, which is what this pass has.
-  //
-  // Error semantics match the per-note isolation discipline used everywhere
-  // else here: every note participating in a cycle FAILS (an entry in
-  // `errors`) and is omitted from `choices`, exactly like any other compile
-  // failure. Not a thrown error (one bad pair must not take down the whole
-  // compile), and not a silent pass-through (that is the hang this exists to
-  // prevent).
-  const macroChoices = compiled.filter((c): c is QuickAddMacroChoice => c.type === "Macro");
+  // with a more specific message, but it can only see one step of one note
+  // at a time; a cycle spanning two or more notes is only visible over the
+  // whole compiled set — and as of Stage D that set includes choices NESTED
+  // inside a Multi, not just top-level ones, since nesting has no bearing
+  // on whether a Macro's choice: step can form a cycle.
+  const allCompiled = flattenAll(compiled);
+  const byId = new Map(allCompiled.map((c) => [c.id, c]));
+  const macroChoices = allCompiled.filter((c): c is QuickAddMacroChoice => c.type === "Macro");
   const cycles = detectChoiceCycles(macroChoices);
   const cyclic = new Set<string>();
   for (const cycle of cycles) {
-    const paths = cycle.map((id) => noteOf.get(id)?.notePath ?? id);
+    const paths = cycle.map((id) => notePathOfChoiceId(id));
     for (const id of cycle) {
       cyclic.add(id);
-      const note = noteOf.get(id);
-      if (!note) continue;
+      const choice = byId.get(id);
+      if (!choice) continue;
       errors.push({
-        notePath: note.notePath,
+        notePath: notePathOfChoiceId(id),
         message:
-          `Macro "${note.name}" (${note.notePath}) is part of a choice-step reference cycle involving: ` +
+          `Macro "${choice.name}" (${notePathOfChoiceId(id)}) is part of a choice-step reference cycle involving: ` +
           `${paths.join(", ")}. QuickAdd has no cycle guard, so running any choice in the cycle would loop ` +
           "forever at run time — every note in the cycle is dropped from this compile. Break the cycle by " +
           "removing one of the choice steps.",
@@ -88,7 +130,7 @@ export function transformChoices(inputs: ChoiceNoteInput[]): TransformResult {
     }
   }
 
-  const choices = cyclic.size === 0 ? compiled : compiled.filter((c) => !cyclic.has(c.id));
+  const choices = cyclic.size === 0 ? compiled : pruneCyclic(compiled, cyclic);
 
   return { choices, errors };
 }
@@ -180,7 +222,7 @@ export function detectChoiceCycles(choices: QuickAddMacroChoice[]): string[][] {
 }
 
 type OneResult =
-  | { ok: true; choice: QuickAddMacroChoice | QuickAddTemplateChoice | QuickAddCaptureChoice }
+  | { ok: true; choice: QuickAddMacroChoice | QuickAddTemplateChoice | QuickAddCaptureChoice | QuickAddMultiChoice; nestedErrors: ChoiceError[] }
   | { ok: false; message: string };
 
 function transformOne(input: ChoiceNoteInput): OneResult {
@@ -191,7 +233,38 @@ function transformOne(input: ChoiceNoteInput): OneResult {
       return transformTemplate(input);
     case "capture":
       return transformCapture(input);
+    case "multi":
+      return transformMulti(input);
   }
+}
+
+function transformMulti(input: MultiChoiceNoteInput): OneResult {
+  if (!input.folder.ok) {
+    return { ok: false, message: `Multi "${input.name}" (${input.notePath}): ${input.folder.error}` };
+  }
+  const memberChoices: Array<QuickAddMacroChoice | QuickAddTemplateChoice | QuickAddCaptureChoice | QuickAddMultiChoice> = [];
+  const nestedErrors: ChoiceError[] = [];
+  for (const member of input.folder.members) {
+    const r = transformOne(member);
+    if (r.ok) {
+      memberChoices.push(r.choice);
+      nestedErrors.push(...r.nestedErrors);
+    } else {
+      nestedErrors.push({ notePath: member.notePath, message: r.message });
+    }
+  }
+  return {
+    ok: true,
+    nestedErrors,
+    choice: {
+      id: deriveChoiceId(input.notePath),
+      name: input.name,
+      type: "Multi",
+      command: false,
+      choices: memberChoices,
+      collapsed: false,
+    },
+  };
 }
 
 function transformTemplate(input: TemplateChoiceNoteInput): OneResult {
@@ -200,6 +273,7 @@ function transformTemplate(input: TemplateChoiceNoteInput): OneResult {
   }
   return {
     ok: true,
+    nestedErrors: [],
     choice: {
       id: deriveChoiceId(input.notePath),
       name: input.name,
@@ -228,6 +302,7 @@ function transformCapture(input: CaptureChoiceNoteInput): OneResult {
   }
   return {
     ok: true,
+    nestedErrors: [],
     choice: {
       id: deriveChoiceId(input.notePath),
       name: input.name,
@@ -317,6 +392,7 @@ function transformMacro(input: MacroChoiceNoteInput): OneResult {
 
   return {
     ok: true,
+    nestedErrors: [],
     choice: {
       id: deriveChoiceId(input.notePath),
       name: input.name,
