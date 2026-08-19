@@ -182,6 +182,21 @@ Known-overstated section instead — see its header for the format.
 - Safety guards that apply: read-only mode always applies (mutating external tools are blocked when read-only is on); the path allowlist scopes arguments under recognized path keys (path, from, to, paths, and a few others) — when an allowlist is active, mutating external tools whose args carry no recognized path key are blocked outright, since vault-mcp cannot scope the call.
 - `readOnly: true` on a published tool is an assertion by a third-party plugin about code vault-mcp cannot inspect — and believing it exempts that tool from the write queue, the journal, the path allowlist, the kernel arguments, and read-only mode, all at once.
 
+## docs/reference.md (#264 record immutability)
+
+Reviewed at authoring time (#264). Both claims are substantiated by
+`tests/record-immutable.test.mjs`: the per-op refusal sweep (write / patch /
+frontmatter / move / trash / delete / append_at_heading), the
+destination-is-a-record multi-path pin, the journaled-refusal pin, and the
+fail-open pins (undefined flag, throwing probe, probe without `record`).
+Scope note: "every mutating operation that names one" is scoped to the
+kernel (the plugin's guarded path) and to operations that NAME the path —
+the surrounding paragraph carries the fail-open qualifier, and writes that
+bypass the MCP server entirely are out of scope by the stated threat model.
+
+- The kernel refuses **every mutating operation that names one** (write, patch, frontmatter edit, move, trash, delete — and a move whose *destination* is a record, which would overwrite it) with `Error [record_immutable]: …` before the handler runs, journaled like any other refused operation.
+- The check runs at the front of the write queue (same point as `if_rev`), reads the flag from Obsidian's already-parsed metadata cache, and **fails open**: a missing file, an unparsed cache, or an unreadable frontmatter never refuses anything — this guard is protective, and an unreadable note must not turn into a vault-wide write outage.
+
 ## docs/triage.md
 
 Reviewed at authoring time (#221 phase 2), re-reviewed for the phase-3

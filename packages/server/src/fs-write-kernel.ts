@@ -36,6 +36,13 @@
  *   cross-process lock worth trusting, and the FS_ALLOW_WRITES gate (fs-mode.ts)
  *   exists precisely because that residual gap remains.
  *
+ * - **No record immutability (#264).** The plugin kernel refuses non-append
+ *   mutation of `record: true` notes at its dequeue closure
+ *   (packages/plugin/src/kernel/record-guard.ts); FS mode has no metadata
+ *   cache to probe the flag from cheaply and, like if_rev/idempotency above,
+ *   does not re-state the check. With FS_ALLOW_WRITES on, a record note is
+ *   mutable through this path — same residual class as the rest of this list.
+ *
  * Shared semantics kept from the plugin kernel, pinned by tests:
  * - one FIFO queue per process; reads never queue; enqueue order is run order;
  * - exactly one journal record per mutating operation, error outcomes included;

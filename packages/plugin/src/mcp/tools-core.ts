@@ -52,6 +52,10 @@ export interface ServerCtx {
      * (mcp/cli-policy.ts). Absent ⇒ the defaults: the opaque-accept set
      * denied, everything else allowed. */
     cliPolicy?: CliCommandPolicy;
+    /** Record-immutability enforcement (#264). Absent ⇒ ENFORCED: only an
+     * explicit `false` disables it, so a caller that never wired the setting
+     * fails toward protection. Read live by the per-connection probe. */
+    enforceRecordImmutability?: boolean;
   };
   /** The configured controlled-vocabulary sources (tools-vocab.ts). Optional:
    * absent means the defaults; absent in tests that don't exercise it. */
