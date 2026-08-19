@@ -26,7 +26,7 @@ surface, the socket/bridge architecture, the path allowlist). These docs go deep
 | [scope-provider.md](scope-provider.md) | The scope provider module: Johnny Decimal `jd:` addressing and read-only allocation (compute, not reserve). |
 | [vocabulary.md](vocabulary.md) | The vocabulary provider module: read-only validation of tags, properties, types, and glossary terms. |
 | [crosssession.md](crosssession.md) | The cross-session channel module: coordination-log discovery by frontmatter, delta reads, read-receipt attestation, and posting refused while stale (`stale_read`). |
-| [triage.md](triage.md) | The inbox-triage module: the disposition substrate (#221) and its second instance — ten agent dispositions over inbox notes, one dry-run-by-default guarded tool, no pane. |
+| [triage.md](triage.md) | The inbox-triage module: the disposition substrate (#221) and its second instance (#241 phase-3 shape) — three built-in primitives plus human-declared disposition rows over inbox notes, Base-backed queues, one dry-run-by-default guarded tool, no pane. |
 | [conformance.md](conformance.md) | The TS conformance engine: rule packs, the ratchet (baseline-diffed findings), the ported legacy checks, and the headless CLI. |
 | [reference.md](reference.md) | The precise operational contracts: addressing (`uid:`/schemes), write queue & journal semantics, `if_rev`/idempotency, advisory claims, the path allowlist and its oracles, external-tool trust, Code Mode. |
 
@@ -74,28 +74,31 @@ The end-to-end shape:
   [acceptance-model.md](acceptance-model.md) for the mechanism and its named, tracked
   residuals).
 
-### The Acceptance review surface
+### The governance module (the Acceptance capability)
 
-**Acceptance** (named per the 2026-08-10 ruling; formerly *Stewardship* — code identifiers,
-the repo name, and file paths keep the legacy name until the rename lands, tracked in #115)
-is the review *surface*: it reads the write journal and its own baseline store, renders a
-pending-review pane, and is where a human accepts or reverts a proposed change.
+**Naming, ruled (#115, 2026-08-19):** `governance` is the canonical identifier — it is the
+shipped module id, settings key, and source directory, and renaming a shipped id is a
+compatibility event with no offsetting benefit. *Acceptance* remains the capability's
+descriptive name in prose (the module's `capabilities: ["acceptance"]` entry). One id, one
+capability name, no third synonym; *Stewardship* is legacy vocabulary for the pre-fold
+standalone plugin (decommissioned 2026-08-18, #164).
 
-Today it ships as a separate Obsidian plugin (repo `obsidian-stewardship`); vault-mcp does
-not import it and does not depend on it being installed. **The plugin boundary is not a
-trust boundary** — both plugins run in the same JS realm, so the separation was never a
-security property. The accept veto is protected by *in-realm unreachability* (no commands,
-gesture-gated handlers, module-scope closures), which survives packaging changes. The
-destination, per the module-consolidation ruling, is for Acceptance to fold into vault-mcp
-as the **governance module** (#83) — gated on a fresh accept-reachability review of the
-merged topology.
+The fold this section once anticipated has long since landed (#83, 0.8.3) and been built
+out through the acceptance convergence (#230): the governance module IS the review surface
+— it reads the write journal and its own baseline store, renders the review pane (pending /
+Proposed / Revising sections, Queue ⇄ History toggle), and is where a human accepts,
+reverts, adopts, or requests changes. The accept veto is protected by *in-realm
+unreachability* (no commands, gesture-gated handlers, module-scope closures) — see
+[acceptance-model.md](acceptance-model.md). The read-only `obsidian_pending_review`,
+`governance_revisions`, and the agent-facing `governance_submit_revision` are the module's
+only transport-visible surfaces; none exposes an accept verb.
 
-The one contract between the two today is a file: the review plugin writes a read-only
-index at `<config-dir>/plugins/stewardship/pending-index.json` on every review-queue
-refresh, and vault-mcp's `obsidian_pending_review` reads it (see
-[agent-writes.md](agent-writes.md#b3--obsidian_pending_review)). The coupling is
-one-directional and data-only — Acceptance publishes, vault-mcp reads. Neither exposes an
-accept verb to an agent.
+## Release history note
+
+Tags begin at `0.4.x` and jump to `0.7.0`: **0.5.0 and 0.6.0 were built and deployed
+locally during development but never tagged or released**, so the tag history and
+`versions.json` deliberately omit them (documented here per #102 rather than backfilling
+tags for builds whose exact bytes are unrecoverable).
 
 ## Status & verification
 

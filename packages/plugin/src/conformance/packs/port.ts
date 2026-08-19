@@ -23,7 +23,15 @@ export const PORT_PACK_ID = "port_lint";
 
 /** The three flagged families. `name` becomes the finding's `check`; the whole
  * matched substring (Python's `m.group(0)`) becomes `kind`. Order and patterns
- * are verbatim from port_lint.py's PATTERNS. */
+ * are verbatim from port_lint.py's PATTERNS.
+ *
+ * PINNED (#112a): `\b` here is JS's ASCII-only word boundary, where Python's
+ * `re` treated `\w` as Unicode — a token glued to a non-ASCII letter
+ * ("Templaterö") matches here where the Python did not. The Python rail is
+ * retired, so the ASCII semantics ARE the rail's own now, kept deliberately
+ * (a Unicode-aware rewrite changes what the lint reports and re-keys
+ * findings — a human behavior decision). Pinned by "ASCII word boundaries
+ * are the rail's own semantics" in tests/conformance-legacy-packs.test.mjs. */
 const PATTERNS: ReadonlyArray<{ name: string; rx: RegExp }> = [
   // Absolute or tilde paths into the retired source vaults (obsidian-old /
   // -new / -newer). NOT the live `~/obsidian`. `newer` precedes `new` in the
