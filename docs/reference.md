@@ -195,9 +195,11 @@ With no allowlist configured, every one of these behaves exactly as it always di
 
 ## Publishing tools from other plugins
 
-Other Obsidian plugins can publish their own MCP tools through vault-mcp's bridge. Add the SDK:
+Other Obsidian plugins can publish their own MCP tools through vault-mcp's bridge. Add the SDK — `vault-mcp-api`, which lives in this monorepo at [`packages/vault-mcp-api`](../packages/vault-mcp-api) (folded from the standalone `github:nelsonlove/vault-mcp-api` repo, #86):
 
-    npm install github:nelsonlove/vault-mcp-api#v1.0.0
+    npm install vault-mcp-api
+
+(Before the first npm-published version lands, the pinned install from the old standalone repo — `npm install github:nelsonlove/vault-mcp-api#v1.0.0` — keeps working.)
 
 then in your plugin's `onload()`:
 

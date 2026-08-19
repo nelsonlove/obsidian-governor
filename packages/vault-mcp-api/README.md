@@ -1,10 +1,22 @@
 # vault-mcp-api
 
-Publisher SDK for the [vault-mcp](https://github.com/nelsonlove/obsidian-vault-mcp-plugin) external tool registry: let your Obsidian plugin publish MCP tools to Claude Code through vault-mcp's bridge.
+Publisher SDK for the [vault-mcp](https://github.com/nelsonlove/obsidian-governor) external tool registry: let your Obsidian plugin publish MCP tools to Claude Code through vault-mcp's bridge.
+
+> **Canonical home moved (2026-08-19, #86):** this package now lives in the
+> vault-mcp monorepo at `packages/vault-mcp-api` of
+> [nelsonlove/obsidian-governor](https://github.com/nelsonlove/obsidian-governor),
+> next to the host side of the contract
+> (`packages/plugin/src/mcp/external-tools.ts`) and a contract test that pins
+> the two together. The old standalone repo
+> ([nelsonlove/vault-mcp-api](https://github.com/nelsonlove/vault-mcp-api)) is
+> to be archived; existing `github:nelsonlove/vault-mcp-api#v1.0.0` installs
+> keep working from the archive. The published npm package name is unchanged.
 
 ## Install
 
-    npm install github:nelsonlove/vault-mcp-api#v1.0.0
+    npm install vault-mcp-api
+
+(Until the first monorepo-published version reaches npm, the pinned install from the old repo still works: `npm install github:nelsonlove/vault-mcp-api#v1.0.0`.)
 
 `obsidian` and `zod` are peer dependencies (any plugin build already has the former; npm ≥7 auto-installs the latter).
 
