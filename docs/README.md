@@ -1,15 +1,15 @@
-# vault-mcp kernel — documentation
+# Governor kernel — documentation
 
-This directory documents the **vault-mcp kernel**: the governed write substrate that
+This directory documents the **Governor kernel**: the governed write substrate that
 turns the plugin's `obsidian_*` tools from "an agent editing files" into "an agent
 proposing changes that a human reviews and accepts." It is the plugin-side half of the
-[Assent](#how-the-pieces-fit--the-assent-review-channel) review channel.
+[Governor](#how-the-pieces-fit--the-governor-review-channel) review channel.
 
 The top-level [`README.md`](../README.md) is the user-facing overview (install, the tool
 surface, the socket/bridge architecture, the path allowlist). These docs go deeper on the
 **kernel** and the **acceptance model** it exists to protect.
 
-> These docs track **`main`** (the kernel shipped in v0.7.0; current release **0.11.0**),
+> These docs track **`main`** (the kernel shipped in v0.7.0; current release **0.12.0**),
 > plugin package `packages/plugin/`. The last full line-by-line verification pass ran at
 > pre-ship head `bc1a8a1`; file references are given so each claim is checkable against
 > current source.
@@ -18,7 +18,7 @@ surface, the socket/bridge architecture, the path allowlist). These docs go deep
 
 | Doc | What it covers |
 | --- | --- |
-| **[overview.md](overview.md)** | **Start here.** The whole-system map as of 0.11.0: transport, guard + kernel, the acceptance perimeter, the governance module, one paragraph per capability module, the dev tool-runner, CLI tools, conformance, external-tool trust, and the module defaults table — with links into everything below. |
+| **[overview.md](overview.md)** | **Start here.** The whole-system map as of 0.12.0: transport, guard + kernel, the acceptance perimeter, the acceptance module, one paragraph per capability module, the dev tool-runner, CLI tools, conformance, external-tool trust, and the module defaults table — with links into everything below. |
 | **[acceptance-model.md](acceptance-model.md)** | **The heart of the design.** Acceptance is human-only — "the accept verb goes in no API." The accept-forbidden guard at the shared write primitive, on every write surface that routes through it (including the CLI proxy), and its documented residuals (tracked publicly; not yet all closed). |
 | [kernel-v0.md](kernel-v0.md) | Kernel v0 primitives: the serialized write queue, the append-only write journal, `if_rev` optimistic concurrency, idempotency keys, advisory scope locks, and server/install identity. |
 | [identity-and-links.md](identity-and-links.md) | The identity substrate: the uid index, `uid:` addressing that survives rename/move, link healing, `obsidian_check_links`, `obsidian_repoint_link`, and read-boundary containment. |
@@ -33,13 +33,13 @@ surface, the socket/bridge architecture, the path allowlist). These docs go deep
 | [conformance.md](conformance.md) | The TS conformance engine: rule packs, the ratchet (baseline-diffed findings), the ported legacy checks, and the headless CLI. |
 | [reference.md](reference.md) | The precise operational contracts: addressing (`uid:`/schemes), write queue & journal semantics, `if_rev`/idempotency, advisory claims, the path allowlist and its oracles, external-tool trust, Code Mode. |
 
-## How the pieces fit — the Assent review channel
+## How the pieces fit — the Governor review channel
 
 The kernel exists to make agent writes **reviewable** without making them **unsupervised**.
 The end-to-end shape:
 
 ```
-   agent (Claude Code)                    vault-mcp kernel                     human
+   agent (Claude Code)                    Governor kernel                     human
    ───────────────────                    ────────────────                     ─────
    obsidian_write_note(s) ─┐
    append / patch / move ──┼─▶ serialized write queue ─▶ note written ─┐
@@ -53,9 +53,9 @@ The end-to-end shape:
    obsidian_pending_review ◀────────────────┼──────────────────────────┘
    (read: what's under review)              │                          │
                                             ▼                          ▼
-                                    Governance review pane ◀── reads journal + baseline
-                                    (vault-mcp governance      publishes pending-index.json
-                                     module, folded #164)
+                                    Acceptance review pane ◀── reads journal + baseline
+                                    (the acceptance module,    publishes pending-index.json
+                                     folded #164)
                                             │
                                             ▼
                                     human accepts / reverts  ◀── the SOLE accept authority
@@ -73,29 +73,30 @@ The end-to-end shape:
   avoids stepping on a note a human is about to review.
 - **The human keeps the sole accept veto — by design, and by enforcement on the surfaces the
   guard covers.** Acceptance is a gesture made in the
-  **[Acceptance review surface](#the-acceptance-review-surface)** — never through a tool, agent,
+  **[acceptance module](#the-acceptance-module)** — never through a tool, agent,
   or CLI call the guard sees. The kernel enforces this structurally where it's wired in (see
   [acceptance-model.md](acceptance-model.md) for the mechanism and its named, tracked
   residuals).
 
-### The governance module (the Acceptance capability)
+### The acceptance module
 
-**Project naming (2026-08-19):** the product is **Governor** (repo `obsidian-governor`); the
-plugin **id** remains `vault-mcp` permanently — it is load-bearing plumbing (plugin folder,
-`~/.claude/vault-mcp/` socket namespace, `mcp__vault-mcp__*` tool prefixes, the
-`app.plugins.plugins['vault-mcp'].api` contract), and renaming a shipped id is a compatibility
-event with no functional benefit. *Assent* names the broader framework the plugin realizes;
-*vault-mcp* in prose refers to the id, not the product.
-
-**Module naming, ruled (#115, 2026-08-19):** `governance` is the canonical identifier — it is the
-shipped module id, settings key, and source directory, and renaming a shipped id is a
-compatibility event with no offsetting benefit. *Acceptance* remains the capability's
-descriptive name in prose (the module's `capabilities: ["acceptance"]` entry). One id, one
-capability name, no third synonym; *Stewardship* is legacy vocabulary for the pre-fold
-standalone plugin (decommissioned 2026-08-18, #164).
+**One brand (Nelson's ruling, 0.12.0 — supersedes the 2026-08-19 keep-the-ids ruling):**
+**Governor** is the product, the project, and the framework — the one name for all three
+(*Assent*, the framework's former name, is legacy vocabulary). The plugin **id** is
+`governor`, migrated from `vault-mcp` in 0.12.0 with a self-migrating data folder, a
+grace-period compat surface at the old `~/.claude/vault-mcp/` state dir, and a re-register
+under the `governor` server name (`mcp__governor__*` tool prefixes); *vault-mcp* in prose
+refers to the retired historical id. The capability that guards acceptance is the
+**acceptance module** (module id `acceptance`, migrated from `governance` with a one-time
+settings-key shim). Two things deliberately keep the old word as historical spelling: the
+shipped always-on tool names `governance_revisions` / `governance_submit_revision` (renaming
+shipped tool names breaks agent sessions for zero semantic gain) and the source dirs
+`src/governance/` + `src/kernel/governance/` (moving dirs churns every import for zero
+user-visible gain). *Stewardship* is legacy vocabulary for the pre-fold standalone plugin
+(decommissioned 2026-08-18, #164).
 
 The fold this section once anticipated has long since landed (#83, 0.8.3) and been built
-out through the acceptance convergence (#230): the governance module IS the review surface
+out through the acceptance convergence (#230): the acceptance module IS the review surface
 — it reads the write journal and its own baseline store, renders the review pane (pending /
 Proposed / Revising sections, Queue ⇄ History toggle), and is where a human accepts,
 reverts, adopts, or requests changes. The accept veto is protected by *in-realm

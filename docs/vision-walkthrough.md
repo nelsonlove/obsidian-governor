@@ -1,9 +1,9 @@
-# Walkthrough — your first month with Assent *(vision)*
+# Walkthrough — your first month with Governor *(vision)*
 
 > **This document describes the destination, not the shipped product.** Every feature below is
 > written as if complete; the appendix maps each part to what actually exists today. It doubles
 > as the roadmap's acceptance criteria: when a stranger can follow this walkthrough verbatim,
-> Assent is done. For what's real right now, read the [README](../README.md) and
+> Governor is done. For what's real right now, read the [README](../README.md) and
 > [docs/](README.md), which are bounded to shipped behavior.
 
 ## Part 0 — What you're about to do
@@ -14,11 +14,11 @@ You need: Obsidian on desktop, any MCP-speaking agent (Claude Code in these exam
 
 ## Part 1 — Install (ten minutes)
 
-1. **Community plugins → install "Assent" (vault-mcp).** One plugin. The review pane, the conformance rail, scope addressing, and vocabulary all live inside it as modules — Settings shows one tab per module, and each tab doubles as the directory of everything that module can do.
-2. Run **`Assent: Adopt current state as baseline`**. That's the whole setup: no schema, no config file, no new syntax in your notes. Your vault, exactly as it stands, becomes the accepted baseline — including its mess. Only *changes from here* will ever queue for you.
-3. Run **`Assent: Connect agent…`** and restart your Claude Code session.
+1. **Community plugins → install "Governor".** One plugin. The review pane, the conformance rail, scope addressing, and vocabulary all live inside it as modules — Settings shows one tab per module, and each tab doubles as the directory of everything that module can do.
+2. Run **`Governor: Adopt current state as baseline`**. That's the whole setup: no schema, no config file, no new syntax in your notes. Your vault, exactly as it stands, becomes the accepted baseline — including its mess. Only *changes from here* will ever queue for you.
+3. Run **`Governor: Connect agent…`** and restart your Claude Code session.
 
-Open Settings → Assent once, just to look. Each module's page is generated from what the module declares: what it does, every tool it offers, every knob with its consequences. Config here *is* the documentation — there is no drift between the settings screen and the docs because they're the same data.
+Open Settings → Governor once, just to look. Each module's page is generated from what the module declares: what it does, every tool it offers, every knob with its consequences. Config here *is* the documentation — there is no drift between the settings screen and the docs because they're the same data.
 
 ## Part 2 — The first hour: watch an agent work
 
@@ -37,7 +37,7 @@ Open the sidebar: the **Acceptance** badge shows what's waiting. Not a crime sce
 
 Overnight you let a standing loop run: inbox triage, dailies rolled into the weekly, stale tasks groomed. Now:
 
-1. Open the **Acceptance pane**. Pending changes are grouped by agent and scope: note, author, one-line summary, age. Your own edits are nowhere in it — Assent knows you by how a change *arrives*, and your edits advance the baseline silently.
+1. Open the **Acceptance pane**. Pending changes are grouped by agent and scope: note, author, one-line summary, age. Your own edits are nowhere in it — Governor knows you by how a change *arrives*, and your edits advance the baseline silently.
 2. Click a row: a proper diff — frontmatter compared key-by-key, prose word-by-word — with the agent's stated intent as the header.
 3. Four verbs, all yours: **Accept** · **Accept with edits** (open, tweak, accept — the common case) · **Reject**, with a reason that routes back to the agent's next turn · **Defer**.
 4. The batch bar clears the mechanical majority in one motion — select by rule, by scope, by agent. Fifty stamp-like changes don't cost fifty clicks.
@@ -62,7 +62,7 @@ Your vault runs Johnny Decimal, so you turn on the scheme module's JD definition
 
 ## Part 6 — Month one: the fleet
 
-- **Loops are first-class.** `Assent: loops` shows your standing schedules — inbox triage nightly, weekly rollup Sundays, a feed-watcher filing summaries with citations. Every loop's output is just proposals; an unattended agent is another proposer with a schedule.
+- **Loops are first-class.** `Governor: loops` shows your standing schedules — inbox triage nightly, weekly rollup Sundays, a feed-watcher filing summaries with citations. Every loop's output is just proposals; an unattended agent is another proposer with a schedule.
 - **Server mode.** `assent serve` supervises a headless vault on the closet Mac mini; your agents work while your laptop sleeps.
 - **Review from your phone.** The queue reaches you as notifications: approve, reject, defer from the lock screen. Nothing gains standing while you're out unless you say so.
 - **Your other systems join.** GitHub issues ⇄ tasks, OmniFocus ⇄ tasks, calendar and mail — syncs run continuously, and *outbound* mutations to the world gate through the same approval as everything else. Task ⇄ proposal ⇄ acceptance reads exactly like issue ⇄ PR ⇄ merge, because it is that model.
@@ -83,7 +83,7 @@ Uninstall everything. Your vault is still there — every note, every accepted c
 | Tab per module / config-as-directory | Designed + reviewed (config-host, #78/#81); **not built** |
 | Adopt-baseline one-command setup | Shipped in the Acceptance plugin (pane/settings button) |
 | Operations, not writes; discoverable access; `propose` access level | **Not built** — today's surface is governed *tools*, not a registered operation surface; propose-as-access-level has no mechanism yet |
-| Queue, journal, intent, stamps, `uid:`/`jd:` addressing | Shipped (vault-mcp 0.8.x) |
+| Queue, journal, intent, stamps, `uid:`/`jd:` addressing | Shipped (0.8.x, under the historical vault-mcp id) |
 | Accept-forbidden guard, every surface | Shipped; perimeter hardening ongoing (0.8.1 milestone; #144 class in triage) |
 | Auto-accept: four mechanical classes, rail-clean gate | Built + adversarially passed; awaiting deploy with the pane |
 | Per-note policies (auto-accept appends), history browser | Spec'd (auto-accept spec §6b); **not built** |
