@@ -2,6 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
   transformChoices,
+  detectChoiceCycles,
   deriveChoiceId,
   deriveMacroId,
   deriveStepId,
@@ -266,6 +267,140 @@ describe("transformChoices — mixed multi-step macro (the real motivating case)
     assert.deepEqual(result.errors, []);
     const cmds = result.choices[0].macro.commands;
     assert.deepEqual(cmds.map((c) => c.type), ["Choice", "Wait", "Obsidian"]);
+  });
+});
+
+describe("transformChoices — multi-note reference cycles", () => {
+  const cyclePair = () => [
+    macroInput({
+      notePath: "Choices/A.md",
+      name: "A",
+      steps: [choiceStep({ choiceId: deriveChoiceId("Choices/B.md"), displayName: "B" })],
+    }),
+    macroInput({
+      notePath: "Choices/B.md",
+      name: "B",
+      steps: [choiceStep({ choiceId: deriveChoiceId("Choices/A.md"), displayName: "A" })],
+    }),
+  ];
+
+  test("a two-note cycle (A → B → A) fails BOTH notes and compiles neither", () => {
+    const result = transformChoices(cyclePair());
+    assert.equal(result.choices.length, 0);
+    assert.equal(result.errors.length, 2);
+    assert.deepEqual(result.errors.map((e) => e.notePath).sort(), ["Choices/A.md", "Choices/B.md"]);
+    for (const e of result.errors) {
+      // Distinguishable from the single-note self-reference message.
+      assert.match(e.message, /reference cycle/i);
+      assert.doesNotMatch(e.message, /same note/i);
+      assert.match(e.message, /Choices\/A\.md/);
+      assert.match(e.message, /Choices\/B\.md/);
+      assert.match(e.message, /loop forever/i);
+    }
+  });
+
+  test("an unrelated note still compiles while a cycle beside it fails", () => {
+    const result = transformChoices([
+      ...cyclePair(),
+      macroInput({ notePath: "Choices/Fine.md", name: "Fine" }),
+    ]);
+    assert.deepEqual(result.choices.map((c) => c.name), ["Fine"]);
+    assert.equal(result.errors.length, 2);
+  });
+
+  test("a three-note cycle (A → B → C → A) fails all three", () => {
+    const link = (from, to) =>
+      macroInput({
+        notePath: `Choices/${from}.md`,
+        name: from,
+        steps: [choiceStep({ choiceId: deriveChoiceId(`Choices/${to}.md`), displayName: to })],
+      });
+    const result = transformChoices([link("A", "B"), link("B", "C"), link("C", "A")]);
+    assert.equal(result.choices.length, 0);
+    assert.deepEqual(result.errors.map((e) => e.notePath).sort(), [
+      "Choices/A.md",
+      "Choices/B.md",
+      "Choices/C.md",
+    ]);
+  });
+
+  test("a chain with no cycle (A → B → C) compiles all three", () => {
+    const result = transformChoices([
+      macroInput({ notePath: "Choices/A.md", name: "A", steps: [choiceStep({ choiceId: deriveChoiceId("Choices/B.md") })] }),
+      macroInput({ notePath: "Choices/B.md", name: "B", steps: [choiceStep({ choiceId: deriveChoiceId("Choices/C.md") })] }),
+      macroInput({ notePath: "Choices/C.md", name: "C" }),
+    ]);
+    assert.deepEqual(result.errors, []);
+    assert.equal(result.choices.length, 3);
+  });
+
+  test("a dangling reference (target never compiled) is not a cycle and still compiles", () => {
+    const result = transformChoices([
+      macroInput({ notePath: "Choices/A.md", name: "A", steps: [choiceStep({ choiceId: deriveChoiceId("Choices/Nowhere.md") })] }),
+    ]);
+    assert.deepEqual(result.errors, []);
+    assert.equal(result.choices.length, 1);
+  });
+});
+
+describe("detectChoiceCycles", () => {
+  const choice = (path, targets = []) => ({
+    id: deriveChoiceId(path),
+    name: path,
+    type: "Macro",
+    command: true,
+    runOnStartup: false,
+    macro: {
+      name: path,
+      id: deriveMacroId(path),
+      commands: targets.map((t, i) => ({
+        id: deriveStepId(path, i),
+        name: t,
+        type: "Choice",
+        choiceId: deriveChoiceId(t),
+      })),
+    },
+  });
+
+  test("no edges at all ⇒ no cycles", () => {
+    assert.deepEqual(detectChoiceCycles([choice("A.md"), choice("B.md")]), []);
+  });
+
+  test("a two-node cycle is reported as one group naming both ids", () => {
+    const cycles = detectChoiceCycles([choice("A.md", ["B.md"]), choice("B.md", ["A.md"])]);
+    assert.equal(cycles.length, 1);
+    assert.deepEqual(cycles[0].sort(), [deriveChoiceId("A.md"), deriveChoiceId("B.md")]);
+  });
+
+  test("a self-edge is a cycle of one", () => {
+    const cycles = detectChoiceCycles([choice("A.md", ["A.md"])]);
+    assert.deepEqual(cycles, [[deriveChoiceId("A.md")]]);
+  });
+
+  test("two disjoint cycles are reported as two groups", () => {
+    const cycles = detectChoiceCycles([
+      choice("A.md", ["B.md"]),
+      choice("B.md", ["A.md"]),
+      choice("C.md", ["D.md"]),
+      choice("D.md", ["C.md"]),
+    ]);
+    assert.equal(cycles.length, 2);
+    assert.equal(cycles.flat().length, 4);
+  });
+
+  test("a node pointing INTO a cycle without being in it is not reported", () => {
+    const cycles = detectChoiceCycles([
+      choice("Entry.md", ["A.md"]),
+      choice("A.md", ["B.md"]),
+      choice("B.md", ["A.md"]),
+    ]);
+    assert.deepEqual(cycles.flat().sort(), [deriveChoiceId("A.md"), deriveChoiceId("B.md")]);
+  });
+
+  test("output is stable regardless of input order", () => {
+    const a = choice("A.md", ["B.md"]);
+    const b = choice("B.md", ["A.md"]);
+    assert.deepEqual(detectChoiceCycles([a, b]), detectChoiceCycles([b, a]));
   });
 });
 

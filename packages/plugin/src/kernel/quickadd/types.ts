@@ -30,7 +30,10 @@ export interface UserScriptStepFailed {
  *  function of note path. Whether the referenced note actually compiles
  *  into a valid choice is NOT checked here — same discipline QuickAdd's
  *  own data.json uses (choiceId is just a stored reference; a dangling one
- *  fails at RUN time, not compile time).
+ *  fails at RUN time, not compile time). Reference CYCLES are the one
+ *  exception, and they are caught after the fact rather than here: see
+ *  `detectChoiceCycles` in transform.ts, which runs over the whole compiled
+ *  set once every note's steps are resolved.
  *
  *  `displayName` is the TARGET note's own display name, derived exactly the
  *  way a choice note's own name is (frontmatter `name:` if it is a non-empty
@@ -93,18 +96,28 @@ export interface ObsidianCommandStepFailed {
  *  exhaustively against QuickAdd's own `executeEditorCommand` switch
  *  statement in main.js. There is no user-extensible variant of this step
  *  kind; a value outside this set is a per-choice error, never passed
- *  through. */
-export type EditorCommandType =
-  | "Cut"
-  | "Copy"
-  | "Paste"
-  | "Paste with format"
-  | "Select active line"
-  | "Select link on active line"
-  | "Move cursor to file start"
-  | "Move cursor to file end"
-  | "Move cursor to line start"
-  | "Move cursor to line end";
+ *  through.
+ *
+ *  This array is the ONE canonical list: the `EditorCommandType` union is
+ *  derived from it, and the glue layer's runtime membership check
+ *  (mcp/tools-quickadd.ts) is built from it too. Two hand-kept lists — a
+ *  union here and a `Set` there — drift silently, because a `Set` only
+ *  catches an invalid VALUE at run time, never a union member with no
+ *  runtime entry or the reverse. */
+export const EDITOR_COMMAND_TYPES = [
+  "Cut",
+  "Copy",
+  "Paste",
+  "Paste with format",
+  "Select active line",
+  "Select link on active line",
+  "Move cursor to file start",
+  "Move cursor to file end",
+  "Move cursor to line start",
+  "Move cursor to line end",
+] as const;
+
+export type EditorCommandType = (typeof EDITOR_COMMAND_TYPES)[number];
 
 export interface EditorCommandStepOk {
   kind: "editor-command";

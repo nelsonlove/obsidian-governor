@@ -29,6 +29,7 @@ import type { ServerCtx } from "./tools-core.js";
 import { RW } from "./tools-vault-write.js";
 import type { GuardSettings } from "../guard.js";
 import { transformChoices, isCompilerOwnedId, deriveChoiceId } from "../kernel/quickadd/transform.js";
+import { EDITOR_COMMAND_TYPES } from "../kernel/quickadd/types.js";
 import type { ChoiceNoteInput, MacroStepResolved, QuickAddMacroChoice, EditorCommandType } from "../kernel/quickadd/types.js";
 
 /** 0 fresh choices AND this many about-to-be-deleted ones reads as a cold
@@ -85,12 +86,10 @@ function displayNameOf(frontmatter: any, path: string): string {
     : path.split("/").pop()!.replace(/\.md$/, "");
 }
 
-const EDITOR_COMMAND_TYPES: ReadonlySet<EditorCommandType> = new Set([
-  "Cut", "Copy", "Paste", "Paste with format",
-  "Select active line", "Select link on active line",
-  "Move cursor to file start", "Move cursor to file end",
-  "Move cursor to line start", "Move cursor to line end",
-]);
+/** The runtime membership check, built FROM the kernel's canonical array
+ *  (types.ts) that the `EditorCommandType` union is itself derived from — so
+ *  the type and the check cannot drift. Never re-list the strings here. */
+const EDITOR_COMMAND_TYPE_SET: ReadonlySet<string> = new Set(EDITOR_COMMAND_TYPES);
 
 function resolveUserScriptStep(app: App, notePath: string, step: any): MacroStepResolved {
   if (step?.kind !== "userscript") {
@@ -129,8 +128,10 @@ function resolveChoiceStep(app: App, notePath: string, step: any): MacroStepReso
   // no depth cap — its only cycle guard is for template inclusion), so a
   // choice referencing its own note would loop forever in Obsidian at run
   // time. One typo away, so it is caught here rather than compiled. This is
-  // deliberately only the DIRECT case — a multi-note cycle (A → B → A) is
-  // not detected.
+  // the DIRECT case only — it is a cheap early rejection with a specific
+  // message, and one step of one note is all this resolver can see. Multi-note
+  // cycles (A → B → A, and longer) are caught over the whole compiled set by
+  // `detectChoiceCycles` in kernel/quickadd/transform.ts.
   if (dest.path === notePath) {
     return {
       kind: "choice",
@@ -152,15 +153,33 @@ function resolveChoiceStep(app: App, notePath: string, step: any): MacroStepReso
         `another choice note (.md).`,
     };
   }
+  // ...and a markdown note is still not necessarily a CHOICE note. The target
+  // must carry the same `quickadd-type: macro` frontmatter collectChoiceNotes
+  // requires to treat a note as a choice note at all; without it the note is
+  // never compiled, so the reference is permanently dangling and fails only at
+  // run time. Symmetric with the non-md check above, which already catches the
+  // equivalent problem for a non-markdown target.
+  const destFrontmatter = app.metadataCache.getFileCache(dest)?.frontmatter;
+  if (destFrontmatter?.["quickadd-type"] !== "macro") {
+    return {
+      kind: "choice",
+      ok: false,
+      error:
+        `"${raw}" resolves to "${dest.path}", which is not a QuickAdd choice note (its frontmatter does not ` +
+        `declare quickadd-type: macro). A choice step must reference a note this compiler actually compiles, ` +
+        `otherwise the reference is permanently dangling.`,
+    };
+  }
   // The referenced note's compiled id is a pure function of its path — no
   // need to wait for that note to be compiled in this same run. Whether it
-  // actually compiles into a valid choice is unchecked (see types.ts's
-  // ChoiceStepOk doc comment).
+  // compiles SUCCESSFULLY is still unchecked (see types.ts's ChoiceStepOk doc
+  // comment); reference cycles are the one exception, caught over the whole
+  // compiled set by transform.ts's detectChoiceCycles.
   return {
     kind: "choice",
     ok: true,
     choiceId: deriveChoiceId(dest.path),
-    displayName: displayNameOf(app.metadataCache.getFileCache(dest)?.frontmatter, dest.path),
+    displayName: displayNameOf(destFrontmatter, dest.path),
   };
 }
 
@@ -183,7 +202,17 @@ function resolveObsidianCommandStep(app: App, _notePath: string, step: any): Mac
     return { kind: "obsidian-command", ok: false, error: `"command_id" is missing or empty.` };
   }
   // app.commands is not in the public obsidian types — cast required.
-  const registered = (app as any).commands?.commands?.[commandId];
+  // The registry is a plain object, so a RAW lookup walks the prototype
+  // chain: `command_id: "constructor"` (or "toString", "valueOf", …) answers
+  // an Object.prototype member whose `.name` IS a truthy string, passing the
+  // "no registered command" check below and compiling a dead Obsidian command
+  // that only fails at QuickAdd run time. Own-property lookup only — same
+  // reason mcp/tools-nav.ts's `own()` exists for the plugin registries.
+  const registry = (app as any).commands?.commands;
+  const registered =
+    registry && typeof registry === "object" && Object.prototype.hasOwnProperty.call(registry, commandId)
+      ? registry[commandId]
+      : undefined;
   const displayName = registered?.name;
   if (typeof displayName !== "string") {
     return { kind: "obsidian-command", ok: false, error: `no registered command "${commandId}".` };
@@ -193,11 +222,11 @@ function resolveObsidianCommandStep(app: App, _notePath: string, step: any): Mac
 
 function resolveEditorCommandStep(_app: App, _notePath: string, step: any): MacroStepResolved {
   const value = String(step.editor_command ?? "");
-  if (!EDITOR_COMMAND_TYPES.has(value as EditorCommandType)) {
+  if (!EDITOR_COMMAND_TYPE_SET.has(value)) {
     return {
       kind: "editor-command",
       ok: false,
-      error: `"${value}" is not a recognized editor_command (expected one of: ${[...EDITOR_COMMAND_TYPES].join(", ")}).`,
+      error: `"${value}" is not a recognized editor_command (expected one of: ${EDITOR_COMMAND_TYPES.join(", ")}).`,
     };
   }
   return { kind: "editor-command", ok: true, editorCommandType: value as EditorCommandType };
@@ -270,7 +299,10 @@ export function registerQuickAddTools(server: McpServer, app: App, ctx: ServerCt
         "whole response carries isError: true so a partial compile is distinguishable from a clean one), never " +
         "the whole compile. A non-dry-run that would find zero choices while deleting three or more refuses " +
         "(`suspicious_mass_removal`) — that shape is a cold metadata cache far more often than a real change. " +
-        "Supports Macro choices with userscript, choice, wait, obsidian-command, and editor-command steps. " +
+        "Supports Macro choices with userscript, choice, wait, obsidian-command, and editor-command steps. A " +
+        "choice step must point at another quickadd-type: macro note, and choice steps that form a reference " +
+        "cycle (A → B → A, or a self-reference) fail every note in the cycle — QuickAdd has no cycle guard, so " +
+        "such a chain would loop forever at run time. " +
         "nested-choice and ai-assistant steps are not yet supported (per-choice error). A note with a different " +
         "quickadd-type is simply out of scope here — silently skipped. Refuses outright while a path allowlist " +
         "is active.",
