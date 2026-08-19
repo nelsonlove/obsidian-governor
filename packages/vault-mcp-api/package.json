@@ -1,7 +1,7 @@
 {
   "name": "vault-mcp-api",
   "version": "1.0.0",
-  "description": "Publisher SDK for the vault-mcp external tool registry — let your Obsidian plugin publish MCP tools to Claude Code through vault-mcp.",
+  "description": "Publisher SDK for Governor's external tool registry — let your Obsidian plugin publish MCP tools to Claude Code through Governor (plugin id `governor`, `vault-mcp` before 0.12.0). The package name is unchanged by that rename.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

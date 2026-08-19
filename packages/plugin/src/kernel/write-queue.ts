@@ -178,7 +178,7 @@ export class WriteQueue {
       } catch (e) {
         // A misbehaving observer must not take down the queue (or surface as an
         // unhandled rejection on an operation nobody is awaiting any more).
-        console.error("[vault-mcp] late-settlement handler failed", e);
+        console.error("[governor] late-settlement handler failed", e);
       }
     };
 

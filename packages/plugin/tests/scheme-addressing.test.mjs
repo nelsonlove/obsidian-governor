@@ -266,19 +266,19 @@ describe("resolveSchemeArgs", () => {
 describe("addressSafe — fold-back, tested directly", () => {
   test("folds a resolved uid back to its uid: form", () => {
     const out = addressSafe(
-      "path 'Notes/A.md' is outside the vault-mcp allowlist",
+      "path 'Notes/A.md' is outside the governor allowlist",
       [{ uid: "uid-a", path: "Notes/A.md" }]
     );
-    assert.equal(out, "path 'uid:uid-a' is outside the vault-mcp allowlist");
+    assert.equal(out, "path 'uid:uid-a' is outside the governor allowlist");
   });
 
   test("folds a resolved scheme address back to its jd: form", () => {
     const out = addressSafe(
-      "path 'Notes/A.md' is outside the vault-mcp allowlist",
+      "path 'Notes/A.md' is outside the governor allowlist",
       [],
       [{ ref: "jd:06.11", path: "Notes/A.md" }]
     );
-    assert.equal(out, "path 'jd:06.11' is outside the vault-mcp allowlist");
+    assert.equal(out, "path 'jd:06.11' is outside the governor allowlist");
   });
 
   test("folds a uid pair AND a scheme pair in the SAME message, one pass", () => {
@@ -292,18 +292,18 @@ describe("addressSafe — fold-back, tested directly", () => {
 
   test("a message naming neither resolved path is left untouched", () => {
     const out = addressSafe(
-      "path 'Elsewhere.md' is outside the vault-mcp allowlist",
+      "path 'Elsewhere.md' is outside the governor allowlist",
       [{ uid: "uid-a", path: "Notes/A.md" }],
       [{ ref: "jd:06.11", path: "Notes/B.md" }]
     );
-    assert.equal(out, "path 'Elsewhere.md' is outside the vault-mcp allowlist");
+    assert.equal(out, "path 'Elsewhere.md' is outside the governor allowlist");
   });
 
   test("the scheme list defaults to empty — uid-only calls are unaffected", () => {
-    const out = addressSafe("path 'Notes/A.md' is outside the vault-mcp allowlist", [
+    const out = addressSafe("path 'Notes/A.md' is outside the governor allowlist", [
       { uid: "uid-a", path: "Notes/A.md" },
     ]);
-    assert.equal(out, "path 'uid:uid-a' is outside the vault-mcp allowlist");
+    assert.equal(out, "path 'uid:uid-a' is outside the governor allowlist");
   });
 });
 

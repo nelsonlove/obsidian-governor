@@ -300,9 +300,9 @@ describe("obsidian_plugin_reload", () => {
     assert.equal(res.structuredContent.version, "1.5.2", "the response reports the version now RUNNING");
   });
 
-  test("refuses to reload vault-mcp — it hosts the connection carrying the response", async () => {
-    const { app, calls } = fakeApp({ "vault-mcp": { installed: "0.8.8", running: "0.8.8" } });
-    const res = await nav(app).call("obsidian_plugin_reload", { plugin_id: "vault-mcp" });
+  test("refuses to reload the governor plugin — it hosts the connection carrying the response", async () => {
+    const { app, calls } = fakeApp({ governor: { installed: "0.12.0", running: "0.12.0" } });
+    const res = await nav(app).call("obsidian_plugin_reload", { plugin_id: "governor" });
 
     assert.equal(res.isError, true);
     assert.match(text(res), /Error \[reload_refused\]/);

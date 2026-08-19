@@ -76,7 +76,7 @@ function moveErrorMessage(e: unknown): string {
 export function registerSchemeWriteTools(server: McpServer, app: App, ctx: SchemeWriteToolsCtx): void {
   const visible = (paths: string[]): string[] => visiblePaths(paths, ctx.getSettings?.());
   const outOfAllowlist = (path: string) =>
-    codedError("out_of_allowlist", `path '${path}' is outside the vault-mcp allowlist`);
+    codedError("out_of_allowlist", `path '${path}' is outside the governor allowlist`);
   // A computed destination (not a call argument) failing visibility — see the
   // header comment above. Distinguished from `outOfAllowlist` in wording only
   // (same code: a caller branching on `out_of_allowlist` should not have to

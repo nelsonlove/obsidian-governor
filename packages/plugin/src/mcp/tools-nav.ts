@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PLUGIN_ID } from "../id-migration.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type App, MarkdownView } from "obsidian";
 import { ok, fail, codedError } from "./helpers.js";
@@ -471,8 +472,10 @@ export function registerNavTools(server: McpServer, app: App, ctx: ServerCtx) {
       try {
         // Don't let the MCP disable its own host plugin — it would tear down
         // this connection mid-response. Use Obsidian's settings to disable.
-        if (!enabled && plugin_id === "vault-mcp") {
-          return fail(new Error("refusing to disable vault-mcp via MCP (it hosts this connection); use Obsidian settings"));
+        // (PLUGIN_ID, not a literal: the 0.12.0 id migration is exactly the
+        // kind of rename a hardcoded "vault-mcp" here silently survives.)
+        if (!enabled && plugin_id === PLUGIN_ID) {
+          return fail(new Error(`refusing to disable ${PLUGIN_ID} via MCP (it hosts this connection); use Obsidian settings`));
         }
         // app.plugins.enablePlugin / disablePlugin are internal — not in public obsidian types.
         const plugins = (app as any).plugins;
@@ -556,8 +559,8 @@ export function registerNavTools(server: McpServer, app: App, ctx: ServerCtx) {
       try {
         // Reloading the host plugin tears down the connection carrying this
         // response — same reasoning as obsidian_plugin_toggle's disable refusal.
-        if (plugin_id === "vault-mcp") {
-          return codedError("reload_refused", "refusing to reload vault-mcp via MCP (it hosts this connection); reload it from Obsidian's settings");
+        if (plugin_id === PLUGIN_ID) {
+          return codedError("reload_refused", `refusing to reload ${PLUGIN_ID} via MCP (it hosts this connection); reload it from Obsidian's settings`);
         }
         // app.plugins.{manifests,plugins,loadManifests,disablePlugin,enablePlugin} are internal.
         const plugins = (app as any).plugins;

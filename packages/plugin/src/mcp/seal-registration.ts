@@ -60,7 +60,7 @@ export function sealUnguardedRegistration(server: unknown): void {
     if (typeof s[name] !== "function") continue; // never invent surface
     s[name] = (..._args: unknown[]): never => {
       throw new Error(
-        `vault-mcp: '${name}()' is sealed — it registers a client-reachable surface that would bypass the ` +
+        `governor: '${name}()' is sealed — it registers a client-reachable surface that would bypass the ` +
           `guard, the path allowlist, read-only mode, the kernel arguments, the write queue and the journal. ` +
           `Register through 'registerTool', which is the one interception point where those are applied. ` +
           `(If a prompt/resource surface is ever genuinely wanted, route it through the guard deliberately ` +

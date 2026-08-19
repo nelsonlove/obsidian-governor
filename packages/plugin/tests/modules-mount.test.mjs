@@ -154,9 +154,9 @@ describe("mountModules: the two built-in modules register through the registry",
     // surfaces a human turns on), so they contribute nothing here — scheme +
     // vocab + bases (#243, the read-only default-enabled Bases surface) are
     // the live trio.
-    assert.deepEqual(described.map((d) => d.id), ["scheme", "vocab", "skills", "provenance", "health", "fileclass", "governance", "crosssession", "bases", "jd-scaffold", "triage"]);
+    assert.deepEqual(described.map((d) => d.id), ["scheme", "vocab", "skills", "provenance", "health", "fileclass", "acceptance", "crosssession", "bases", "jd-scaffold", "triage"]);
     for (const d of described) {
-      if (["skills", "provenance", "health", "fileclass", "governance", "crosssession", "jd-scaffold", "triage"].includes(d.id)) {
+      if (["skills", "provenance", "health", "fileclass", "acceptance", "crosssession", "jd-scaffold", "triage"].includes(d.id)) {
         assert.equal(d.enabled, false);
         assert.deepEqual(d.tools, []);
       } else {
@@ -177,14 +177,14 @@ describe("mountModules: the two built-in modules register through the registry",
   });
 
   test("governance ON: contributes ZERO MCP tools (the accept surface is an Obsidian pane, not a tool)", () => {
-    const { server, registry } = mount({ settings: { modules: { governance: { enabled: true } } } });
+    const { server, registry } = mount({ settings: { modules: { acceptance: { enabled: true } } } });
     const names = [...server.tools.keys()];
     // The governance module's capability is the review pane (wired in main.ts) — it puts
     // NOTHING on the MCP transport. Enabling it adds no tool at all, and never the
     // always-on-elsewhere obsidian_pending_review.
     assert.ok(!names.includes("obsidian_pending_review"));
     assert.deepEqual(registry.problems, []);
-    const gov = registry.describe().find((d) => d.id === "governance");
+    const gov = registry.describe().find((d) => d.id === "acceptance");
     assert.equal(gov.enabled, true);
     assert.deepEqual(gov.tools, []);
   });
@@ -291,7 +291,7 @@ describe("mount gate 2: the host ctx handed to modules is minimal", () => {
       ["fileclass", "capability"],
       // governance is posture "capability", NOT "governance" — the v1 registry refuses
       // the governance posture (it is inert). It clears that gate by being read-only.
-      ["governance", "capability"],
+      ["acceptance", "capability"],
       // crosssession (#232) is a MUTATING capability module (post appends a log
       // entry; attest writes the module's receipt state).
       ["crosssession", "capability"],
@@ -372,7 +372,7 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
   test("drift check: every ToolDoc names a tool the module ACTUALLY contributed on registerAll, and vice versa", () => {
     // Enable every default-off module so all modules contribute — the drift check
     // needs a contributed tool list to compare each manifest against.
-    const { registry } = mount({ settings: { modules: { skills: { enabled: true }, provenance: { enabled: true }, health: { enabled: true }, fileclass: { enabled: true }, governance: { enabled: true }, crosssession: { enabled: true }, "jd-scaffold": { enabled: true }, triage: { enabled: true } } } });
+    const { registry } = mount({ settings: { modules: { skills: { enabled: true }, provenance: { enabled: true }, health: { enabled: true }, fileclass: { enabled: true }, acceptance: { enabled: true }, crosssession: { enabled: true }, "jd-scaffold": { enabled: true }, triage: { enabled: true } } } });
     const described = registry.describe();
     for (const d of described) {
       const mod = builtinModules(deps()).find((m) => m.id === d.id);
@@ -382,7 +382,7 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
   });
 
   test("readOnly drift: every ToolDoc's readOnly matches the tool's real registered annotation", () => {
-    const { server } = mount({ settings: { modules: { skills: { enabled: true }, provenance: { enabled: true }, health: { enabled: true }, fileclass: { enabled: true }, governance: { enabled: true }, crosssession: { enabled: true }, "jd-scaffold": { enabled: true }, triage: { enabled: true } } } });
+    const { server } = mount({ settings: { modules: { skills: { enabled: true }, provenance: { enabled: true }, health: { enabled: true }, fileclass: { enabled: true }, acceptance: { enabled: true }, crosssession: { enabled: true }, "jd-scaffold": { enabled: true }, triage: { enabled: true } } } });
     const mods = builtinModules(deps());
     const annotationsByName = Object.fromEntries([...server.tools].map(([name, { def }]) => [name, def.annotations]));
     for (const mod of mods) {
@@ -453,7 +453,7 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
     const settings = { schemes: [{ id: "jd", provider: "johnny-decimal", config: { contentDecimalFloor: 20 } }], modules: {} };
     const mods = builtinModules(deps({ settings }));
     const hosted = collect(mods, settings.modules, settings);
-    assert.deepEqual(hosted.map((h) => h.id), ["scheme", "vocab", "skills", "provenance", "health", "fileclass", "governance", "crosssession", "bases", "jd-scaffold", "triage"]);
+    assert.deepEqual(hosted.map((h) => h.id), ["scheme", "vocab", "skills", "provenance", "health", "fileclass", "acceptance", "crosssession", "bases", "jd-scaffold", "triage"]);
     const scheme = hosted.find((h) => h.id === "scheme");
     assert.equal(scheme.fields.find((f) => f.key === "contentDecimalFloor").value, 20);
     const vocab = hosted.find((h) => h.id === "vocab");
@@ -471,7 +471,7 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
     // (#221/#164: acceptedBy text, requiredFrontmatterKeys csv) and an EMPTY capability
     // directory, because its capability is the Obsidian review pane (wired in main.ts),
     // not an MCP tool. It contributes nothing to the transport and ships disabled.
-    const governance = hosted.find((h) => h.id === "governance");
+    const governance = hosted.find((h) => h.id === "acceptance");
     assert.deepEqual(governance.fields.map((f) => f.key), [
       "showRibbonBadge",
       "showViewTabBadge",

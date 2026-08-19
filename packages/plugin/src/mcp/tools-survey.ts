@@ -116,7 +116,7 @@ export function registerSurveyTools(server: McpServer, app: App, ctx: SurveyTool
         "the note or the mirror directory. The mirror directory defaults to the same relative path under " +
         "`mirror_root` as the note's own vault folder; a note's own `survey-mirror` frontmatter overrides that " +
         "when the mirror doesn't follow the default layout. Both are checked against a declared content-root " +
-        "boundary (ASSENT_CONTENT_ROOT / ASSENT_VAULT_ROOT) before anything is read.",
+        "boundary (GOVERNOR_CONTENT_ROOT / GOVERNOR_VAULT_ROOT; legacy ASSENT_* accepted) before anything is read.",
       inputSchema: {
         path: z.string().min(1).describe("Vault-relative path (ending in .md) of the note to check."),
         mirror_root: z.string().min(1).describe("Absolute filesystem path the vault's folder tree is mirrored under."),
