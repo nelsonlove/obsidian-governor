@@ -203,10 +203,12 @@ export interface CaptureTargetOk {
   ok: true;
   captureTo: string;
 }
-/** The `target:` field is missing, or was wikilink-shaped but did not
- *  resolve. A non-wikilink-shaped string is ALWAYS `CaptureTargetOk` —
- *  there is no way for a literal string to "fail" resolution, since it is
- *  never resolved, only passed through. */
+/** The `target:` field is missing, was wikilink-shaped but did not resolve,
+ *  or was a MALFORMED wikilink (it contains `[[` without being a well-formed
+ *  one — `[[Note]`, `[[Note]] extra`, `[[  ]]`). A string containing no `[[`
+ *  at all is ALWAYS `CaptureTargetOk` — there is no way for a literal path
+ *  string to "fail" resolution, since it is never resolved, only passed
+ *  through. */
 export interface CaptureTargetFailed {
   ok: false;
   error: string;
