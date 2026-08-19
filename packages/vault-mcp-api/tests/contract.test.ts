@@ -38,6 +38,9 @@ import type { JsonSchemaObject as HostJsonSchemaObject } from "../../plugin/src/
 type Assignable<A, B> = [A] extends [B] ? true : false;
 type MutuallyAssignable<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 
+// NOTE: method syntax makes registerTools/unregisterTools parameter-BIVARIANT,
+// so _api alone would miss parameter drift — the direct _spec/_schema pins
+// below are what carry that load.
 const _api: MutuallyAssignable<SdkVaultMcpApi, HostVaultMcpApi> = true;
 const _spec: Assignable<HostExternalToolSpec, SdkExternalToolSpec> = true;
 const _schema: Assignable<HostJsonSchemaObject, SdkJsonSchemaObject> = true;
