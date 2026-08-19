@@ -94,6 +94,8 @@ import {
   pruneRenameRecords,
   serializeRenameRecords,
   deserializeRenameRecords,
+  RENAME_RECORDS_CAP,
+  RENAME_RECORD_TTL_MS,
   type RenameRecordData,
 } from "../kernel/governance/rename-records.js";
 import { autoAcceptPolicyOf, protectedPropertyDrift, type AutoAcceptPolicy } from "../kernel/governance/protected-policy.js";
@@ -302,7 +304,16 @@ function recordRename(plugin: Plugin, newPath: string, oldPath: string): void {
     newTargets: linkTargetsOf(newPath),
     at: Date.now(),
   });
+  pruneLiveRenameRecords(plugin, Date.now());
   void persistRenameRecords(plugin);
+}
+// TTL/cap must bind the LIVE list the oracle consults, not just the persisted file — otherwise
+// a month-old record still confirms in a long-running session (review finding on #261).
+function pruneLiveRenameRecords(plugin: Plugin, nowMs: number): void {
+  const live = renameRecordsFor(plugin);
+  const kept = live.filter((r) => nowMs - r.at <= RENAME_RECORD_TTL_MS && nowMs - r.at >= 0);
+  const capped = kept.length > RENAME_RECORDS_CAP ? kept.slice(kept.length - RENAME_RECORDS_CAP) : kept;
+  if (capped.length !== live.length) renameRecords.set(plugin, capped);
 }
 async function loadRenameRecords(plugin: Plugin): Promise<void> {
   let data: RenameRecordData[] = [];
@@ -320,16 +331,26 @@ async function loadRenameRecords(plugin: Plugin): Promise<void> {
     data.map((r) => ({ oldTargets: new Set(r.old), newTargets: new Set(r.new), at: r.at })),
   );
 }
+// Persist writes are CHAINED per plugin (the WriteJournal.append pattern): a batch move fires
+// many rename events back-to-back, and unserialized concurrent adapter.writes to one file can
+// land out of order — a smaller, earlier snapshot finishing last would silently truncate the
+// records the persistence exists to keep (review finding on #261).
+const renamePersistTails = new WeakMap<Plugin, Promise<void>>();
 async function persistRenameRecords(plugin: Plugin): Promise<void> {
-  try {
-    const pruned = pruneRenameRecords(
-      renameRecordsFor(plugin).map((r) => ({ old: [...r.oldTargets], new: [...r.newTargets], at: r.at })),
-      Date.now(),
-    );
-    await plugin.app.vault.adapter.write(paths(plugin).renameRecordsPath, serializeRenameRecords(pruned));
-  } catch (e) {
-    console.error("vault-mcp governance: failed to persist rename records", e);
-  }
+  const tail = renamePersistTails.get(plugin) ?? Promise.resolve();
+  const next = tail.then(async () => {
+    try {
+      const pruned = pruneRenameRecords(
+        renameRecordsFor(plugin).map((r) => ({ old: [...r.oldTargets], new: [...r.newTargets], at: r.at })),
+        Date.now(),
+      );
+      await plugin.app.vault.adapter.write(paths(plugin).renameRecordsPath, serializeRenameRecords(pruned));
+    } catch (e) {
+      console.error("vault-mcp governance: failed to persist rename records", e);
+    }
+  });
+  renamePersistTails.set(plugin, next);
+  await next;
 }
 class VaultRenameIndex implements RenameIndex {
   constructor(private readonly plugin: Plugin) {}
@@ -790,14 +811,19 @@ async function refresh(plugin: Plugin): Promise<void> {
   // published view of it too (`<plugin dir>/governance/pending-index.json`, the file
   // obsidian_pending_review reads; the retired standalone's stewardship path is dead since
   // #164). Same read-only DATA shape the standalone published (kernel pending-index.ts).
-  // A publish failure must never break the refresh: log + continue.
-  try {
-    await plugin.app.vault.adapter.write(
-      paths(plugin).pendingIndexPath,
-      serializePendingIndex(pending, new Date().toISOString()),
-    );
-  } catch (e) {
-    console.error("vault-mcp governance: failed to publish pending index", e);
+  // A publish failure must never break the refresh: log + continue. Gated on the LIVE mount
+  // so a refresh still in flight when the module unmounts cannot re-create the file the
+  // teardown just retracted (an unmounted module must read as not-published); the residual
+  // window between this check and the write completing is a single already-issued write.
+  if (mountedPlugins.has(plugin)) {
+    try {
+      await plugin.app.vault.adapter.write(
+        paths(plugin).pendingIndexPath,
+        serializePendingIndex(pending, new Date().toISOString()),
+      );
+    } catch (e) {
+      console.error("vault-mcp governance: failed to publish pending index", e);
+    }
   }
   updateBadge(plugin, pending.length);
   for (const leaf of plugin.app.workspace.getLeavesOfType(VIEW_TYPE_GOVERNANCE)) {
