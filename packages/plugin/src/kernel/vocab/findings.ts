@@ -110,5 +110,12 @@ export function noteVocabFindings(note: NoteVocabInput, providers: VocabularyPro
     findings.push(...check(typeToken(raw), "type", note.path, providers));
   }
 
+  // provider-specific whole-note checks (the optional `noteFindings` seam —
+  // e.g. the scope-tags placement gate, which needs the note's PATH to walk
+  // its folder chain and its full frontmatter for the whitelist key)
+  for (const p of providers) {
+    if (p.noteFindings) findings.push(...p.noteFindings(note));
+  }
+
   return findings;
 }

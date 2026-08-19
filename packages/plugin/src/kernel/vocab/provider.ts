@@ -65,7 +65,13 @@ export interface VocabFinding {
     | "unknown_term"
     | "deprecated"
     | "ambiguous"
-    | "malformed_token";
+    | "malformed_token"
+    // the scope-tags provider's five-finding pack (#251)
+    | "tag_unregistered"
+    | "tag_out_of_scope"
+    | "allowedTags_unregistered"
+    | "registry_entry_untagged"
+    | "registry_duplicate";
   token: string;
   path: string | null;
   detail: string;
@@ -124,4 +130,11 @@ export interface VocabularyProvider {
   /** Every entry of a kind, optionally only those declared under the `scope`
    * path prefix. */
   list(kind: VocabKind, scope?: string): VocabEntry[];
+
+  /** OPTIONAL: provider-specific findings about one whole note — checks that
+   * need the note's path or its full frontmatter, beyond per-token
+   * validation (the scope-tags provider's placement gate lives here). Called
+   * by `noteVocabFindings` for every provider that implements it; findings
+   * carry the note's path. */
+  noteFindings?(note: { path: string; frontmatter: Record<string, unknown> | null }): VocabFinding[];
 }

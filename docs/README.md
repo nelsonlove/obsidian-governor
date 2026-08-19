@@ -9,7 +9,7 @@ The top-level [`README.md`](../README.md) is the user-facing overview (install, 
 surface, the socket/bridge architecture, the path allowlist). These docs go deeper on the
 **kernel** and the **acceptance model** it exists to protect.
 
-> These docs track **`main`** (the kernel shipped in v0.7.0; current release **0.8.0**),
+> These docs track **`main`** (the kernel shipped in v0.7.0; current release **0.11.0**),
 > plugin package `packages/plugin/`. The last full line-by-line verification pass ran at
 > pre-ship head `bc1a8a1`; file references are given so each claim is checkable against
 > current source.
@@ -18,6 +18,7 @@ surface, the socket/bridge architecture, the path allowlist). These docs go deep
 
 | Doc | What it covers |
 | --- | --- |
+| **[overview.md](overview.md)** | **Start here.** The whole-system map as of 0.11.0: transport, guard + kernel, the acceptance perimeter, the governance module, one paragraph per capability module, the dev tool-runner, CLI tools, conformance, external-tool trust, and the module defaults table — with links into everything below. |
 | **[acceptance-model.md](acceptance-model.md)** | **The heart of the design.** Acceptance is human-only — "the accept verb goes in no API." The accept-forbidden guard at the shared write primitive, on every write surface that routes through it (including the CLI proxy), and its documented residuals (tracked publicly; not yet all closed). |
 | [kernel-v0.md](kernel-v0.md) | Kernel v0 primitives: the serialized write queue, the append-only write journal, `if_rev` optimistic concurrency, idempotency keys, advisory scope locks, and server/install identity. |
 | [identity-and-links.md](identity-and-links.md) | The identity substrate: the uid index, `uid:` addressing that survives rename/move, link healing, `obsidian_check_links`, `obsidian_repoint_link`, and read-boundary containment. |
@@ -27,6 +28,8 @@ surface, the socket/bridge architecture, the path allowlist). These docs go deep
 | [vocabulary.md](vocabulary.md) | The vocabulary provider module: read-only validation of tags, properties, types, and glossary terms. |
 | [crosssession.md](crosssession.md) | The cross-session channel module: coordination-log discovery by frontmatter, delta reads, read-receipt attestation, and posting refused while stale (`stale_read`). |
 | [triage.md](triage.md) | The inbox-triage module: the disposition substrate (#221) and its second instance (#241 phase-3 shape) — three built-in primitives plus human-declared disposition rows over inbox notes, Base-backed queues, one dry-run-by-default guarded tool, no pane. |
+| [bases.md](bases.md) | The Bases module: `base_list` / `base_query`, the detached-leaf capture design (public API only, no expression re-implementation), timeout/serialization/allowlist behavior, caps, and the triage named-queues consumer. |
+| [tool-runner.md](tool-runner.md) | The in-Obsidian dev tool-runner: one palette command, schema-rendered args, the write-confirm step, the result modal, and the captured-registry pipeline it shares with Code Mode's `obsidian_call_tool`. |
 | [conformance.md](conformance.md) | The TS conformance engine: rule packs, the ratchet (baseline-diffed findings), the ported legacy checks, and the headless CLI. |
 | [reference.md](reference.md) | The precise operational contracts: addressing (`uid:`/schemes), write queue & journal semantics, `if_rev`/idempotency, advisory claims, the path allowlist and its oracles, external-tool trust, Code Mode. |
 
@@ -76,7 +79,14 @@ The end-to-end shape:
 
 ### The governance module (the Acceptance capability)
 
-**Naming, ruled (#115, 2026-08-19):** `governance` is the canonical identifier — it is the
+**Project naming (2026-08-19):** the product is **Governor** (repo `obsidian-governor`); the
+plugin **id** remains `vault-mcp` permanently — it is load-bearing plumbing (plugin folder,
+`~/.claude/vault-mcp/` socket namespace, `mcp__vault-mcp__*` tool prefixes, the
+`app.plugins.plugins['vault-mcp'].api` contract), and renaming a shipped id is a compatibility
+event with no functional benefit. *Assent* names the broader framework the plugin realizes;
+*vault-mcp* in prose refers to the id, not the product.
+
+**Module naming, ruled (#115, 2026-08-19):** `governance` is the canonical identifier — it is the
 shipped module id, settings key, and source directory, and renaming a shipped id is a
 compatibility event with no offsetting benefit. *Acceptance* remains the capability's
 descriptive name in prose (the module's `capabilities: ["acceptance"]` entry). One id, one
@@ -92,6 +102,23 @@ unreachability* (no commands, gesture-gated handlers, module-scope closures) —
 [acceptance-model.md](acceptance-model.md). The read-only `obsidian_pending_review`,
 `governance_revisions`, and the agent-facing `governance_submit_revision` are the module's
 only transport-visible surfaces; none exposes an accept verb.
+
+## README lives in the vault too
+
+`README.md` is symlinked into the Obsidian vault (`00.89 Assent/Build/vault-mcp README.md`),
+where vault machinery (the Linter, fileclass stamps) may add YAML frontmatter to it. A git
+**clean filter** (`scripts/strip-frontmatter.sh`, bound via `.gitattributes`) strips any
+leading frontmatter block when git reads the file, so the committed blob never carries it and
+`git status`/`diff` treat the working file as unmodified however much frontmatter the vault
+side adds. One-time setup per clone:
+
+```bash
+git config filter.stripfm.clean "sh scripts/strip-frontmatter.sh"
+```
+
+A clone without that config still works — committed content is already clean. Body edits
+made from the vault side DO show as ordinary git diffs (by design: inbound suggestions to
+review, commit, or discard).
 
 ## Release history note
 

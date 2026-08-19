@@ -132,6 +132,14 @@ async function buildListing(
         if (under(p, row.root)) want(p, "fm");
         if (termsRoot !== null && under(p, termsRoot) && under(p, row.root)) want(p, "body");
       }
+    } else if (row.provider === "scope-tags") {
+      // Registry notes (`fileClass: Meta/Tag`) and scope folder-notes are
+      // recognized by FRONTMATTER, which only the provider can inspect — so
+      // every markdown note under the root arrives with its cached
+      // frontmatter. No body is ever read: this provider needs none.
+      for (const p of all) {
+        if (p.endsWith(".md") && under(p, row.root)) want(p, "fm");
+      }
     }
   }
 
@@ -320,9 +328,11 @@ export function registerVocabTools(server: McpServer, source: VocabSource, ctx: 
     {
       title: "Validate a note's vocabulary",
       description:
-        "Check one note's frontmatter against the controlled vocabulary: unregistered tags (namespace-permissive, " +
-        "like the rail's check H), undefined properties, unknown or retired types, ambiguous senses. Report-only — " +
-        "findings are returned, never fixed, and nothing is written.",
+        "Check one note's frontmatter against the controlled vocabulary, per the configured providers: unregistered " +
+        "tags (exact-match under the default scope-tags model; namespace-permissive under the legacy blueprint " +
+        "grammar), tags outside the note's scope-chain whitelist, unregistered whitelist entries on a scope note, " +
+        "undefined properties, unknown or retired types, ambiguous senses. Report-only — findings are returned, " +
+        "never fixed, and nothing is written.",
       inputSchema: {
         path: z.string().min(1).describe("Vault-relative note path to validate."),
       },

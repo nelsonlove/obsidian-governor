@@ -1,9 +1,9 @@
 {
   "id": "vault-mcp",
-  "name": "Vault MCP",
-  "version": "0.9.0",
+  "name": "Governor",
+  "version": "0.11.0",
   "minAppVersion": "1.6.6",
-  "description": "Embeds an MCP server giving Claude Code direct, canonical access to this vault via a local Unix socket.",
+  "description": "Governed agent access to your vault: an embedded MCP server, a write journal, and a human-only acceptance perimeter.",
   "author": "Nelson Love",
   "isDesktopOnly": true
 }

@@ -39,7 +39,7 @@ Known-overstated section instead — see its header for the format.
 
 ## README.md
 
-- vault-mcp is an Obsidian plugin that connects AI agents (Claude Code, or anything that speaks MCP) to your vault the *governed* way: agents see your vault the way Obsidian does, every change they make is recorded and attributed, and one rule is enforced at the shared write primitive: **an agent cannot mark its own work as accepted through it.
+- Governor is an Obsidian plugin that connects AI agents (Claude Code, or anything that speaks MCP) to your vault the *governed* way: agents see your vault the way Obsidian does, every change they make is recorded and attributed, and one rule is enforced at the shared write primitive: **an agent cannot mark its own work as accepted through it.
 - **A paper trail for everything.** Every mutating operation through the plugin's guarded path lands in an append-only journal: what happened, to which note, by which agent, in which session — and, when the agent says so, *why*. (The optional headless FS-fallback mode is a documented exception — see [Honest limits](#honest-limits).) "What did it do while I was out" becomes a file you can read.
 - Reviewing and accepting is meant to happen only in a human-only review pane (the companion **Acceptance** plugin) — never through the API on the surfaces the guard covers today; the surfaces it doesn't cover yet are named, tracked gaps, not silent ones (see [Honest limits](#honest-limits)).
 - Open the journal (or the Acceptance pane, if installed): every change is there, attributed, diffable, waiting for your verdict.

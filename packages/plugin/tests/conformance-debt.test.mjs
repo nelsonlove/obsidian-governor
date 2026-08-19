@@ -340,8 +340,11 @@ describe("obsidian_conformance_debt tool", () => {
 async function vault() {
   const root = await mkdtemp(path.join(tmpdir(), "conf-debt-"));
   await mkdir(path.join(root, "Notes"), { recursive: true });
-  // an unregistered tag → a vocab finding (empty registry ⇒ every tag unregistered)
+  // an unregistered tag → a vocab finding (a SEEDED registry that doesn't
+  // declare it ⇒ `rogue` unregistered; unseeded would force no findings, #251)
   await writeFile(path.join(root, "Notes", "A.md"), "---\ntitle: A\ntags:\n  - rogue\n---\nbody\n");
+  await mkdir(path.join(root, "Registry"), { recursive: true });
+  await writeFile(path.join(root, "Registry", "keep.md"), "---\nfileClass: Meta/Tag\ntag: keep\n---\n");
   return root;
 }
 

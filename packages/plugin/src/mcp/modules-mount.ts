@@ -798,6 +798,17 @@ const GOVERNANCE_CONFIG_FIELDS: ConfigField[] = [
       "this settings tab is not agent-reachable, and agent transports can never write the accepted family.",
   },
   {
+    key: "gateMode",
+    label: "Conformance-gate response",
+    type: "select",
+    options: ["soft", "hard", "off"],
+    help:
+      "How Accept responds when a `proposed` note is missing required frontmatter (below). `soft` (default): " +
+      "a modal offers Accept anyway / Open note / Cancel — the override is a second explicit human click. " +
+      "`hard`: refuse with a notice (fix, then accept). `off`: the gate is not checked at all. Never an agent " +
+      "surface — agents cannot reach Accept in any mode.",
+  },
+  {
     key: "requiredFrontmatterKeys",
     label: "Required frontmatter for acceptance",
     type: "csv",
