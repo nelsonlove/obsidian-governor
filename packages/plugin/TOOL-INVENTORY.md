@@ -6,13 +6,13 @@ The FULL set is locked by `tests/tool-inventory.test.mjs`: the names documented
 here must equal the names registered in source, both directions, or the suite
 fails (the fs-expressible and scheme sub-locks from #25/task-6 still apply).
 
-**Count summary:** 17 fs-expressible + 41 always-live + 10 module-mounted
-(default enabled, settings-toggleable) = **68 base** tools, plus up to
+**Count summary:** 17 fs-expressible + 42 always-live + 10 module-mounted
+(default enabled, settings-toggleable) = **69 base** tools, plus up to
 6 conditional integration tools, 5 CLI-binary-conditional dedicated tools
 (`obsidian_note_history`, `obsidian_note_diff`, `obsidian_base_create`,
 `obsidian_plugin_install`, `obsidian_plugin_uninstall`), and 1 settings-gated
 CLI-conditional tool (`obsidian_cli`, default OFF)
-= **up to 80 total**.  The 3 Code Mode meta-tools are an alternative
+= **up to 81 total**.  The 3 Code Mode meta-tools are an alternative
 per-connection surface and are not counted (a session sees one surface or the
 other, never both).  Not counted here (outside the locked `obsidian_*` family):
 the always-on `governance_submit_revision` + `governance_revisions` (2 tools, see their section below), and
@@ -30,7 +30,7 @@ the scheme write surface (`obsidian_assign_address`,
 `obsidian_refile_address`, `obsidian_renumber_address`), and subsequent
 `main` additions (in-Obsidian dev tool-runner, conformance debt register,
 the snippet tools);
-the same plugin set today registers 17 + 41 + 10 + 6 = **74**.
+the same plugin set today registers 17 + 42 + 10 + 6 = **75**.
 
 ---
 
@@ -63,7 +63,7 @@ against its `FilesystemBackend`.
 
 ---
 
-## Section 2 — live-only, always registered (41)
+## Section 2 — live-only, always registered (42)
 
 These tools depend on live Obsidian `app.*` state and cannot be expressed on the
 filesystem.  They are unconditionally registered on every `buildMcpServer` call,
@@ -97,6 +97,18 @@ read tools; `dry_run` never mutates.
 | `obsidian_assign_address` | Assign a note the next free address in a scope, then move it there |
 | `obsidian_refile_address` | Move a note back to the folder its own address says it belongs in |
 | `obsidian_renumber_address` | Move a note to a specific target address, optionally displacing (`on_occupied`: `auto`/`manual`/`fail`) whatever already occupies it |
+
+### `tools-quickadd.ts` — `registerQuickAddTools` (1 tool, Stage A of "QuickAdd macros as notes")
+
+Registered directly in `server.ts`, alongside `registerSchemeWriteTools` — same
+reason: this tool mutates another plugin's config (QuickAdd's own `data.json`,
+applied via QuickAdd's own `saveSettings()`), not a vault note, so it cannot go
+through the module host (`modules-mount.ts`'s `registerAll` gate refuses any
+tool whose `readOnlyHint !== true`).
+
+| Tool name | Description |
+|---|---|
+| `obsidian_quickadd_compile` | Compiles every Macro/UserScript choice note (frontmatter `quickadd-type: macro`) into QuickAdd's live config. Both modes report the would-be diff (`added`/`changed`/`removed` compiler-owned choices) plus per-note `errors` (a non-empty `errors` sets `isError: true`, so a partial compile is distinguishable from a clean one). `dry_run: true` touches nothing; `dry_run: false` applies via a scoped merge — only choices this tool itself generated (a stable `qan:`-prefixed id derived from the note's path) are added/updated/removed, every other choice is left untouched — then (de)registers the Obsidian commands via QuickAdd's own `removeCommandForChoice`/`addCommandForChoice` (`commandsRegistered: false` ⇒ config written but that API was unavailable). Refuses `suspicious_mass_removal` when a non-dry-run would find 0 choices while deleting 3+ (a cold metadata cache), and `out_of_allowlist` outright while a path allowlist is active |
 
 ### `tools-write-notes.ts` — `registerWriteNotesTool` (1 tool, kernel B1)
 
@@ -444,7 +456,7 @@ it stood then:
   default-off "Raw CLI proxy" setting is on)
 
 **No tool in the observed-44 list was unaccounted for in source.**  Under the
-same plugin set the current surface registers 74 (see the count summary); the
+same plugin set the current surface registers 75 (see the count summary); the
 source↔doc lock in `tests/tool-inventory.test.mjs` keeps this file current, and
 any future live observation should be checked against that lock rather than
 this historical snapshot.
@@ -460,6 +472,7 @@ this historical snapshot.
 | `packages/plugin/src/mcp/tools-core.ts` | `registerCoreTools` | 2 always-live |
 | `packages/plugin/src/mcp/tools-vault-write.ts` | `registerVaultWriteTools` | 2 always-live |
 | `packages/plugin/src/mcp/tools-scheme-write.ts` | `registerSchemeWriteTools` | 3 always-live |
+| `packages/plugin/src/mcp/tools-quickadd.ts` | `registerQuickAddTools` | 1 always-live |
 | `packages/plugin/src/mcp/tools-complementary.ts` | `registerComplementaryTools` | 9 always-live |
 | `packages/plugin/src/mcp/tools-nav.ts` | `registerNavTools` | 11 always-live |
 | `packages/plugin/src/mcp/tools-locks.ts` | `registerLockTools` | 4 always-live |
