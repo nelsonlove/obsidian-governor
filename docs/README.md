@@ -76,7 +76,14 @@ The end-to-end shape:
 
 ### The governance module (the Acceptance capability)
 
-**Naming, ruled (#115, 2026-08-19):** `governance` is the canonical identifier — it is the
+**Project naming (2026-08-19):** the product is **Governor** (repo `obsidian-governor`); the
+plugin **id** remains `vault-mcp` permanently — it is load-bearing plumbing (plugin folder,
+`~/.claude/vault-mcp/` socket namespace, `mcp__vault-mcp__*` tool prefixes, the
+`app.plugins.plugins['vault-mcp'].api` contract), and renaming a shipped id is a compatibility
+event with no functional benefit. *Assent* names the broader framework the plugin realizes;
+*vault-mcp* in prose refers to the id, not the product.
+
+**Module naming, ruled (#115, 2026-08-19):** `governance` is the canonical identifier — it is the
 shipped module id, settings key, and source directory, and renaming a shipped id is a
 compatibility event with no offsetting benefit. *Acceptance* remains the capability's
 descriptive name in prose (the module's `capabilities: ["acceptance"]` entry). One id, one
