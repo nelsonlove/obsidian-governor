@@ -10,7 +10,7 @@ export interface Discovery {
 }
 
 const ENABLE_HINT =
-  "open Obsidian and enable the 'Vault MCP' plugin (Settings → Community plugins)";
+  "open Obsidian and enable the 'Governor' plugin (Settings → Community plugins)";
 
 export function selectVault(
   discoveries: Discovery[],
@@ -53,28 +53,33 @@ export function filterLive(
 
 export function noLiveMessage(all: Discovery[]): string {
   return all.length > 0
-    ? `vault-mcp: found vault discovery but no live socket — the 'Vault MCP' plugin is ` +
+    ? `governor: found vault discovery but no live socket — the 'Governor' plugin is ` +
         `disabled or Obsidian is closed.\n  Fix: ${ENABLE_HINT}.\n` +
         `  (stale discovery for: ${all.map((d) => d.vault_name).join(", ")})`
-    : `vault-mcp: no vault is currently serving MCP — ${ENABLE_HINT}.`;
+    : `governor: no vault is currently serving MCP — ${ENABLE_HINT}.`;
 }
 
 export function staleRequestedMessage(pick: string): string {
   return (
-    `vault-mcp: vault '${pick}' has a discovery but no live socket — the 'Vault MCP' ` +
+    `governor: vault '${pick}' has a discovery but no live socket — the 'Governor' ` +
     `plugin is disabled or Obsidian isn't running.\n  Fix: ${ENABLE_HINT}.`
   );
 }
 
 export function connectFailMessage(chosen: Discovery): string {
   return (
-    `vault-mcp: can't connect to vault '${chosen.vault_name}' — the 'Vault MCP' plugin ` +
+    `governor: can't connect to vault '${chosen.vault_name}' — the 'Governor' plugin ` +
     `is disabled or Obsidian isn't running.\n  Fix: ${ENABLE_HINT}.\n  (socket: ${chosen.socket_path})`
   );
 }
 
-function loadDiscoveries(): Discovery[] {
-  const dir = path.join(os.homedir(), ".claude", "vault-mcp");
+// Discovery jsons live in ~/.claude/governor/ (since the 0.12.0 plugin-id
+// migration). The pre-0.12.0 dir ~/.claude/vault-mcp/ is still read as a
+// compat surface: a vault running an older plugin publishes its discovery
+// only there. Entries carrying `legacy: true` are the 0.12.0 plugin's own
+// compat COPIES of files already present in the new dir — skipped here, or a
+// single vault would look like two.
+function loadDiscoveryDir(dir: string, skipLegacy: boolean): Discovery[] {
   let files: string[] = [];
   try {
     files = fs.readdirSync(dir).filter((f) => f.endsWith(".json"));
@@ -84,12 +89,22 @@ function loadDiscoveries(): Discovery[] {
   const out: Discovery[] = [];
   for (const f of files) {
     try {
-      out.push(JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")));
+      const d = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8"));
+      if (skipLegacy && (d as { legacy?: boolean }).legacy === true) continue;
+      out.push(d);
     } catch {
       /* skip */
     }
   }
   return out;
+}
+
+function loadDiscoveries(): Discovery[] {
+  const home = os.homedir();
+  return [
+    ...loadDiscoveryDir(path.join(home, ".claude", "governor"), false),
+    ...loadDiscoveryDir(path.join(home, ".claude", "vault-mcp"), true),
+  ];
 }
 
 function parseFlag(argv: string[], name: string): string | undefined {
@@ -121,7 +136,7 @@ export function resolveTarget(
   if (live.length === 0) return { kind: "wait" };
   return {
     kind: "fatal",
-    message: `vault-mcp: multiple vaults open; specify --vault <name>: ${live
+    message: `governor: multiple vaults open; specify --vault <name>: ${live
       .map((d) => d.vault_name)
       .join(", ")}`,
   };
@@ -136,7 +151,7 @@ export function deadlineMessage(
   if (pick) {
     return all.some((d) => d.vault_name === pick)
       ? staleRequestedMessage(pick)
-      : `vault-mcp: no vault named "${pick}"; available: ${all.map((d) => d.vault_name).join(", ") || "(none)"}`;
+      : `governor: no vault named "${pick}"; available: ${all.map((d) => d.vault_name).join(", ") || "(none)"}`;
   }
   // Exactly one discovery we still couldn't reach: name it and its socket.
   if (all.length === 1) return connectFailMessage(all[0]);
@@ -199,7 +214,7 @@ function tryConnect(chosen: Discovery): Promise<net.Socket | null> {
 // --- Reconnect-aware relay ---
 //
 // The bridge used to be a dumb byte pipe that exited when the socket closed,
-// so every Obsidian restart (or vault-mcp plugin reload) killed the MCP server
+// so every Obsidian restart (or plugin reload) killed the MCP server
 // for the whole Claude Code session. Instead we parse the NDJSON stream just
 // enough to survive a restart: capture the client's `initialize` handshake,
 // and when the socket dies with the client still attached, fail in-flight
@@ -233,7 +248,8 @@ export function parseCodeModeFlag(argv: string[], env?: string): boolean {
 
 // The preamble may only be sent to a plugin build that knows how to consume
 // it: an older listener would deliver it to the MCP SDK as a bogus message.
-// ~/.claude/vault-mcp/bridge.mjs is one shared file rewritten by whichever
+// ~/.claude/governor/bridge.mjs (and its legacy vault-mcp twin) is one shared
+// file rewritten by whichever
 // vault's plugin loaded last, so a newer bridge CAN meet an older plugin —
 // gate on the discovery's advertised capabilities, not on hope.
 export function supportsPreamble(d: Discovery): boolean {
@@ -475,7 +491,7 @@ export interface RelayOpts {
 }
 
 const DISCONNECT_REASON =
-  "vault-mcp: connection to Obsidian lost (restarting?) — retry shortly";
+  "governor: connection to Obsidian lost (restarting?) — retry shortly";
 
 export class BridgeRelay {
   readonly state = new RelayState();
@@ -805,11 +821,11 @@ if (process.argv[1] && process.argv[1].endsWith("bridge.mjs")) {
     if (codeModeWanted) {
       if (supportsPreamble(chosen)) {
         preamble = buildPreamble({ codeMode: true });
-        fs.writeSync(2, "vault-mcp: code mode on\n");
+        fs.writeSync(2, "governor: code mode on\n");
       } else {
         fs.writeSync(
           2,
-          `vault-mcp: code mode requested but vault '${chosen.vault_name}' runs plugin ` +
+          `governor: code mode requested but vault '${chosen.vault_name}' runs plugin ` +
             `${chosen.plugin_version ?? "unknown"} without preamble support — continuing with the full tool surface\n`
         );
       }
@@ -820,7 +836,7 @@ if (process.argv[1] && process.argv[1].endsWith("bridge.mjs")) {
         clientOut: process.stdout,
         log: (msg) => {
           try {
-            fs.writeSync(2, `vault-mcp: ${msg}\n`);
+            fs.writeSync(2, `governor: ${msg}\n`);
           } catch {
             /* ignore */
           }
@@ -832,9 +848,9 @@ if (process.argv[1] && process.argv[1].endsWith("bridge.mjs")) {
     );
     relay.start(sock);
   })().catch((e) => {
-    // Diagnostics from waitForVault already carry the vault-mcp prefix;
+    // Diagnostics from waitForVault already carry the governor prefix;
     // don't stutter it.
     const msg = (e as Error).message;
-    fail(msg.startsWith("vault-mcp") ? msg : `vault-mcp bridge: ${msg}`);
+    fail(msg.startsWith("governor") ? msg : `governor bridge: ${msg}`);
   });
 }

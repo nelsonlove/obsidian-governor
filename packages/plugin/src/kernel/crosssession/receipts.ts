@@ -90,11 +90,11 @@ export class ReceiptStore implements ReceiptStoreLike {
       try {
         return sane(JSON.parse(raw));
       } catch {
-        console.error(`[vault-mcp] ${this.file} is unreadable; treating receipts as empty`);
+        console.error(`[governor] ${this.file} is unreadable; treating receipts as empty`);
         return {};
       }
     } catch (e) {
-      console.error("[vault-mcp] crosssession receipts could not be read", e);
+      console.error("[governor] crosssession receipts could not be read", e);
       return {};
     }
   }
@@ -121,7 +121,7 @@ export class ReceiptStore implements ReceiptStoreLike {
       // A receipt that could not persist is logged and lost on reload — the
       // caller's operation (attest / post) still succeeded; the next delta
       // simply re-serves what the lost receipt would have covered.
-      console.error("[vault-mcp] crosssession receipt could not be persisted", e);
+      console.error("[governor] crosssession receipt could not be persisted", e);
     }
   }
 }

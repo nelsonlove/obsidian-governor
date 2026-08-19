@@ -255,7 +255,7 @@ export class WriteJournal {
     const next = this.tail
       .then(() => this.writeLine(file, line))
       .catch((e: unknown) => {
-        console.error("[vault-mcp] journal append failed", e);
+        console.error("[governor] journal append failed", e);
       });
     this.tail = next;
     return next;

@@ -1,5 +1,5 @@
 {
-  "id": "vault-mcp",
+  "id": "governor",
   "name": "Governor",
   "version": "0.11.1",
   "minAppVersion": "1.6.6",

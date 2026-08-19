@@ -16,6 +16,7 @@ import { DEFAULT_PROTECTED_PROPERTIES, setDeclaredProtectedProperties } from "@v
 import { wireGovernance, nudgeGovernanceQueue } from "./governance/wiring.js";
 import { mountAction } from "./governance/mount-state.js";
 import { wireSkills } from "./skills/wiring.js";
+import { runFolderMigration, LEGACY_PLUGIN_ID } from "./id-migration.js";
 
 interface VaultMcpSettings {
   setupAcknowledged: boolean;
@@ -139,7 +140,7 @@ const DEFAULT_SETTINGS: VaultMcpSettings = {
 class DiagnosticsModal extends Modal {
   constructor(app: any, private readonly lines: string[]) { super(app); }
   onOpen() {
-    this.titleEl.setText("vault-mcp diagnostics");
+    this.titleEl.setText("governor diagnostics");
     for (const l of this.lines) this.contentEl.createEl("p", { text: l });
   }
   onClose() { this.contentEl.empty(); }
@@ -156,7 +157,10 @@ export default class VaultMcpPlugin extends Plugin {
   // enable→disable can't interleave a half-finished mount with a teardown.
   private governanceComponent: Component | null = null;
   private governanceReconcile: Promise<void> = Promise.resolve();
-  // Public plugin-to-plugin API: app.plugins.plugins['vault-mcp'].api
+  // Public plugin-to-plugin API: app.plugins.plugins['governor'].api (the
+  // property rides the plugin instance, so it moved with the 0.12.0 id
+  // migration automatically; the old 'vault-mcp' lookup finds nothing once
+  // the old plugin entry is removed — SDK consumers need a dual-id read).
   api: VaultMcpApi = {
     apiVersion: 1,
     registerTools: (owner, tools) => this.externalRegistry.registerTools(owner, tools),
@@ -221,7 +225,7 @@ export default class VaultMcpPlugin extends Plugin {
   async autoRegister(force = false): Promise<void> {
     const bin = findClaudeBinary();
     if (!bin) {
-      if (force) new Notice("vault-mcp: `claude` CLI not found. Use the manual command in settings.");
+      if (force) new Notice("governor: `claude` CLI not found. Use the manual command in settings.");
       else this.showFallbackOnce();
       return;
     }
@@ -229,15 +233,18 @@ export default class VaultMcpPlugin extends Plugin {
     try {
       if (await claudeIsRegistered(bin)) {
         // `claude mcp add` errors on a duplicate name, so never re-add.
-        if (force) new Notice("vault-mcp: already connected to Claude Code.");
+        if (force) new Notice("governor: already connected to Claude Code.");
         this.ensureConnectPlugin(bin, force);
         return;
       }
       await claudeRegister(bin, bridgeDestPath(), this.app.vault.getName());
-      new Notice("vault-mcp: connected to Claude Code. Restart any open Claude Code session to use it.");
+      new Notice(
+        "governor: connected to Claude Code (server name 'governor'). Restart any open Claude Code session to use it. " +
+          "If this vault was registered under the old 'vault-mcp' name, remove that entry: claude mcp remove vault-mcp.",
+      );
       this.ensureConnectPlugin(bin, force);
     } catch (e) {
-      new Notice(`vault-mcp: auto-register failed — ${(e as Error).message}. Use the manual command in settings.`);
+      new Notice(`governor: auto-register failed — ${(e as Error).message}. Use the manual command in settings.`);
       this.showFallbackOnce();
     }
   }
@@ -249,19 +256,19 @@ export default class VaultMcpPlugin extends Plugin {
   private ensureConnectPlugin(bin: string, force: boolean): void {
     void claudeEnsureConnectPlugin(bin)
       .then((r) => {
-        if (r === "installed") new Notice("vault-mcp: installed the vault-mcp-connect Claude Code plugin.");
-        else if (force) new Notice("vault-mcp: vault-mcp-connect plugin already installed.");
+        if (r === "installed") new Notice("governor: installed the vault-mcp-connect Claude Code plugin.");
+        else if (force) new Notice("governor: vault-mcp-connect plugin already installed.");
       })
       .catch((e: unknown) => {
-        console.error("vault-mcp: connect-plugin provisioning skipped —", e instanceof Error ? e.message : e);
+        console.error("governor: connect-plugin provisioning skipped —", e instanceof Error ? e.message : e);
       });
   }
 
   async claudeRemoveRegistration(): Promise<void> {
     const bin = findClaudeBinary();
-    if (!bin) { new Notice("vault-mcp: `claude` CLI not found."); return; }
+    if (!bin) { new Notice("governor: `claude` CLI not found."); return; }
     await claudeRemove(bin);
-    new Notice("vault-mcp: removed Claude Code registration.");
+    new Notice("governor: removed Claude Code registration.");
   }
 
   private showFallbackOnce(): void {
@@ -311,6 +318,38 @@ export default class VaultMcpPlugin extends Plugin {
   }
 
   async onload() {
+    // 0.12.0 plugin-id migration (vault-mcp → governor, #266): adopt the OLD
+    // plugin folder's data (settings, journal, install-id, baselines,
+    // acceptance log, receipts) into this plugin's own dir BEFORE settings
+    // load and before the kernel opens the journal. Idempotent (marker /
+    // no-data.json / already-provisioned ⇒ skip), abort-don't-overwrite, and
+    // never fatal to the load — see src/id-migration.ts. The old folder is
+    // left in place (with a MIGRATED.md marker) for the human to remove after
+    // live verification.
+    const migrationPluginDir = this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`;
+    try {
+      const legacyDir = `${this.app.vault.configDir}/plugins/${LEGACY_PLUGIN_ID}`;
+      const result = await runFolderMigration(this.app.vault.adapter, legacyDir, migrationPluginDir);
+      if (result.plan.action === "migrate") {
+        if (result.failedEntry) {
+          console.error(
+            `[governor] data-folder migration INCOMPLETE — '${result.failedEntry}' failed to move; ` +
+              `moved so far: ${result.moved.join(", ") || "(none)"}. No marker written; ` +
+              `old folder left at ${legacyDir} — reconcile by hand before re-enabling.`,
+          );
+        } else {
+          console.log(`[governor] adopted legacy plugin data from ${legacyDir}: ${result.moved.join(", ")}`);
+        }
+      } else if (result.plan.action === "abort") {
+        console.error(`[governor] data-folder migration aborted: ${result.plan.reason}`);
+      }
+    } catch (e) {
+      console.error(
+        "[governor] data-folder migration failed — continuing with fresh state; the old folder is untouched",
+        e,
+      );
+    }
+
     // Load settings FIRST so the enabled gate and guard settings are available.
     await this.loadSettings();
 
@@ -321,13 +360,14 @@ export default class VaultMcpPlugin extends Plugin {
     const adapter = this.app.vault.adapter;
     const basePath = adapter instanceof FileSystemAdapter ? adapter.getBasePath() : "";
 
-    // Write the build-time-embedded bridge into ~/.claude/vault-mcp/.
+    // Write the build-time-embedded bridge into ~/.claude/governor/ (and a
+    // grace-period copy into the legacy ~/.claude/vault-mcp/ — see discovery.ts).
     try { writeBridge(); }
-    catch (e) { console.error("[vault-mcp] writeBridge failed", e); }
+    catch (e) { console.error("[governor] writeBridge failed", e); }
 
     // Kernel v0 — ONE queue and ONE journal per plugin instance, shared by
     // every per-connection server built below. The journal lives beside the
-    // plugin's own data (`.obsidian/plugins/vault-mcp/journal/YYYY-MM.jsonl`),
+    // plugin's own data (`.obsidian/plugins/governor/journal/YYYY-MM.jsonl`),
     // out of the note tree so it can never be mistaken for vault content.
     const pluginDir = this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`;
     // The identity substrate's uid index — one per plugin instance, like the
@@ -407,7 +447,7 @@ export default class VaultMcpPlugin extends Plugin {
       // background agents share the plugin without evicting each other.
       this.listener = new UnixSocketListener(sock, (transport, connOpts) => {
         const server = buildMcpServer(this.app, ctx, { codeMode: connOpts.codeMode });
-        server.connect(transport).catch((e) => console.error("[vault-mcp] connect failed", e));
+        server.connect(transport).catch((e) => console.error("[governor] connect failed", e));
       });
       await this.listener.listen();
 
@@ -421,9 +461,9 @@ export default class VaultMcpPlugin extends Plugin {
         capabilities: ["preamble"],
       };
       writeDiscovery(this.slug, discovery);
-      console.log(`[vault-mcp] listening on ${sock}`);
+      console.log(`[governor] listening on ${sock}`);
     } else {
-      console.log("[vault-mcp] disabled in settings; socket not started");
+      console.log("[governor] disabled in settings; socket not started");
     }
 
     this.addSettingTab(new VaultMcpSettingTab(this.app, this));
@@ -460,7 +500,7 @@ export default class VaultMcpPlugin extends Plugin {
           getConfig: () => (this.settings.modules?.skills?.config ?? {}) as Record<string, unknown>,
         });
       } catch (e) {
-        console.error("[vault-mcp] skills GUI wiring failed", e);
+        console.error("[governor] skills GUI wiring failed", e);
       }
     }
 
@@ -533,6 +573,11 @@ export default class VaultMcpPlugin extends Plugin {
     });
 
     // Signal publishers (vault-mcp-api SDK) that the api is (re-)available.
+    // Both events fire during the 0.12.0 id-migration grace period: `governor:ready`
+    // is the canonical event going forward; `vault-mcp:ready` is kept for any
+    // publisher built against the old id (the SDK needs a dual-id read or a
+    // major bump before the legacy event can be dropped).
+    this.app.workspace.trigger("governor:ready", this.api);
     this.app.workspace.trigger("vault-mcp:ready", this.api);
   }
 
@@ -574,7 +619,7 @@ export default class VaultMcpPlugin extends Plugin {
           getConfig: () => (this.settings.modules?.acceptance?.config ?? {}) as Record<string, unknown>,
         });
       } catch (e) {
-        console.error("[vault-mcp] governance pane wiring failed", e);
+        console.error("[governor] governance pane wiring failed", e);
         this.governanceComponent = null;
       }
     } else {

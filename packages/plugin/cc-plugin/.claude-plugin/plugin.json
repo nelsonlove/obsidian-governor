@@ -1,7 +1,7 @@
 {
   "name": "vault-mcp-connect",
-  "version": "0.2.0",
-  "description": "Session-start health check and status command for the vault-mcp Obsidian bridge \u2014 warns when the mcp__vault-mcp__* tools will fail because Obsidian isn't serving the socket. Also ships the record-class write guard: PreToolUse hook refusing non-append Bash/MCP writes to 'Machinery record/' fold archives.",
+  "version": "0.2.1",
+  "description": "Session-start health check and status command for the Governor Obsidian bridge (plugin id 'governor'; historically 'vault-mcp') \u2014 warns when the mcp__governor__* (or legacy mcp__vault-mcp__*) tools will fail because Obsidian isn't serving the socket. Also ships the record-class write guard: PreToolUse hook refusing non-append Bash/MCP writes to 'Machinery record/' fold archives.",
   "author": {
     "name": "Nelson Love",
     "url": "https://github.com/nelsonlove"

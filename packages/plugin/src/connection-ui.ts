@@ -316,7 +316,7 @@ export class ConnectionSetupModal extends Modal {
   constructor(app: App, private onAck?: () => void) { super(app); }
   onOpen() {
     const { contentEl, titleEl } = this;
-    titleEl.setText("Connect vault-mcp to Claude Code (manual fallback)");
+    titleEl.setText("Connect Governor to Claude Code (manual fallback)");
     contentEl.createEl("p", {
       text: "Couldn't auto-register (claude CLI not found or multiple vaults). Run this once in a terminal:",
     });
@@ -468,7 +468,11 @@ export class VaultMcpSettingTab extends PluginSettingTab {
     // Connect / Disconnect buttons.
     new Setting(containerEl)
       .setName("Registration")
-      .setDesc("Connect or disconnect this vault's MCP server from Claude Code.")
+      .setDesc(
+        "Connect or disconnect this vault's MCP server from Claude Code (server name 'governor'; tools appear " +
+          "as mcp__governor__*). Registrations made before 0.12.0 under the old 'vault-mcp' name should be " +
+          "removed: claude mcp remove vault-mcp.",
+      )
       .addButton((b) =>
         b.setButtonText("Connect to Claude Code").setCta().onClick(() => this.plugin.autoRegister(true))
       )
@@ -500,7 +504,7 @@ export class VaultMcpSettingTab extends PluginSettingTab {
         b.onClick(async () => {
           this.plugin.settings.enabled = !this.plugin.settings.enabled;
           await this.plugin.saveSettings();
-          new Notice("vault-mcp: reload the plugin (or restart Obsidian) for this change to take effect.");
+          new Notice("governor: reload the plugin (or restart Obsidian) for this change to take effect.");
           this.display();
         });
       });
@@ -704,7 +708,7 @@ export class VaultMcpSettingTab extends PluginSettingTab {
           const effective = normalizeProtectedProperties(raw, () => {});
           if (effective.length < raw.length) {
             new Notice(
-              `vault-mcp: ${raw.length - effective.length} protected-property line(s) ignored ` +
+              `governor: ${raw.length - effective.length} protected-property line(s) ignored ` +
                 `(floor keys and unknown grades cannot be declared) — see the console for details.`
             );
           }

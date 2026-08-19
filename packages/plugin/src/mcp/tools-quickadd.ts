@@ -425,7 +425,7 @@ function applyCommands(quickadd: any, previouslyOwned: unknown[], fresh: QuickAd
     for (const choice of fresh) quickadd.addCommandForChoice(choice);
     return true;
   } catch (e) {
-    console.error("vault-mcp: QuickAdd command (de)registration failed after a compile", e);
+    console.error("governor: QuickAdd command (de)registration failed after a compile", e);
     return false;
   }
 }

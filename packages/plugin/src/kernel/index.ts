@@ -299,7 +299,7 @@ function safeEffects(mc: MutationContext, result: unknown): JournalEffects | und
   try {
     return mc.effectsOf?.(result);
   } catch (e) {
-    console.error("[vault-mcp] journal effects failed", e);
+    console.error("[governor] journal effects failed", e);
     return undefined;
   }
 }
@@ -698,7 +698,7 @@ export class Kernel {
     try {
       return this.probe?.rev(target.path);
     } catch (e) {
-      console.error("[vault-mcp] revAfter probe failed", e);
+      console.error("[governor] revAfter probe failed", e);
       return undefined;
     }
   }

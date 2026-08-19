@@ -138,7 +138,7 @@ export interface GovernanceWireDeps {
 const baselineStores = new WeakMap<Plugin, BaselineStore>();
 function getStore(plugin: Plugin): BaselineStore {
   const s = baselineStores.get(plugin);
-  if (!s) throw new Error("vault-mcp governance: baseline store not initialised");
+  if (!s) throw new Error("governor acceptance: baseline store not initialised");
   return s;
 }
 
@@ -168,7 +168,7 @@ interface PluginPaths {
 const pluginPaths = new WeakMap<Plugin, PluginPaths>();
 function paths(plugin: Plugin): PluginPaths {
   const p = pluginPaths.get(plugin);
-  if (!p) throw new Error("vault-mcp governance: paths not initialised");
+  if (!p) throw new Error("governor acceptance: paths not initialised");
   return p;
 }
 
@@ -265,7 +265,7 @@ async function saveAllowlist(plugin: Plugin): Promise<void> {
   try {
     await plugin.app.vault.adapter.write(paths(plugin).allowlistPath, serializeAllowlist(getEnabledClasses(plugin)));
   } catch (e) {
-    console.error("vault-mcp governance: failed to persist auto-accept allowlist", e);
+    console.error("governor acceptance: failed to persist auto-accept allowlist", e);
   }
 }
 // The ONLY allowlist mutator. Accept-equivalent authority, so it is gesture-gated exactly like
@@ -1083,7 +1083,7 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
   try {
     plugin.registerView(VIEW_TYPE_GOVERNANCE, (leaf) => new GovernanceReviewView(leaf, buildController(plugin)));
   } catch (e) {
-    console.warn("vault-mcp governance: review view type already registered — reusing it", e);
+    console.warn("governor acceptance: review view type already registered — reusing it", e);
   }
   // Live-unmount teardown of the view: detach any open governance leaves (drops the sole reference
   // to their accept-capable controller) and unregister the type so a later re-mount can register
@@ -1092,7 +1092,7 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
   component.register(() => {
     for (const leaf of plugin.app.workspace.getLeavesOfType(VIEW_TYPE_GOVERNANCE)) leaf.detach();
     try { viewRegistryOf(plugin)?.unregisterView(VIEW_TYPE_GOVERNANCE); }
-    catch (e) { console.warn("vault-mcp governance: view unregister failed", e); }
+    catch (e) { console.warn("governor acceptance: view unregister failed", e); }
   });
 
   // Ribbon icon + badge. The ribbon only OPENS the pane (read-only navigation); it advances no
@@ -1218,7 +1218,7 @@ export function renderGovernanceSettings(plugin: Plugin, containerEl: HTMLElemen
     adoptBtn,
     () => confirmAdopt(plugin.app),
     async () => { adoptedCount = await performAdopt(plugin); },
-    () => { new Notice(`vault-mcp governance: adopted baseline for ${adoptedCount} note(s).`); },
+    () => { new Notice(`governor acceptance: adopted baseline for ${adoptedCount} note(s).`); },
   );
 
   // Auto-accept allowlist — the SAME gesture-gated section the pane renders, built from the

@@ -445,7 +445,7 @@ export class GovernanceReviewView extends ItemView {
     if (!el && !this.tabIconUnavailableWarned) {
       this.tabIconUnavailableWarned = true;
       console.warn(
-        "vault-mcp governance: tab header icon element not reachable in this Obsidian version — " +
+        "governor acceptance: tab header icon element not reachable in this Obsidian version — " +
           "the review-pane tab badge is disabled; the ribbon badge is unaffected.",
       );
     }
@@ -512,7 +512,7 @@ export class GovernanceReviewView extends ItemView {
       () => confirmAdopt(this.app),
       () => deps.adopt(),
       async () => {
-        new Notice("vault-mcp governance: baseline adopted — the vault is now reviewable.");
+        new Notice("governor acceptance: baseline adopted — the vault is now reviewable.");
         await this.rerender();
       },
     );
@@ -594,12 +594,12 @@ export class GovernanceReviewView extends ItemView {
           if (res === null) { proposedAcceptBtn.disabled = false; return; } // gate: open/cancel — nothing happened
           new Notice(
             res.stamped
-              ? `vault-mcp governance: accepted ${item.title} — stamped accepted-by: ${identity}`
-              : `vault-mcp governance: accepted ${item.title}`,
+              ? `governor acceptance: accepted ${item.title} — stamped accepted-by: ${identity}`
+              : `governor acceptance: accepted ${item.title}`,
           );
           await this.rerender();
         } catch (e) {
-          new Notice(`vault-mcp governance: accept failed — ${(e as Error).message}`);
+          new Notice(`governor acceptance: accept failed — ${(e as Error).message}`);
           proposedAcceptBtn.disabled = false;
         }
       });
@@ -615,10 +615,10 @@ export class GovernanceReviewView extends ItemView {
         proposedRequestBtn.disabled = true;
         try {
           await deps.requestChanges(item.path, text);
-          new Notice(`vault-mcp governance: requested changes on ${item.title}`);
+          new Notice(`governor acceptance: requested changes on ${item.title}`);
           await this.rerender();
         } catch (e) {
-          new Notice(`vault-mcp governance: request-changes failed — ${(e as Error).message}`);
+          new Notice(`governor acceptance: request-changes failed — ${(e as Error).message}`);
           proposedRequestBtn.disabled = false;
         }
       });
@@ -668,10 +668,10 @@ export class GovernanceReviewView extends ItemView {
         withdrawBtn.disabled = true;
         try {
           await deps.withdraw(item.path);
-          new Notice(`vault-mcp governance: withdrew the revision request on ${item.title}`);
+          new Notice(`governor acceptance: withdrew the revision request on ${item.title}`);
           await this.rerender();
         } catch (e) {
-          new Notice(`vault-mcp governance: withdraw failed — ${(e as Error).message}`);
+          new Notice(`governor acceptance: withdraw failed — ${(e as Error).message}`);
           withdrawBtn.disabled = false;
         }
       });
@@ -823,13 +823,13 @@ export class GovernanceReviewView extends ItemView {
         if (res === null) { setBusy(false); return; } // gate: opened-to-fix or cancelled — nothing happened
         new Notice(
           res.stamped
-            ? `vault-mcp governance: accepted ${item.title} — stamped accepted-by: ${identity}`
-            : `vault-mcp governance: accepted ${item.title}`,
+            ? `governor acceptance: accepted ${item.title} — stamped accepted-by: ${identity}`
+            : `governor acceptance: accepted ${item.title}`,
         );
         this.selected = null;
         await this.rerender();
       } catch (e) {
-        new Notice(`vault-mcp governance: accept failed — ${(e as Error).message}`);
+        new Notice(`governor acceptance: accept failed — ${(e as Error).message}`);
         setBusy(false);
       }
     });
@@ -838,11 +838,11 @@ export class GovernanceReviewView extends ItemView {
       setBusy(true);
       try {
         await deps.revert(item.path);
-        new Notice(`vault-mcp governance: reverted ${item.title} (previous version quarantined)`);
+        new Notice(`governor acceptance: reverted ${item.title} (previous version quarantined)`);
         this.selected = null;
         await this.rerender();
       } catch (e) {
-        new Notice(`vault-mcp governance: revert failed — ${(e as Error).message}`);
+        new Notice(`governor acceptance: revert failed — ${(e as Error).message}`);
         setBusy(false);
       }
     });
@@ -857,11 +857,11 @@ export class GovernanceReviewView extends ItemView {
       setBusy(true);
       try {
         await deps.requestChanges(item.path, text);
-        new Notice(`vault-mcp governance: requested changes on ${item.title}`);
+        new Notice(`governor acceptance: requested changes on ${item.title}`);
         this.selected = null;
         await this.rerender();
       } catch (e) {
-        new Notice(`vault-mcp governance: request-changes failed — ${(e as Error).message}`);
+        new Notice(`governor acceptance: request-changes failed — ${(e as Error).message}`);
         setBusy(false);
       }
     });
