@@ -513,20 +513,21 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
       crosssession.directory.tools.filter((t) => t.readOnly === false).map((t) => t.name),
       ["crosssession_attest", "crosssession_post"],
     );
-    // The triage module (#221 phase 2) renders its own config tab: eight config
-    // fields (inbox markers, four destinations, three frontmatter patches —
-    // defaults mirroring the legacy dispose-inbox-item flow) and a two-tool
+    // The triage module (#221 phase 2, phase-3 shape per #241) renders its own
+    // config tab: eight config fields (inbox markers, the stamp/escalate
+    // patches, the move white/blacklist, the declared-dispositions and
+    // built-in-description JSON blobs, the named queues) and a two-tool
     // capability directory (one read: queue; one write: dispose). Ships disabled.
     const triage = hosted.find((h) => h.id === "triage");
     assert.deepEqual(triage.fields.map((f) => f.key), [
       "inboxMarkers",
-      "actionDestination",
-      "knowledgeDestination",
-      "somedayDestination",
-      "archiveDestination",
-      "actionFrontmatter",
-      "somedayFrontmatter",
+      "stampFrontmatter",
       "escalateFrontmatter",
+      "moveWhitelist",
+      "moveBlacklist",
+      "declaredDispositions",
+      "builtinDescriptions",
+      "queues",
     ]);
     assert.deepEqual(triage.fields.find((f) => f.key === "inboxMarkers").value, [" Inbox for "]);
     assert.equal(triage.enabled, false);

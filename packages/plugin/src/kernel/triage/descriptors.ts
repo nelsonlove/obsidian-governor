@@ -1,201 +1,241 @@
 // ============================================================================
-//  INBOX TRIAGE — the disposition substrate's SECOND instance (#221, phase 2)
+//  INBOX TRIAGE — the disposition substrate's SECOND instance (#221 phase 2,
+//  reshaped by #241 phase 3 per Nelson's 2026-08-19 ruling)
 // ----------------------------------------------------------------------------
-//  Successor to the vault's retired `dispose-inbox-item` QuickAdd flow: ten
-//  dispositions over notes sitting in inbox positions. NONE of the ten confers
-//  standing — every one is a mechanical, reversible write (a move through the
-//  link-healing move primitive, a frontmatter transition, or a trash) — so per
-//  the authority axis ALL TEN are `authority: "agent"`: ordinary guarded MCP
-//  verbs, human-drivable through the tool-runner, with NO pane surface at all
-//  (Nelson's native-tooling rule on #221: queue VIEWS are native Bases over
-//  frontmatter; bespoke pane UI is reserved for gesture-gated authority
-//  dispositions, of which this instance has none).
+//  Phase 2 shipped TEN verbs ported from the legacy `dispose-inbox-item` flow.
+//  Phase 3 REPLACES that table (breaking, pre-release): the built-in set is
+//  the three MECHANICAL PRIMITIVES only —
 //
-//  The table below is the SINGLE SOURCE for the instance: the `triage_dispose`
-//  tool derives its disposition enum, its description text, and the module
-//  manifest's directory entry from it, so the ten verbs cannot drift apart
-//  across surfaces.
+//    trash — Obsidian's recoverable trash (never a hard delete)
+//    move  — the shared link-healing move primitive, target required,
+//            subject to the configured move whitelist/blacklist
+//    stamp — the configured frontmatter patch, note stays in place
 //
-//  Effect-mapping metadata (this instance's data extension of the substrate
-//  shape — still plain strings, still frozen, still no callable):
+//  Everything richer is a HUMAN-DECLARED disposition row in module config
+//  (config.ts's `declaredDispositions`): `{id, label, description, action:
+//  trash|move|stamp|choice, patch?, destination?, inPlace?, choice?}`. One
+//  default declared row ships — `escalate` (mechanically stamp-in-place,
+//  patch from the `escalateFrontmatter` config, default
+//  `{tags: [attention/user]}`) — deletable and editable like any declared
+//  row. The nine other legacy verbs do NOT ship; docs/triage.md shows how to
+//  re-declare any of them as config rows.
 //
-//    action        — what the disposition does to the note: "move" (via the
-//                    shared link-healing move primitive), "trash" (Obsidian
-//                    trash, never a hard delete), or "in-place" (frontmatter
-//                    only, the note stays put).
-//    targetPolicy  — "required": the call must name a `target` folder;
-//                    "config-or-target": an explicit `target` wins, else the
-//                    configured destination (destinationKey), else a typed
-//                    refusal; "none": a `target` is refused (nothing to aim).
-//    destinationKey / frontmatterKey — which TriageConfig keys supply the
-//                    fallback destination / the frontmatter patch. VAULT
-//                    SEMANTICS LIVE IN CONFIG, never here: the descriptors
-//                    name config keys, and the keys' defaults (config.ts)
-//                    mirror the legacy flow's live-vault behavior while
-//                    staying per-vault overridable.
+//  SUBSTRATE DISCIPLINE, unchanged: the FROZEN code-level instance table is
+//  the three built-ins below, declared against the shared
+//  DispositionDescriptorShape (dispositions.ts — untouched; the governance
+//  instance keeps declaring against the same shape). Declared rows are NOT
+//  runtime additions to that table: they are CONFIGURATION the planner
+//  interprets — human-only-mutable data whose authority answer is uniform
+//  (every declared row is exercised by an agent through the one guarded
+//  `triage_dispose` tool; none confers standing; a `choice` row's QuickAdd
+//  binding is opaque-by-declaration, see plan.ts / docs). The MERGED table
+//  (built-ins ∪ declared) is a derived, per-config view — the single source
+//  for the tool enum, its description, and the docs — computed by
+//  `mergedDispositionsOf` here.
+//
+//  ONE SHARED DESCRIPTION FORMAT (ruling point 4): built-ins carry default
+//  descriptive text, human-overridable via config (`builtinDescriptions`),
+//  the SAME field declared rows carry — descriptions exist to help agents
+//  pick the right verb, wherever the verb came from.
 // ============================================================================
 
 import type { DispositionDescriptorShape } from "./dispositions.js";
 
-export type TriageDispositionId =
-  | "discard"
-  | "route"
-  | "establish-new-home"
-  | "convert-to-action"
-  | "develop-as-knowledge"
-  | "register"
-  | "curate-as-link"
-  | "defer-to-someday"
-  | "archive-as-record"
-  | "escalate";
+/** The closed built-in id set — the three primitives. */
+export type TriageBuiltinId = "trash" | "move" | "stamp";
 
 /** The one surface this instance has: every verb is a guarded MCP tool call
  * (they share the single `triage_dispose` tool, selected by `disposition`). */
 export type TriageDispositionSurface = "mcp-tool";
 
-export type TriageAction = "move" | "trash" | "in-place";
+/** What a disposition does to the note. `choice` (declared rows only) runs a
+ * human-bound QuickAdd choice — opaque by declaration. */
+export type TriageAction = "trash" | "move" | "stamp" | "choice";
+
 export type TriageTargetPolicy = "required" | "config-or-target" | "none";
 
-/** TriageConfig keys a descriptor may name (see config.ts). */
-export type TriageDestinationKey =
-  | "actionDestination"
-  | "knowledgeDestination"
-  | "somedayDestination"
-  | "archiveDestination";
-export type TriageFrontmatterKey = "actionFrontmatter" | "somedayFrontmatter" | "escalateFrontmatter";
-
 export interface TriageDispositionDescriptor
-  extends DispositionDescriptorShape<TriageDispositionId, TriageDispositionSurface> {
-  readonly action: TriageAction;
-  readonly targetPolicy: TriageTargetPolicy;
-  /** Config key holding the fallback destination folder ("config-or-target" only). */
-  readonly destinationKey?: TriageDestinationKey;
-  /** Config key holding the frontmatter patch this disposition applies. */
-  readonly frontmatterKey?: TriageFrontmatterKey;
+  extends DispositionDescriptorShape<TriageBuiltinId, TriageDispositionSurface> {
+  readonly action: Extract<TriageAction, "trash" | "move" | "stamp">;
 }
 
 /**
- * The inbox-triage instance's full disposition set. Frozen: the tool surface
- * and docs render FROM this; nothing may add to it at runtime.
+ * The frozen built-in instance table — the substrate's code-level triage set.
+ * All agent-authority (nothing here confers standing), pure frozen data, no
+ * callable. `effect` is the DEFAULT description text; the merged table lets a
+ * human override it per built-in (same description field as declared rows).
  */
 export const TRIAGE_DISPOSITIONS: ReadonlyArray<TriageDispositionDescriptor> = Object.freeze([
   Object.freeze({
-    id: "discard",
+    id: "trash",
     authority: "agent",
     surface: "mcp-tool",
-    label: "Discard",
+    label: "Trash",
     action: "trash",
-    targetPolicy: "none",
     effect: "trash the note (Obsidian's trash — recoverable, never a hard delete)",
   } as const),
   Object.freeze({
-    id: "route",
+    id: "move",
     authority: "agent",
     surface: "mcp-tool",
-    label: "Route",
+    label: "Move",
     action: "move",
-    targetPolicy: "required",
-    effect: "move the note into the target folder it already belongs in (link-healing move)",
-  } as const),
-  Object.freeze({
-    id: "establish-new-home",
-    authority: "agent",
-    surface: "mcp-tool",
-    label: "Establish new home",
-    action: "move",
-    targetPolicy: "required",
-    effect: "move the note into a NEW home folder named by target (missing parent folders are created)",
-  } as const),
-  Object.freeze({
-    id: "convert-to-action",
-    authority: "agent",
-    surface: "mcp-tool",
-    label: "Convert to action",
-    action: "move",
-    targetPolicy: "config-or-target",
-    destinationKey: "actionDestination",
-    frontmatterKey: "actionFrontmatter",
     effect:
-      "retype the note as a task (the configured action frontmatter patch), then move it to target or the " +
-      "configured action destination",
+      "move the note into the target folder (link-healing move; missing parents created; the destination is " +
+      "checked against the configured move whitelist/blacklist)",
   } as const),
   Object.freeze({
-    id: "develop-as-knowledge",
+    id: "stamp",
     authority: "agent",
     surface: "mcp-tool",
-    label: "Develop as knowledge",
-    action: "move",
-    targetPolicy: "config-or-target",
-    destinationKey: "knowledgeDestination",
-    effect: "move the note to target or the configured knowledge destination, to be developed as a knowledge note",
-  } as const),
-  Object.freeze({
-    id: "register",
-    authority: "agent",
-    surface: "mcp-tool",
-    label: "Register",
-    action: "move",
-    targetPolicy: "required",
-    effect: "move the note into the registry location named by target",
-  } as const),
-  Object.freeze({
-    id: "curate-as-link",
-    authority: "agent",
-    surface: "mcp-tool",
-    label: "Curate as link",
-    action: "move",
-    targetPolicy: "required",
-    effect: "move the note into the link-collection location named by target",
-  } as const),
-  Object.freeze({
-    id: "defer-to-someday",
-    authority: "agent",
-    surface: "mcp-tool",
-    label: "Defer to someday",
-    action: "move",
-    targetPolicy: "config-or-target",
-    destinationKey: "somedayDestination",
-    frontmatterKey: "somedayFrontmatter",
+    label: "Stamp",
+    action: "stamp",
     effect:
-      "apply the configured someday frontmatter patch, then move the note to target or the configured someday " +
-      "destination",
-  } as const),
-  Object.freeze({
-    id: "archive-as-record",
-    authority: "agent",
-    surface: "mcp-tool",
-    label: "Archive as record",
-    action: "move",
-    targetPolicy: "config-or-target",
-    destinationKey: "archiveDestination",
-    effect: "move the note to target or the configured archive destination, kept as a record",
-  } as const),
-  Object.freeze({
-    id: "escalate",
-    authority: "agent",
-    surface: "mcp-tool",
-    label: "Escalate",
-    action: "in-place",
-    targetPolicy: "none",
-    frontmatterKey: "escalateFrontmatter",
-    effect:
-      "flag the note for human attention (the configured escalate frontmatter patch) and leave it in place — " +
-      "the simplest faithful mapping of the legacy escalate",
+      "apply the configured stamp frontmatter patch (modules.triage.config.stampFrontmatter; array values union, " +
+      "scalars overwrite) and leave the note in place",
   } as const),
 ]);
 
-/** Lookup by id — undefined for an unknown id (the set is closed). */
-export function triageDispositionById(id: string): TriageDispositionDescriptor | undefined {
-  return TRIAGE_DISPOSITIONS.find((d) => d.id === id);
+export const TRIAGE_BUILTIN_IDS: ReadonlyArray<TriageBuiltinId> = Object.freeze(
+  TRIAGE_DISPOSITIONS.map((d) => d.id),
+);
+
+// ── declared rows (human config — parsed/validated in config.ts) ────────────
+
+/** One human-declared disposition row, as config.ts sanitizes it. */
+export interface DeclaredDispositionRow {
+  id: string;
+  label?: string;
+  description?: string;
+  action: TriageAction;
+  /** Frontmatter patch (stamp rows: required; move rows: optional). Already
+   * accept-forbidden- and proto-key-checked by config.ts. */
+  patch?: Record<string, unknown>;
+  /** Configured fallback destination folder (an explicit `target` overrides). */
+  destination?: string;
+  /** Stamp rows: true (the default with no destination) ⇒ the note stays put
+   * and `target` is refused; false with no destination ⇒ target required. */
+  inPlace?: boolean;
+  /** Choice rows: the QuickAdd choice binding (name, or choice id). */
+  choice?: string;
 }
 
-/** The closed id list, in declared order — the `triage_dispose` enum's single
+// ── the merged table (built-ins ∪ declared) — the single-source view ────────
+
+/** One row of the merged disposition table — what the tool enum, description,
+ * planner, and docs all render from. */
+export interface MergedDisposition {
+  id: string;
+  label: string;
+  /** The shared description field — built-in default/override, or the
+   * declared row's own text. */
+  description: string;
+  builtin: boolean;
+  action: TriageAction;
+  /** The effective frontmatter patch, or null. Built-in `stamp` resolves this
+   * from config at plan time (patchSource: "stampFrontmatter"); a null patch
+   * on the built-in stamp row here means "resolved later". */
+  patch: Record<string, unknown> | null;
+  destination: string | null;
+  inPlace: boolean;
+  choice: string | null;
+  targetPolicy: TriageTargetPolicy;
+}
+
+/** Derive a row's target policy from its shape — one rule, applied uniformly:
+ * trash / choice / in-place stamp aim at nothing; a declared destination makes
+ * `target` an override; a moving row without one requires it. */
+export function targetPolicyOf(row: {
+  action: TriageAction;
+  destination?: string | null;
+  inPlace?: boolean;
+}): TriageTargetPolicy {
+  if (row.action === "trash" || row.action === "choice") return "none";
+  if (row.action === "stamp") {
+    if (row.destination) return "config-or-target";
+    if (row.inPlace === false) return "required";
+    return "none"; // in place — the default stamp shape
+  }
+  // move
+  return row.destination ? "config-or-target" : "required";
+}
+
+/** The default `escalate` declared row (ruling point 2): mechanically
+ * stamp-in-place; the patch comes from the `escalateFrontmatter` config
+ * (default `{tags: [attention/user]}` — the tag is configurable there), and
+ * the row disappears when the human sets `declaredDispositions` without it. */
+export function defaultEscalateRow(escalatePatch: Record<string, unknown>): DeclaredDispositionRow {
+  return {
+    id: "escalate",
+    label: "Escalate",
+    description:
+      "flag the note for human attention (stamps the configured escalate frontmatter patch, default " +
+      "tags: [attention/user]) and leave it in place",
+    action: "stamp",
+    patch: escalatePatch,
+    inPlace: true,
+  };
+}
+
+/** The inputs `mergedDispositionsOf` consumes — config.ts's parsed view. */
+export interface MergeInputs {
+  /** Sanitized declared rows, or null when the config leaves them unset
+   * (⇒ the default escalate row applies). Collisions with built-in ids and
+   * duplicate ids are already dropped (and reported) by config.ts. */
+  declared: DeclaredDispositionRow[] | null;
+  /** Per-built-in description overrides (the shared description field). */
+  builtinDescriptions: Partial<Record<TriageBuiltinId, string>>;
+  /** The parsed escalate patch (feeds the DEFAULT escalate row only). */
+  escalateFrontmatter: Record<string, unknown>;
+}
+
+/**
+ * The merged (built-in ∪ declared) disposition table, in render order:
+ * built-ins first (declared order), then declared rows (declared order).
+ * Pure over its inputs; the tool enum, tool description, planner and docs all
+ * derive from this one function — single-sourced by construction.
+ */
+export function mergedDispositionsOf(inputs: MergeInputs): MergedDisposition[] {
+  const builtins: MergedDisposition[] = TRIAGE_DISPOSITIONS.map((d) => ({
+    id: d.id,
+    label: d.label,
+    description: inputs.builtinDescriptions[d.id] ?? d.effect,
+    builtin: true,
+    action: d.action,
+    patch: null, // built-in stamp resolves its patch from config at plan time
+    destination: null,
+    inPlace: d.action === "stamp",
+    choice: null,
+    targetPolicy: targetPolicyOf({ action: d.action, destination: null, inPlace: d.action === "stamp" }),
+  }));
+  const declaredRows = inputs.declared ?? [defaultEscalateRow(inputs.escalateFrontmatter)];
+  const declared: MergedDisposition[] = declaredRows.map((r) => ({
+    id: r.id,
+    label: r.label ?? r.id,
+    description: r.description ?? `declared '${r.action}' disposition (no description configured)`,
+    builtin: false,
+    action: r.action,
+    patch: r.patch && Object.keys(r.patch).length > 0 ? r.patch : null,
+    destination: r.destination ?? null,
+    inPlace: r.action === "stamp" ? r.inPlace !== false && !r.destination : false,
+    choice: r.choice ?? null,
+    targetPolicy: targetPolicyOf(r),
+  }));
+  return [...builtins, ...declared];
+}
+
+/** Lookup by id over a merged table — undefined for an unknown id. */
+export function mergedById(table: MergedDisposition[], id: string): MergedDisposition | undefined {
+  return table.find((d) => d.id === id);
+}
+
+/** The merged id list, in declared order — the `triage_dispose` enum's single
  * source. */
-export function triageDispositionIds(): TriageDispositionId[] {
-  return TRIAGE_DISPOSITIONS.map((d) => d.id);
+export function mergedIds(table: MergedDisposition[]): string[] {
+  return table.map((d) => d.id);
 }
 
 /** One line per verb — the tool description's and the docs' single source. */
-export function triageDispositionLines(): string[] {
-  return TRIAGE_DISPOSITIONS.map((d) => `${d.id} — ${d.effect}`);
+export function mergedLines(table: MergedDisposition[]): string[] {
+  return table.map((d) => `${d.id} — ${d.description}`);
 }
