@@ -1,8 +1,13 @@
 import type {
   ChoiceNoteInput,
   ChoiceError,
+  MacroChoiceNoteInput,
+  TemplateChoiceNoteInput,
+  CaptureChoiceNoteInput,
   QuickAddMacro,
   QuickAddMacroChoice,
+  QuickAddTemplateChoice,
+  QuickAddCaptureChoice,
   TransformResult,
 } from "./types.js";
 
@@ -33,7 +38,7 @@ export function deriveStepId(notePath: string, index: number): string {
 }
 
 export function transformChoices(inputs: ChoiceNoteInput[]): TransformResult {
-  const compiled: QuickAddMacroChoice[] = [];
+  const compiled: Array<QuickAddMacroChoice | QuickAddTemplateChoice | QuickAddCaptureChoice> = [];
   const errors: ChoiceError[] = [];
   /** Compiled choice id → the note it came from, so a cycle can be reported
    *  in the note paths a human edits rather than in compiler-owned ids. */
@@ -63,7 +68,8 @@ export function transformChoices(inputs: ChoiceNoteInput[]): TransformResult {
   // failure. Not a thrown error (one bad pair must not take down the whole
   // compile), and not a silent pass-through (that is the hang this exists to
   // prevent).
-  const cycles = detectChoiceCycles(compiled);
+  const macroChoices = compiled.filter((c): c is QuickAddMacroChoice => c.type === "Macro");
+  const cycles = detectChoiceCycles(macroChoices);
   const cyclic = new Set<string>();
   for (const cycle of cycles) {
     const paths = cycle.map((id) => noteOf.get(id)?.notePath ?? id);
@@ -173,9 +179,83 @@ export function detectChoiceCycles(choices: QuickAddMacroChoice[]): string[][] {
   return cycles;
 }
 
-type OneResult = { ok: true; choice: QuickAddMacroChoice } | { ok: false; message: string };
+type OneResult =
+  | { ok: true; choice: QuickAddMacroChoice | QuickAddTemplateChoice | QuickAddCaptureChoice }
+  | { ok: false; message: string };
 
 function transformOne(input: ChoiceNoteInput): OneResult {
+  switch (input.quickaddType) {
+    case "macro":
+      return transformMacro(input);
+    case "template":
+      return transformTemplate(input);
+    case "capture":
+      return transformCapture(input);
+  }
+}
+
+function transformTemplate(input: TemplateChoiceNoteInput): OneResult {
+  if (!input.template.ok) {
+    return { ok: false, message: `Template "${input.name}" (${input.notePath}): ${input.template.error}` };
+  }
+  return {
+    ok: true,
+    choice: {
+      id: deriveChoiceId(input.notePath),
+      name: input.name,
+      type: "Template",
+      command: true,
+      templatePath: input.template.templatePath,
+      fileNameFormat: input.fileNameFormat !== undefined
+        ? { enabled: true, format: input.fileNameFormat }
+        : { enabled: false, format: "" },
+      discoverExistingNotesBeforeCreate: false,
+      folder: input.folder !== undefined
+        ? { enabled: true, folders: [input.folder], chooseWhenCreatingNote: false, createInSameFolderAsActiveFile: false, chooseFromSubfolders: false }
+        : { enabled: false, folders: [], chooseWhenCreatingNote: false, createInSameFolderAsActiveFile: false, chooseFromSubfolders: false },
+      appendLink: false,
+      copyLinkToClipboard: false,
+      openFile: input.openFile,
+      fileOpening: { location: "tab", direction: "vertical", mode: "default", focus: true },
+      fileExistsBehavior: { kind: "prompt" },
+    },
+  };
+}
+
+function transformCapture(input: CaptureChoiceNoteInput): OneResult {
+  if (!input.target.ok) {
+    return { ok: false, message: `Capture "${input.name}" (${input.notePath}): ${input.target.error}` };
+  }
+  return {
+    ok: true,
+    choice: {
+      id: deriveChoiceId(input.notePath),
+      name: input.name,
+      type: "Capture",
+      command: true,
+      appendLink: false,
+      copyLinkToClipboard: false,
+      captureTo: input.target.captureTo,
+      captureToActiveFile: false,
+      captureToCanvasNodeId: "",
+      activeFileWritePosition: "cursor",
+      createFileIfItDoesntExist: { enabled: input.createIfMissing, createWithTemplate: false, template: "" },
+      format: { enabled: false, format: "" },
+      insertAfter: input.insertAfterHeading !== undefined
+        ? { enabled: true, after: input.insertAfterHeading, insertAtEnd: false, considerSubsections: false, createIfNotFound: false, createIfNotFoundLocation: "top", inline: false, replaceExisting: false, blankLineAfterMatchMode: "auto", promptHeading: false }
+        : { enabled: false, after: "", insertAtEnd: false, considerSubsections: false, createIfNotFound: false, createIfNotFoundLocation: "top", inline: false, replaceExisting: false, blankLineAfterMatchMode: "auto", promptHeading: false },
+      insertBefore: { enabled: false, before: "", createIfNotFound: false, createIfNotFoundLocation: "top" },
+      newLineCapture: { enabled: false, direction: "below" },
+      prepend: input.prepend,
+      task: input.task,
+      openFile: false,
+      fileOpening: { location: "tab", direction: "vertical", mode: "default", focus: true },
+      templater: { afterCapture: "none" },
+    },
+  };
+}
+
+function transformMacro(input: MacroChoiceNoteInput): OneResult {
   if (input.steps.length === 0) {
     return { ok: false, message: `Macro "${input.name}" (${input.notePath}) has no steps.` };
   }

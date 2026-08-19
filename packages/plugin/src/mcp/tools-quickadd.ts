@@ -30,7 +30,7 @@ import { RW } from "./tools-vault-write.js";
 import type { GuardSettings } from "../guard.js";
 import { transformChoices, isCompilerOwnedId, deriveChoiceId } from "../kernel/quickadd/transform.js";
 import { EDITOR_COMMAND_TYPES } from "../kernel/quickadd/types.js";
-import type { ChoiceNoteInput, MacroStepResolved, QuickAddMacroChoice, EditorCommandType } from "../kernel/quickadd/types.js";
+import type { ChoiceNoteInput, MacroStepResolved, QuickAddMacroChoice, QuickAddTemplateChoice, QuickAddCaptureChoice, EditorCommandType } from "../kernel/quickadd/types.js";
 
 /** 0 fresh choices AND this many about-to-be-deleted ones reads as a cold
  *  metadata cache, not a real change — see the mass-removal guard below. */
@@ -416,7 +416,11 @@ export function registerQuickAddTools(server: McpServer, app: App, ctx: ServerCt
  *  false (rather than throwing) if QuickAdd doesn't expose the command API or
  *  it fails: the config is already saved at that point, and reporting
  *  "commands not registered" is strictly more useful than losing the result. */
-function applyCommands(quickadd: any, previouslyOwned: unknown[], fresh: QuickAddMacroChoice[]): boolean {
+function applyCommands(
+  quickadd: any,
+  previouslyOwned: unknown[],
+  fresh: Array<QuickAddMacroChoice | QuickAddTemplateChoice | QuickAddCaptureChoice>,
+): boolean {
   if (typeof quickadd.addCommandForChoice !== "function" || typeof quickadd.removeCommandForChoice !== "function") {
     return false;
   }

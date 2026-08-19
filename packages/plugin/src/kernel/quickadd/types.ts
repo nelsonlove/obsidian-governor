@@ -165,7 +165,70 @@ export interface MacroChoiceNoteInput {
   steps: MacroStepResolved[];
 }
 
-export type ChoiceNoteInput = MacroChoiceNoteInput;
+/** The `template:` wikilink resolved to a real vault path. */
+export interface TemplateFieldOk {
+  ok: true;
+  templatePath: string;
+}
+/** The `template:` wikilink did NOT resolve, or the frontmatter field is
+ *  missing/not wikilink-shaped. `error` is human-readable, surfaced
+ *  verbatim in the resulting ChoiceError message. */
+export interface TemplateFieldFailed {
+  ok: false;
+  error: string;
+}
+
+/** One `quickadd-type: template` choice note's data, already resolved by
+ *  the glue layer. `folder`/`fileNameFormat`/`openFile` are the curated
+ *  subset this stage exposes — see the plan's "Deliberate scope narrowing"
+ *  section for the full field-default rationale. `folder` and
+ *  `fileNameFormat` are `undefined` when the note's frontmatter omits them
+ *  (compiles to QuickAdd's own `enabled: false` default), never an empty
+ *  string standing in for "not set". */
+export interface TemplateChoiceNoteInput {
+  quickaddType: "template";
+  notePath: string;
+  name: string;
+  template: TemplateFieldOk | TemplateFieldFailed;
+  folder: string | undefined;
+  fileNameFormat: string | undefined;
+  openFile: boolean;
+}
+
+/** The `target:` field resolved. `captureTo` is either the resolved
+ *  wikilink's note path (when `target:` was wikilink-shaped) or the raw
+ *  literal string verbatim (QuickAdd's own dynamic-path format syntax —
+ *  this compiler does not interpret it, only passes it through). */
+export interface CaptureTargetOk {
+  ok: true;
+  captureTo: string;
+}
+/** The `target:` field is missing, or was wikilink-shaped but did not
+ *  resolve. A non-wikilink-shaped string is ALWAYS `CaptureTargetOk` —
+ *  there is no way for a literal string to "fail" resolution, since it is
+ *  never resolved, only passed through. */
+export interface CaptureTargetFailed {
+  ok: false;
+  error: string;
+}
+
+/** One `quickadd-type: capture` choice note's data, already resolved by
+ *  the glue layer. `prepend`/`task`/`insertAfterHeading`/`createIfMissing`
+ *  are the curated subset this stage exposes. `insertAfterHeading`
+ *  `undefined` means the note's frontmatter omitted `insert_after_heading:`
+ *  (compiles to `insertAfter.enabled: false`). */
+export interface CaptureChoiceNoteInput {
+  quickaddType: "capture";
+  notePath: string;
+  name: string;
+  target: CaptureTargetOk | CaptureTargetFailed;
+  prepend: boolean;
+  task: boolean;
+  insertAfterHeading: string | undefined;
+  createIfMissing: boolean;
+}
+
+export type ChoiceNoteInput = MacroChoiceNoteInput | TemplateChoiceNoteInput | CaptureChoiceNoteInput;
 
 /** QuickAdd's own native shapes (the Stage A subset — UserScript commands
  *  only) — verified against a real vault's
@@ -223,6 +286,71 @@ export interface QuickAddMacroChoice {
   macro: QuickAddMacro;
 }
 
+/** QuickAdd's native Template-choice shape — verified against QuickAdd's
+ *  decompiled source (class `rd`), not assumed from the design spec (see
+ *  the plan's "Ground truth vs. the spec" section). Every field this stage
+ *  doesn't expose via frontmatter carries QuickAdd's own literal default,
+ *  so a compiled choice is byte-identical to a freshly-created one for
+ *  anything Stage C doesn't author. */
+export interface QuickAddTemplateChoice {
+  id: string;
+  name: string;
+  type: "Template";
+  command: true;
+  templatePath: string;
+  fileNameFormat: { enabled: boolean; format: string };
+  discoverExistingNotesBeforeCreate: false;
+  folder: {
+    enabled: boolean;
+    folders: string[];
+    chooseWhenCreatingNote: false;
+    createInSameFolderAsActiveFile: false;
+    chooseFromSubfolders: false;
+  };
+  appendLink: false;
+  copyLinkToClipboard: false;
+  openFile: boolean;
+  fileOpening: { location: "tab"; direction: "vertical"; mode: "default"; focus: true };
+  fileExistsBehavior: { kind: "prompt" };
+}
+
+/** QuickAdd's native Capture-choice shape — verified against QuickAdd's
+ *  decompiled source (class `qh`). Same "unexposed fields carry QuickAdd's
+ *  own default" discipline as QuickAddTemplateChoice above. */
+export interface QuickAddCaptureChoice {
+  id: string;
+  name: string;
+  type: "Capture";
+  command: true;
+  appendLink: false;
+  copyLinkToClipboard: false;
+  captureTo: string;
+  captureToActiveFile: false;
+  captureToCanvasNodeId: "";
+  activeFileWritePosition: "cursor";
+  createFileIfItDoesntExist: { enabled: boolean; createWithTemplate: false; template: "" };
+  format: { enabled: false; format: "" };
+  insertAfter: {
+    enabled: boolean;
+    after: string;
+    insertAtEnd: false;
+    considerSubsections: false;
+    createIfNotFound: false;
+    createIfNotFoundLocation: "top";
+    inline: false;
+    replaceExisting: false;
+    blankLineAfterMatchMode: "auto";
+    promptHeading: false;
+  };
+  insertBefore: { enabled: false; before: ""; createIfNotFound: false; createIfNotFoundLocation: "top" };
+  newLineCapture: { enabled: false; direction: "below" };
+  prepend: boolean;
+  task: boolean;
+  openFile: false;
+  fileOpening: { location: "tab"; direction: "vertical"; mode: "default"; focus: true };
+  templater: { afterCapture: "none" };
+}
+
 /** One choice note that failed to compile. The choice is OMITTED from
  *  `TransformResult.choices` entirely — never partially included. */
 export interface ChoiceError {
@@ -231,6 +359,6 @@ export interface ChoiceError {
 }
 
 export interface TransformResult {
-  choices: QuickAddMacroChoice[];
+  choices: Array<QuickAddMacroChoice | QuickAddTemplateChoice | QuickAddCaptureChoice>;
   errors: ChoiceError[];
 }
