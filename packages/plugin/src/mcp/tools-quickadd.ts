@@ -48,7 +48,9 @@ import type {
 } from "../kernel/quickadd/types.js";
 
 /** 0 fresh choices AND this many about-to-be-deleted ones reads as a cold
- *  metadata cache, not a real change — see the mass-removal guard below. */
+ *  metadata cache, not a real change — see the mass-removal guard below. The
+ *  count it is compared against is the NESTED-AWARE total (`countAll`), not
+ *  the number of top-level entries. */
 const MASS_REMOVAL_THRESHOLD = 3;
 
 /** obsidian_quickadd_compile is disabled while a path allowlist is active: it
@@ -588,6 +590,35 @@ function describeChoice(choice: unknown, id: string): { id: string; name: string
   return { id, name: typeof name === "string" ? name : null };
 }
 
+/** How many choices a list of choices REALLY represents: 1 per entry, plus
+ *  everything nested inside any Multi, recursively.
+ *
+ *  Stage D made this necessary. Before Multi existed, "n top-level entries"
+ *  and "n choices" were the same number, so the mass-removal guard could
+ *  count top-level entries. Now one top-level Multi can hold dozens of nested
+ *  choices, and deleting it deletes all of them — a vault whose 40 Capture
+ *  notes moved into one Multi folder would otherwise trip the guard at 41
+ *  before the move and at 1 after it, for the exact same loss. The guard
+ *  weighs an about-to-be-removed Multi by what it is actually removing.
+ *
+ *  Defensive like `ownedId`: `quickadd.settings.choices` (and the nested
+ *  `choices` inside it) is other code's data — a stray null, string, or
+ *  missing/blank `choices` array must count sanely rather than throw. A
+ *  non-array `choices` on a Multi contributes 0 nested; every array ELEMENT
+ *  counts 1 whatever it is, since a junk entry is still an entry that would
+ *  disappear. */
+function countAll(choices: unknown): number {
+  if (!Array.isArray(choices)) return 0;
+  let total = 0;
+  for (const choice of choices) {
+    total += 1;
+    if (choice && typeof choice === "object" && (choice as { type?: unknown }).type === "Multi") {
+      total += countAll((choice as { choices?: unknown }).choices);
+    }
+  }
+  return total;
+}
+
 export function registerQuickAddTools(server: McpServer, app: App, ctx: ServerCtx): void {
   server.registerTool(
     "obsidian_quickadd_compile",
@@ -628,7 +659,10 @@ export function registerQuickAddTools(server: McpServer, app: App, ctx: ServerCt
         "separate top-level entry; two or more multi-notes claiming the same folder is a per-note error for each " +
         "of them (their unrelated siblings are unaffected); a Multi choice is discoverable and compilable but is " +
         "NOT a valid choice: step target (matching native QuickAdd's own restriction — a Multi is opened, not " +
-        "invoked from a Macro step). A note with an unrecognized quickadd-type is simply out of scope here — " +
+        "invoked from a Macro step). A multi note placed at the VAULT ROOT anchors the entire vault root, so it " +
+        "claims EVERY other root-level choice note as a member — the largest blast radius any single note's " +
+        "placement has in this compiler, and worth checking before putting one there. " +
+        "A note with an unrecognized quickadd-type is simply out of scope here — " +
         "silently skipped. Refuses outright while a path allowlist is active.",
       inputSchema: {
         dry_run: z.boolean().describe("If true, report the would-be diff and errors without writing anything."),
@@ -658,6 +692,14 @@ export function registerQuickAddTools(server: McpServer, app: App, ctx: ServerCt
       // the COMPILER-OWNED half of QuickAdd's config is ever in scope; a
       // hand-authored choice is neither added, changed nor removed by
       // definition, so it never appears here.
+      //
+      // GRANULARITY (ruled, accepted): the diff is per TOP-LEVEL compiler-owned
+      // choice. A change nested INSIDE an otherwise-identical Multi reports that
+      // Multi as `changed` and never names which member changed — the same
+      // granularity QuickAdd's own data.json has, where a nested choice carries
+      // no identity outside its container. A caller who needs finer detail
+      // should inspect the full `choices` field, which the response includes in
+      // full under both `dry_run: true` and `dry_run: false`.
       const liveChoices = quickadd.settings.choices as unknown[];
       const previouslyOwned: Array<{ choice: unknown; id: string }> = [];
       const preserved: unknown[] = [];
@@ -671,9 +713,12 @@ export function registerQuickAddTools(server: McpServer, app: App, ctx: ServerCt
 
       const added = result.choices.filter((c) => !previousIds.has(c.id)).map((c) => describeChoice(c, c.id));
       const changed = result.choices.filter((c) => previousIds.has(c.id)).map((c) => describeChoice(c, c.id));
-      const removed = previouslyOwned
-        .filter((p) => !freshIds.has(p.id))
-        .map((p) => describeChoice(p.choice, p.id));
+      const removedEntries = previouslyOwned.filter((p) => !freshIds.has(p.id));
+      const removed = removedEntries.map((p) => describeChoice(p.choice, p.id));
+      // What the removal would ACTUALLY cost, counting everything nested
+      // inside an about-to-be-removed Multi — the number the mass-removal
+      // guard weighs. `removed.length` is only the top-level entry count.
+      const removedTotal = countAll(removedEntries.map((p) => p.choice));
 
       const respond = (data: Record<string, unknown>) =>
         result.errors.length > 0 ? okError(data) : ok(data);
@@ -694,13 +739,24 @@ export function registerQuickAddTools(server: McpServer, app: App, ctx: ServerCt
       // (getFileCache returns no frontmatter for every note, so
       // collectChoiceNotes returns zero inputs) far more often than it is a
       // real change. A dry run still SHOWS it — this only refuses to DO it.
-      if (result.choices.length === 0 && removed.length >= MASS_REMOVAL_THRESHOLD) {
+      //
+      // The threshold is compared against `removedTotal`, NOT `removed.length`:
+      // one top-level Multi holding 40 nested choices is a 40-choice deletion,
+      // and counting top-level entries would let exactly that shape slip
+      // through at a nominal count of 1. The MESSAGE still lists the top-level
+      // names — they are the entries a reader can go look for — and says how
+      // many choices that really adds up to when the two differ.
+      if (result.choices.length === 0 && removedTotal >= MASS_REMOVAL_THRESHOLD) {
+        const nested =
+          removedTotal > removed.length
+            ? `, ${removedTotal} choices in total once everything nested inside them is counted`
+            : "";
         return codedError(
           "suspicious_mass_removal",
-          `Refusing to apply: this compile found 0 choice notes while ${removed.length} compiler-owned choices ` +
-            `(${removed.map((r) => r.name ?? r.id).join(", ")}) would be removed. That usually means Obsidian's ` +
-            "metadata cache is still warming rather than that the notes are really gone. Retry in a moment, or " +
-            "run with dry_run: true to inspect the would-be diff first.",
+          `Refusing to apply: this compile found 0 choice notes while ${removed.length} top-level compiler-owned ` +
+            `choices (${removed.map((r) => r.name ?? r.id).join(", ")}) would be removed${nested}. That usually ` +
+            "means Obsidian's metadata cache is still warming rather than that the notes are really gone. Retry " +
+            "in a moment, or run with dry_run: true to inspect the would-be diff first.",
         );
       }
 
@@ -739,7 +795,18 @@ export function registerQuickAddTools(server: McpServer, app: App, ctx: ServerCt
 /** Deregister then re-register the compiler-owned Obsidian commands. Returns
  *  false (rather than throwing) if QuickAdd doesn't expose the command API or
  *  it fails: the config is already saved at that point, and reporting
- *  "commands not registered" is strictly more useful than losing the result. */
+ *  "commands not registered" is strictly more useful than losing the result.
+ *
+ *  The two halves are ASYMMETRIC in QuickAdd's own source, and the asymmetry
+ *  is why the remove call carries an options argument and the add call does
+ *  not: `addCommandForChoice` recurses into a Multi's nested choices
+ *  UNCONDITIONALLY, while `removeCommandForChoice(choice, opts)` recurses only
+ *  when `opts?.recursive === true`. Without it, a nested choice that
+ *  disappears (its note deleted or moved, or its containing Multi removed or
+ *  replaced) keeps a palette command nobody can service — running it throws
+ *  "Choice … not found" until Obsidian reloads. Passing the option is safe
+ *  against every QuickAdd version: a version that doesn't read a second
+ *  argument simply ignores it. */
 function applyCommands(
   quickadd: any,
   previouslyOwned: unknown[],
@@ -749,7 +816,7 @@ function applyCommands(
     return false;
   }
   try {
-    for (const choice of previouslyOwned) quickadd.removeCommandForChoice(choice);
+    for (const choice of previouslyOwned) quickadd.removeCommandForChoice(choice, { recursive: true });
     for (const choice of fresh) quickadd.addCommandForChoice(choice);
     return true;
   } catch (e) {

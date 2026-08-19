@@ -20,6 +20,12 @@ function build({ notes = [], links = {}, existingChoices = [], settings = {}, co
   const saveSettingsCalls = [];
   const addedCommands = [];
   const removedCommands = [];
+  // The FULL argument list of each removeCommandForChoice call. QuickAdd's own
+  // removeCommandForChoice(choice, opts) recurses into a Multi's nested
+  // choices only when `opts.recursive === true` (addCommandForChoice recurses
+  // unconditionally), so the second argument is load-bearing, not decoration —
+  // `removedCommands` alone cannot see it.
+  const removedCommandCalls = [];
   const getMarkdownFilesCalls = [];
   const quickadd = {
     settings: { choices: existingChoices },
@@ -27,7 +33,10 @@ function build({ notes = [], links = {}, existingChoices = [], settings = {}, co
   };
   if (commandApi) {
     quickadd.addCommandForChoice = (c) => addedCommands.push(c);
-    quickadd.removeCommandForChoice = (c) => removedCommands.push(c);
+    quickadd.removeCommandForChoice = (...args) => {
+      removedCommands.push(args[0]);
+      removedCommandCalls.push(args);
+    };
   }
   const app = {
     vault: { getMarkdownFiles: () => { getMarkdownFilesCalls.push(1); return files; } },
@@ -59,6 +68,7 @@ function build({ notes = [], links = {}, existingChoices = [], settings = {}, co
     saveSettingsCalls,
     addedCommands,
     removedCommands,
+    removedCommandCalls,
     getMarkdownFilesCalls,
   };
 }
@@ -425,6 +435,43 @@ describe("obsidian_quickadd_compile — Multi discovery", () => {
     assert.equal(res.structuredContent.choices[0].name, "Sibling");
   });
 
+  // PIN, not a fix. An ambiguous SUBFOLDER nested inside an otherwise-valid
+  // outer Multi is treated as UNCLAIMED for membership purposes (the same
+  // rule the flat ambiguous-folder case above states), and an unclaimed
+  // folder's contents fall through to TOP LEVEL — so `Sib`, living two
+  // folders deep, compiles as its own separate top-level choice rather than
+  // nesting anywhere. Surprising enough to pin: this is the current, ruled
+  // behavior, and any future change to it must be a deliberate design call
+  // rather than an accidental regression.
+  test("an ambiguous SUBFOLDER inside an outer Multi hoists its unrelated sibling to TOP LEVEL", async () => {
+    const { handler } = build({
+      notes: [
+        multiNote("Out/Out.md", "Out"),
+        multiNote("Out/Amb/One.md", "One"),
+        multiNote("Out/Amb/Two.md", "Two"),
+        captureNote("Out/Amb/Sib.md", "Sib", { target: "s.md" }),
+      ],
+    });
+    const res = await handler({ dry_run: true });
+    // Both ambiguous multi-notes fail, and only those two.
+    assert.equal(res.structuredContent.errors.length, 2);
+    assert.deepEqual(res.structuredContent.errors.map((e) => e.notePath).sort(), [
+      "Out/Amb/One.md",
+      "Out/Amb/Two.md",
+    ]);
+    assert.ok(res.structuredContent.errors.every((e) => /ambiguous/i.test(e.message)));
+
+    // TWO top-level choices: the outer Multi (whose only subfolder-member
+    // failed to resolve, so it compiles EMPTY) and the hoisted sibling.
+    assert.equal(res.structuredContent.choices.length, 2);
+    const outer = res.structuredContent.choices.find((c) => c.name === "Out");
+    assert.equal(outer.type, "Multi");
+    assert.deepEqual(outer.choices, []);
+    const sib = res.structuredContent.choices.find((c) => c.name === "Sib");
+    assert.equal(sib.type, "Capture");
+    assert.equal(sib.id, "qan:Out/Amb/Sib.md#choice");
+  });
+
   test("a Macro choice: step CANNOT target a Multi choice — still a dangling-reference error", async () => {
     const { handler } = build({
       notes: [
@@ -784,6 +831,43 @@ describe("obsidian_quickadd_compile: Obsidian command registration", () => {
     assert.equal(addedCommands[0].name, "Stamp title");
   });
 
+  // QuickAdd's addCommandForChoice recurses into a Multi's nested choices
+  // UNCONDITIONALLY, but removeCommandForChoice(choice, opts) recurses only
+  // when `opts.recursive === true`. Without the option, a nested choice whose
+  // containing Multi is removed or replaced keeps a palette command nobody can
+  // service — it throws "Choice … not found" until Obsidian reloads.
+  test("removeCommandForChoice is called with { recursive: true }", async () => {
+    const stale = { id: "qan:Choices/Gone.md#choice", name: "Gone", type: "Macro" };
+    const { handler, removedCommandCalls } = build({
+      notes: [macroNote("Choices/Stamp title.md", "Stamp title", "stamp-title")],
+      links: { "stamp-title": "Scripts/stamp-title.md" },
+      existingChoices: [stale],
+    });
+    await handler({ dry_run: false });
+    assert.equal(removedCommandCalls.length, 1);
+    assert.deepEqual(removedCommandCalls[0], [stale, { recursive: true }]);
+  });
+
+  test("a removed MULTI is deregistered recursively, so its nested commands go too", async () => {
+    const nested = { id: "qan:Choices/Gone/Leaf.md#choice", name: "Leaf", type: "Capture" };
+    const staleMulti = {
+      id: "qan:Choices/Gone/Gone.md#choice",
+      name: "Gone",
+      type: "Multi",
+      choices: [nested],
+    };
+    const { handler, removedCommandCalls } = build({
+      notes: [macroNote("Choices/Stamp title.md", "Stamp title", "stamp-title")],
+      links: { "stamp-title": "Scripts/stamp-title.md" },
+      existingChoices: [staleMulti],
+    });
+    await handler({ dry_run: false });
+    // The compiler hands QuickAdd the CONTAINER plus the recursive flag —
+    // walking the nested choices itself is QuickAdd's own job, and doing it
+    // here would double-deregister on every version that honors the flag.
+    assert.deepEqual(removedCommandCalls, [[staleMulti, { recursive: true }]]);
+  });
+
   test("dry_run: true registers and deregisters nothing", async () => {
     const stale = { id: "qan:Choices/Gone.md#choice", name: "Gone", type: "Macro" };
     const { handler, addedCommands, removedCommands } = build({
@@ -889,6 +973,100 @@ describe("obsidian_quickadd_compile: mass-removal guard", () => {
     assert.equal(saveSettingsCalls.length, 1);
     assert.deepEqual(quickadd.settings.choices, []);
     assert.equal(res.structuredContent.removed.length, 2);
+  });
+
+  // Stage D regression. Before Multi existed, a vault with 40 Capture notes
+  // had 40 TOP-LEVEL compiler-owned choices, so a cold-cache compile removing
+  // all of them tripped the guard at 40. Move those same notes into one Multi
+  // folder and the top-level count drops to 1 — nominally below the threshold,
+  // while the deletion is exactly as large. The guard therefore counts the
+  // FULL removed subtree, not the top-level entries.
+  test("removing ONE Multi that holds many nested choices trips the guard (nested count, not top-level)", async () => {
+    const nested = [];
+    for (let i = 0; i < 40; i++) {
+      nested.push({ id: `qan:Choices/Big/N${i}.md#choice`, name: `N${i}`, type: "Capture" });
+    }
+    const bigMulti = { id: "qan:Choices/Big/Big.md#choice", name: "Big", type: "Multi", choices: nested };
+    // notes: [] is the cold-cache shape — collectChoiceNotes finds nothing.
+    const { handler, quickadd, saveSettingsCalls, removedCommands } = build({
+      notes: [],
+      existingChoices: [bigMulti],
+    });
+    const res = await handler({ dry_run: false });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[suspicious_mass_removal\]/);
+    // Only ONE top-level entry is nominally "removed" — the guard fired on the
+    // 41 choices that entry really carries.
+    assert.match(res.content[0].text, /41 choices in total/);
+    assert.deepEqual(saveSettingsCalls, []);
+    assert.deepEqual(quickadd.settings.choices, [bigMulti]);
+    assert.deepEqual(removedCommands, []);
+  });
+
+  test("nesting is counted RECURSIVELY — a Multi inside a Multi still trips the guard", async () => {
+    const inner = {
+      id: "qan:Choices/Out/In/In.md#choice",
+      name: "In",
+      type: "Multi",
+      choices: [
+        { id: "qan:Choices/Out/In/A.md#choice", name: "A", type: "Capture" },
+        { id: "qan:Choices/Out/In/B.md#choice", name: "B", type: "Capture" },
+      ],
+    };
+    const outer = { id: "qan:Choices/Out/Out.md#choice", name: "Out", type: "Multi", choices: [inner] };
+    const { handler, saveSettingsCalls } = build({ notes: [], existingChoices: [outer] });
+    const res = await handler({ dry_run: false });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[suspicious_mass_removal\]/);
+    assert.deepEqual(saveSettingsCalls, []);
+  });
+
+  // The flip side of the nested count: it must not turn every Multi removal
+  // into a refusal. One Multi holding one member is 2 choices — still below
+  // the threshold, and still applies.
+  test("a small Multi (2 choices in total) stays below the threshold and applies", async () => {
+    const smallMulti = {
+      id: "qan:Choices/Small/Small.md#choice",
+      name: "Small",
+      type: "Multi",
+      choices: [{ id: "qan:Choices/Small/One.md#choice", name: "One", type: "Capture" }],
+    };
+    const { handler, quickadd, saveSettingsCalls } = build({ notes: [], existingChoices: [smallMulti] });
+    const res = await handler({ dry_run: false });
+    assert.notEqual(res.isError, true);
+    assert.equal(saveSettingsCalls.length, 1);
+    assert.deepEqual(quickadd.settings.choices, []);
+  });
+
+  test("dry_run still SHOWS a nested mass removal instead of refusing", async () => {
+    const bigMulti = {
+      id: "qan:Choices/Big/Big.md#choice",
+      name: "Big",
+      type: "Multi",
+      choices: [
+        { id: "qan:Choices/Big/A.md#choice", name: "A", type: "Capture" },
+        { id: "qan:Choices/Big/B.md#choice", name: "B", type: "Capture" },
+      ],
+    };
+    const { handler } = build({ notes: [], existingChoices: [bigMulti] });
+    const res = await handler({ dry_run: true });
+    assert.notEqual(res.isError, true);
+    // The DIFF stays per top-level choice (its ruled granularity) — only the
+    // guard's threshold comparison counts nested members.
+    assert.deepEqual(res.structuredContent.removed, [{ id: "qan:Choices/Big/Big.md#choice", name: "Big" }]);
+  });
+
+  // `quickadd.settings.choices` is other code's array, so the nested count
+  // must survive junk exactly the way `ownedId` does — never a TypeError.
+  test("a Multi with a missing/hostile nested choices array counts sanely", async () => {
+    const noArray = { id: "qan:Choices/M1.md#choice", name: "M1", type: "Multi" };
+    const junkArray = { id: "qan:Choices/M2.md#choice", name: "M2", type: "Multi", choices: [null, "x", 42] };
+    const { handler, quickadd } = build({ notes: [], existingChoices: [noArray, junkArray] });
+    const res = await handler({ dry_run: false });
+    // 2 top-level + 0 nested + 3 junk nested = 5, over the threshold.
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[suspicious_mass_removal\]/);
+    assert.deepEqual(quickadd.settings.choices, [noArray, junkArray]);
   });
 
   test("removing 3 while at least one fresh choice compiles is NOT suspicious", async () => {
