@@ -1621,8 +1621,8 @@ export function builtinModules(deps: MountDeps): VaultModule[] {
         visible: host.visible,
       }),
     ),
-    // jd-scaffold (Stage A of the jd-dashboard fold): the second MUTATING
-    // capability module after skills, same reasoning — it declares
+    // jd-scaffold (Stage A of the jd-dashboard fold): another MUTATING
+    // capability module (skills' own reasoning applies here too) — it declares
     // `mutating: true` so its three write tools (standard_zeros,
     // ensure_category_indexes, promote_to_folder) register with
     // `readOnlyHint: false`, still through the guard-patched registrar (queue,

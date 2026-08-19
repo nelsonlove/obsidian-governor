@@ -77,13 +77,19 @@ export function emptyJdScaffoldSource(): JdScaffoldSource {
  *  jd-dashboard's own original CreateZerosResult/EnsureCategoryIndexesResult
  *  shape. Every path is allowlist-checked immediately before its own write,
  *  not just once up front — a long-running batch must not outlive a
- *  mid-batch settings change. */
+ *  mid-batch settings change. `paths` (the successfully created ones, in
+ *  write order) feeds `filesChanged`/`files` in the caller's result — the
+ *  guard's `reportedEffects()` convention (guarded.ts) — so the journal's
+ *  `effects` field names every note actually written, not just the
+ *  argument-derived `folder_path` (which, for ensure_category_indexes, isn't
+ *  even an argument at all). */
 async function applyCreates(
   source: JdScaffoldSource,
   settings: GuardSettings,
   creates: PlannedCreate[]
-): Promise<{ created: number; failures: { path: string; error: string }[] }> {
+): Promise<{ created: number; paths: string[]; failures: { path: string; error: string }[] }> {
   let created = 0;
+  const paths: string[] = [];
   const failures: { path: string; error: string }[] = [];
   for (const c of creates) {
     if (!isVisible(c.path, settings)) {
@@ -93,11 +99,12 @@ async function applyCreates(
     try {
       await source.create(c.path, c.content);
       created++;
+      paths.push(c.path);
     } catch (e) {
       failures.push({ path: c.path, error: (e as Error).message });
     }
   }
-  return { created, failures };
+  return { created, paths, failures };
 }
 
 export function registerJdScaffoldTools(server: McpServer, source: JdScaffoldSource, ctx: JdScaffoldToolsCtx): void {
@@ -131,10 +138,25 @@ export function registerJdScaffoldTools(server: McpServer, source: JdScaffoldSou
         exists: (p) => source.exists(p),
       });
 
-      if (dry_run) return ok({ dry_run: true, creates: plan.creates, skipped: plan.skipped });
+      // Computed paths are re-checked unconditionally, even under dry_run —
+      // matching this file's own header comment and tools-scheme-write.ts's
+      // precedent. Every candidate is a child of the already-checked
+      // folder_path, so prefix-matching means nothing is ever actually
+      // dropped here today; the check exists so a preview can never diverge
+      // from what applyCreates would really do on the same plan.
+      if (dry_run) {
+        return ok({ dry_run: true, creates: plan.creates.filter((c) => isVisible(c.path, settings)), skipped: plan.skipped });
+      }
 
       const applied = await applyCreates(source, settings, plan.creates);
-      return ok({ dry_run: false, created: applied.created, skipped: plan.skipped, failures: applied.failures });
+      return ok({
+        dry_run: false,
+        created: applied.created,
+        skipped: plan.skipped,
+        failures: applied.failures,
+        filesChanged: applied.created,
+        files: applied.paths,
+      });
     }
   );
 
@@ -153,12 +175,24 @@ export function registerJdScaffoldTools(server: McpServer, source: JdScaffoldSou
     },
     async ({ dry_run }) => {
       const settings = ctx.getSettings();
-      const plan = planEnsureCategoryIndexes(source.categoryFolders(), source.today());
+      // No path argument (vault-wide by design), so this tool bounds its OWN
+      // iteration — CLAUDE.md's read-boundary rule for argument-less
+      // enumeration: filter BEFORE the listing ever reaches the planner, not
+      // just before a write. A hidden category folder must be invisible to
+      // "what needs an index" the same way it is to any other read.
+      const visibleFolders = source.categoryFolders().filter((f) => isVisible(f.path, settings));
+      const plan = planEnsureCategoryIndexes(visibleFolders, source.today());
 
       if (dry_run) return ok({ dry_run: true, creates: plan.creates });
 
       const applied = await applyCreates(source, settings, plan.creates);
-      return ok({ dry_run: false, created: applied.created, failures: applied.failures });
+      return ok({
+        dry_run: false,
+        created: applied.created,
+        failures: applied.failures,
+        filesChanged: applied.created,
+        files: applied.paths,
+      });
     }
   );
 
@@ -192,8 +226,29 @@ export function registerJdScaffoldTools(server: McpServer, source: JdScaffoldSou
       if (dry_run) return ok({ dry_run: true, folder_path: plan.folderPath, new_file_path: plan.newFilePath });
 
       await source.createFolder(plan.folderPath);
-      await source.renameFile(path, plan.newFilePath);
-      return ok({ dry_run: false, folder_path: plan.folderPath, new_file_path: plan.newFilePath });
+      try {
+        await source.renameFile(path, plan.newFilePath);
+      } catch (e) {
+        // createFolder already succeeded, so a retry's OWN planPromoteToFolder
+        // call will now see plan.folderPath as existing and refuse
+        // folder_exists — a confusing dead end with no indication why. Not a
+        // rollback (this layer has no delete primitive, and inventing one
+        // just for this narrow failure isn't worth the added surface for how
+        // rarely renameFile fails after a successful createFolder) — just an
+        // honest, actionable error instead of a silent, permanently-stuck retry.
+        return codedError(
+          "promote_partial",
+          `"${plan.folderPath}" was created but "${path}" could not be moved into it (${(e as Error).message}). ` +
+            `Remove the empty folder before retrying.`
+        );
+      }
+      return ok({
+        dry_run: false,
+        folder_path: plan.folderPath,
+        new_file_path: plan.newFilePath,
+        filesChanged: 2,
+        files: [plan.folderPath, plan.newFilePath],
+      });
     }
   );
 }

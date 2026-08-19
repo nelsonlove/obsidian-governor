@@ -105,6 +105,43 @@ describe("obsidian_jd_standard_zeros", () => {
     assert.deepEqual(created, []);
   });
 
+  test("dry_run: false reports filesChanged/files for the journal's effects field", async () => {
+    const { server } = build();
+    const res = await server.tools.get("obsidian_jd_standard_zeros").handler({
+      folder_path: "10-19 Personal/06 Digital tools",
+      prefix: "06",
+      dry_run: false,
+    });
+    assert.equal(res.structuredContent.filesChanged, 10);
+    assert.equal(res.structuredContent.files.length, 10);
+    assert.ok(res.structuredContent.files.every((p) => p.startsWith("10-19 Personal/06 Digital tools/")));
+  });
+
+  test("dry_run: true reports no filesChanged/files — a preview asserts nothing was written", async () => {
+    const { server } = build();
+    const res = await server.tools.get("obsidian_jd_standard_zeros").handler({
+      folder_path: "10-19 Personal/06 Digital tools",
+      prefix: "06",
+      dry_run: true,
+    });
+    assert.equal(res.structuredContent.filesChanged, undefined);
+    assert.equal(res.structuredContent.files, undefined);
+  });
+
+  test("dry_run: true's computed creates are allowlist-filtered too, matching what a real write would do", async () => {
+    // Every computed path is a child of the already-checked folder_path, so
+    // under normal prefix-matching nothing is ever actually dropped — this
+    // just proves the preview can never diverge from applyCreates' own check.
+    const { server } = build({ allowlist: ["10-19 Personal/06 Digital tools"] });
+    const res = await server.tools.get("obsidian_jd_standard_zeros").handler({
+      folder_path: "10-19 Personal/06 Digital tools",
+      prefix: "06",
+      dry_run: true,
+    });
+    assert.notEqual(res.isError, true);
+    assert.equal(res.structuredContent.creates.length, 10);
+  });
+
   test("one failing create doesn't block the rest — per-item isolation", async () => {
     const server = fakeServer();
     const created = [];
@@ -155,6 +192,37 @@ describe("obsidian_jd_ensure_category_indexes", () => {
     assert.equal(res.structuredContent.creates.length, 1);
     assert.deepEqual(created, []);
   });
+
+  test("a folder outside an active allowlist never reaches the planner — not even under dry_run", async () => {
+    // The vulnerability this closes: this tool takes NO path argument (it's
+    // vault-wide by design), so an allowlist-restricted session could
+    // otherwise see category-folder paths from anywhere in the vault, in
+    // both the preview and the real write's per-item failures.
+    const { server, created } = build({
+      folders: [
+        { path: "10-19 Personal/06 Digital tools", name: "06 Digital tools", prefix: "06", childBasenames: [] },
+        { path: "Archive/09 Hidden", name: "09 Hidden", prefix: "09", childBasenames: [] },
+      ],
+      allowlist: ["10-19 Personal"],
+    });
+    const dryRes = await server.tools.get("obsidian_jd_ensure_category_indexes").handler({ dry_run: true });
+    assert.equal(dryRes.structuredContent.creates.length, 1);
+    assert.ok(!dryRes.structuredContent.creates.some((c) => c.path.startsWith("Archive/")));
+
+    const writeRes = await server.tools.get("obsidian_jd_ensure_category_indexes").handler({ dry_run: false });
+    assert.equal(writeRes.structuredContent.created, 1);
+    assert.deepEqual(writeRes.structuredContent.failures, []); // the hidden folder never became a failure entry either
+    assert.ok(!created.some((c) => c.path.startsWith("Archive/")));
+  });
+
+  test("dry_run: false reports filesChanged/files for the journal's effects field", async () => {
+    const { server } = build({
+      folders: [{ path: "10-19 Personal/06 Digital tools", name: "06 Digital tools", prefix: "06", childBasenames: [] }],
+    });
+    const res = await server.tools.get("obsidian_jd_ensure_category_indexes").handler({ dry_run: false });
+    assert.equal(res.structuredContent.filesChanged, 1);
+    assert.equal(res.structuredContent.files.length, 1);
+  });
 });
 
 describe("obsidian_jd_promote_to_folder", () => {
@@ -167,6 +235,31 @@ describe("obsidian_jd_promote_to_folder", () => {
     assert.notEqual(res.isError, true);
     assert.deepEqual(foldersCreated, ["06 Digital tools/06.13 Bar"]);
     assert.deepEqual(renamed, [{ from: "06 Digital tools/06.13 Bar.md", to: "06 Digital tools/06.13 Bar/06.13 Bar.md" }]);
+    assert.equal(res.structuredContent.filesChanged, 2);
+    assert.deepEqual(res.structuredContent.files, ["06 Digital tools/06.13 Bar", "06 Digital tools/06.13 Bar/06.13 Bar.md"]);
+  });
+
+  test("a renameFile failure after createFolder succeeds reports a clear promote_partial error, not a silent orphan", async () => {
+    const server = fakeServer();
+    const foldersCreated = [];
+    const source = {
+      exists: (p) => p === "06 Digital tools/06.13 Bar.md",
+      categoryFolders: () => [],
+      create: async () => {},
+      createFolder: async (path) => { foldersCreated.push(path); },
+      renameFile: async () => { throw new Error("note vanished mid-operation"); },
+      today: () => "2026-08-19",
+    };
+    registerJdScaffoldTools(server, source, { getSettings: () => ({ readOnly: false, allowlist: [] }) });
+    const res = await server.tools.get("obsidian_jd_promote_to_folder").handler({
+      path: "06 Digital tools/06.13 Bar.md",
+      dry_run: false,
+    });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[promote_partial\]/);
+    assert.match(res.content[0].text, /note vanished mid-operation/);
+    assert.match(res.content[0].text, /Remove the empty folder before retrying/);
+    assert.deepEqual(foldersCreated, ["06 Digital tools/06.13 Bar"]); // confirms the scenario: folder WAS created
   });
 
   test("dry_run: true reports the plan and creates/renames nothing", async () => {
