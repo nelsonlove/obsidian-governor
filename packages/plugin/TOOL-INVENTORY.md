@@ -342,7 +342,7 @@ Stage A + Stage A2 of the jd-dashboard fold — ported from the standalone
 `obsidian-jd-dashboard`'s `standard-zeros.ts`/`promote-to-folder.ts`/
 `category-index.ts`. All four are `readOnlyHint: false`; `dry_run` is
 mandatory (no default) on all four, matching `tools-scheme-write.ts`'s
-convention. No `jd-id:` frontmatter is written — vault-mcp's scheme module is
+convention. No `jd-id:` frontmatter is written — Governor's scheme module is
 path-canonical, the filename already carries the address (same call already
 made for the jd-numbering fold).
 Takes an injected `JdScaffoldSource` (mirroring `vocabSource`/`skillsSource`),
