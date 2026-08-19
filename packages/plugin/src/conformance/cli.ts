@@ -8,8 +8,8 @@
 // reads argv/env, loads the baseline note, prints, and sets the exit code.
 //
 // The two module packs (vocab + scheme) always run. All four ported legacy
-// checks (structure/port/ste/drift) are opt-in behind `legacyPacks` — the full
-// legacy rail now lives in TS, but stays gated until the staged rebaseline.
+// checks (structure/port/ste/drift) register by DEFAULT — `--no-legacy-packs`
+// opts out (the rationale is on `RunOpts.legacyPacks` below, issue #116).
 
 import { readFile, writeFile } from "node:fs/promises";
 import { existsSync, realpathSync, lstatSync, readlinkSync, statSync } from "node:fs";

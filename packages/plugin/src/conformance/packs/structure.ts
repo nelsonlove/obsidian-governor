@@ -13,6 +13,18 @@
 //     deletes that section. Key ("conformance_check","DROPPED",<path>,<bp base>).
 //   - NO-BLUEPRINT — the note names a blueprint file that does not exist. Key
 //     ("conformance_check","NO-BLUEPRINT",<path>,<full wikilink inner>).
+//   - UNRESOLVED-INCLUDE (#112c, TS-native — no Python counterpart) — a
+//     governed blueprint's `{% include %}` names a target absent from the
+//     blueprint listing. The Python read include targets straight off disk;
+//     the TS resolves them against the snapshot's blueprint set and used to
+//     no-op silently on a miss, so `emittedH2s` returned a SMALLER emitted set
+//     than the blueprint declares and every note checked against it was linted
+//     against incomplete headings — a silent false negative, measured live in
+//     the governed tree (a `ScopeNoteHeader.blueprint` include beginning with
+//     a literal `…` placeholder). Same absence-vs-emptiness class as
+//     #125/#133/#136. Reported as a finding — never a throw (one bad include
+//     must not kill the pack's whole run) — the rail's idiom: detect, humans
+//     fix. Key ("conformance_check","UNRESOLVED-INCLUDE",<bp path>,<target>).
 // REFILL (blueprint emits an H2 the note lacks — a warning) and SKIPPED (a
 // dynamic-H2 blueprint that cannot be checked statically) are NOT findings, so
 // the pack emits neither, exactly as the ratchet parser dropped them. The pack
@@ -134,7 +146,16 @@ export function structurePack(opts: StructurePackOpts = {}): RulePack {
       const blueprints: SourceFile[] = requireBlueprints(snapshot, STRUCTURE_PACK_ID);
       // byPath: every blueprint (include resolution). byBasename: only those
       // under the registry root (the note→blueprint lookup, Python's BP_ROOTS).
-      // Sorted input → last-wins on a basename collision is deterministic.
+      //
+      // PINNED (#112b): on a basename COLLISION (two `.blueprint` files under
+      // the registry root sharing a basename) the winner is last-in-sorted-
+      // path-order — deterministic by construction, because the snapshot sorts
+      // its blueprint listing. The Python's `rglob` order was filesystem-
+      // dependent, so on this axis the TS is strictly better; that the
+      // arbitration is SILENT (nothing reports that a choice was made) is a
+      // known, deliberate residual — surfacing it is a reporting decision, not
+      // a port fix. Pinned by "basename collision resolves last-in-sorted-
+      // order" in tests/conformance-legacy-packs.test.mjs.
       const byPath = new Map<string, string>();
       const byBasename = new Map<string, string>();
       for (const bp of blueprints) {
@@ -156,6 +177,43 @@ export function structurePack(opts: StructurePackOpts = {}): RulePack {
       };
 
       const out: Finding[] = [];
+
+      // UNRESOLVED-INCLUDE (#112c): every governed blueprint's own direct
+      // `{% include %}` directives, checked against the listing `emittedH2s`
+      // resolves them from. Scanned over the same text `emittedH2s` sees —
+      // frontmatter stripped, `{# #}` comments removed, `___REST___` sections
+      // dropped (an include inside a stripped section never affects emission,
+      // so it is not a silent zero). Each unresolved site reports at the
+      // blueprint whose text CONTAINS it (a nested miss reports at the nested
+      // blueprint's own entry), scoped like the note scan: no dot/.trash
+      // segments, no `_` roots, no ungoverned roots. Known residual of that
+      // scoping: a governed blueprint including an UNGOVERNED one whose own
+      // include is unresolved still shrinks silently — the nested site sits in
+      // a blueprint this scan skips. Deliberate (a cross-governance include is
+      // itself the anomaly), not an oversight.
+      for (const bp of blueprints) {
+        if (hasDotOrTrashSegment(bp.path)) continue;
+        const bpRoot = firstSegment(bp.path);
+        if (bpRoot.startsWith("_") || conv.ungovernedRoots.includes(bpRoot)) continue;
+        const scanned = stripLeadingFrontmatter(bp.text).replace(COMMENT, "").replace(REST, "");
+        const seenTargets = new Set<string>();
+        for (const inc of scanned.matchAll(INCLUDE)) {
+          const target = inc[1];
+          if (byPath.has(target) || seenTargets.has(target)) continue;
+          seenTargets.add(target);
+          out.push({
+            script: STRUCTURE_PACK_ID,
+            check: "UNRESOLVED-INCLUDE",
+            target: bp.path,
+            kind: target,
+            detail:
+              `UNRESOLVED-INCLUDE: ${bp.path} includes "${target}" which resolves to no blueprint — ` +
+              `its emitted-H2 set is silently smaller than declared, so notes checked against it are ` +
+              `linted against incomplete headings`,
+          });
+        }
+      }
+
       for (const src of requireSources(snapshot, STRUCTURE_PACK_ID)) {
         // conformance_check.targets(): no dot/.trash segments, no `_` root, no
         // ungoverned Assent / Vault archaeology roots.
