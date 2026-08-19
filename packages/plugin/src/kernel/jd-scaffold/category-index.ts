@@ -223,13 +223,28 @@ function buildCategoriesMap(allPaths: string[]): Map<string, CategoryData> {
 }
 
 /** Bullets for one category's contribution to a consolidated view. For the
- *  consolidating file's own category, rebuild fresh from the vault. For
- *  siblings, copy their `## Contents` verbatim from `siblingContent`
- *  (falling back to a fresh build if empty/missing), prepending the
- *  sibling's own `XX.00` link so that index file isn't an orphan. */
+ *  consolidating file's own category, rebuild fresh from the vault. For an
+ *  ORDINARY sibling, copy its `## Contents` verbatim from `siblingContent`
+ *  (falling back to a fresh build if empty/missing) — its stored Contents is
+ *  a flat bullet list, safe to inline. For a sibling that is ITSELF an
+ *  area-management or system file (`reindexTier(cat.indexPath) !==
+ *  "ordinary"`), its stored `## Contents` is already a multi-section
+ *  consolidation of OTHER categories' bullets under `### `/`#### `
+ *  sub-headings — `extractContentsBullets` only stops at a top-level `## `,
+ *  so inlining it here would flatten every one of those other categories'
+ *  bullets into this view too, duplicating them (they're already being
+ *  processed as their own separate entries in the same consolidation).
+ *  Falls back to the sibling's own direct members instead — bug found and
+ *  fixed by PR review, not present in a naive port; caught because it has
+ *  no counterpart in the original TFile-based source (which has the same
+ *  latent defect, just never exercised: `extractContentsBullets`'s
+ *  `## `-only stop condition is identical there).
+ *
+ *  Every consolidating file still gets its own `XX.00` link prepended so it
+ *  isn't an orphan in the view either way. */
 function bulletsForCategory(cat: CategoryData, selfIndexPath: string, siblingContent: Map<string, string>): string {
   if (cat.indexPath === selfIndexPath) return buildLinks(cat.memberBasenames);
-  const content = siblingContent.get(cat.indexPath) ?? "";
+  const content = reindexTier(cat.indexPath) === "ordinary" ? (siblingContent.get(cat.indexPath) ?? "") : "";
   const inner = extractContentsBullets(content) || buildLinks(cat.memberBasenames);
   const indexBullet = `- [[${cat.indexBasename}]]`;
   return inner ? `${indexBullet}\n${inner}` : indexBullet;

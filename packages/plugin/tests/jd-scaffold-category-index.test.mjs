@@ -312,3 +312,50 @@ describe("planReindexCategory — system tier (00)", () => {
     assert.ok(idx10 < idx20);
   });
 });
+
+describe("planReindexCategory — system tier does not double-count an area-management sibling's already-consolidated bullets (review fix)", () => {
+  // 10-19 Personal has its own self-management category "10 Foo" (10.00,
+  // area-management tier) ALONGSIDE ordinary categories 06 and 07. 10.00 has
+  // ALREADY been reindexed once, so its stored ## Contents is itself a
+  // multi-section consolidation (### 06 Digital tools / ### 07 Health / ###
+  // 10 Foo), not a flat bullet list — extractContentsBullets only stops at a
+  // top-level ## heading, so naively inlining 10.00's stored content into
+  // the system view would flatten ALL of it (06's and 07's bullets included)
+  // under "#### 10 Foo", duplicating them alongside 06.00's and 07.00's own
+  // separately-processed entries.
+  const allPaths = [
+    "00-09 System/00.00 System index.md",
+    "10-19 Personal/06 Digital tools/06.00 JDex.md",
+    "10-19 Personal/06 Digital tools/06.13 Bar.md",
+    "10-19 Personal/07 Health/07.00 JDex.md",
+    "10-19 Personal/07 Health/07.01 Log.md",
+    "10-19 Personal/10 Foo/10.00 Area index.md",
+  ];
+  const alreadyConsolidated =
+    "## Contents\n\n" +
+    "### 06 Digital tools\n\n- [[06.00 JDex]]\n- [[06.13 Bar]]\n\n" +
+    "### 07 Health\n\n- [[07.00 JDex]]\n- [[07.01 Log]]\n\n" +
+    "### 10 Foo\n\n";
+  const siblingContent = new Map([
+    ["00-09 System/00.00 System index.md", "## Contents\n\n"],
+    ["10-19 Personal/06 Digital tools/06.00 JDex.md", "## Contents\n\n- [[06.13 Bar]]\n"],
+    ["10-19 Personal/07 Health/07.00 JDex.md", "## Contents\n\n- [[07.01 Log]]\n"],
+    ["10-19 Personal/10 Foo/10.00 Area index.md", alreadyConsolidated],
+  ]);
+
+  test("06.13 Bar and 07.01 Log each appear exactly ONCE in the regenerated system index, not duplicated via 10.00's stored consolidation", () => {
+    const plan = planReindexCategory({ targetIndexPath: "00-09 System/00.00 System index.md", allPaths, siblingContent });
+    const count = (needle) => plan.newContent.split(needle).length - 1;
+    assert.equal(count("[[06.13 Bar]]"), 1, "06.13 Bar must appear exactly once");
+    assert.equal(count("[[07.01 Log]]"), 1, "07.01 Log must appear exactly once");
+  });
+
+  test("10 Foo's own section shows only its own direct members, not the whole area flattened", () => {
+    const plan = planReindexCategory({ targetIndexPath: "00-09 System/00.00 System index.md", allPaths, siblingContent });
+    const fooStart = plan.newContent.indexOf("#### 10 Foo");
+    const nextSection = plan.newContent.indexOf("####", fooStart + 1);
+    const fooSection = plan.newContent.slice(fooStart, nextSection === -1 ? undefined : nextSection);
+    assert.doesNotMatch(fooSection, /06\.13 Bar/);
+    assert.doesNotMatch(fooSection, /07\.01 Log/);
+  });
+});

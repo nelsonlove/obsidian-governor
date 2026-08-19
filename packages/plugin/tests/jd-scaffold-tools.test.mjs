@@ -445,4 +445,79 @@ describe("obsidian_jd_reindex_category", () => {
     assert.ok(readCalls.includes("10-19 Personal/06 Digital tools/06.00 JDex.md"));
     assert.match(res.structuredContent.new_content, /\[\[06\.13 Bar\]\]/);
   });
+
+  test("review fix: refuses an ordinary note whose prefix merely LOOKS area-management-shaped (e.g. '10.13'), rather than overwriting it", async () => {
+    // Before the fix: reindexTier("10.13 Something.md") returns
+    // "area-management" (loose two-digit-prefix check), passing the tool's
+    // gate; the path is never fetched into siblingContent (only strictly
+    // XX.00-shaped paths are); planReindexCategory then resolves
+    // categories.get("10") to whatever REAL 10.00 file exists and builds a
+    // full area consolidation UNRELATED to "10.13 Something.md" — which a
+    // non-dry-run call would then write straight over the note's real
+    // content. The fix gates on isIndexFilePath (strict), not reindexTier
+    // (loose), so this must refuse before any read/write happens.
+    const modifyCalls = [];
+    const server = fakeServer();
+    const source = {
+      exists: () => false,
+      categoryFolders: () => [],
+      create: async () => {},
+      createFolder: async () => {},
+      renameFile: async () => {},
+      today: () => "2026-08-19",
+      allNotePaths: () => ["10-19 Personal/10 Foo/10.00 Area index.md", "10-19 Personal/10 Foo/10.13 Something.md"],
+      read: async () => "## Contents\n\n- [[10.13 Something]]\n",
+      modify: async (p, content) => { modifyCalls.push({ path: p, content }); },
+    };
+    registerJdScaffoldTools(server, source, { getSettings: () => ({ readOnly: false, allowlist: [] }) });
+
+    const res = await server.tools.get("obsidian_jd_reindex_category").handler({
+      path: "10-19 Personal/10 Foo/10.13 Something.md",
+      dry_run: false,
+    });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[not_index_file\]/);
+    assert.deepEqual(modifyCalls, []); // the note was NEVER touched
+  });
+
+  test("review fix: a sibling XX.00 file outside the allowlist is excluded from consolidation, and scoped_to_allowlist reports true", async () => {
+    const allPaths = [
+      "10-19 Personal/10 Foo/10.00 Area index.md",
+      "10-19 Personal/06 Digital tools/06.00 JDex.md",
+      "10-19 Personal/06 Digital tools/06.13 Bar.md",
+      "Archive/09 Hidden/09.00 Hidden index.md", // outside the allowlist below
+      "Archive/09 Hidden/09.05 Secret.md",
+    ];
+    const { server } = build({
+      allPaths,
+      allowlist: ["10-19 Personal"],
+      noteContent: {
+        "10-19 Personal/10 Foo/10.00 Area index.md": "## Contents\n\n",
+        "10-19 Personal/06 Digital tools/06.00 JDex.md": "## Contents\n\n- [[06.13 Bar]]\n",
+        "Archive/09 Hidden/09.00 Hidden index.md": "## Contents\n\n- [[09.05 Secret]] *(sensitive)*\n",
+      },
+    });
+    const res = await server.tools.get("obsidian_jd_reindex_category").handler({
+      path: "10-19 Personal/10 Foo/10.00 Area index.md",
+      dry_run: true,
+    });
+    assert.notEqual(res.isError, true);
+    assert.equal(res.structuredContent.scoped_to_allowlist, true);
+    assert.match(res.structuredContent.new_content, /\[\[06\.13 Bar\]\]/);
+    assert.doesNotMatch(res.structuredContent.new_content, /09\.05 Secret/);
+    assert.doesNotMatch(res.structuredContent.new_content, /09 Hidden/);
+    assert.doesNotMatch(res.structuredContent.new_content, /sensitive/);
+  });
+
+  test("scoped_to_allowlist is false with no active allowlist", async () => {
+    const { server } = build({
+      allPaths: ["10-19 Personal/06 Digital tools/06.00 JDex.md"],
+      noteContent: { "10-19 Personal/06 Digital tools/06.00 JDex.md": "# JDex\n" },
+    });
+    const res = await server.tools.get("obsidian_jd_reindex_category").handler({
+      path: "10-19 Personal/06 Digital tools/06.00 JDex.md",
+      dry_run: true,
+    });
+    assert.equal(res.structuredContent.scoped_to_allowlist, false);
+  });
 });
