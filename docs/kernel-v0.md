@@ -20,7 +20,12 @@ agent. Reads never queue, so a slow write never stalls a session's reads.
   setting; `packages/plugin/src/kernel/write-queue.ts`). If an operation hasn't settled by
   then it is **abandoned**, that one call fails with `Error [write_timeout]`, and the queue
   immediately moves on — a wedged operation can never take down the bridge or anyone else's
-  session. The vault may or may not have been modified; re-read before retrying.
+  session. The vault may or may not have been modified; re-read before retrying. The deadline
+  is **wall-clock math re-evaluated on queue activity** (a new enqueue, a journal append,
+  an explicit nudge), not just a timer — Chromium suspends renderer timers while the Obsidian
+  window is occluded, so a timer-only deadline went unfired in exactly the unattended
+  conditions agents operate in (#272). A per-operation timer still arms as the best-effort
+  prompt path in the foreground.
 - **Late settlement.** Because an abandoned operation may still finish afterwards, the queue
   reports its eventual outcome via an `onLate` hook, which the kernel turns into a
   **corrective journal record** (see below) rather than dropping the settlement silently.
@@ -186,7 +191,10 @@ other so. A claim takes a **scope** (a vault path prefix), a **reason**, and an 
   someone else's. What bounds a client running many connections is *time*, not identity: every
   claim expires within 30 minutes, so the store drains on its own.
 - **Bounded by the path allowlist.** A session sandboxed to `Projects/` can claim inside it and
-  nowhere else (`Error [out_of_allowlist]` otherwise); listing is never restricted.
+  nowhere else (`Error [out_of_allowlist]` otherwise). Listing follows the same rule: claims
+  whose scope falls outside the allowlist are omitted and counted in `hidden_claims` — you
+  learn that territory outside your view is claimed, not where. No allowlist ⇒ every claim,
+  no `hidden_claims` key.
 
 Claiming and releasing are treated as **mutating** (journaled with `target.ref = scope:<prefix>`
 / `lock:<id>`), so **read-only mode blocks claiming and releasing** — there is nothing for a

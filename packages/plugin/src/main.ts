@@ -333,15 +333,25 @@ export default class VaultMcpPlugin extends Plugin {
     // journal grows only through this kernel, so the append itself is the reliable
     // "journal grew" event; the nudge is a no-op while governance is unmounted, and the
     // signature/in-flight gates in pollJournal keep repeated nudges cheap.
+    //
+    // #272: the same append also nudges the WRITE QUEUE's wall-clock deadline check.
+    // Some journal records land without taking a queue slot (idempotent replays,
+    // deduped waiters, key mismatches), so an append can happen while an operation
+    // is wedged mid-queue — one more timer-free event that abandons an overdue
+    // operation instead of leaving it holding the queue in an occluded window.
+    const writeQueue = new WriteQueue();
     const journal = new WriteJournal(this.app.vault.adapter, `${pluginDir}/journal`);
     const journalAppend = journal.append.bind(journal);
     journal.append = (record) => {
       const done = journalAppend(record);
-      void done.then(() => nudgeGovernanceQueue(this));
+      void done.then(() => {
+        writeQueue.nudge();
+        nudgeGovernanceQueue(this);
+      });
       return done;
     };
     const kernel = new Kernel(
-      new WriteQueue(),
+      writeQueue,
       journal,
       obsidianProbe(this.app, () => this.settings.enforceRecordImmutability),
       new IdempotencyStore(),

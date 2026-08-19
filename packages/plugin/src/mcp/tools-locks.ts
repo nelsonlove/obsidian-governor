@@ -12,7 +12,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ok, fail, codedError } from "./helpers.js";
-import { guardCall, type GuardSettings } from "../guard.js";
+import { guardCall, isVisible, type GuardSettings } from "../guard.js";
 import {
   expiresInSeconds,
   holderOf,
@@ -96,6 +96,31 @@ function scopeRefusal(scope: string, settings?: GuardSettings): { code: string; 
   }
   const blocked = guardCall({ isMutating: false, args: { path: normalized }, settings });
   return blocked ? { code: blocked.code, message: `${blocked.message}. Nothing was claimed.` } : null;
+}
+
+/**
+ * Whether a claim's scope may be NAMED to this session (#85). The listing used
+ * to report every claim's scope unfiltered — a path oracle: a session
+ * sandboxed to `Projects/` learned `Archive/Divorce` exists just by listing.
+ * So a claim is shown iff its scope path is itself inside the allowlist — the
+ * same rule as every other read surface, and the exact set of scopes this
+ * session could have claimed itself (scopeRefusal's rule, read back).
+ *
+ * Two consequences, both deliberate:
+ *   • A PREFIX scope that merely covers visible territory is hidden. Under
+ *     allowlist `Projects/Alpha`, a claim on `Projects` names territory
+ *     outside the view (`Projects/Beta`, …), so it is counted, not shown —
+ *     "within the allowlist", never "overlaps it".
+ *   • The whole-vault scope `""` needs its own clause for the same reason it
+ *     does in scopeRefusal: `isVisible("")` passes vacuously (collectPaths
+ *     drops empty strings), but "everything" is not inside any allowlist.
+ *
+ * Hidden claims are COUNTED (`hidden_claims`), never listed — the disclosure
+ * function survives ("territory outside your view is claimed") without
+ * revealing where. Stored scopes are already normalized (LockStore.claim).
+ */
+function claimVisible(scope: string, settings: GuardSettings): boolean {
+  return scope !== "" && isVisible(scope, settings);
 }
 
 export function registerLockTools(server: McpServer, ctx: LockToolsCtx, actor: () => JournalActor): void {
@@ -242,7 +267,9 @@ export function registerLockTools(server: McpServer, ctx: LockToolsCtx, actor: (
       title: "List scope claims",
       description:
         "Every live advisory claim on this vault: scope, holder, reason and time left. Expired claims are already gone. " +
-        "Read-only, and purely informational — nothing here blocks anything.",
+        "Read-only, and purely informational — nothing here blocks anything. While a path allowlist is configured, " +
+        "claims whose scope falls outside it are counted in `hidden_claims` rather than listed — you learn that " +
+        "territory outside your view is claimed, not where.",
       inputSchema: {},
       annotations: RO,
     },
@@ -252,9 +279,25 @@ export function registerLockTools(server: McpServer, ctx: LockToolsCtx, actor: (
         if (!locks) return fail(new Error(NO_KERNEL));
         const now = Date.now();
         const holder = holderOf(actor());
+        const all = locks.list();
+        const settings = ctx.getSettings?.();
+        // No allowlist ⇒ no filter and no `hidden_claims` key — byte-identical
+        // to the pre-#85 response, the same identity convention as visiblePaths.
+        if (!settings?.allowlist?.length) {
+          return ok({
+            holder,
+            claims: all.map((l) => ({ ...view(l, now), mine: l.holder === holder })),
+          });
+        }
+        // The filter is uniform — even a claim of YOUR OWN is hidden if its
+        // scope is no longer visible (possible only when the allowlist changed
+        // after you claimed): the listing must never name a path the session
+        // cannot see, whoever put it there.
+        const shown = all.filter((l) => claimVisible(l.scope, settings));
         return ok({
           holder,
-          claims: locks.list().map((l) => ({ ...view(l, now), mine: l.holder === holder })),
+          claims: shown.map((l) => ({ ...view(l, now), mine: l.holder === holder })),
+          hidden_claims: all.length - shown.length,
         });
       } catch (e) {
         return fail(e);
