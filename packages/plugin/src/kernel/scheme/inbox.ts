@@ -3,8 +3,10 @@
 //
 // Ported from obsidian-jd-dashboard/src/scanner.ts's `scanInboxes` (area/
 // category/id folder-shape regexes carried over VERBATIM: AREA_RE, CATEGORY_RE,
-// ID_RE, the ".01" + "Unsorted"/"Inbox" title-prefix test, and the cover-note
-// exclusion from `isCoverNote`), but reworked from an `app.vault` TFolder tree
+// ID_RE, the ".01" + "Unsorted"/"Inbox" title-prefix test, and scanInboxes's
+// own inline cover-note/dot-file/+README exclusion — NOT `isCoverNote`, a
+// different function in the original file used only by its drift scanner),
+// but reworked from an `app.vault` TFolder tree
 // walk to operate purely over a flat markdown-path listing — same "pure, no
 // obsidian import" discipline as the rest of this directory (findings.ts,
 // jd.ts). This is genuinely a scope-provider-shaped question ("what's in this
@@ -24,17 +26,26 @@
 //
 // Counting-fidelity note: the original counts DIRECT TFolder children (files
 // AND subfolders, one level deep, so a subfolder counts as "1" regardless of
-// what — or how much — is inside it, and non-markdown attachments count too).
-// This module only ever sees markdown note paths, so it approximates that by
-// counting DISTINCT direct entry names under the inbox folder — a bare
-// filename for a note directly in the folder, or a subfolder's own name
-// (deduped) for anything nested one or more levels deeper. This undercounts
-// versus the original in two ways, both accepted as the fold's known
-// reduction: a non-markdown attachment sitting directly in the inbox folder
-// is invisible, and an entirely-empty subfolder (no markdown notes anywhere
-// inside it) is invisible. Everything else — which folder counts as which
-// item, the cover-note exclusion, the busiest-first sort, the area grouping —
-// matches the original exactly.
+// what — or how much — is inside it, and non-markdown attachments count too),
+// excluding the cover note, any dot-prefixed name, and any name containing
+// "+README" (a documented legacy-leftover exclusion). This module only ever
+// sees markdown note paths, so it approximates the TFolder count by counting
+// DISTINCT direct entry names under the inbox folder — a bare filename for a
+// note directly in the folder, or a subfolder's own name (deduped) for
+// anything nested one or more levels deeper — applying the same cover-note/
+// dot-file/+README exclusions to that name set. This still undercounts versus
+// the original in two ways, both accepted as the fold's known reduction: a
+// non-markdown attachment sitting directly in the inbox folder is invisible,
+// and an entirely-empty subfolder (no markdown notes anywhere inside it) is
+// invisible. Everything else — which folder counts as which item, the three
+// exclusions, the busiest-first sort, the area grouping — matches the
+// original exactly.
+//
+// This function does NOT filter by a scheme instance's `excludedRoots` —
+// that is the wiring layer's job (scheme/wiring.ts), applied to the `notes`
+// listing BEFORE it reaches this function, so an excluded root is invisible
+// to both discovery and counting here without this pure function needing to
+// know about scheme instances at all.
 
 const AREA_RE = /^(\d{2})-(\d{2})\s+(.+)$/;
 const CATEGORY_RE = /^(\d{2})\s+(.+)$/;
@@ -100,7 +111,13 @@ export function scanInboxes(notes: string[]): InboxAreaGroup[] {
     const directNames = new Set<string>();
     for (const note of notes) {
       if (!note.startsWith(prefix) || note === coverPath) continue;
-      directNames.add(note.slice(prefix.length).split("/")[0]);
+      const name = note.slice(prefix.length).split("/")[0];
+      // Same exclusions the original applies to its direct-children count
+      // (scanner.ts's own filter, verbatim in spirit): a dot-prefixed name
+      // and any name containing "+README" (a legacy leftover) don't count
+      // as real unsorted items either.
+      if (name.startsWith(".") || name.includes("+README")) continue;
+      directNames.add(name);
     }
     if (directNames.size > 0) items.push({ area, category, inboxFolder, path, count: directNames.size });
   }

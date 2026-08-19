@@ -7,8 +7,8 @@
 //
 // Click a row to reveal that folder in Obsidian's file explorer — same
 // `revealInFolder` internal-API call the original used (there is no public
-// Obsidian API for "select this folder in the file tree"; the cast to `any`
-// is inherent to reaching it, same as the original).
+// Obsidian API for "select this folder in the file tree"; reaching it needs
+// an unchecked cast either way — see scheme/wiring.ts's `revealFolder`).
 
 import { ItemView, type WorkspaceLeaf } from "obsidian";
 import { scanInboxes, type InboxAreaGroup } from "../kernel/scheme/inbox.js";
