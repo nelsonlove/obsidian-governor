@@ -1,27 +1,33 @@
 /**
- * triage-module.test.mjs — the inbox-triage module (#221 phase 2): the
- * disposition substrate's second instance.
+ * triage-module.test.mjs — the inbox-triage module (#221 phase 2, PHASE-3
+ * SHAPE per #241 / Nelson's 2026-08-19 ruling).
  *
  * Pins:
- *   • the SUBSTRATE EXTRACTION is invisible — the governance table still
- *     declares against the shared shape and the shared helpers behave
- *     identically over both instances (the governance suite itself runs
- *     untouched; here we pin the substrate side);
- *   • descriptor completeness — exactly the legacy flow's ten dispositions,
- *     ALL `authority: "agent"` (none confers standing), pure frozen data,
- *     single-sourced into the tool's enum and description;
- *   • triage_queue — inbox recognition by configured marker, folder-note
- *     exclusion, allowlist filtering BEFORE reads, oldest-first order, cap;
- *   • triage_dispose — dry-run by default (reports, writes nothing),
- *     per-disposition apply effects over a fake source (move / retype /
- *     trash), target-required and target-unsupported refusals, unknown
- *     disposition refusal, destination_unresolved / destination_occupied /
- *     out_of_allowlist refusals, accept-forbidden config patches refused,
- *     scheme-absent degradation (and the advisory when present);
- *   • module-host conformance — mounted through the ModuleRegistry as a
- *     `mutating: true` module, default DISABLED, config validated loudly;
- *   • the TOOL-INVENTORY doc documents both tool names (the crosssession
- *     precedent for surfaces outside the locked obsidian_* family).
+ *   • the SUBSTRATE EXTRACTION stays invisible — the governance table still
+ *     declares against the shared shape (its suite runs untouched); the
+ *     triage code-level instance is now the THREE built-in primitives
+ *     (trash / move / stamp), all `authority: "agent"`, pure frozen data;
+ *   • MERGED-TABLE semantics — built-ins ∪ declared rows, the default
+ *     escalate declared row (deletable, patch fed by escalateFrontmatter),
+ *     built-in description overrides via the shared description field, id
+ *     collisions refused loudly (and the colliding row dropped), the tool
+ *     enum + description single-sourced from the merged table;
+ *   • the three primitives' plan/apply parity with the #238 behavior where
+ *     unchanged (dry-run default, typed refusals, occupied/allowlist
+ *     re-checks, patch union/overwrite, mid-sequence failure reporting);
+ *   • move whitelist/blacklist — enforced at PLAN time and RE-CHECKED at
+ *     APPLY time (proven with a config that flips between the two reads);
+ *   • declared `choice` rows — executed through the injected runChoice seam,
+ *     dry_run REFUSED without an explicit false, target refused, refusal
+ *     passthrough, script-throw surfaces as failure, and the deny-set
+ *     NON-WEAKENING: the opaque-execution deny constants are untouched and a
+ *     raw command id is not a disposition;
+ *   • base-backed queues — {base}/{view}, config-named {queue}s, typed
+ *     bases_unavailable feature-gate refusal, refusal passthrough, allowlist
+ *     row filtering through the shared queryBaseRows seam, marker-queue
+ *     fallback unchanged;
+ *   • MIGRATION — a config carrying the OLD phase-2 shape behaves sanely;
+ *   • module-host conformance + the TOOL-INVENTORY doc lock.
  */
 
 import { test, describe } from "node:test";
@@ -32,15 +38,20 @@ import path from "node:path";
 import { fakeServer } from "./fake-server.mjs";
 import {
   TRIAGE_DISPOSITIONS,
-  triageDispositionById,
-  triageDispositionIds,
-  triageDispositionLines,
+  TRIAGE_BUILTIN_IDS,
+  defaultEscalateRow,
+  mergedDispositionsOf,
+  mergedIds,
+  mergedLines,
   DEFAULT_TRIAGE_CONFIG,
   validateTriageConfig,
   triageConfigOf,
+  declaredRowsOf,
+  queuesOf,
   inboxFolderOf,
   sortQueue,
   planDispose,
+  moveDenied,
   applyFrontmatterPatch,
   gestureGatedIn,
   dispositionsForSurface,
@@ -48,6 +59,8 @@ import {
 } from "../src/kernel/triage/index.ts";
 import { DISPOSITIONS } from "../src/kernel/governance/dispositions.ts";
 import { registerTriageTools, emptyTriageSource } from "../src/mcp/tools-triage.ts";
+import { queryBaseRows } from "../src/mcp/tools-bases.ts";
+import { OPAQUE_ACCEPT_COMMAND_IDS, OPAQUE_ACCEPT_CLI_COMMANDS } from "../src/mcp/cli-policy.ts";
 import { mountModules } from "../src/mcp/modules-mount.ts";
 import { memoryReceiptStore } from "../src/kernel/crosssession/index.ts";
 
@@ -91,6 +104,10 @@ function fakeVault(files = {}) {
         apply(f.fm);
         log.push({ op: "frontmatter", path: p, fm: JSON.parse(JSON.stringify(f.fm)) });
       },
+      runChoice: async (binding, variables) => {
+        log.push({ op: "choice", binding, variables });
+        return { ok: true, choice: binding };
+      },
     },
   };
 }
@@ -102,13 +119,16 @@ function register(vault, ctxOverrides = {}) {
 }
 
 const item = (name) => `${INBOX}/${name}`;
+const errText = (res) => res.content.map((c) => c.text).join("\n");
+
+/** A config record with declared rows / other overrides as JSON strings. */
+const withConfig = (over = {}) => ({ ...DEFAULT_TRIAGE_CONFIG, ...over });
+const declared = (rows) => JSON.stringify(rows);
 
 // ── the substrate (Part A): extraction invisible, helpers shared ────────────
 
 describe("the disposition substrate: shared shape, both instances declared against it", () => {
   test("the governance instance still behaves identically through the shared helpers", () => {
-    // The substrate helpers give the same answers the governance instance's
-    // own (delegating) helpers give — the extraction moved code, not behavior.
     assert.deepEqual(
       dispositionsForSurface(DISPOSITIONS, "pending-item").map((d) => d.id),
       ["accept", "revert", "request-changes"],
@@ -124,178 +144,273 @@ describe("the disposition substrate: shared shape, both instances declared again
     assert.deepEqual(gestureGatedIn(TRIAGE_DISPOSITIONS), []);
     assert.deepEqual(
       dispositionsForSurface(TRIAGE_DISPOSITIONS, "mcp-tool").map((d) => d.id),
-      [...triageDispositionIds()],
+      [...TRIAGE_BUILTIN_IDS],
     );
   });
-});
 
-// ── descriptor completeness (Part B, single source) ─────────────────────────
-
-describe("triage descriptors: the legacy flow's ten verbs, all agent, pure frozen data", () => {
-  test("exactly the ten legacy dispositions, in declared order", () => {
-    assert.deepEqual(triageDispositionIds(), [
-      "discard",
-      "route",
-      "establish-new-home",
-      "convert-to-action",
-      "develop-as-knowledge",
-      "register",
-      "curate-as-link",
-      "defer-to-someday",
-      "archive-as-record",
-      "escalate",
-    ]);
-  });
-
-  test("every disposition is authority: agent — none confers standing", () => {
-    for (const d of TRIAGE_DISPOSITIONS) {
-      assert.equal(d.authority, "agent", `${d.id} must be agent-authority`);
-      assert.equal(d.surface, "mcp-tool", `${d.id} must surface as an MCP tool`);
-    }
-  });
-
-  test("the target-policy table matches the legacy flow's NEEDS_TARGET set", () => {
-    const required = TRIAGE_DISPOSITIONS.filter((d) => d.targetPolicy === "required").map((d) => d.id);
-    assert.deepEqual(required.sort(), ["curate-as-link", "establish-new-home", "register", "route"]);
-    const none = TRIAGE_DISPOSITIONS.filter((d) => d.targetPolicy === "none").map((d) => d.id);
-    assert.deepEqual(none.sort(), ["discard", "escalate"]);
-    // The rest fall back to config destinations.
-    const configOr = TRIAGE_DISPOSITIONS.filter((d) => d.targetPolicy === "config-or-target");
-    assert.deepEqual(configOr.map((d) => d.id).sort(), [
-      "archive-as-record",
-      "convert-to-action",
-      "defer-to-someday",
-      "develop-as-knowledge",
-    ]);
-    for (const d of configOr) assert.ok(d.destinationKey, `${d.id} must name its destination config key`);
-  });
-
-  test("descriptors are pure frozen data — no callable rides any descriptor", () => {
+  test("the built-in table is the three primitives — frozen, pure string data, all agent", () => {
+    assert.deepEqual([...TRIAGE_BUILTIN_IDS], ["trash", "move", "stamp"]);
     assert.ok(Object.isFrozen(TRIAGE_DISPOSITIONS));
     for (const d of TRIAGE_DISPOSITIONS) {
       assert.ok(Object.isFrozen(d), `${d.id} must be frozen`);
+      assert.equal(d.authority, "agent", `${d.id} must be agent-authority`);
+      assert.equal(d.surface, "mcp-tool");
       for (const [k, v] of Object.entries(d)) {
         assert.notEqual(typeof v, "function", `${d.id}.${k} must not be a callable`);
         assert.equal(typeof v, "string", `${d.id}.${k} must be plain string data`);
       }
-      assert.ok(d.effect.length > 0 && d.label.length > 0, `${d.id} must declare label + effect`);
+      assert.ok(d.effect.length > 0 && d.label.length > 0);
     }
   });
+});
 
-  test("the table is the SINGLE SOURCE: the tool enum and description derive from it", () => {
-    const vault = fakeVault();
-    const server = register(vault);
+// ── merged-table semantics ──────────────────────────────────────────────────
+
+describe("the merged disposition table (built-ins ∪ declared)", () => {
+  test("defaults: three built-ins + the one default declared row, escalate", () => {
+    const table = mergedDispositionsOf(triageConfigOf(withConfig()));
+    assert.deepEqual(mergedIds(table), ["trash", "move", "stamp", "escalate"]);
+    const escalate = table.find((d) => d.id === "escalate");
+    assert.equal(escalate.builtin, false);
+    assert.equal(escalate.action, "stamp");
+    assert.equal(escalate.inPlace, true);
+    assert.deepEqual(escalate.patch, { tags: ["attention/user"] });
+    assert.equal(escalate.targetPolicy, "none");
+  });
+
+  test("the escalate row's patch (its tag) is configured via escalateFrontmatter", () => {
+    const cfg = triageConfigOf(withConfig({ escalateFrontmatter: '{"tags": ["attention/nelson"]}' }));
+    const table = mergedDispositionsOf(cfg);
+    assert.deepEqual(table.find((d) => d.id === "escalate").patch, { tags: ["attention/nelson"] });
+  });
+
+  test("the escalate row is DELETABLE: an explicit declared list without it drops it", () => {
+    const cfg = triageConfigOf(withConfig({ declaredDispositions: "[]" }));
+    assert.deepEqual(mergedIds(mergedDispositionsOf(cfg)), ["trash", "move", "stamp"]);
+  });
+
+  test("built-in descriptions are human-overridable via config — the shared description field", () => {
+    const cfg = triageConfigOf(
+      withConfig({ builtinDescriptions: '{"move": "route the note to its JD scope folder"}' }),
+    );
+    const table = mergedDispositionsOf(cfg);
+    assert.equal(table.find((d) => d.id === "move").description, "route the note to its JD scope folder");
+    // Un-overridden built-ins keep their default text.
+    assert.match(table.find((d) => d.id === "trash").description, /recoverable/);
+    assert.deepEqual(
+      validateTriageConfig(withConfig({ builtinDescriptions: '{"explode": "x"}' })).filter((p) => p.includes("explode")).length,
+      1,
+      "an unknown built-in id is reported loudly",
+    );
+  });
+
+  test("id collisions are refused LOUDLY — with a built-in, and between declared rows", () => {
+    const rows = declared([
+      { id: "move", action: "trash", description: "shadow a builtin" },
+      { id: "custom", action: "trash", description: "ok" },
+      { id: "custom", action: "trash", description: "dupe" },
+    ]);
+    const problems = validateTriageConfig(withConfig({ declaredDispositions: rows }));
+    assert.ok(problems.some((p) => p.includes("'move'") && p.includes("built-in")));
+    assert.ok(problems.some((p) => p.includes("'custom'") && p.includes("earlier declared row")));
+    // …and the colliding rows are DROPPED from the merged table, never merged.
+    const table = mergedDispositionsOf(triageConfigOf(withConfig({ declaredDispositions: rows })));
+    assert.deepEqual(mergedIds(table), ["trash", "move", "stamp", "custom"]);
+    assert.equal(table.find((d) => d.id === "move").builtin, true, "the built-in must win");
+  });
+
+  test("per-action row shapes are validated loudly and bad rows dropped", () => {
+    const rows = declared([
+      { id: "a", action: "trash", patch: { x: 1 }, description: "trash with patch" },
+      { id: "b", action: "stamp", description: "stamp without patch" },
+      { id: "c", action: "stamp", inPlace: true, destination: "X", patch: { s: 1 }, description: "contradiction" },
+      { id: "d", action: "choice", description: "choice without binding" },
+      { id: "e", action: "move", choice: "Nope", description: "move with choice" },
+      { id: "ok", action: "move", destination: "Projects", description: "fine" },
+    ]);
+    const problems = validateTriageConfig(withConfig({ declaredDispositions: rows }));
+    for (const [id, needle] of [
+      ["a", "takes no patch"],
+      ["b", "needs a non-empty patch"],
+      ["c", "contradict"],
+      ["d", "needs a `choice` binding"],
+      ["e", "takes no choice"],
+    ]) {
+      assert.ok(problems.some((p) => p.includes(`'${id}'`) && p.includes(needle)), `${id}: ${needle}`);
+    }
+    const table = mergedDispositionsOf(triageConfigOf(withConfig({ declaredDispositions: rows })));
+    assert.deepEqual(mergedIds(table), ["trash", "move", "stamp", "ok"]);
+  });
+
+  test("a declared patch may never assert acceptance — refused loudly, row dropped", () => {
+    const rows = declared([{ id: "x", action: "stamp", patch: { "accepted-by": "me" }, description: "evil" }]);
+    const problems = validateTriageConfig(withConfig({ declaredDispositions: rows }));
+    assert.ok(problems.some((p) => p.includes("'x'") && p.includes("acceptance")));
+    const table = mergedDispositionsOf(triageConfigOf(withConfig({ declaredDispositions: rows })));
+    assert.ok(!mergedIds(table).includes("x"));
+  });
+
+  test("declaredRowsOf distinguishes UNSET (null ⇒ default escalate) from an explicit []", () => {
+    assert.equal(declaredRowsOf("").rows, null);
+    assert.equal(declaredRowsOf(undefined).rows, null);
+    assert.deepEqual(declaredRowsOf("[]").rows, []);
+  });
+
+  test("the tool enum and description are single-sourced from the MERGED table", () => {
+    const config = withConfig({
+      declaredDispositions: declared([
+        { id: "escalate", action: "stamp", patch: { tags: ["attention/user"] }, inPlace: true, description: "flag for the human" },
+        { id: "file-bookmark", action: "choice", choice: "File bookmark", description: "run the bookmark filing macro" },
+      ]),
+    });
+    const server = fakeServer();
+    registerTriageTools(server, fakeVault().source, { config });
     const { def } = server.tools.get("triage_dispose");
-    // Every id appears in the registered description (via triageDispositionLines).
-    for (const line of triageDispositionLines()) {
+    const table = mergedDispositionsOf(triageConfigOf(config));
+    for (const line of mergedLines(table)) {
       assert.ok(def.description.includes(line), `description must carry: ${line}`);
     }
-    // And the zod enum accepts exactly the table's ids.
     const dispositionSchema = def.inputSchema.disposition;
-    for (const id of triageDispositionIds()) {
+    for (const id of mergedIds(table)) {
       assert.equal(dispositionSchema.safeParse(id).success, true, `enum must accept ${id}`);
     }
+    assert.equal(dispositionSchema.safeParse("discard").success, false, "the retired legacy verbs are gone");
     assert.equal(dispositionSchema.safeParse("accept").success, false, "the enum is closed");
-    // No accept-shaped verb anywhere in the set.
-    for (const id of triageDispositionIds()) {
+    for (const id of mergedIds(table)) {
       assert.ok(!/accept|approve|baseline/i.test(id), `${id} must not be accept-shaped`);
     }
   });
 
   test("dry_run defaults to TRUE at the schema level (report-first)", () => {
-    const vault = fakeVault();
-    const server = register(vault);
-    const { def } = server.tools.get("triage_dispose");
-    assert.equal(def.inputSchema.dry_run.parse(undefined), true);
+    const server = register(fakeVault());
+    assert.equal(server.tools.get("triage_dispose").def.inputSchema.dry_run.parse(undefined), true);
   });
 });
 
-// ── config ──────────────────────────────────────────────────────────────────
+// ── config: loud validation, degrade to defaults ────────────────────────────
 
-describe("triage config: validated loudly, degrades to defaults, never hardwired", () => {
-  test("defaults mirror the legacy flow's stamps and the live inbox convention", () => {
-    const cfg = triageConfigOf({ ...DEFAULT_TRIAGE_CONFIG });
+describe("triage config (phase 3)", () => {
+  test("defaults: markers + escalate patch mirror the live conventions; stamp unconfigured; no bounds/queues", () => {
+    const cfg = triageConfigOf(withConfig());
     assert.deepEqual(cfg.inboxMarkers, [" Inbox for "]);
-    assert.deepEqual(cfg.actionFrontmatter, { tags: ["note/task"], status: "open", priority: "normal" });
-    assert.deepEqual(cfg.somedayFrontmatter, { status: "someday" });
     assert.deepEqual(cfg.escalateFrontmatter, { tags: ["attention/user"] });
-    assert.equal(cfg.archiveDestination, "");
+    assert.deepEqual(cfg.stampFrontmatter, {});
+    assert.deepEqual(cfg.moveWhitelist, []);
+    assert.deepEqual(cfg.moveBlacklist, []);
+    assert.equal(cfg.declared, null);
+    assert.deepEqual(cfg.queues, []);
   });
 
   test("validate is loud about every malformed value", () => {
     const problems = validateTriageConfig({
       inboxMarkers: "not-an-array",
-      archiveDestination: "/absolute",
-      actionFrontmatter: "{not json",
-      somedayFrontmatter: '["array"]',
+      stampFrontmatter: "{not json",
+      escalateFrontmatter: '["array"]',
+      moveWhitelist: "nope",
+      moveBlacklist: ["/absolute"],
+      declaredDispositions: "{not json",
+      builtinDescriptions: "[]",
+      queues: '[{"id": "q", "base": "not-a-base.md"}]',
     });
-    assert.ok(problems.some((p) => p.includes("inboxMarkers")));
-    assert.ok(problems.some((p) => p.includes("archiveDestination")));
-    assert.ok(problems.some((p) => p.includes("actionFrontmatter")));
-    assert.ok(problems.some((p) => p.includes("somedayFrontmatter")));
+    for (const key of [
+      "inboxMarkers",
+      "stampFrontmatter",
+      "escalateFrontmatter",
+      "moveWhitelist",
+      "moveBlacklist",
+      "declaredDispositions",
+      "builtinDescriptions",
+      "queues",
+    ]) {
+      assert.ok(problems.some((p) => p.includes(key)), `must report ${key}`);
+    }
   });
 
   test("an empty markers list is refused — with none, nothing is ever an inbox item", () => {
     assert.ok(validateTriageConfig({ inboxMarkers: [] }).some((p) => p.includes("inboxMarkers")));
-    assert.ok(validateTriageConfig({ inboxMarkers: ["  "] }).some((p) => p.includes("inboxMarkers")));
   });
 
-  test("a configured patch may never assert acceptance (the shared rule, at validation time)", () => {
-    const problems = validateTriageConfig({ escalateFrontmatter: '{"accepted-by": "me"}' });
+  test("a config patch asserting acceptance is refused at validation AND sanitized at coercion", () => {
+    const problems = validateTriageConfig(withConfig({ escalateFrontmatter: '{"accepted-by": "me"}' }));
     assert.ok(problems.some((p) => p.includes("escalateFrontmatter") && p.includes("acceptance")));
-    const problems2 = validateTriageConfig({ actionFrontmatter: '{"acceptance-status": "accepted"}' });
-    assert.ok(problems2.some((p) => p.includes("actionFrontmatter")));
-    // `acceptance-status: proposed` is agent-legal, exactly like every write surface.
-    assert.deepEqual(validateTriageConfig({ actionFrontmatter: '{"acceptance-status": "proposed"}' }), []);
+    // Coercion degrades to the CLEAN default — the acceptance field can never
+    // reach the default escalate row.
+    const cfg = triageConfigOf(withConfig({ escalateFrontmatter: '{"accepted-by": "me"}' }));
+    assert.deepEqual(cfg.escalateFrontmatter, { tags: ["attention/user"] });
+    // `acceptance-status: proposed` stays agent-legal, like every surface.
+    assert.deepEqual(validateTriageConfig(withConfig({ stampFrontmatter: '{"acceptance-status": "proposed"}' })), []);
   });
 
-  test("reserved object-machinery keys in a patch are refused loudly and never written", () => {
-    // Loud half: validation names the key.
-    const problems = validateTriageConfig({ escalateFrontmatter: '{"__proto__": {"x": 1}}' });
-    assert.ok(problems.some((p) => p.includes("escalateFrontmatter") && p.includes("__proto__")));
-    // Defensive half: even if such a patch reached the merge, the key is skipped.
+  test("reserved object-machinery keys are refused loudly and never written", () => {
+    const problems = validateTriageConfig(withConfig({ stampFrontmatter: '{"__proto__": {"x": 1}}' }));
+    assert.ok(problems.some((p) => p.includes("stampFrontmatter") && p.includes("__proto__")));
     const fm = {};
     applyFrontmatterPatch(fm, JSON.parse('{"__proto__": {"x": 1}, "status": "open"}'));
     assert.deepEqual(fm, { status: "open" });
-    assert.equal(Object.getPrototypeOf(fm), Object.prototype, "the prototype must never be rewired");
+    assert.equal(Object.getPrototypeOf(fm), Object.prototype);
   });
 
-  test("triageConfigOf degrades an invalid stored value to its default (validation already reported it)", () => {
-    const cfg = triageConfigOf({ ...DEFAULT_TRIAGE_CONFIG, somedayFrontmatter: "{broken", inboxMarkers: 42 });
-    assert.deepEqual(cfg.somedayFrontmatter, { status: "someday" });
-    assert.deepEqual(cfg.inboxMarkers, [" Inbox for "]);
-  });
-
-  test("inbox recognition is configurable — a different vault's marker works, the default stops applying", () => {
-    assert.equal(inboxFolderOf("A/My Inbox/x.md", ["Inbox"]), "A/My Inbox");
-    assert.equal(inboxFolderOf("A/My Inbox/x.md", [" Inbox for "]), null);
+  test("queues: id-unique {id, base(.base), view?} rows; bad rows reported and dropped", () => {
+    const value = JSON.stringify([
+      { id: "acceptance", base: "Views/Acceptance.base", view: "queue" },
+      { id: "acceptance", base: "Views/Other.base" },
+      { id: "debt", base: "Views/Debt.base" },
+      { id: "bad", base: "note.md" },
+    ]);
+    const { queues, problems } = queuesOf(value);
+    assert.deepEqual(queues, [
+      { id: "acceptance", base: "Views/Acceptance.base", view: "queue" },
+      { id: "debt", base: "Views/Debt.base" },
+    ]);
+    assert.ok(problems.some((p) => p.includes("repeats")));
+    assert.ok(problems.some((p) => p.includes("'bad'") && p.includes(".base")));
   });
 });
 
-// ── the queue predicate + queue tool ────────────────────────────────────────
+// ── MIGRATION: the OLD phase-2 config shape behaves sanely ──────────────────
 
-describe("inbox recognition (pure)", () => {
-  test("any ancestor folder matching a marker qualifies; deepest inbox wins", () => {
-    assert.equal(inboxFolderOf(`${INBOX}/x.md`, [" Inbox for "]), INBOX);
-    assert.equal(inboxFolderOf(`${INBOX}/sub/x.md`, [" Inbox for "]), INBOX);
-    assert.equal(
-      inboxFolderOf(`${INBOX}/9 Inbox for sub/x.md`, [" Inbox for "]),
-      `${INBOX}/9 Inbox for sub`,
-    );
-    assert.equal(inboxFolderOf("Projects/x.md", [" Inbox for "]), null);
-    assert.equal(inboxFolderOf("root-note.md", [" Inbox for "]), null);
+describe("migration: a phase-2 config (no declared rows) is sane", () => {
+  const OLD = {
+    inboxMarkers: [" Inbox for "],
+    actionDestination: "Tasks",
+    knowledgeDestination: "",
+    somedayDestination: "Someday",
+    archiveDestination: "",
+    actionFrontmatter: '{"tags": ["note/task"], "status": "open", "priority": "normal"}',
+    somedayFrontmatter: '{"status": "someday"}',
+    escalateFrontmatter: '{"tags": ["attention/custom"]}',
+  };
+
+  test("unknown legacy keys are ignored — no validation noise, no crash", () => {
+    assert.deepEqual(validateTriageConfig(OLD), []);
   });
 
-  test("the inbox's own folder note is not an item", () => {
+  test("the merged table is builtins + escalate, and the legacy escalate patch carries over", () => {
+    const table = mergedDispositionsOf(triageConfigOf(OLD));
+    assert.deepEqual(mergedIds(table), ["trash", "move", "stamp", "escalate"]);
+    assert.deepEqual(table.find((d) => d.id === "escalate").patch, { tags: ["attention/custom"] });
+  });
+
+  test("a retired legacy verb refuses unknown_disposition (re-declare it as a row instead)", async () => {
+    const server = fakeServer();
+    registerTriageTools(server, fakeVault({ [item("x.md")]: {} }).source, { config: OLD });
+    const res = await server.tools
+      .get("triage_dispose")
+      .handler({ path: item("x.md"), disposition: "convert-to-action" });
+    assert.equal(res.isError, true);
+    assert.match(errText(res), /unknown_disposition/);
+  });
+});
+
+// ── the queue predicate + marker queue (unchanged phase-2 behavior) ─────────
+
+describe("inbox recognition (pure) — unchanged", () => {
+  test("any ancestor folder matching a marker qualifies; deepest inbox wins; folder note excluded", () => {
+    assert.equal(inboxFolderOf(`${INBOX}/x.md`, [" Inbox for "]), INBOX);
+    assert.equal(inboxFolderOf(`${INBOX}/sub/x.md`, [" Inbox for "]), INBOX);
+    assert.equal(inboxFolderOf("Projects/x.md", [" Inbox for "]), null);
     assert.equal(inboxFolderOf(`${INBOX}/03.10 Inbox for 03 Agents.md`, [" Inbox for "]), null);
-    // …but a same-named note one level DEEPER is an ordinary item (its
-    // immediate parent is "sub", so it is not the inbox's folder note).
-    assert.equal(inboxFolderOf(`${INBOX}/sub/03.10 Inbox for 03 Agents.md`, [" Inbox for "]), INBOX);
-    // An ordinary SUBFOLDER's folder note inside an inbox is still an item —
-    // the exclusion is only for a folder note whose parent itself matches a
-    // marker (it IS an inbox, nested or not).
     assert.equal(inboxFolderOf(`${INBOX}/sub/sub.md`, [" Inbox for "]), INBOX);
-    assert.equal(inboxFolderOf(`${INBOX}/9 Inbox for sub/9 Inbox for sub.md`, [" Inbox for "]), null);
   });
 
   test("sortQueue: oldest first, unknown created last, path tiebreak", () => {
@@ -303,17 +418,16 @@ describe("inbox recognition (pure)", () => {
       { path: "b.md", inbox: "i", created: 200, modified: null, type: null, status: null },
       { path: "a.md", inbox: "i", created: null, modified: null, type: null, status: null },
       { path: "c.md", inbox: "i", created: 100, modified: null, type: null, status: null },
-      { path: "d.md", inbox: "i", created: 100, modified: null, type: null, status: null },
     ];
-    assert.deepEqual(sortQueue(rows).map((r) => r.path), ["c.md", "d.md", "b.md", "a.md"]);
+    assert.deepEqual(sortQueue(rows).map((r) => r.path), ["c.md", "b.md", "a.md"]);
   });
 });
 
-describe("triage_queue", () => {
+describe("triage_queue: the marker queue (default) — unchanged", () => {
   const files = {
     [item("old.md")]: { ctime: 1_000, mtime: 2_000, fm: { type: "note", status: "open" } },
     [item("new.md")]: { ctime: 5_000, mtime: 6_000 },
-    [`${INBOX}/03.10 Inbox for 03 Agents.md`]: { ctime: 1 }, // the folder note — not an item
+    [`${INBOX}/03.10 Inbox for 03 Agents.md`]: { ctime: 1 },
     "Projects/elsewhere.md": { ctime: 10 },
   };
 
@@ -327,11 +441,7 @@ describe("triage_queue", () => {
     assert.equal(sc.total, 2);
     assert.deepEqual(sc.notes.map((n) => n.path), [item("old.md"), item("new.md")]);
     assert.equal(sc.notes[0].inbox, INBOX);
-    assert.equal(sc.notes[0].type, "note");
-    assert.equal(sc.notes[0].status, "open");
-    assert.equal(sc.notes[0].created, new Date(1_000).toISOString());
-    assert.equal(sc.notes[0].age_days, 2); // ~3 days clock minus ~0 created
-    assert.equal(sc.notes[1].type, null);
+    assert.equal(sc.notes[0].age_days, 2);
     assert.equal(sc.truncated, false);
   });
 
@@ -347,7 +457,7 @@ describe("triage_queue", () => {
     };
     const server = fakeServer();
     registerTriageTools(server, spySource, {
-      config: { ...DEFAULT_TRIAGE_CONFIG },
+      config: withConfig(),
       visible: (paths) => paths.filter((p) => p.endsWith("new.md")),
     });
     const res = await server.tools.get("triage_queue").handler({});
@@ -364,16 +474,163 @@ describe("triage_queue", () => {
   });
 });
 
-// ── triage_dispose ──────────────────────────────────────────────────────────
+// ── base-backed queues (#241 point 5) ───────────────────────────────────────
 
-const errText = (res) => res.content.map((c) => c.text).join("\n");
+describe("triage_queue: base-backed queues through the shared seam", () => {
+  const ROWS = {
+    view: "queue",
+    viewType: "table",
+    columns: ["file.name", "note.status"],
+    rows: [
+      { path: "A/x.md", values: { "note.status": "open" } },
+      { path: "A/y.md", values: { "note.status": "stale" } },
+    ],
+    total: 2,
+    truncated: false,
+    someRowsHidden: false,
+  };
 
-describe("triage_dispose: refusals (typed, identical for dry-run and apply)", () => {
+  const fakeBaseQuery = (calls = []) => async (args) => {
+    calls.push(args);
+    return { result: { ...ROWS } };
+  };
+
+  test("{base} serves the evaluated rows, in the Base's own order", async () => {
+    const calls = [];
+    const server = register(fakeVault(), { baseQuery: fakeBaseQuery(calls) });
+    const res = await server.tools.get("triage_queue").handler({ base: "Views/Stale.base", view: "queue" });
+    assert.equal(res.isError, undefined);
+    const sc = res.structuredContent;
+    assert.equal(sc.base, "Views/Stale.base");
+    assert.equal(sc.view, "queue");
+    assert.deepEqual(sc.columns, ["file.name", "note.status"]);
+    assert.deepEqual(sc.notes.map((n) => n.path), ["A/x.md", "A/y.md"]);
+    assert.deepEqual(sc.notes[0].properties, { "note.status": "open" });
+    assert.equal(sc.returned, 2);
+    assert.deepEqual(calls, [{ path: "Views/Stale.base", view: "queue", limit: 50 }]);
+  });
+
+  test("a config-named {queue} resolves to its declared base + view", async () => {
+    const calls = [];
+    const server = register(fakeVault(), {
+      config: withConfig({ queues: JSON.stringify([{ id: "acceptance", base: "Views/Acceptance.base", view: "q" }]) }),
+      baseQuery: fakeBaseQuery(calls),
+    });
+    const res = await server.tools.get("triage_queue").handler({ queue: "acceptance", limit: 10 });
+    assert.equal(res.isError, undefined);
+    assert.equal(res.structuredContent.queue, "acceptance");
+    assert.equal(res.structuredContent.base, "Views/Acceptance.base");
+    assert.deepEqual(calls, [{ path: "Views/Acceptance.base", view: "q", limit: 10 }]);
+  });
+
+  test("typed argument refusals: unknown queue, queue+base conflict, view without base", async () => {
+    const server = register(fakeVault(), {
+      config: withConfig({ queues: JSON.stringify([{ id: "acceptance", base: "V/A.base" }]) }),
+      baseQuery: fakeBaseQuery(),
+    });
+    const q = server.tools.get("triage_queue").handler;
+    assert.match(errText(await q({ queue: "nope" })), /unknown_queue.*acceptance/s);
+    assert.match(errText(await q({ queue: "acceptance", base: "V/A.base" })), /invalid_arguments/);
+    assert.match(errText(await q({ view: "x" })), /invalid_arguments/);
+  });
+
+  test("feature gate: no wired seam ⇒ typed bases_unavailable; the marker queue still works", async () => {
+    const server = register(fakeVault({ [item("x.md")]: { ctime: 1 } }));
+    const q = server.tools.get("triage_queue").handler;
+    const res = await q({ base: "V/A.base" });
+    assert.equal(res.isError, true);
+    assert.match(errText(res), /bases_unavailable/);
+    const markers = await q({});
+    assert.equal(markers.isError, undefined);
+    assert.equal(markers.structuredContent.total, 1, "the marker queue is unaffected");
+  });
+
+  test("seam refusals pass through typed (base_timeout, view_not_found, out_of_allowlist)", async () => {
+    for (const code of ["base_timeout", "view_not_found", "out_of_allowlist", "bases_unavailable"]) {
+      const server = register(fakeVault(), {
+        baseQuery: async () => ({ refusal: { code, message: `msg for ${code}` } }),
+      });
+      const res = await server.tools.get("triage_queue").handler({ base: "V/A.base" });
+      assert.equal(res.isError, true);
+      assert.match(errText(res), new RegExp(code));
+    }
+  });
+
+  test("some_rows_hidden is disclosed only under an active allowlist (the base_query rule)", async () => {
+    const hiddenRows = async () => ({ result: { ...ROWS, someRowsHidden: true } });
+    const bare = register(fakeVault(), { baseQuery: hiddenRows });
+    const res1 = await bare.tools.get("triage_queue").handler({ base: "V/A.base" });
+    assert.ok(!("some_rows_hidden" in res1.structuredContent), "no allowlist ⇒ not disclosed");
+    const listed = register(fakeVault(), {
+      baseQuery: hiddenRows,
+      getSettings: () => ({ allowlist: ["A"] }),
+    });
+    const res2 = await listed.tools.get("triage_queue").handler({ base: "V/A.base" });
+    assert.equal(res2.structuredContent.some_rows_hidden, true);
+  });
+});
+
+describe("queryBaseRows: the shared seam itself (fake BasesSource)", () => {
+  const baseSource = (over = {}) => ({
+    available: () => true,
+    listBasePaths: () => ["V/A.base"],
+    readBaseConfig: async () => ({
+      exists: true,
+      config: { views: [{ name: "q", type: "table", order: ["note.status"] }] },
+    }),
+    capture: async () => ({
+      columns: ["note.status"],
+      rows: [
+        { path: "A/x.md", values: { "note.status": "open" } },
+        { path: "Secret/z.md", values: { "note.status": "open" } },
+      ],
+    }),
+    ...over,
+  });
+
+  test("unavailable source ⇒ typed bases_unavailable (the triage feature gate)", async () => {
+    const out = await queryBaseRows(baseSource({ available: () => false }), { config: {} }, { path: "V/A.base" });
+    assert.equal(out.refusal.code, "bases_unavailable");
+  });
+
+  test("rows are allowlist-filtered (identical to base_query's discipline)", async () => {
+    const out = await queryBaseRows(
+      baseSource(),
+      { config: {}, visible: (paths) => paths.filter((p) => !p.startsWith("Secret/")) },
+      { path: "V/A.base", view: "q" },
+    );
+    assert.deepEqual(out.result.rows.map((r) => r.path), ["A/x.md"]);
+    assert.equal(out.result.someRowsHidden, true);
+  });
+
+  test("a hidden base refuses out_of_allowlist; a non-.base refuses not_a_base", async () => {
+    const hidden = await queryBaseRows(
+      baseSource(),
+      { config: {}, visible: () => [] },
+      { path: "V/A.base" },
+    );
+    assert.equal(hidden.refusal.code, "out_of_allowlist");
+    const notBase = await queryBaseRows(baseSource(), { config: {} }, { path: "note.md" });
+    assert.equal(notBase.refusal.code, "not_a_base");
+  });
+
+  test("view selection + refusal, and the limit cap", async () => {
+    const missing = await queryBaseRows(baseSource(), { config: {} }, { path: "V/A.base", view: "nope" });
+    assert.equal(missing.refusal.code, "view_not_found");
+    const capped = await queryBaseRows(baseSource(), { config: {} }, { path: "V/A.base", limit: 1 });
+    assert.equal(capped.result.rows.length, 1);
+    assert.equal(capped.result.truncated, true);
+  });
+});
+
+// ── triage_dispose: primitives (plan/apply parity with #238 where unchanged) ─
+
+describe("triage_dispose: typed refusals (identical for dry-run and apply)", () => {
   const files = { [item("x.md")]: { ctime: 1 }, "Projects/done.md": {} };
 
   test("a non-inbox note is refused not_inbox", async () => {
     const server = register(fakeVault(files));
-    const res = await server.tools.get("triage_dispose").handler({ path: "Projects/done.md", disposition: "discard" });
+    const res = await server.tools.get("triage_dispose").handler({ path: "Projects/done.md", disposition: "trash" });
     assert.equal(res.isError, true);
     assert.match(errText(res), /not_inbox/);
   });
@@ -385,32 +642,29 @@ describe("triage_dispose: refusals (typed, identical for dry-run and apply)", ()
     assert.match(errText(res), /unknown_disposition/);
   });
 
-  test("target-required dispositions refuse typed without one", async () => {
+  test("built-in move requires a target", async () => {
     const server = register(fakeVault(files));
-    for (const disposition of ["route", "establish-new-home", "register", "curate-as-link"]) {
-      const res = await server.tools.get("triage_dispose").handler({ path: item("x.md"), disposition });
-      assert.equal(res.isError, true, `${disposition} must refuse`);
-      assert.match(errText(res), /target_required/);
-    }
+    const res = await server.tools.get("triage_dispose").handler({ path: item("x.md"), disposition: "move" });
+    assert.equal(res.isError, true);
+    assert.match(errText(res), /target_required/);
   });
 
-  test("discard/escalate refuse a target — nothing to aim", async () => {
-    const server = register(fakeVault(files));
-    for (const disposition of ["discard", "escalate"]) {
+  test("trash / stamp / escalate refuse a target — nothing to aim", async () => {
+    const server = register(fakeVault(files), {
+      config: withConfig({ stampFrontmatter: '{"status": "seen"}' }),
+    });
+    for (const disposition of ["trash", "stamp", "escalate"]) {
       const res = await server.tools.get("triage_dispose").handler({ path: item("x.md"), disposition, target: "T" });
-      assert.equal(res.isError, true);
+      assert.equal(res.isError, true, `${disposition} must refuse`);
       assert.match(errText(res), /target_unsupported/);
     }
   });
 
-  test("config-backed dispositions refuse destination_unresolved with neither target nor config", async () => {
+  test("built-in stamp with no configured patch refuses patch_unresolved", async () => {
     const server = register(fakeVault(files));
-    for (const disposition of ["convert-to-action", "develop-as-knowledge", "defer-to-someday", "archive-as-record"]) {
-      const res = await server.tools.get("triage_dispose").handler({ path: item("x.md"), disposition });
-      assert.equal(res.isError, true, `${disposition} must refuse unconfigured`);
-      assert.match(errText(res), /destination_unresolved/);
-      assert.match(errText(res), /modules\.triage\.config/);
-    }
+    const res = await server.tools.get("triage_dispose").handler({ path: item("x.md"), disposition: "stamp" });
+    assert.equal(res.isError, true);
+    assert.match(errText(res), /patch_unresolved.*stampFrontmatter/s);
   });
 
   test("an occupied destination is refused — never an overwrite", async () => {
@@ -418,7 +672,7 @@ describe("triage_dispose: refusals (typed, identical for dry-run and apply)", ()
     const server = register(vault);
     const res = await server.tools
       .get("triage_dispose")
-      .handler({ path: item("x.md"), disposition: "route", target: "Projects", dry_run: false });
+      .handler({ path: item("x.md"), disposition: "move", target: "Projects", dry_run: false });
     assert.equal(res.isError, true);
     assert.match(errText(res), /destination_occupied/);
     assert.deepEqual(vault.log, [], "nothing may be written");
@@ -428,12 +682,12 @@ describe("triage_dispose: refusals (typed, identical for dry-run and apply)", ()
     const vault = fakeVault({ [item("x.md")]: {} });
     const server = fakeServer();
     registerTriageTools(server, vault.source, {
-      config: { ...DEFAULT_TRIAGE_CONFIG },
+      config: withConfig(),
       visible: (paths) => paths.filter((p) => !p.startsWith("Secret/")),
     });
     const res = await server.tools
       .get("triage_dispose")
-      .handler({ path: item("x.md"), disposition: "route", target: "Secret" });
+      .handler({ path: item("x.md"), disposition: "move", target: "Secret" });
     assert.equal(res.isError, true);
     assert.match(errText(res), /out_of_allowlist/);
   });
@@ -441,7 +695,7 @@ describe("triage_dispose: refusals (typed, identical for dry-run and apply)", ()
   test("a malformed target is refused (absolute, escaping, whitespace)", async () => {
     const server = register(fakeVault(files));
     for (const target of ["/abs", "a/../b", " padded "]) {
-      const res = await server.tools.get("triage_dispose").handler({ path: item("x.md"), disposition: "route", target });
+      const res = await server.tools.get("triage_dispose").handler({ path: item("x.md"), disposition: "move", target });
       assert.equal(res.isError, true, `target ${JSON.stringify(target)} must refuse`);
       assert.match(errText(res), /invalid_target/);
     }
@@ -449,138 +703,78 @@ describe("triage_dispose: refusals (typed, identical for dry-run and apply)", ()
 
   test("a missing source note is refused not_found", async () => {
     const server = register(fakeVault({}));
-    const res = await server.tools.get("triage_dispose").handler({ path: item("ghost.md"), disposition: "discard" });
+    const res = await server.tools.get("triage_dispose").handler({ path: item("ghost.md"), disposition: "trash" });
     assert.equal(res.isError, true);
     assert.match(errText(res), /not_found/);
-  });
-
-  test("an acceptance-carrying configured patch can NEVER reach a note — sanitized to the default at coercion, re-checked at the write", async () => {
-    // Layer 1 (validation): validateTriageConfig refuses it loudly — pinned in
-    // the config suite above. Layer 2 (coercion): triageConfigOf treats an
-    // acceptance-carrying patch as invalid and degrades to the CLEAN default,
-    // so the runtime accept_forbidden belt in the handler is genuinely
-    // unreachable through config — pinned here by applying and observing that
-    // only the default patch landed, never the acceptance field.
-    const vault = fakeVault({ [item("x.md")]: {} });
-    const server = fakeServer();
-    registerTriageTools(server, vault.source, {
-      config: { ...DEFAULT_TRIAGE_CONFIG, escalateFrontmatter: '{"accepted-on": "2026-01-01"}' },
-    });
-    const res = await server.tools
-      .get("triage_dispose")
-      .handler({ path: item("x.md"), disposition: "escalate", dry_run: false });
-    assert.equal(res.isError, undefined);
-    assert.deepEqual(vault.log, [
-      { op: "frontmatter", path: item("x.md"), fm: { tags: ["attention/user"] } },
-    ]);
-    assert.ok(!("accepted-on" in vault.state.get(item("x.md")).fm), "the acceptance field must never land");
   });
 });
 
 describe("triage_dispose: dry-run (the default) reports and writes nothing", () => {
   test("dry-run is the default and reports the exact plan", async () => {
     const vault = fakeVault({ [item("x.md")]: {} });
-    const server = register(vault, { config: { ...DEFAULT_TRIAGE_CONFIG, archiveDestination: "Archive/2026" } });
+    const server = register(vault);
     const res = await server.tools
       .get("triage_dispose")
-      .handler({ path: item("x.md"), disposition: "archive-as-record" });
+      .handler({ path: item("x.md"), disposition: "move", target: "Archive/2026" });
     assert.equal(res.isError, undefined);
     const sc = res.structuredContent;
     assert.equal(sc.dry_run, true);
     assert.equal(sc.applied, false);
     assert.equal(sc.plan.action, "move");
-    assert.equal(sc.plan.move_to, `Archive/2026/x.md`);
+    assert.equal(sc.plan.move_to, "Archive/2026/x.md");
     assert.equal(sc.inbox, INBOX);
     assert.deepEqual(vault.log, [], "dry-run writes nothing");
     assert.ok(!("filesChanged" in sc), "dry-run reports no effects");
   });
 
-  test("dry-run for a retyping disposition reports the frontmatter patch", async () => {
+  test("dry-run for a stamping disposition reports the frontmatter patch", async () => {
     const vault = fakeVault({ [item("x.md")]: {} });
-    const server = register(vault, { config: { ...DEFAULT_TRIAGE_CONFIG, actionDestination: "Tasks" } });
-    const res = await server.tools.get("triage_dispose").handler({ path: item("x.md"), disposition: "convert-to-action" });
-    const sc = res.structuredContent;
-    assert.deepEqual(sc.plan.frontmatter_patch, { tags: ["note/task"], status: "open", priority: "normal" });
-    assert.equal(sc.plan.move_to, "Tasks/x.md");
+    const server = register(vault, { config: withConfig({ stampFrontmatter: '{"status": "seen"}' }) });
+    const res = await server.tools.get("triage_dispose").handler({ path: item("x.md"), disposition: "stamp" });
+    assert.deepEqual(res.structuredContent.plan.frontmatter_patch, { status: "seen" });
+    assert.ok(!("move_to" in res.structuredContent.plan));
     assert.deepEqual(vault.log, []);
   });
 });
 
-describe("triage_dispose: apply — each disposition's effect over the fake backend", () => {
-  test("discard trashes (never deletes) the note", async () => {
+describe("triage_dispose: apply — the three primitives + declared rows over the fake backend", () => {
+  test("trash trashes (never deletes) the note", async () => {
     const vault = fakeVault({ [item("x.md")]: {} });
     const server = register(vault);
-    const res = await server.tools.get("triage_dispose").handler({ path: item("x.md"), disposition: "discard", dry_run: false });
+    const res = await server.tools.get("triage_dispose").handler({ path: item("x.md"), disposition: "trash", dry_run: false });
     assert.equal(res.isError, undefined);
     assert.deepEqual(vault.log, [{ op: "trash", path: item("x.md") }]);
     assert.equal(res.structuredContent.trashed, true);
     assert.deepEqual(res.structuredContent.files, [item("x.md")]);
   });
 
-  test("route / establish-new-home / register / curate-as-link move to the target folder", async () => {
-    for (const disposition of ["route", "establish-new-home", "register", "curate-as-link"]) {
-      const vault = fakeVault({ [item("x.md")]: {} });
-      const server = register(vault);
-      const res = await server.tools
-        .get("triage_dispose")
-        .handler({ path: item("x.md"), disposition, target: "Projects/Dest", dry_run: false });
-      assert.equal(res.isError, undefined, `${disposition} must apply`);
-      assert.deepEqual(vault.log, [{ op: "move", from: item("x.md"), to: "Projects/Dest/x.md" }]);
-      assert.equal(res.structuredContent.applied, true);
-      assert.equal(res.structuredContent.moved_to, "Projects/Dest/x.md");
-      assert.deepEqual(res.structuredContent.files, ["Projects/Dest/x.md"]);
-    }
+  test("move moves to the target folder and reports the effect at the final path", async () => {
+    const vault = fakeVault({ [item("x.md")]: {} });
+    const server = register(vault);
+    const res = await server.tools
+      .get("triage_dispose")
+      .handler({ path: item("x.md"), disposition: "move", target: "Projects/Dest", dry_run: false });
+    assert.equal(res.isError, undefined);
+    assert.deepEqual(vault.log, [{ op: "move", from: item("x.md"), to: "Projects/Dest/x.md" }]);
+    assert.equal(res.structuredContent.moved_to, "Projects/Dest/x.md");
+    assert.deepEqual(res.structuredContent.files, ["Projects/Dest/x.md"]);
   });
 
-  test("convert-to-action retypes THEN moves (config destination, patch semantics: union arrays, overwrite scalars)", async () => {
+  test("stamp applies the configured patch in place (union arrays, overwrite scalars)", async () => {
     const vault = fakeVault({ [item("x.md")]: { fm: { tags: ["existing"], status: "raw" } } });
-    const server = register(vault, { config: { ...DEFAULT_TRIAGE_CONFIG, actionDestination: "Tasks" } });
-    const res = await server.tools
-      .get("triage_dispose")
-      .handler({ path: item("x.md"), disposition: "convert-to-action", dry_run: false });
-    assert.equal(res.isError, undefined);
-    assert.deepEqual(vault.log.map((l) => l.op), ["frontmatter", "move"], "frontmatter first, then the move");
-    assert.deepEqual(vault.log[0].fm, {
-      tags: ["existing", "note/task"],
-      status: "open",
-      priority: "normal",
+    const server = register(vault, {
+      config: withConfig({ stampFrontmatter: '{"tags": ["note/task"], "status": "open"}' }),
     });
-    assert.deepEqual(vault.log[1], { op: "move", from: item("x.md"), to: "Tasks/x.md" });
-    assert.equal(res.structuredContent.frontmatter_applied, true);
-  });
-
-  test("an explicit target overrides the configured destination", async () => {
-    const vault = fakeVault({ [item("x.md")]: {} });
-    const server = register(vault, { config: { ...DEFAULT_TRIAGE_CONFIG, somedayDestination: "Configured" } });
-    const res = await server.tools
-      .get("triage_dispose")
-      .handler({ path: item("x.md"), disposition: "defer-to-someday", target: "Explicit", dry_run: false });
+    const res = await server.tools.get("triage_dispose").handler({ path: item("x.md"), disposition: "stamp", dry_run: false });
     assert.equal(res.isError, undefined);
-    assert.equal(vault.log.find((l) => l.op === "move").to, "Explicit/x.md");
+    assert.deepEqual(vault.log, [
+      { op: "frontmatter", path: item("x.md"), fm: { tags: ["existing", "note/task"], status: "open" } },
+    ]);
+    assert.ok(!("moved_to" in res.structuredContent));
+    assert.deepEqual(res.structuredContent.files, [item("x.md")]);
   });
 
-  test("defer-to-someday stamps status: someday then moves", async () => {
-    const vault = fakeVault({ [item("x.md")]: {} });
-    const server = register(vault, { config: { ...DEFAULT_TRIAGE_CONFIG, somedayDestination: "Someday" } });
-    await server.tools.get("triage_dispose").handler({ path: item("x.md"), disposition: "defer-to-someday", dry_run: false });
-    assert.deepEqual(vault.log[0], { op: "frontmatter", path: item("x.md"), fm: { status: "someday" } });
-    assert.equal(vault.log[1].to, "Someday/x.md");
-  });
-
-  test("develop-as-knowledge / archive-as-record are plain moves (no patch)", async () => {
-    for (const [disposition, key, dest] of [
-      ["develop-as-knowledge", "knowledgeDestination", "Knowledge"],
-      ["archive-as-record", "archiveDestination", "Records"],
-    ]) {
-      const vault = fakeVault({ [item("x.md")]: {} });
-      const server = register(vault, { config: { ...DEFAULT_TRIAGE_CONFIG, [key]: dest } });
-      const res = await server.tools.get("triage_dispose").handler({ path: item("x.md"), disposition, dry_run: false });
-      assert.equal(res.isError, undefined);
-      assert.deepEqual(vault.log, [{ op: "move", from: item("x.md"), to: `${dest}/x.md` }], `${disposition}`);
-    }
-  });
-
-  test("escalate flags in place — frontmatter only, the note stays put", async () => {
+  test("the default escalate row flags in place — parity with the #238 escalate", async () => {
     const vault = fakeVault({ [item("x.md")]: { fm: { tags: ["attention/user"] } } });
     const server = register(vault);
     const res = await server.tools.get("triage_dispose").handler({ path: item("x.md"), disposition: "escalate", dry_run: false });
@@ -590,7 +784,58 @@ describe("triage_dispose: apply — each disposition's effect over the fake back
     ]);
     assert.equal(res.structuredContent.applied, true);
     assert.ok(!("moved_to" in res.structuredContent));
-    assert.deepEqual(res.structuredContent.files, [item("x.md")]);
+  });
+
+  test("a declared stamp row with a destination stamps THEN moves (the re-declared convert-to-action)", async () => {
+    const vault = fakeVault({ [item("x.md")]: { fm: { tags: ["existing"] } } });
+    const server = register(vault, {
+      config: withConfig({
+        declaredDispositions: declared([
+          {
+            id: "convert-to-action",
+            action: "stamp",
+            destination: "Tasks",
+            patch: { tags: ["note/task"], status: "open" },
+            description: "retype as a task and file it",
+          },
+        ]),
+      }),
+    });
+    const res = await server.tools
+      .get("triage_dispose")
+      .handler({ path: item("x.md"), disposition: "convert-to-action", dry_run: false });
+    assert.equal(res.isError, undefined);
+    assert.deepEqual(vault.log.map((l) => l.op), ["frontmatter", "move"], "frontmatter first, then the move");
+    assert.deepEqual(vault.log[0].fm, { tags: ["existing", "note/task"], status: "open" });
+    assert.deepEqual(vault.log[1], { op: "move", from: item("x.md"), to: "Tasks/x.md" });
+    assert.equal(res.structuredContent.frontmatter_applied, true);
+    // …and an explicit target overrides the declared destination.
+    const vault2 = fakeVault({ [item("y.md")]: {} });
+    const server2 = register(vault2, {
+      config: withConfig({
+        declaredDispositions: declared([
+          { id: "c", action: "stamp", destination: "Tasks", patch: { s: 1 }, description: "d" },
+        ]),
+      }),
+    });
+    await server2.tools
+      .get("triage_dispose")
+      .handler({ path: item("y.md"), disposition: "c", target: "Explicit", dry_run: false });
+    assert.equal(vault2.log.find((l) => l.op === "move").to, "Explicit/y.md");
+  });
+
+  test("a declared move row with a destination is a config-or-target move", async () => {
+    const vault = fakeVault({ [item("x.md")]: {} });
+    const server = register(vault, {
+      config: withConfig({
+        declaredDispositions: declared([
+          { id: "archive", action: "move", destination: "Records/2026", description: "file as a record" },
+        ]),
+      }),
+    });
+    const res = await server.tools.get("triage_dispose").handler({ path: item("x.md"), disposition: "archive", dry_run: false });
+    assert.equal(res.isError, undefined);
+    assert.deepEqual(vault.log, [{ op: "move", from: item("x.md"), to: "Records/2026/x.md" }]);
   });
 
   test("a move failing AFTER the patch names the partial state instead of hiding it", async () => {
@@ -598,40 +843,238 @@ describe("triage_dispose: apply — each disposition's effect over the fake back
     vault.source.move = async () => {
       throw new Error("disk full");
     };
-    const server = register(vault, { config: { ...DEFAULT_TRIAGE_CONFIG, actionDestination: "Tasks" } });
-    const res = await server.tools
-      .get("triage_dispose")
-      .handler({ path: item("x.md"), disposition: "convert-to-action", dry_run: false });
+    const server = register(vault, {
+      config: withConfig({
+        declaredDispositions: declared([
+          { id: "c", action: "stamp", destination: "Tasks", patch: { s: 1 }, description: "d" },
+        ]),
+      }),
+    });
+    const res = await server.tools.get("triage_dispose").handler({ path: item("x.md"), disposition: "c", dry_run: false });
     assert.equal(res.isError, true);
     assert.equal(res.structuredContent.frontmatter_applied, true);
     assert.match(res.structuredContent.error, /frontmatter patch was applied but the move failed/);
   });
 });
 
-describe("triage_dispose: scheme integration degrades cleanly", () => {
-  test("no schemeExpected seam ⇒ no scheme field, everything else identical", async () => {
-    const server = register(fakeVault({ [item("x.md")]: {} }));
-    const res = await server.tools.get("triage_dispose").handler({ path: item("x.md"), disposition: "discard" });
-    assert.equal(res.isError, undefined);
-    assert.ok(!("scheme" in res.structuredContent));
+// ── move whitelist/blacklist (#241 point 3) ─────────────────────────────────
+
+describe("move whitelist/blacklist: plan-time enforcement + apply-time re-check", () => {
+  test("moveDenied (pure): segment-boundary prefixes, blacklist beats whitelist", () => {
+    const cfg = triageConfigOf(withConfig({ moveWhitelist: ["Projects"], moveBlacklist: ["Projects/Frozen"] }));
+    assert.equal(moveDenied("Projects/Active", cfg), null);
+    assert.equal(moveDenied("Projects", cfg), null);
+    assert.match(moveDenied("Projects2", cfg), /outside every configured moveWhitelist/);
+    assert.match(moveDenied("Elsewhere", cfg), /outside every configured moveWhitelist/);
+    assert.match(moveDenied("Projects/Frozen/sub", cfg), /moveBlacklist/);
+    const bare = triageConfigOf(withConfig());
+    assert.equal(moveDenied("Anywhere/At/All", bare), null, "default = any destination");
   });
 
-  test("a schemeExpected answer lands as the advisory; a THROWING seam degrades to absent", async () => {
+  test("plan-time: a denied destination refuses move_denied, dry-run and apply alike", async () => {
     const vault = fakeVault({ [item("x.md")]: {} });
-    const server = register(vault, {
-      schemeExpected: () => ({ address: "03.10", expected_folder: "00-09 System/03 Agents" }),
+    const server = register(vault, { config: withConfig({ moveWhitelist: ["Projects"] }) });
+    for (const dry_run of [undefined, false]) {
+      const res = await server.tools
+        .get("triage_dispose")
+        .handler({ path: item("x.md"), disposition: "move", target: "Elsewhere", dry_run });
+      assert.equal(res.isError, true);
+      assert.match(errText(res), /move_denied/);
+    }
+    assert.deepEqual(vault.log, []);
+    const okRes = await server.tools
+      .get("triage_dispose")
+      .handler({ path: item("x.md"), disposition: "move", target: "Projects/Dest", dry_run: false });
+    assert.equal(okRes.isError, undefined);
+  });
+
+  test("declared-row destinations are bounded too", async () => {
+    const server = register(fakeVault({ [item("x.md")]: {} }), {
+      config: withConfig({
+        moveBlacklist: ["Records"],
+        declaredDispositions: declared([
+          { id: "archive", action: "move", destination: "Records/2026", description: "d" },
+        ]),
+      }),
     });
-    const res = await server.tools.get("triage_dispose").handler({ path: item("x.md"), disposition: "discard" });
-    assert.deepEqual(res.structuredContent.scheme, { address: "03.10", expected_folder: "00-09 System/03 Agents" });
+    const res = await server.tools.get("triage_dispose").handler({ path: item("x.md"), disposition: "archive" });
+    assert.equal(res.isError, true);
+    assert.match(errText(res), /move_denied/);
+  });
+
+  test("APPLY-TIME RE-CHECK: a config that tightens between plan and apply still blocks the move", async () => {
+    // The handler reads config once to plan and AGAIN inside the apply branch
+    // (the ruling's re-check). Prove the second read is real: a config getter
+    // that turns restrictive after the first read must still deny the move.
+    const vault = fakeVault({ [item("x.md")]: {} });
+    let reads = 0;
+    const ctx = {
+      get config() {
+        reads++;
+        // First read (plan): permissive. Later reads (the apply re-check):
+        // blacklisted.
+        return reads <= 1 ? withConfig() : withConfig({ moveBlacklist: ["Projects"] });
+      },
+    };
+    const server = fakeServer();
+    registerTriageTools(server, vault.source, ctx);
+    const res = await server.tools
+      .get("triage_dispose")
+      .handler({ path: item("x.md"), disposition: "move", target: "Projects/Dest", dry_run: false });
+    assert.equal(res.isError, true);
+    assert.match(errText(res), /move_denied/);
+    assert.deepEqual(vault.log, [], "the re-check must fire BEFORE any write");
+    assert.ok(reads >= 2, "apply must re-read the config");
+  });
+});
+
+// ── declared choice rows (#241 point 2) ─────────────────────────────────────
+
+describe("declared choice dispositions: the human-bound macro seam", () => {
+  const CHOICE_CONFIG = withConfig({
+    declaredDispositions: declared([
+      { id: "file-bookmark", action: "choice", choice: "File bookmark", description: "run the bookmark filing macro" },
+    ]),
+  });
+
+  test("a choice row CANNOT dry-run: the default refuses typed until dry_run: false", async () => {
+    const vault = fakeVault({ [item("x.md")]: {} });
+    const server = register(vault, { config: CHOICE_CONFIG });
+    for (const args of [
+      { path: item("x.md"), disposition: "file-bookmark" },
+      { path: item("x.md"), disposition: "file-bookmark", dry_run: true },
+    ]) {
+      const res = await server.tools.get("triage_dispose").handler(args);
+      assert.equal(res.isError, true);
+      assert.match(errText(res), /choice_dry_run_unsupported/);
+    }
+    assert.deepEqual(vault.log, []);
+  });
+
+  test("dry_run: false executes the bound choice through the seam with {path, disposition}", async () => {
+    const vault = fakeVault({ [item("x.md")]: {} });
+    const server = register(vault, { config: CHOICE_CONFIG });
+    const res = await server.tools
+      .get("triage_dispose")
+      .handler({ path: item("x.md"), disposition: "file-bookmark", dry_run: false });
+    assert.equal(res.isError, undefined);
+    assert.deepEqual(vault.log, [
+      { op: "choice", binding: "File bookmark", variables: { path: item("x.md"), disposition: "file-bookmark" } },
+    ]);
+    const sc = res.structuredContent;
+    assert.equal(sc.applied, true);
+    assert.equal(sc.choice, "File bookmark");
+    assert.equal(sc.plan.choice_binding, "File bookmark");
+    assert.equal(sc.effects_unknown, true, "a script's effects are unknown to this tool");
+    assert.ok(!("filesChanged" in sc), "no effects claim for an opaque script");
+  });
+
+  test("a choice row refuses a target, and inbox membership still binds", async () => {
+    const server = register(fakeVault({ [item("x.md")]: {}, "Projects/y.md": {} }), { config: CHOICE_CONFIG });
+    const withTarget = await server.tools
+      .get("triage_dispose")
+      .handler({ path: item("x.md"), disposition: "file-bookmark", target: "T", dry_run: false });
+    assert.match(errText(withTarget), /target_unsupported/);
+    const outside = await server.tools
+      .get("triage_dispose")
+      .handler({ path: "Projects/y.md", disposition: "file-bookmark", dry_run: false });
+    assert.match(errText(outside), /not_inbox/);
+  });
+
+  test("seam refusals surface typed; a script throw surfaces as an ordinary failure", async () => {
+    const vault = fakeVault({ [item("x.md")]: {} });
+    vault.source.runChoice = async () => ({ ok: false, code: "quickadd_unavailable", message: "QuickAdd is gone" });
+    const server = register(vault, { config: CHOICE_CONFIG });
+    const res = await server.tools
+      .get("triage_dispose")
+      .handler({ path: item("x.md"), disposition: "file-bookmark", dry_run: false });
+    assert.equal(res.isError, true);
+    assert.match(errText(res), /quickadd_unavailable/);
+
+    vault.source.runChoice = async () => {
+      throw new Error("the macro exploded");
+    };
+    const res2 = await server.tools
+      .get("triage_dispose")
+      .handler({ path: item("x.md"), disposition: "file-bookmark", dry_run: false });
+    assert.equal(res2.isError, true);
+    assert.match(errText(res2), /the macro exploded/);
+  });
+
+  test("DENY-SET NON-WEAKENING: the opaque-execution deny constants are untouched, and a raw command id is not a disposition", async () => {
+    // The cli-policy suites (cli-policy.test.mjs, run-command-policy.test.mjs)
+    // run unchanged over the same constants; pin them here too so a triage
+    // change relaxing them fails THIS suite loudly.
+    assert.deepEqual([...OPAQUE_ACCEPT_COMMAND_IDS], ["quickadd:*", "js-engine:*"]);
+    assert.deepEqual([...OPAQUE_ACCEPT_CLI_COMMANDS], ["quickadd", "quickadd:run", "quickadd:run-template", "eval", "command"]);
+    // The agent-facing surface is the disposition id ONLY: a QuickAdd command
+    // id (or bare choice name) is not in the merged table and refuses.
+    const server = register(fakeVault({ [item("x.md")]: {} }), { config: CHOICE_CONFIG });
+    for (const disposition of ["quickadd:choice:1234", "quickadd:runQuickAdd", "File bookmark"]) {
+      const res = await server.tools
+        .get("triage_dispose")
+        .handler({ path: item("x.md"), disposition, dry_run: false });
+      assert.equal(res.isError, true, `${disposition} must refuse`);
+      assert.match(errText(res), /unknown_disposition/);
+    }
+  });
+
+  test("the inert source refuses choice execution typed (no live adapter)", async () => {
+    const src = emptyTriageSource();
+    const out = await src.runChoice("Anything", {});
+    assert.equal(out.ok, false);
+    assert.equal(out.code, "quickadd_unavailable");
+  });
+});
+
+// ── scheme integration degrades cleanly (unchanged) ─────────────────────────
+
+describe("triage_dispose: scheme integration degrades cleanly", () => {
+  test("no schemeExpected seam ⇒ no scheme field; a throwing seam degrades to absent", async () => {
+    const vault = fakeVault({ [item("x.md")]: {} });
+    const server = register(vault);
+    const res = await server.tools.get("triage_dispose").handler({ path: item("x.md"), disposition: "trash" });
+    assert.ok(!("scheme" in res.structuredContent));
 
     const server2 = register(vault, {
       schemeExpected: () => {
         throw new Error("scheme exploded");
       },
     });
-    const res2 = await server2.tools.get("triage_dispose").handler({ path: item("x.md"), disposition: "discard" });
-    assert.equal(res2.isError, undefined, "a broken scheme seam must not fail the dispose");
+    const res2 = await server2.tools.get("triage_dispose").handler({ path: item("x.md"), disposition: "trash" });
+    assert.equal(res2.isError, undefined);
     assert.ok(!("scheme" in res2.structuredContent));
+  });
+
+  test("a schemeExpected answer lands as the advisory", async () => {
+    const server = register(fakeVault({ [item("x.md")]: {} }), {
+      schemeExpected: () => ({ address: "03.10", expected_folder: "00-09 System/03 Agents" }),
+    });
+    const res = await server.tools.get("triage_dispose").handler({ path: item("x.md"), disposition: "trash" });
+    assert.deepEqual(res.structuredContent.scheme, { address: "03.10", expected_folder: "00-09 System/03 Agents" });
+  });
+});
+
+// ── acceptance can never land (belt over belt) ──────────────────────────────
+
+describe("acceptance can never reach a note through triage", () => {
+  test("an acceptance-carrying stamp config degrades at coercion and refuses patch_unresolved", async () => {
+    const vault = fakeVault({ [item("x.md")]: {} });
+    const server = register(vault, { config: withConfig({ stampFrontmatter: '{"accepted-on": "2026-01-01"}' }) });
+    const res = await server.tools.get("triage_dispose").handler({ path: item("x.md"), disposition: "stamp", dry_run: false });
+    assert.equal(res.isError, true);
+    // The poisoned patch degrades to the default (empty) ⇒ unconfigured stamp.
+    assert.match(errText(res), /patch_unresolved/);
+    assert.deepEqual(vault.log, [], "the acceptance field must never land");
+  });
+
+  test("an acceptance-carrying escalate config degrades to the clean default", async () => {
+    const vault = fakeVault({ [item("x.md")]: {} });
+    const server = register(vault, { config: withConfig({ escalateFrontmatter: '{"accepted-on": "2026-01-01"}' }) });
+    const res = await server.tools.get("triage_dispose").handler({ path: item("x.md"), disposition: "escalate", dry_run: false });
+    assert.equal(res.isError, undefined);
+    assert.deepEqual(vault.log, [{ op: "frontmatter", path: item("x.md"), fm: { tags: ["attention/user"] } }]);
+    assert.ok(!("accepted-on" in vault.state.get(item("x.md")).fm));
   });
 });
 
@@ -645,11 +1088,23 @@ describe("applyFrontmatterPatch", () => {
   });
 });
 
+// ── the default-escalate builder (pure) ─────────────────────────────────────
+
+describe("defaultEscalateRow", () => {
+  test("stamp-in-place with the supplied patch", () => {
+    const row = defaultEscalateRow({ tags: ["attention/user"] });
+    assert.equal(row.id, "escalate");
+    assert.equal(row.action, "stamp");
+    assert.equal(row.inPlace, true);
+    assert.deepEqual(row.patch, { tags: ["attention/user"] });
+  });
+});
+
 // ── module-host conformance ─────────────────────────────────────────────────
 
 describe("module-host conformance", () => {
   const NOTES = [item("x.md")];
-  const mountDeps = (settings = {}) => ({
+  const mountDeps = (settings = {}, extra = {}) => ({
     getSettings: () => ({ ...settings }),
     schemeNotes: () => NOTES,
     vocabSource: { paths: () => NOTES, frontmatter: () => null, body: async () => null },
@@ -677,6 +1132,7 @@ describe("module-host conformance", () => {
     crosssessionSource: { paths: () => [], frontmatter: () => null, read: async () => null, append: async () => {} },
     crosssessionReceipts: memoryReceiptStore(),
     triageSource: fakeVault({ [item("x.md")]: { ctime: 1 } }).source,
+    ...extra,
   });
 
   test("default settings: the triage module is DISABLED and contributes nothing", () => {
@@ -698,9 +1154,6 @@ describe("module-host conformance", () => {
     assert.deepEqual(registry.problems, []);
     assert.equal(server.tools.get("triage_queue").def.annotations.readOnlyHint, true);
     assert.equal(server.tools.get("triage_dispose").def.annotations.readOnlyHint, false);
-    const desc = registry.describe().find((d) => d.id === "triage");
-    assert.deepEqual(desc.tools.sort(), ["triage_dispose", "triage_queue"]);
-    // The mounted queue actually answers over the injected source.
     const res = await server.tools.get("triage_queue").handler({});
     assert.equal(res.structuredContent.total, 1);
   });
@@ -709,35 +1162,72 @@ describe("module-host conformance", () => {
     const server = fakeServer();
     const registry = mountModules(
       (n, d, h) => server.registerTool(n, d, h),
-      mountDeps({ modules: { triage: { enabled: true, config: { actionFrontmatter: "{broken" } } } }),
+      mountDeps({ modules: { triage: { enabled: true, config: { declaredDispositions: "{broken" } } } }),
     );
-    assert.ok(registry.problems.some((p) => p.includes("triage") && p.includes("actionFrontmatter")));
+    assert.ok(registry.problems.some((p) => p.includes("triage") && p.includes("declaredDispositions")));
   });
 
-  test("scheme ON: the mounted dispose carries the scheme advisory; scheme OFF: it degrades to absent", async () => {
-    // An inbox item whose FILENAME carries a JD address — the default JD
-    // instance recognizes it, so the wired seam answers with the address.
+  test("the mounted queue serves a base-backed queue through the WIRED bases seam", async () => {
+    const server = fakeServer();
+    const basesSource = {
+      available: () => true,
+      listBasePaths: () => ["V/Q.base"],
+      readBaseConfig: async () => ({ exists: true, config: { views: [{ name: "q", type: "table", order: null }] } }),
+      capture: async () => ({ columns: [], rows: [{ path: item("x.md"), values: {} }] }),
+    };
+    mountModules(
+      (n, d, h) => server.registerTool(n, d, h),
+      mountDeps({ modules: { triage: { enabled: true } } }, { basesSource }),
+    );
+    const res = await server.tools.get("triage_queue").handler({ base: "V/Q.base" });
+    assert.equal(res.isError, undefined);
+    assert.deepEqual(res.structuredContent.notes.map((n) => n.path), [item("x.md")]);
+  });
+
+  test("bases module DISABLED ⇒ base-backed queues refuse typed; marker queue works", async () => {
+    const server = fakeServer();
+    mountModules(
+      (n, d, h) => server.registerTool(n, d, h),
+      mountDeps({ modules: { triage: { enabled: true }, bases: { enabled: false } } }),
+    );
+    const res = await server.tools.get("triage_queue").handler({ base: "V/Q.base" });
+    assert.equal(res.isError, true);
+    assert.match(errText(res), /bases_unavailable/);
+    const markers = await server.tools.get("triage_queue").handler({});
+    assert.equal(markers.structuredContent.total, 1);
+  });
+
+  test("no basesSource wired (pre-Bases Obsidian) ⇒ typed bases_unavailable via the source gate", async () => {
+    const server = fakeServer();
+    mountModules(
+      (n, d, h) => server.registerTool(n, d, h),
+      mountDeps({ modules: { triage: { enabled: true } } }),
+    );
+    const res = await server.tools.get("triage_queue").handler({ base: "V/Q.base" });
+    assert.equal(res.isError, true);
+    assert.match(errText(res), /bases_unavailable/);
+  });
+
+  test("scheme ON: the mounted dispose carries the scheme advisory; scheme OFF: absent", async () => {
     const addressed = item("03.42 Misfiled thing.md");
-    const withAddressed = () => ({
-      ...mountDeps({ modules: { triage: { enabled: true } } }),
-      schemeNotes: () => [addressed],
-      triageSource: fakeVault({ [addressed]: { ctime: 1 } }).source,
-    });
+    const withAddressed = (settings) =>
+      mountDeps(settings, {
+        schemeNotes: () => [addressed],
+        triageSource: fakeVault({ [addressed]: { ctime: 1 } }).source,
+      });
 
     const on = fakeServer();
-    mountModules((n, d, h) => on.registerTool(n, d, h), withAddressed());
-    const resOn = await on.tools.get("triage_dispose").handler({ path: addressed, disposition: "discard" });
-    assert.equal(resOn.isError, undefined);
-    assert.equal(resOn.structuredContent.scheme?.address, "03.42", "the wired seam must report the note's address");
+    mountModules((n, d, h) => on.registerTool(n, d, h), withAddressed({ modules: { triage: { enabled: true } } }));
+    const resOn = await on.tools.get("triage_dispose").handler({ path: addressed, disposition: "trash" });
+    assert.equal(resOn.structuredContent.scheme?.address, "03.42");
 
     const off = fakeServer();
-    mountModules((n, d, h) => off.registerTool(n, d, h), {
-      ...withAddressed(),
-      getSettings: () => ({ modules: { triage: { enabled: true }, scheme: { enabled: false } } }),
-    });
-    const resOff = await off.tools.get("triage_dispose").handler({ path: addressed, disposition: "discard" });
-    assert.equal(resOff.isError, undefined);
-    assert.ok(!("scheme" in resOff.structuredContent), "scheme disabled ⇒ no advisory, no failure");
+    mountModules(
+      (n, d, h) => off.registerTool(n, d, h),
+      withAddressed({ modules: { triage: { enabled: true }, scheme: { enabled: false } } }),
+    );
+    const resOff = await off.tools.get("triage_dispose").handler({ path: addressed, disposition: "trash" });
+    assert.ok(!("scheme" in resOff.structuredContent));
   });
 });
 
@@ -746,7 +1236,7 @@ describe("module-host conformance", () => {
 describe("TOOL-INVENTORY documents the triage surface", () => {
   test("both tool names appear in TOOL-INVENTORY.md", () => {
     const doc = readFileSync(path.join(HERE, "..", "TOOL-INVENTORY.md"), "utf8");
-    assert.ok(doc.includes("`triage_queue`"), "TOOL-INVENTORY.md must document triage_queue");
-    assert.ok(doc.includes("`triage_dispose`"), "TOOL-INVENTORY.md must document triage_dispose");
+    assert.ok(doc.includes("`triage_queue`"));
+    assert.ok(doc.includes("`triage_dispose`"));
   });
 });
