@@ -45,7 +45,7 @@ import {
   type ToolRegistrar,
   type VaultModule,
 } from "../kernel/modules/index.js";
-import { makeRegistry, DEFAULT_SCHEMES, validateExcludedRoots, type SchemeInstanceConfig } from "../kernel/scheme/registry.js";
+import { makeRegistry, DEFAULT_SCHEMES, validateExcludedRoots, excludeRoots, type SchemeInstanceConfig } from "../kernel/scheme/registry.js";
 import { validateJdConfig, type JdConfig } from "../kernel/scheme/jd.js";
 import type { VocabInstanceSettings } from "../kernel/index.js";
 import { registerSchemeTools } from "./tools-scheme.js";
@@ -58,6 +58,25 @@ import { registerHealthTools, type HealthToolsCtx } from "./tools-health.js";
 import { DEFAULT_HEALTH_CONFIG, validateHealthConfig, DEFAULT_EMPTY_CHARS, type HealthSource } from "../kernel/health/index.js";
 import { registerFileclassTools, type FileclassToolsCtx } from "./tools-fileclass.js";
 import { DEFAULT_GOVERNANCE_SETTINGS, DEFAULT_ACCEPTANCE_SETTINGS } from "../kernel/governance/settings.js";
+import {
+  registerCrosssessionTools,
+  emptyCrosssessionSource,
+  type CrosssessionSource,
+  type CrosssessionToolsCtx,
+} from "./tools-crosssession.js";
+import {
+  DEFAULT_CROSSSESSION_CONFIG,
+  validateCrosssessionConfig,
+  memoryReceiptStore,
+  type ReceiptStoreLike,
+} from "../kernel/crosssession/index.js";
+import { registerTriageTools, emptyTriageSource, type TriageSource, type TriageToolsCtx } from "./tools-triage.js";
+import {
+  DEFAULT_TRIAGE_CONFIG,
+  validateTriageConfig,
+  triageDispositionIds,
+  triageDispositionLines,
+} from "../kernel/triage/index.js";
 
 // ── manifests (#81: config-host — see
 //    docs/superpowers/specs/2026-08-10-config-host-design.md) ──────────────
@@ -815,6 +834,298 @@ const GOVERNANCE_MANIFEST: ModuleManifest = {
   },
 };
 
+// ── crosssession module manifest (#232: the cross-session channel module) ───
+//
+// The fleet's coordination-log conventions given an agent surface: channel
+// discovery by fileclass + `audience:` frontmatter (never by path), delta
+// reads against a per-handle read position, read-receipt attestation, and
+// posting that is REFUSED (`stale_read`, typed, before any write) while
+// unread foreign entries exist. A MUTATING capability module (`mutating:
+// true`): crosssession_post appends a `## <stamp> · <handle>` section to the
+// channel's log file, and crosssession_attest writes MODULE STATE (the
+// receipt file beside the journal — the lock-tools "journaling matters more
+// than the queue slot" precedent), so both register readOnlyHint: false and
+// ride the guard-patched registrar (read-only mode, queue, journal, kernel
+// args). Entries are BODY APPENDS at end-of-file — the posting path composes
+// no frontmatter, so there is no acceptance field for it to assert; the
+// receipt store touches no note at all (see kernel/crosssession/receipts.ts).
+// Handles are COOPERATIVE (self-declared tool arguments, not authenticated) —
+// the fleet's fallible-not-adversarial threat model, documented on every
+// tool. Default DISABLED (opt-in), like every newly-folded mutating surface.
+// Config lives at `modules.crosssession.config` (a new module, no
+// ConfigBinding); the defaults mirror the live vault conventions.
+const CROSSSESSION_CONFIG_FIELDS: ConfigField[] = [
+  {
+    key: "channelFileclass",
+    label: "Channel fileClass",
+    type: "text",
+    help:
+      "The fileClass a channel's folder note carries. A note with this fileClass AND an `audience:` frontmatter " +
+      `value is a channel. Blank ⇒ the default (${DEFAULT_CROSSSESSION_CONFIG.channelFileclass}).`,
+  },
+  {
+    key: "messageFileclass",
+    label: "Per-message note fileClass",
+    type: "text",
+    help:
+      "The fileClass a channel's per-message notes carry (filename `<stamp> · <handle>.md`, write-once). Blank ⇒ " +
+      `the default (${DEFAULT_CROSSSESSION_CONFIG.messageFileclass}).`,
+  },
+  {
+    key: "deltaCap",
+    label: "Delta cap",
+    type: "number",
+    help:
+      "Maximum entries crosssession_delta returns per channel per call (a `more` marker + `next_stamp` continue a " +
+      `truncated read). Blank ⇒ the default (${DEFAULT_CROSSSESSION_CONFIG.deltaCap}).`,
+  },
+];
+
+const CROSSSESSION_MANIFEST: ModuleManifest = {
+  summary:
+    "Cross-session coordination channels: discover the fleet's coordination logs by fileclass + `audience:` " +
+    "frontmatter (never by path), read the entries newer than your attested position, attest read receipts, and " +
+    "post — with posting refused while unread entries exist (\"posting asserts you are current\", enforced " +
+    "mechanically). Handles are cooperative, self-declared session names, not authenticated identities: the module " +
+    "catches honest lapses (posting without reading), not adversaries. Read positions are per-handle module state " +
+    "in the plugin's own directory — never note frontmatter, never data.json. Attestation is a read-receipt, not " +
+    "authority: it grants nothing and gates only this module's own posting tool.",
+  config: {
+    fields: CROSSSESSION_CONFIG_FIELDS,
+    defaults: { ...DEFAULT_CROSSSESSION_CONFIG } as Record<string, unknown>,
+    validate: validateCrosssessionConfig,
+  },
+  directory: {
+    tools: [
+      {
+        name: "crosssession_channels",
+        purpose:
+          "Discover every channel by fileclass + audience frontmatter: uid, path, audience, linked projects, entry " +
+          "count, newest stamp, and recorded read receipts (which handles are behind).",
+        readOnly: true,
+        options: [{ name: "handle", what: "your session handle — adds your read position + unread count per channel" }],
+        caveats: ["A channel outside the path allowlist is invisible — absent from the answer, not refused."],
+      },
+      {
+        name: "crosssession_delta",
+        purpose:
+          "Entries newer than your attested read position, parsed {stamp, handle, body} from both forms (log-file " +
+          "sections + per-message notes), oldest first, capped with a `more` marker.",
+        readOnly: true,
+        options: [
+          { name: "handle", what: "your session handle (self-declared)" },
+          { name: "channel", what: "channel uid, folder-note path, or folder; omit for all visible channels" },
+        ],
+        caveats: [
+          "Your own entries are omitted — they are exempt from staleness.",
+          "Stamps are opaque ordered strings (the live file contains imprecise stamps like `…T14:2x`); never parsed " +
+            "as datetimes.",
+        ],
+      },
+      {
+        name: "crosssession_attest",
+        purpose: "Record a read receipt: your handle has read a channel through a stamp.",
+        readOnly: false,
+        options: [
+          { name: "handle", what: "your session handle (self-declared)" },
+          { name: "channel", what: "channel uid, folder-note path, or folder" },
+          { name: "through_stamp", what: "the last entry stamp you have read, verbatim" },
+        ],
+        caveats: [
+          "A read-receipt, not authority: it grants nothing, writes no note, and feeds only crosssession_post's " +
+            "staleness check. Receipts are cooperative claims — any stamp at or before the channel's newest entry " +
+            "is accepted.",
+          "Mutates module state (the receipt file beside the journal), not the vault — registered mutating so the " +
+            "attestation is journaled, like a lock claim.",
+        ],
+      },
+      {
+        name: "crosssession_post",
+        purpose:
+          "Append one `## <stamp> · <handle>` entry to the channel's append-only log file; refused (`stale_read`) " +
+          "while unread entries exist.",
+        readOnly: false,
+        options: [
+          { name: "handle", what: "your session handle (self-declared)" },
+          { name: "channel", what: "channel uid, folder-note path, or folder" },
+          { name: "body", what: "the entry body (markdown)" },
+        ],
+        caveats: [
+          "The staleness refusal is typed (`stale_read`) and checked BEFORE any write — read the delta and attest " +
+            "first. Your own entries are exempt.",
+          "Appends body text at end-of-file only; the posting path composes no frontmatter. On success it " +
+            "auto-attests your handle through the new entry.",
+        ],
+      },
+    ],
+  },
+};
+
+// ── triage module manifest (#221 phase 2: the disposition substrate's second
+//    instance — inbox triage) ────────────────────────────────────────────────
+//
+// Successor to the vault's retired `dispose-inbox-item` QuickAdd flow: ten
+// dispositions over inbox notes, declared as data in
+// kernel/triage/descriptors.ts (the SHARED substrate extracted from the
+// acceptance instance's #228 table). NONE confers standing, so per the
+// authority axis all ten are agent verbs and the module has NO pane UI at all
+// — per Nelson's native-tooling rule on #221, queue VIEWS are native (Bases
+// over frontmatter) and bespoke pane UI is reserved for gesture-gated
+// authority dispositions, of which this instance has none. The surface is:
+// descriptors as data + one read-only queue tool + ONE guarded mutating
+// disposition tool (DRY-RUN BY DEFAULT, the #214 report-first discipline).
+//
+// A MUTATING capability module (`mutating: true`): triage_dispose moves notes
+// (through the SAME shared link-healing move primitive every move tool uses),
+// edits frontmatter (processFrontMatter), and trashes (Obsidian trash, never
+// a hard delete) — all through the guard-patched registrar (read-only mode,
+// path allowlist, queue, journal, kernel args), with the shared
+// accept-forbidden rule re-checked over every frontmatter patch. NO
+// ACCEPTANCE SEMANTICS ANYWHERE in the module.
+//
+// Vault semantics are configuration (the standing rule): inbox recognition
+// (inboxMarkers), the fallback destinations, and the frontmatter patches are
+// all per-vault config whose DEFAULTS mirror the legacy flow's live-vault
+// behavior — nothing scheme-semantic is hardwired. Deliberate phase-2 scope
+// reductions vs the legacy flow (documented in docs/triage.md): no on-demand
+// destination-folder materialization via the vault's operations machinery
+// (configure a folder or pass `target` instead), and no dynamic
+// `projects: [[<scope note>]]` stamp (a static config cannot express it).
+// Default DISABLED (opt-in), like every newly-folded mutating surface. Config
+// lives at `modules.triage.config` (a new module, no ConfigBinding).
+const TRIAGE_CONFIG_FIELDS: ConfigField[] = [
+  {
+    key: "inboxMarkers",
+    label: "Inbox folder markers",
+    type: "lines",
+    help:
+      "Substrings (one per line) that mark a folder as an inbox: a note is an inbox item when any ancestor " +
+      'folder\'s name contains one of these. Blank ⇒ the default (" Inbox for ", the live vault convention — ' +
+      'e.g. "03.10 Inbox for 03 Agents"). The inbox folder\'s own folder note is never an item.',
+    caveats: ["Matching is case-sensitive, per folder-name segment."],
+  },
+  {
+    key: "actionDestination",
+    label: "convert-to-action destination",
+    type: "text",
+    help:
+      "Folder notes converted to actions move into when the call names no `target`. Blank ⇒ unconfigured " +
+      "(convert-to-action then refuses without an explicit target).",
+  },
+  {
+    key: "knowledgeDestination",
+    label: "develop-as-knowledge destination",
+    type: "text",
+    help:
+      "Folder notes developed as knowledge move into when the call names no `target`. Blank ⇒ unconfigured " +
+      "(develop-as-knowledge then refuses without an explicit target).",
+  },
+  {
+    key: "somedayDestination",
+    label: "defer-to-someday destination",
+    type: "text",
+    help:
+      "Folder deferred notes move into when the call names no `target`. Blank ⇒ unconfigured (defer-to-someday " +
+      "then refuses without an explicit target).",
+  },
+  {
+    key: "archiveDestination",
+    label: "archive-as-record destination",
+    type: "text",
+    help:
+      "Folder archived notes move into when the call names no `target`. Blank ⇒ unconfigured (archive-as-record " +
+      "then refuses without an explicit target).",
+  },
+  {
+    key: "actionFrontmatter",
+    label: "convert-to-action frontmatter patch",
+    type: "text",
+    help:
+      "JSON object convert-to-action applies to the note's frontmatter before moving it (array values union with " +
+      'the existing value; scalars overwrite). Default: {"tags": ["note/task"], "status": "open", "priority": ' +
+      '"normal"} — the legacy flow\'s stamp. It can never carry an acceptance field (validated, and re-checked at ' +
+      "write time).",
+  },
+  {
+    key: "somedayFrontmatter",
+    label: "defer-to-someday frontmatter patch",
+    type: "text",
+    help:
+      "JSON object defer-to-someday applies before moving the note. Default: " +
+      '{"status": "someday"}. Same union/overwrite semantics and acceptance ban as the action patch.',
+  },
+  {
+    key: "escalateFrontmatter",
+    label: "escalate frontmatter patch",
+    type: "text",
+    help:
+      "JSON object escalate applies — the note stays in place (escalate is a frontmatter flag, the simplest " +
+      'faithful mapping of the legacy verb). Default: {"tags": ["attention/user"]}. Same semantics and acceptance ' +
+      "ban as the other patches.",
+  },
+];
+
+const TRIAGE_MANIFEST: ModuleManifest = {
+  summary:
+    "Inbox triage — the disposition substrate's second instance (#221): the retired dispose-inbox-item flow's ten " +
+    "dispositions (" +
+    triageDispositionIds().join(", ") +
+    ") as ONE guarded mutating tool plus a read-only queue view for agents (humans use native Bases — no pane UI: " +
+    "none of the ten confers standing, so per the authority axis all ten are agent verbs). triage_dispose is " +
+    "DRY-RUN BY DEFAULT; moves ride the shared link-healing move primitive and never overwrite; discard is " +
+    "Obsidian's recoverable trash, never a hard delete; frontmatter patches come from this config and can never " +
+    "carry an acceptance field. Inbox recognition, destinations, and patches are all per-vault config — nothing " +
+    "vault-semantic is hardwired.",
+  config: {
+    fields: TRIAGE_CONFIG_FIELDS,
+    defaults: { ...DEFAULT_TRIAGE_CONFIG },
+    validate: validateTriageConfig,
+  },
+  directory: {
+    tools: [
+      {
+        name: "triage_queue",
+        purpose:
+          "List the notes sitting in inbox positions (any ancestor folder matching an inbox marker): path, inbox, " +
+          "created/modified, age, frontmatter type/status — oldest first, capped.",
+        readOnly: true,
+        options: [{ name: "limit", what: "maximum rows to return (default 50, max 200)" }],
+        caveats: [
+          "The agent's view of the queue — queue VIEWS for humans are native Bases over frontmatter, not this " +
+            "module's job.",
+          "Only allowlist-visible notes are listed or read.",
+        ],
+      },
+      {
+        name: "triage_dispose",
+        purpose:
+          "Apply ONE of the ten dispositions to an inbox note: " + triageDispositionLines().join("; ") + ".",
+        readOnly: false,
+        options: [
+          { name: "path", what: "vault-relative path of the inbox note" },
+          { name: "disposition", what: triageDispositionIds().join(" / ") },
+          {
+            name: "target",
+            what:
+              "destination folder — required for route/establish-new-home/register/curate-as-link, optional " +
+              "override for the config-backed movers, refused for discard/escalate",
+          },
+          { name: "dry_run", what: "DEFAULT TRUE — report only; pass false to apply" },
+        ],
+        caveats: [
+          "DRY-RUN BY DEFAULT — nothing is written until dry_run: false.",
+          "Moves go through the shared link-healing move primitive (fileManager.renameFile), never overwrite " +
+            "(`destination_occupied`), and create missing parent folders; discard is Obsidian's recoverable trash.",
+          "Frontmatter patches route through the shared accept-forbidden rule — the tool can never write an " +
+            "acceptance field.",
+          "With the scheme module enabled the report carries a `scheme` advisory (the note's address + expected " +
+            "folder); with scheme disabled the field is simply absent.",
+        ],
+      },
+    ],
+  },
+};
+
 /** What the mount needs from the live plugin (server.ts supplies the Obsidian
  * adapters; tests supply fakes). The same per-call freshness discipline as
  * the direct registrations it replaces: config the HANDLERS read (allowlist,
@@ -855,6 +1166,59 @@ export interface MountDeps {
   /** Injected fileclass CLI binary (tests / explicit override). Absent ⇒ the
    * registrar resolves from config.binaryPath, else probes the filesystem. */
   fileclassBinary?: string | null;
+  /** The crosssession module's injected vault reader/appender
+   * (obsidianCrosssessionSource live). Absent ⇒ an inert empty source, so the
+   * settings-UI's stand-in deps and pre-crosssession callers still satisfy
+   * MountDeps (the module registers, and answers "no channels"). */
+  crosssessionSource?: CrosssessionSource;
+  /** The crosssession module's read-receipt store (obsidianReceiptStore live —
+   * the file beside the journal). Absent ⇒ an in-memory store. */
+  crosssessionReceipts?: ReceiptStoreLike;
+  /** Injectable clock for crosssession post/attest stamps (tests). */
+  crosssessionNow?: () => Date;
+  /** The triage module's injected vault reader/writer (obsidianTriageSource
+   * live — the shared moveOne / trashFile / processFrontMatter primitives).
+   * Absent ⇒ an inert empty source, so the settings-UI's stand-in deps and
+   * pre-triage callers still satisfy MountDeps (the module registers, the
+   * queue answers empty, and any write refuses). */
+  triageSource?: TriageSource;
+  /** Injectable clock for triage queue ages (tests). */
+  triageNow?: () => Date;
+}
+
+/**
+ * The triage module's OPTIONAL scheme consultation: the note's own address
+ * plus the folder the scheme expects it in — obsidian_expected_location's
+ * path-direction answer, computed over the same allowlist-visible listing the
+ * scheme tools use. Returns null (clean degradation, never a throw) when the
+ * scheme MODULE is disabled, no configured instance recognizes the path, or
+ * anything at all goes wrong: the advisory is a hint, never load-bearing.
+ */
+function triageSchemeExpected(deps: MountDeps, host: ModuleHostCtx): TriageToolsCtx["schemeExpected"] {
+  return (path: string) => {
+    try {
+      const settings = deps.getSettings();
+      if (settings.modules?.scheme?.enabled === false) return null;
+      const registry = makeRegistry(settings.schemes ?? DEFAULT_SCHEMES);
+      const visible = host.visible ?? ((p: string[]) => p);
+      const notes = visible(deps.schemeNotes());
+      for (const instance of registry.instances()) {
+        const addr = instance.provider.addressOf(path);
+        if (!addr) continue;
+        // An instance does not speak for its own excluded territory — the
+        // obsidian_expected_location fall-through.
+        if (excludeRoots([path], instance.excludedRoots).length === 0) continue;
+        const scoped = excludeRoots(notes, instance.excludedRoots);
+        return {
+          address: instance.provider.format(addr),
+          expected_folder: instance.provider.expectedFolder(addr, scoped),
+        };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  };
 }
 
 /** The ModuleHostCtx modules receive — deliberately minimal (gate point 2).
@@ -986,6 +1350,55 @@ export function builtinModules(deps: MountDeps): VaultModule[] {
       // not an MCP tool. Contributing nothing keeps the transport read-only by construction.
       () => { /* contributes no MCP tools */ },
       () => ({}),
+    ),
+    // The crosssession module (#232): the cross-session channel surface. A
+    // MUTATING capability module — crosssession_post appends a log-file entry
+    // and crosssession_attest writes the module's own receipt state, so both
+    // register readOnlyHint: false through the guard-patched registrar
+    // (read-only mode, queue, journal, kernel args) and the mount gate honors
+    // `mutating: true`. Posting is REFUSED (`stale_read`, typed, before any
+    // write) while unread foreign entries exist; the receipt state lives in
+    // the plugin dir beside the journal, never in notes or data.json. A NEW
+    // module, so it follows the adapters doc: it reads `host`/`config` and
+    // filters with `host.visible` (channels/entries outside the allowlist are
+    // invisible). Default DISABLED (opt-in). Config lives at
+    // `modules.crosssession.config` (no ConfigBinding).
+    moduleFromRegistrar(
+      { id: "crosssession", capabilities: ["coordination"], enabled: false, mutating: true, manifest: CROSSSESSION_MANIFEST },
+      (server: any, ctx: CrosssessionToolsCtx) =>
+        registerCrosssessionTools(server, deps.crosssessionSource ?? emptyCrosssessionSource(), ctx),
+      (host, config) => ({
+        config,
+        getSettings: deps.getSettings,
+        visible: host.visible,
+        receipts: deps.crosssessionReceipts ?? memoryReceiptStore(),
+        ...(deps.crosssessionNow ? { now: deps.crosssessionNow } : {}),
+      }),
+    ),
+    // The triage module (#221 phase 2): the disposition substrate's second
+    // instance — inbox triage. A MUTATING capability module (`mutating:
+    // true`): triage_dispose moves (the shared link-healing moveOne), edits
+    // frontmatter (processFrontMatter, accept-forbidden re-checked) and
+    // trashes (Obsidian trash) through the guard-patched registrar (read-only
+    // mode, path allowlist, queue, journal, kernel args); triage_queue is the
+    // read-only agent view of the inbox queue. NO pane UI — per the
+    // native-tooling rule none of the ten dispositions confers standing, so
+    // there is nothing to gesture-gate; human queue views are native Bases.
+    // A NEW module, so it follows the adapters doc: it reads `host`/`config`
+    // and filters with `host.visible`. The scheme consultation is an OPTIONAL
+    // read service that degrades to absent when the scheme module is off.
+    // Default DISABLED (opt-in). Config lives at `modules.triage.config` (no
+    // ConfigBinding).
+    moduleFromRegistrar(
+      { id: "triage", capabilities: ["triage"], enabled: false, mutating: true, manifest: TRIAGE_MANIFEST },
+      (server: any, ctx: TriageToolsCtx) => registerTriageTools(server, deps.triageSource ?? emptyTriageSource(), ctx),
+      (host, config) => ({
+        config,
+        getSettings: deps.getSettings,
+        visible: host.visible,
+        schemeExpected: triageSchemeExpected(deps, host),
+        ...(deps.triageNow ? { now: deps.triageNow } : {}),
+      }),
     ),
   ];
 }

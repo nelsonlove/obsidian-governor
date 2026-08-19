@@ -169,3 +169,74 @@ export function registerGovernanceRevisionTool(server: McpServer, source: Revisi
     }
   );
 }
+
+// ── governance_revisions: the read-side discovery listing ─────────────────────
+//
+// The submit tool above closes the round-trip; this tool OPENS it: a dispatcher
+// asks "what revision work is waiting, and what did the human ask for?" without
+// reading every note. Read-only, always-on beside obsidian_pending_review
+// (server.ts), allowlist-filtered with the SAME isVisible rule every read
+// surface uses. It confers nothing: the listing is derived from frontmatter the
+// pane's request-changes gesture wrote and callouts in agent-readable bodies.
+
+import { isVisible, type GuardSettings } from "../guard.js";
+import { parseRevisionRequestCallouts, splitNote } from "../kernel/governance/revision.js";
+
+const RO = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+const REVISIONS_CAP = 100;
+
+/** Enumeration seam for the listing: every markdown note's path + cached frontmatter. */
+export interface RevisionListSource {
+  /** All markdown notes with their (metadata-cache) frontmatter; order unspecified. */
+  listNotes(): Promise<Array<{ path: string; frontmatter: Record<string, unknown> | null }>>;
+  /** Full note text, or null when the path names no note. */
+  read(path: string): Promise<string | null>;
+  /** Settings for the allowlist read boundary (absent ⇒ everything visible). */
+  getSettings?: () => GuardSettings;
+}
+
+export function registerGovernanceRevisionsListTool(server: McpServer, source: RevisionListSource): void {
+  server.registerTool(
+    "governance_revisions",
+    {
+      title: "List notes awaiting revision",
+      description:
+        "Notes a human sent back for changes (`acceptance-status: revising`), with the `[!revision-request]` " +
+        "callout text parsed out of each note's body — the request, its date, and the note's path — so a " +
+        "dispatcher can read the human's asks at a glance and route the work. THE REVISING AGENT'S CONTRACT: " +
+        "the feedback lives in the NOTE BODY (the callout plus anything else the human left inline); finish with " +
+        "governance_submit_revision. Read-only; allowlist-filtered; capped at " + REVISIONS_CAP + ".",
+      inputSchema: {
+        folder: z.string().optional().describe("Only notes under this vault-relative folder prefix."),
+      },
+      annotations: RO,
+    },
+    async ({ folder }: { folder?: string }) => {
+      const settings = source.getSettings?.();
+      const all = await source.listNotes();
+      const prefix = folder ? folder.replace(/\/+$/, "") + "/" : null;
+      const revising = all.filter(
+        (n) =>
+          acceptanceStatusOf(n.frontmatter) === "revising" &&
+          (!prefix || n.path.startsWith(prefix) || n.path === prefix.slice(0, -1)) &&
+          (!settings || isVisible(n.path, settings))
+      );
+      const capped = revising.slice(0, REVISIONS_CAP);
+      const items = [];
+      for (const n of capped) {
+        const text = await source.read(n.path);
+        // A cache/disk race (note deleted between list and read) drops the row
+        // rather than failing the listing.
+        if (text === null) continue;
+        const requests = parseRevisionRequestCallouts(splitNote(text).body);
+        items.push({ path: n.path, requests });
+      }
+      return ok({
+        count: items.length,
+        total_revising: revising.length,
+        truncated: revising.length > capped.length,
+        items,
+      });
+    }
+  );
+}

@@ -97,6 +97,28 @@ Known-overstated section instead — see its header for the format.
   source names no vault-specific key — the uid/title/description list appears only as a
   settings placeholder/example; governance-proposed.test.mjs pins the coercion and
   governance-accept.test.mjs pins empty ⇒ no gate.
+- The accepted family is one hardcoded instance of a general rule, and #224 generalizes it: a **declared list** of frontmatter properties (Security › *Protected frontmatter properties*, human-only-mutable — no agent path writes plugin config) that every guarded transport enforces through the **same two predicates** the accepted family already rides (`acceptTransitionReason` / `acceptForbiddenReason` in `@vault-mcp/core`).
+  substantiated 2026-08-18 (#224): the declared list lives in the module registry inside
+  accept-guard.ts and is consulted INSIDE the two predicates, so every existing call site
+  (fs backend, ObsidianBackend, composeNote, append_at_heading, CLI property/content,
+  fileclass, skills, provenance, revision, debt-register) enforces it with zero call-site
+  changes; protected-properties.test.ts, protected-properties-fs.test.ts and
+  protected-properties-transports.test.mjs are the per-transport sweep. "No agent path
+  writes plugin config" carries the standing settings-surface caveat: settings are
+  data.json, mutable by any local process outside the plugin's transports — the same
+  residual the class allowlist documents (a tampered list can only extend the perimeter;
+  the floor is hardcoded).
+- The governance module's `honoredValueFromBlessed` reads the accepted **baseline** — never the raw frontmatter — so a value sneaked in through a side door (another plugin, a script, Sync) is **inert** until blessed.
+  substantiated 2026-08-18 (#224/#135): honoredValueFromBlessed takes the blessed CONTENT
+  (wiring reads it off the BaselineStore) and has no raw-note read path; baselines advance
+  only via Accept / attributed human edit / adopt / auto-accept, each blessed by
+  construction. governance-protected-policy.test.mjs's honor-rule scenario pins side-door
+  inertness and the bless-then-honor flip.
+- The eligibility engine consults the **honored** policy (from the blessed baseline) before the class allowlist, and every policy-driven auto-accept logs `policy: appends|all` in the acceptance log beside the class-driven records.
+  substantiated 2026-08-18 (#135): eligibility.ts's policy branch precedes the allowlist
+  gate; wiring.ts passes autoAcceptPolicyOf(baseline.content) and forwards result.policy
+  into autoAcceptRecord; governance-protected-policy.test.mjs pins the branch and the
+  record's policy field.
 
 ## docs/agent-writes.md
 
@@ -146,6 +168,20 @@ Known-overstated section instead — see its header for the format.
 - If a journal write fails it is logged to the console and dropped; it never fails the vault operation.
 - Safety guards that apply: read-only mode always applies (mutating external tools are blocked when read-only is on); the path allowlist scopes arguments under recognized path keys (path, from, to, paths, and a few others) — when an allowlist is active, mutating external tools whose args carry no recognized path key are blocked outright, since vault-mcp cannot scope the call.
 - `readOnly: true` on a published tool is an assertion by a third-party plugin about code vault-mcp cannot inspect — and believing it exempts that tool from the write queue, the journal, the path allowlist, the kernel arguments, and read-only mode, all at once.
+
+## docs/triage.md
+
+Reviewed at authoring time (#221 phase 2). Each claim is substantiated by
+`tests/triage-module.test.mjs`: the all-agent authority table + empty
+gesture-gated set, the acceptance-patch sanitize-at-coercion pin, the
+handler's accept-forbidden re-check, and the computed-destination
+`out_of_allowlist` refusal (dry-run included).
+
+- The **authority axis** sorts every verb with one rule: a disposition that **confers standing** (accept, adopt, revert-of-standing) is a human gesture — never an API; a disposition that is an ordinary reversible write is agent-expressible through the guarded path.
+- **Inbox-triage instance** (`kernel/triage/descriptors.ts`): ten verbs, **all `authority: "agent"`** — none confers standing, every effect is a reversible guarded write — so per Nelson's native-tooling rule there is nothing to gesture-gate and no bespoke UI to build.
+- A patch carrying an acceptance field is refused at validation AND sanitized to the clean default at coercion — it can never reach a note.
+- **Frontmatter transitions go through `processFrontMatter`**, and the shared accept-forbidden rule (`@vault-mcp/core`) is re-checked over every effective patch before it is written.
+- The **computed destination is not a call argument**, so the guard's argument check never sees it — the handler re-checks it against the allowlist itself (the scheme-write discipline), in dry-run and apply alike.
 
 
 ## Known-overstated (tracked, not approved-as-true)

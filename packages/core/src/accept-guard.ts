@@ -27,13 +27,27 @@
 // TRANSITION over (before, after) — preserve is allowed, introduce/change is
 // not.
 
-/** Typed refusal for the accept-forbidden guard — rendered as `Error [accept_forbidden]`. */
+/**
+ * Typed refusal for the accept-forbidden guard — rendered as `Error [accept_forbidden]`.
+ *
+ * The SAME code covers the declared protected-property perimeter (#224): both are
+ * "an agent may not write this frontmatter through a guarded transport", and reusing
+ * the one code every transport already renders (several catch sites hardcode the
+ * string, not `e.code`) means a declared-property refusal cannot type differently on
+ * one transport than another. Only the guidance trailer differs, keyed on the
+ * reason the shared predicate produced — the accepted-family message is
+ * byte-identical to what it always was.
+ */
 export class AcceptForbiddenError extends Error {
   readonly code = "accept_forbidden";
   constructor(reason: string) {
     super(
-      `${reason}. The transport never persists acceptance — the accept verb is in no API. ` +
-        `Remove the accepted/accepted-by/accepted-on field and retry; acceptance is a human gesture only.`
+      /protected propert/.test(reason)
+        ? `${reason}. Declared protected frontmatter properties are human-only: no agent transport may ` +
+            `introduce, change, or remove one (byte-identical carry-forward is allowed). Leave the property ` +
+            `exactly as it is on disk and retry; a human sets it by editing the note directly in Obsidian.`
+        : `${reason}. The transport never persists acceptance — the accept verb is in no API. ` +
+            `Remove the accepted/accepted-by/accepted-on field and retry; acceptance is a human gesture only.`
     );
     this.name = "AcceptForbiddenError";
   }
@@ -209,6 +223,239 @@ function lookupCI(fm: Record<string, unknown> | null | undefined, key: string): 
   return { present: false, value: undefined };
 }
 
+// ── Declared protected properties (#224) ────────────────────────────────────
+//
+// The accepted family above is ONE hardcoded instance of a general rule: some
+// frontmatter properties are human-only, and every guarded transport must refuse
+// an agent write that would move one. #224 generalizes the mechanism into a
+// DECLARED list that threads in from plugin settings (human-only-mutable — no
+// agent path writes plugin config) and is enforced HERE, inside the same two
+// predicates every transport already reaches. No call site changes, no second
+// definition, no per-transport reimplementation — a transport that enforces the
+// accepted family enforces the declared list by construction.
+//
+// THE FLOOR IS NOT CONFIG. The accepted-family checks above run unconditionally,
+// before and independently of the declared list: nothing a config can say —
+// including an empty list — touches them. `normalizeProtectedProperties`
+// additionally DROPS (loudly) any config entry naming an accepted-family key or
+// `acceptance-status`: the family is already at maximum protection and must not
+// look configurable, and `acceptance-status`'s non-accepted values are
+// deliberately agent-writable workflow state (#228) that one bad config line
+// must not be able to freeze. Config can only EXTEND the perimeter to NEW keys.
+//
+// Two grades per declared property:
+//   • `agent-forbidden`     — introduce/change/remove refused through every
+//     guarded transport; byte-identical carry-forward allowed. (Removal IS
+//     refused for declared keys — stripping a human's declaration through an
+//     agent transport is as much a mutation as changing it. The accepted family
+//     keeps its historical exact semantics untouched.)
+//   • `authority-conferring` — agent-forbidden PLUS honor-only-if-blessed: the
+//     value only takes EFFECT once the write that set it is human-attributed or
+//     accepted in review. The honor rule itself lives with the governance
+//     module (`honoredValueFromBlessed` reads the accepted BASELINE, never raw
+//     frontmatter); this guard supplies the write-side half and the grade.
+
+export type ProtectedPropertyGrade = "agent-forbidden" | "authority-conferring";
+
+export interface ProtectedProperty {
+  key: string; // canonical form (trimmed, lowercased, `_` folded to `-`)
+  grade: ProtectedPropertyGrade;
+}
+
+/**
+ * Canonical form of a frontmatter key for declared-property matching: trimmed,
+ * lowercased, `_` folded to `-` — the same separator forgiveness the accepted
+ * family's own recognizer applies (`accepted_by` ≡ `accepted-by`,
+ * `acceptance_status` ≡ `acceptance-status`), so a declared key cannot be
+ * dodged by a case or separator variant.
+ */
+export function canonicalPropertyKey(key: string): string {
+  return key.trim().toLowerCase().replace(/_/g, "-");
+}
+
+/** Keys the config may NOT declare: the hardcoded floor governs them already. */
+function isFloorKey(canonical: string): boolean {
+  return isAcceptedKey(canonical) || canonical === "acceptance-status";
+}
+
+const GRADES: ReadonlyArray<ProtectedPropertyGrade> = ["agent-forbidden", "authority-conferring"];
+
+/**
+ * The DEFAULT declared list. `auto-accept` is the first authority-conferring
+ * consumer (#135's per-note auto-accept policy): a human declares delegation by
+ * writing `auto-accept: appends|all` in a note's own frontmatter; the value is
+ * honored only once blessed (see the governance module), and no agent transport
+ * may set it.
+ */
+export const DEFAULT_PROTECTED_PROPERTIES: ReadonlyArray<ProtectedProperty> = Object.freeze([
+  Object.freeze({ key: "auto-accept", grade: "authority-conferring" as ProtectedPropertyGrade }),
+]);
+
+/**
+ * Coerce an UNTRUSTED declared list (plugin settings / hand-edited data.json)
+ * into a safe canonical list. Never throws.
+ *   - a non-array input → the DEFAULT list (fail toward the shipped default);
+ *     an EMPTY array is respected (a human may declare nothing);
+ *   - entries that are not `{key, grade}` with a non-empty string key → dropped, loudly;
+ *   - an unknown grade → dropped, loudly (never guessed: coercing an intended
+ *     `authority-conferring` down to `agent-forbidden` would silently shed the
+ *     honor rule);
+ *   - floor keys (`accepted*`, `acceptance-status`) → dropped, loudly — the
+ *     hardcoded floor cannot be shrunk, downgraded, or restated by config;
+ *   - duplicates (canonical) → first wins, loudly.
+ */
+export function normalizeProtectedProperties(
+  input: unknown,
+  warn: (msg: string) => void = (msg) => console.warn(msg)
+): ProtectedProperty[] {
+  if (!Array.isArray(input)) return [...DEFAULT_PROTECTED_PROPERTIES];
+  const out: ProtectedProperty[] = [];
+  const seen = new Set<string>();
+  for (const raw of input) {
+    const entry = raw as { key?: unknown; grade?: unknown } | null | undefined;
+    const keyRaw = typeof entry?.key === "string" ? entry.key : "";
+    const key = canonicalPropertyKey(keyRaw);
+    if (!key) {
+      warn(`vault-mcp: protected-property entry with no key ignored: ${JSON.stringify(raw)}`);
+      continue;
+    }
+    if (isFloorKey(key)) {
+      warn(
+        `vault-mcp: protected-property entry '${key}' ignored — the accepted family and acceptance-status are ` +
+          `governed by the hardcoded floor and are not configurable (config can only extend the perimeter to new keys)`
+      );
+      continue;
+    }
+    const grade = entry?.grade;
+    if (typeof grade !== "string" || !GRADES.includes(grade as ProtectedPropertyGrade)) {
+      warn(`vault-mcp: protected-property entry '${key}' ignored — unknown grade ${JSON.stringify(grade)}`);
+      continue;
+    }
+    if (seen.has(key)) {
+      warn(`vault-mcp: duplicate protected-property entry '${key}' ignored (first declaration wins)`);
+      continue;
+    }
+    seen.add(key);
+    out.push({ key, grade: grade as ProtectedPropertyGrade });
+  }
+  return out;
+}
+
+// The module-level registry the predicates consult. Set from plugin settings at
+// load and on every settings save (main.ts); defaults to the shipped list so an
+// embed that never wires settings (packages/server's fs-failover, bare core
+// users) still enforces the default perimeter. The setter normalizes, so even a
+// direct mis-set cannot smuggle a floor key or an unknown grade in. There is
+// deliberately NO agent-reachable path to this setter: it is not a tool, not a
+// command, and not reachable by walking `app` — the only production caller is
+// the plugin's own settings load/save.
+/**
+ * Settings-textarea codec: one declaration per line, `key: grade` (or a bare
+ * `key`, which reads as `agent-forbidden`). Parsing is deliberately RAW — it
+ * preserves what the human typed (unknown grades included) so the textarea
+ * round-trips; validation happens once, in `normalizeProtectedProperties`, when
+ * the list is set on the registry. `formatProtectedPropertyLines` is its
+ * inverse over the stored shape.
+ */
+export function parseProtectedPropertyLines(text: string): Array<{ key: string; grade: string }> {
+  const out: Array<{ key: string; grade: string }> = [];
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const colon = line.indexOf(":");
+    if (colon < 0) {
+      out.push({ key: line, grade: "agent-forbidden" });
+    } else {
+      out.push({ key: line.slice(0, colon).trim(), grade: line.slice(colon + 1).trim() || "agent-forbidden" });
+    }
+  }
+  return out;
+}
+
+export function formatProtectedPropertyLines(list: ReadonlyArray<{ key: string; grade: string }>): string {
+  return list.map((p) => `${p.key}: ${p.grade}`).join("\n");
+}
+
+let declared: ReadonlyArray<ProtectedProperty> = DEFAULT_PROTECTED_PROPERTIES;
+
+export function setDeclaredProtectedProperties(input: unknown, warn?: (msg: string) => void): void {
+  declared = Object.freeze(normalizeProtectedProperties(input, warn));
+}
+
+export function declaredProtectedProperties(): ReadonlyArray<ProtectedProperty> {
+  return declared;
+}
+
+/** The declared grade of `key` (canonical match), or null when it is not declared. */
+export function declaredGradeOf(key: string): ProtectedPropertyGrade | null {
+  const want = canonicalPropertyKey(key);
+  for (const p of declared) if (p.key === want) return p.grade;
+  return null;
+}
+
+/**
+ * EVERY entry of `fm` whose key canonically matches `key` — plural on purpose:
+ * a frontmatter object can carry `auto-accept` AND `auto_accept` as two literal
+ * keys at once, and a guard that inspected only the first match would let the
+ * second ride in beside it (the variant-aliasing hole, caught by the fs
+ * transport sweep). The transition rule below compares the full multiset.
+ */
+export function findPropertiesCanonical(
+  fm: Record<string, unknown> | null | undefined,
+  key: string
+): Array<{ key: string; value: unknown }> {
+  const out: Array<{ key: string; value: unknown }> = [];
+  if (fm) {
+    const want = canonicalPropertyKey(key);
+    for (const k of Object.keys(fm)) {
+      if (canonicalPropertyKey(k) === want) out.push({ key: k, value: fm[k] });
+    }
+  }
+  return out;
+}
+
+/** Deep equality over frontmatter values — `fmEqual`, exported for the honor-rule/drift consumers so they cannot fork the comparison. */
+export function frontmatterValuesEqual(a: unknown, b: unknown): boolean {
+  return fmEqual(a, b);
+}
+
+/**
+ * The first DECLARED key textually present in `rawBefore`'s leading frontmatter
+ * block (either separator form, case-insensitive), or null.
+ *
+ * The removal-detection backstop for an UNPARSEABLE before: a content-write
+ * guard that collapses an unclassifiable before to "no prior frontmatter"
+ * decides introduce/change correctly but lets a REMOVAL through (prevs=[] ⇒
+ * nothing to remove). When the unreadable block textually mentions a declared
+ * key, the write cannot be verified to carry it forward — fail closed. Scoped
+ * to the frontmatter block, not the body, so prose mentioning a key name never
+ * trips it; no fence ⇒ no prior frontmatter ⇒ genuinely nothing to remove.
+ */
+export function unverifiableProtectedPropertyIn(rawBefore: string): string | null {
+  if (declared.length === 0) return null;
+  const block = leadingFrontmatterBlock(rawBefore);
+  if (block === null) return null;
+  const l = block.toLowerCase();
+  for (const p of declared) {
+    if (l.includes(p.key) || l.includes(p.key.replace(/-/g, "_"))) return p.key;
+  }
+  return null;
+}
+
+/**
+ * Whether a transition guard must fetch the BEFORE frontmatter to prove a write
+ * clean, given only the RESULT. The historical fast path — "the result asserts
+ * nothing, skip the disk read" — is only sound while absence in the result is
+ * harmless; with declared protected properties, absence may be a REMOVAL, which
+ * is decidable only against the before-frontmatter. One helper, so the three
+ * transports that shortcut (ObsidianBackend, VaultImpl, append_at_heading)
+ * cannot drift on when shortcutting is safe.
+ */
+export function acceptTransitionNeedsBefore(after: Record<string, unknown> | null | undefined): boolean {
+  if (declared.length > 0) return true;
+  return !!after && acceptTransitionReason(null, after) !== null;
+}
+
 /**
  * The reason a write is accept-forbidden given the note's RESULTING frontmatter
  * and its BEFORE-on-disk frontmatter, or null when the write is clean.
@@ -220,26 +467,53 @@ function lookupCI(fm: Record<string, unknown> | null | undefined, key: string): 
  *   • `acceptance-status` (`acceptance_status`) whose resulting value ASSERTS
  *     accepted (string / array / map) and did not already hold that exact value.
  * Preserving an existing (human-set) value verbatim is ALLOWED.
+ *
+ * ALSO rejected (#224): a result that would introduce, change, or REMOVE a
+ * DECLARED protected property (module registry above). Byte-identical
+ * carry-forward is allowed exactly as for the accepted family. The floor checks
+ * run first and unconditionally — the declared loop can only ever ADD refusals.
  */
 export function acceptTransitionReason(
   before: Record<string, unknown> | null | undefined,
   after: Record<string, unknown> | null | undefined
 ): string | null {
-  if (!after) return null;
-  for (const key of Object.keys(after)) {
-    const kl = key.trim().toLowerCase();
-    if (isAcceptedKey(key)) {
-      const prev = lookupCI(before, key);
-      if (!(prev.present && fmEqual(prev.value, after[key]))) {
-        return `write would ${prev.present ? "change" : "introduce"} the acceptance field '${key}'`;
-      }
-    } else if (kl === "acceptance-status" || kl === "acceptance_status") {
-      if (isAcceptedValue(after[key])) {
+  if (after) {
+    for (const key of Object.keys(after)) {
+      const kl = key.trim().toLowerCase();
+      if (isAcceptedKey(key)) {
         const prev = lookupCI(before, key);
         if (!(prev.present && fmEqual(prev.value, after[key]))) {
-          return `write would set ${key} to an accepted value`;
+          return `write would ${prev.present ? "change" : "introduce"} the acceptance field '${key}'`;
+        }
+      } else if (kl === "acceptance-status" || kl === "acceptance_status") {
+        if (isAcceptedValue(after[key])) {
+          const prev = lookupCI(before, key);
+          if (!(prev.present && fmEqual(prev.value, after[key]))) {
+            return `write would set ${key} to an accepted value`;
+          }
         }
       }
+    }
+  }
+  // Declared protected properties: whole-key protection (introduce / change /
+  // remove), decided over BOTH sides so a result that merely OMITS a declared
+  // key is caught as a removal. `after` null (the result has no frontmatter at
+  // all) removes every key `before` carried, declared ones included. The
+  // comparison is over the full MULTISET of canonical matches: adding
+  // `auto_accept` beside an existing `auto-accept` is a change, not a
+  // carry-forward of the first match.
+  for (const prop of declared) {
+    const prevs = findPropertiesCanonical(before, prop.key);
+    const nexts = findPropertiesCanonical(after, prop.key);
+    if (prevs.length === 0 && nexts.length === 0) continue;
+    if (prevs.length === 0) return `write would introduce the protected property '${nexts[0].key}'`;
+    if (nexts.length === 0) return `write would remove the protected property '${prevs[0].key}'`;
+    if (prevs.length !== nexts.length) return `write would change the protected property '${nexts[0].key}'`;
+    const remaining = prevs.map((p) => p.value);
+    for (const n of nexts) {
+      const i = remaining.findIndex((v) => fmEqual(v, n.value));
+      if (i < 0) return `write would change the protected property '${n.key}'`;
+      remaining.splice(i, 1);
     }
   }
   return null;
@@ -258,6 +532,14 @@ export function acceptForbiddenReason(fm: Record<string, unknown> | undefined | 
     if ((k === "acceptance-status" || k === "acceptance_status") && isAcceptedValue(fm[key])) {
       return `frontmatter sets ${key}='${String(fm[key])}'`;
     }
+  }
+  // Declared protected properties (#224): on the payload-only paths (CLI
+  // property/content, fileclass field writes, debt-register) presence alone
+  // refuses — exactly how the accepted family behaves on these same paths,
+  // where no before-frontmatter exists to prove a carry-forward.
+  for (const prop of declared) {
+    const hits = findPropertiesCanonical(fm, prop.key);
+    if (hits.length > 0) return `frontmatter carries the protected property '${hits[0].key}'`;
   }
   return null;
 }

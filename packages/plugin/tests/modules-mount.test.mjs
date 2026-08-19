@@ -24,6 +24,7 @@ import path from "node:path";
 import { fakeServer } from "./fake-server.mjs";
 import { mountModules, mountHost, builtinModules } from "../src/mcp/modules-mount.ts";
 import { ModuleRegistry, collect, toolDocDrift, toolDocReadOnlyDrift } from "../src/kernel/modules/index.ts";
+import { memoryReceiptStore } from "../src/kernel/crosssession/index.ts";
 
 const SRC = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "src");
 
@@ -62,6 +63,16 @@ const provenanceSource = {
   writeNote: async () => {},
 };
 
+/** An inert crosssession source — the crosssession module registers its four
+ * tools over it without ever calling a handler in these registration-only
+ * tests (its own suite is crosssession-module.test.mjs). */
+const crosssessionSource = {
+  paths: () => [],
+  frontmatter: () => null,
+  read: async () => null,
+  append: async () => {},
+};
+
 /** A no-op health source — the (read-only) health module registers its tools over
  * it without ever calling a handler in these registration-only tests. */
 const healthSource = {
@@ -90,6 +101,8 @@ function deps(overrides = {}) {
     vaultName: "TestVault",
     fileclassPresent: () => true,
     fileclassBinary: "/usr/local/bin/fileclass",
+    crosssessionSource,
+    crosssessionReceipts: memoryReceiptStore(),
     ...overrides.deps,
   };
 }
@@ -122,23 +135,27 @@ describe("mountModules: the two built-in modules register through the registry",
     assert.deepEqual(registry.problems, []);
     const described = registry.describe();
     // skills (#82), provenance (the obsidian-provenance fold), health (the
-    // obsidian-vault-health fold), fileclass (#188, the fileclass CLI fold) and
-    // governance (#83) all ship DISABLED (opt-in surfaces a human turns on), so
+    // obsidian-vault-health fold), fileclass (#188, the fileclass CLI fold),
+    // governance (#83), crosssession (#232, the cross-session channel
+    // module) and triage (#221 phase 2, the inbox-triage module) all ship
+    // DISABLED (opt-in surfaces a human turns on), so
     // they contribute nothing here — scheme + vocab are the live pair.
-    assert.deepEqual(described.map((d) => d.id), ["scheme", "vocab", "skills", "provenance", "health", "fileclass", "governance"]);
+    assert.deepEqual(described.map((d) => d.id), ["scheme", "vocab", "skills", "provenance", "health", "fileclass", "governance", "crosssession", "triage"]);
     for (const d of described) {
-      if (d.id === "skills" || d.id === "provenance" || d.id === "health" || d.id === "fileclass" || d.id === "governance") {
+      if (["skills", "provenance", "health", "fileclass", "governance", "crosssession", "triage"].includes(d.id)) {
         assert.equal(d.enabled, false);
         assert.deepEqual(d.tools, []);
       } else {
         assert.ok(d.enabled && d.tools.length > 0);
       }
     }
-    // No skills/provenance/health/fileclass tool leaked onto the surface while the modules are off.
+    // No skills/provenance/health/fileclass/crosssession tool leaked onto the surface while the modules are off.
     assert.ok(!names.some((n) => n.startsWith("vault_skills_")));
     assert.ok(!names.some((n) => n.startsWith("provenance_")));
     assert.ok(!names.includes("obsidian_health") && !names.includes("obsidian_lint"));
     assert.ok(!names.some((n) => n.startsWith("fileclass_")));
+    assert.ok(!names.some((n) => n.startsWith("crosssession_")));
+    assert.ok(!names.some((n) => n.startsWith("triage_")));
     // obsidian_pending_review is NEVER on the MODULE surface (#83 cycle 2): it is
     // registered always-on in server.ts, decoupled from the governance toggle, so the
     // mount never contributes it whether governance is on or off.
@@ -245,7 +262,7 @@ describe("mount gate 2: the host ctx handed to modules is minimal", () => {
     assert.deepEqual(host.visible(["Projects/a.md", "Archive/b.md"]), ["Projects/a.md"]);
   });
 
-  test("builtinModules declares the seven capability modules (skills + provenance + fileclass mutating; health/governance NOT)", () => {
+  test("builtinModules declares the nine capability modules (skills + provenance + fileclass + crosssession + triage mutating; health/governance NOT)", () => {
     const mods = builtinModules(deps());
     assert.deepEqual(mods.map((m) => [m.id, m.posture]), [
       ["scheme", "capability"],
@@ -261,10 +278,16 @@ describe("mount gate 2: the host ctx handed to modules is minimal", () => {
       // governance is posture "capability", NOT "governance" — the v1 registry refuses
       // the governance posture (it is inert). It clears that gate by being read-only.
       ["governance", "capability"],
+      // crosssession (#232) is a MUTATING capability module (post appends a log
+      // entry; attest writes the module's receipt state).
+      ["crosssession", "capability"],
+      // triage (#221 phase 2) is a MUTATING capability module (dispose moves /
+      // retypes / trashes inbox notes through the shared guarded primitives).
+      ["triage", "capability"],
     ]);
-    // skills, provenance and fileclass are the modules that declare they may contribute
-    // mutating tools; health and governance are NOT mutating (read-only surfaces only).
-    assert.deepEqual(mods.filter((m) => m.mutating).map((m) => m.id), ["skills", "provenance", "fileclass"]);
+    // skills, provenance, fileclass, crosssession and triage are the modules that declare
+    // they may contribute mutating tools; health and governance are NOT mutating.
+    assert.deepEqual(mods.filter((m) => m.mutating).map((m) => m.id), ["skills", "provenance", "fileclass", "crosssession", "triage"]);
   });
 });
 
@@ -326,7 +349,7 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
   test("drift check: every ToolDoc names a tool the module ACTUALLY contributed on registerAll, and vice versa", () => {
     // Enable every default-off module so all modules contribute — the drift check
     // needs a contributed tool list to compare each manifest against.
-    const { registry } = mount({ settings: { modules: { skills: { enabled: true }, provenance: { enabled: true }, health: { enabled: true }, fileclass: { enabled: true }, governance: { enabled: true } } } });
+    const { registry } = mount({ settings: { modules: { skills: { enabled: true }, provenance: { enabled: true }, health: { enabled: true }, fileclass: { enabled: true }, governance: { enabled: true }, crosssession: { enabled: true }, triage: { enabled: true } } } });
     const described = registry.describe();
     for (const d of described) {
       const mod = builtinModules(deps()).find((m) => m.id === d.id);
@@ -336,7 +359,7 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
   });
 
   test("readOnly drift: every ToolDoc's readOnly matches the tool's real registered annotation", () => {
-    const { server } = mount({ settings: { modules: { skills: { enabled: true }, provenance: { enabled: true }, health: { enabled: true }, fileclass: { enabled: true }, governance: { enabled: true } } } });
+    const { server } = mount({ settings: { modules: { skills: { enabled: true }, provenance: { enabled: true }, health: { enabled: true }, fileclass: { enabled: true }, governance: { enabled: true }, crosssession: { enabled: true }, triage: { enabled: true } } } });
     const mods = builtinModules(deps());
     const annotationsByName = Object.fromEntries([...server.tools].map(([name, { def }]) => [name, def.annotations]));
     for (const mod of mods) {
@@ -407,7 +430,7 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
     const settings = { schemes: [{ id: "jd", provider: "johnny-decimal", config: { contentDecimalFloor: 20 } }], modules: {} };
     const mods = builtinModules(deps({ settings }));
     const hosted = collect(mods, settings.modules, settings);
-    assert.deepEqual(hosted.map((h) => h.id), ["scheme", "vocab", "skills", "provenance", "health", "fileclass", "governance"]);
+    assert.deepEqual(hosted.map((h) => h.id), ["scheme", "vocab", "skills", "provenance", "health", "fileclass", "governance", "crosssession", "triage"]);
     const scheme = hosted.find((h) => h.id === "scheme");
     assert.equal(scheme.fields.find((f) => f.key === "contentDecimalFloor").value, 20);
     const vocab = hosted.find((h) => h.id === "vocab");
@@ -458,5 +481,42 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
     assert.equal(fileclass.enabled, false);
     assert.equal(fileclass.directory.tools.length, 8);
     assert.equal(fileclass.directory.tools.filter((t) => t.readOnly === false).length, 2);
+    // The crosssession module (#232) renders its own config tab: three config
+    // fields (channel/message fileclasses defaulting to the live vault
+    // conventions, plus the delta cap) and a four-tool capability directory
+    // (two read: channels/delta; two write: attest/post). Ships disabled.
+    const crosssession = hosted.find((h) => h.id === "crosssession");
+    assert.deepEqual(crosssession.fields.map((f) => f.key), ["channelFileclass", "messageFileclass", "deltaCap"]);
+    assert.equal(crosssession.fields.find((f) => f.key === "channelFileclass").value, "Collection/Log");
+    assert.equal(crosssession.fields.find((f) => f.key === "messageFileclass").value, "Agent/Log/CrossSession");
+    assert.equal(crosssession.fields.find((f) => f.key === "deltaCap").value, 20);
+    assert.equal(crosssession.enabled, false);
+    assert.equal(crosssession.directory.tools.length, 4);
+    assert.deepEqual(
+      crosssession.directory.tools.filter((t) => t.readOnly === false).map((t) => t.name),
+      ["crosssession_attest", "crosssession_post"],
+    );
+    // The triage module (#221 phase 2) renders its own config tab: eight config
+    // fields (inbox markers, four destinations, three frontmatter patches —
+    // defaults mirroring the legacy dispose-inbox-item flow) and a two-tool
+    // capability directory (one read: queue; one write: dispose). Ships disabled.
+    const triage = hosted.find((h) => h.id === "triage");
+    assert.deepEqual(triage.fields.map((f) => f.key), [
+      "inboxMarkers",
+      "actionDestination",
+      "knowledgeDestination",
+      "somedayDestination",
+      "archiveDestination",
+      "actionFrontmatter",
+      "somedayFrontmatter",
+      "escalateFrontmatter",
+    ]);
+    assert.deepEqual(triage.fields.find((f) => f.key === "inboxMarkers").value, [" Inbox for "]);
+    assert.equal(triage.enabled, false);
+    assert.equal(triage.directory.tools.length, 2);
+    assert.deepEqual(
+      triage.directory.tools.filter((t) => t.readOnly === false).map((t) => t.name),
+      ["triage_dispose"],
+    );
   });
 });

@@ -15,9 +15,10 @@ CLI-conditional tool (`obsidian_cli`, default OFF)
 = **up to 81 total**.  The 3 Code Mode meta-tools are an alternative
 per-connection surface and are not counted (a session sees one surface or the
 other, never both).  Not counted here (outside the locked `obsidian_*` family):
-the always-on `governance_submit_revision` (1 tool, see its section below), and
+the always-on `governance_submit_revision` + `governance_revisions` (2 tools, see their section below), and
 the default-disabled `skills` (`vault_skills_*`), `provenance`
-(`provenance_*`), and `fileclass` (`fileclass_*`, 8 tools, plugin+binary-gated)
+(`provenance_*`), `fileclass` (`fileclass_*`, 8 tools, plugin+binary-gated),
+`crosssession` (`crosssession_*`, 4 tools), and `triage` (`triage_*`, 2 tools)
 module surfaces — see Section 2c and their own module docs.
 
 Cross-check: the observed live set with Dataview + Templater + Metadata Menu
@@ -121,7 +122,7 @@ tool whose `readOnlyHint !== true`).
 |---|---|
 | `obsidian_pending_review` | Read-only view of Stewardship's published review queue (`pending-index.json`); data-only coupling, no accept verb |
 
-### `tools-governance-revision.ts` — `registerGovernanceRevisionTool` (1 tool, #101)
+### `tools-governance-revision.ts` — `registerGovernanceRevisionTool` / `registerGovernanceRevisionsListTool` (2 tools, #101/#221)
 
 Outside the locked `obsidian_*` family (like the module surfaces), but
 registered ALWAYS-ON in `server.ts` through the ordinary guarded registrar.
@@ -129,6 +130,7 @@ registered ALWAYS-ON in `server.ts` through the ordinary guarded registrar.
 | Tool name | Description |
 |---|---|
 | `governance_submit_revision` | The one agent-expressible disposition (#221 authority axis): resubmit a note a human marked `acceptance-status: revising` — status back to `proposed`, the `[!revision-request]` callout(s) removed, optional `summary` inserted as a `[!revision-report]` callout below the H1. Mutating (`readOnlyHint: false`); refuses `not_revising` when there is nothing to submit; re-checks the write with the shared accept-forbidden guard — it can never write acceptance |
+| `governance_revisions` | Read-side discovery for the revision round-trip: lists `acceptance-status: revising` notes with each `[!revision-request]` callout parsed out (date + request text) so a dispatcher reads the human's asks at a glance. Read-only, always-on beside the submit tool; allowlist-filtered (`isVisible`); optional `folder` prefix filter; capped at 100 |
 
 ### `tools-complementary.ts` — `registerComplementaryTools` (9 tools)
 
@@ -246,11 +248,14 @@ session connect.
 
 Registered through the module host like Section 2b, but these modules ship
 `enabled: false` — a human turns them on in the config tab, and the tools appear
-on the next session connect. (The `skills`, `provenance` and `fileclass` modules
-also ship disabled, but their tools are named `vault_skills_*` / `provenance_*` /
-`fileclass_*`, outside the `obsidian_*` family this inventory locks, so the first
-two are documented in their own module docs; `fileclass` is documented just below
-because it is also plugin-gated.)
+on the next session connect. (The `skills`, `provenance`, `fileclass`,
+`crosssession` and `triage` modules also ship disabled, but their tools are named
+`vault_skills_*` / `provenance_*` / `fileclass_*` / `crosssession_*` / `triage_*`,
+outside the `obsidian_*` family this inventory locks, so the first two are
+documented in their own module docs; `fileclass`, `crosssession` and `triage` are
+documented just below — fileclass because it is also plugin-gated, crosssession
+because it is the cross-session coordination surface (#232), triage because it is
+the inbox-triage disposition surface, #221 phase 2.)
 
 ### `tools-health.ts` — `registerHealthTools` via the `health` module (2 tools)
 
@@ -292,6 +297,78 @@ an accepted value (`Error [accept_forbidden]`, refused before the CLI runs).
 | `fileclass_validate` | R | Schema violations vault-wide or per fileClass; exit 1 (violations) is returned, not errored — CLI `validate` |
 | `fileclass_set` | W | Validated single-note field write; accept-guarded — CLI `set <path> <field> <value>` |
 | `fileclass_set_where` | W | Validated bulk write; **dry-run by default**, `apply: true` to commit; accept-guarded — CLI `set-where <class> <field> <value>` |
+
+### `tools-crosssession.ts` — `registerCrosssessionTools` via the `crosssession` module (4 tools)
+
+The cross-session channel surface (#232): the fleet's coordination-log
+conventions given an agent surface. Channels are discovered by **fileclass +
+`audience:` frontmatter** (default `Collection/Log` + any `audience` value —
+never by path); a channel's entries are read from BOTH live forms: the single
+append-only log file's `## <stamp> · <handle>` sections and per-message notes
+(`fileClass: Agent/Log/CrossSession`, filename `<stamp> · <handle>.md`). Stamps
+are treated as **opaque ordered strings** (the live file contains imprecise
+`…T14:2x` stamps), compared with `:` stripped so the file form and the filename
+form of one minute agree.
+
+**Handles are cooperative**, self-declared tool arguments — not authenticated
+identities (the fleet's fallible-not-adversarial threat model: the module
+catches honest lapses, not adversaries). **Read positions are module state**:
+per-handle receipts in `crosssession-receipts.json` beside the journal in the
+plugin's own directory — not in any note's frontmatter, not in `data.json`.
+Receipts are keyed by the channel note's `uid` (a reorg move keeps read state).
+A channel outside the path allowlist is **invisible**: absent from discovery,
+`channel_unresolved` to the other tools (no existence oracle); hidden member
+files contribute no entries.
+
+The two write tools ride the guard-patched registrar (read-only mode, queue,
+journal, kernel args). `crosssession_post` refuses **`stale_read`** — a typed
+policy refusal, checked before anything is written — while the channel holds
+entries the poster's receipt does not cover (the poster's own entries exempt):
+"posting asserts you are current," enforced mechanically. Post appends body
+text at end-of-file only and composes no frontmatter; attest writes only the
+module's receipt file (registered mutating for the journal record, the
+lock-claim precedent).
+
+| Tool name | R/W | Description |
+|---|---|---|
+| `crosssession_channels` | R | Discover channels by fileclass + audience frontmatter: uid, path, audience, projects, entry count, newest stamp, recorded receipts (which handles are behind); with `handle`, your position + unread count |
+| `crosssession_delta` | R | Entries newer than your attested position, `{stamp, handle, body}` from both forms, oldest first; capped (default 20, never bisecting a same-stamp group) with `more` + `next_stamp`; own entries omitted |
+| `crosssession_attest` | W | Record a read receipt (`through_stamp` ≤ newest entry; `stamp_ahead` otherwise) — a read-receipt, not authority; mutates module state only |
+| `crosssession_post` | W | Append one `## <stamp> · <handle>` section (run clock, minutes precision) to the channel's log file; **refuses `stale_read` before any write** while unread entries exist; auto-attests through its own entry on success |
+
+### `tools-triage.ts` — `registerTriageTools` via the `triage` module (2 tools)
+
+The inbox-triage surface (#221 phase 2): the disposition substrate's second
+instance, successor to the vault's retired `dispose-inbox-item` QuickAdd flow.
+Ten dispositions declared as data (`kernel/triage/descriptors.ts` — discard,
+route, establish-new-home, convert-to-action, develop-as-knowledge, register,
+curate-as-link, defer-to-someday, archive-as-record, escalate); **none confers
+standing**, so per the #221 authority axis all ten are `authority: "agent"` and
+the module has **no pane UI at all** (queue views for humans are native Bases
+over frontmatter; bespoke pane UI is reserved for gesture-gated authority
+dispositions, of which this instance has none). The single-source table drives
+the `triage_dispose` enum, its description, and the manifest directory.
+
+Inbox recognition, fallback destinations, and the frontmatter patches are all
+**per-vault config** (`modules.triage.config`) whose defaults mirror the legacy
+flow's live-vault behavior (`inboxMarkers: [" Inbox for "]`, action patch
+`tags+note/task, status open, priority normal`, someday patch `status:
+someday`, escalate patch `tags+attention/user`) — nothing vault-semantic is
+hardwired. Moves ride the **shared link-healing move primitive**
+(`tools-vault-write.ts`'s `moveOne` — `fileManager.renameFile`, parents
+created, never overwrites); discard is Obsidian's recoverable trash, never a
+hard delete; frontmatter transitions go through `processFrontMatter` with the
+shared accept-forbidden rule re-checked over every patch. `triage_dispose` is
+**dry-run by default** (the #214 report-first discipline) and its computed
+destination is allowlist-re-checked in the handler (it is not a call
+argument). With the scheme module enabled the dispose report carries a
+`scheme` advisory (the note's own address + expected folder); with scheme
+disabled the field is simply absent.
+
+| Tool name | R/W | Description |
+|---|---|---|
+| `triage_queue` | R | Inbox notes (any ancestor folder matching a configured marker; the inbox's own folder note excluded), allowlist-visible only, with path/inbox/created/modified/age/frontmatter type+status — oldest first, capped (`limit`, default 50) with `truncated` + the total |
+| `triage_dispose` | W | Apply ONE of the ten dispositions to an inbox note (`{path, disposition, target?, dry_run?}`); **dry-run by default**; `target` (a destination folder) required for route/establish-new-home/register/curate-as-link, an override for the config-backed movers, refused for discard/escalate; typed refusals (`not_inbox`, `target_required`, `target_unsupported`, `destination_unresolved`, `destination_occupied`, `out_of_allowlist`, `accept_forbidden`) |
 
 ---
 

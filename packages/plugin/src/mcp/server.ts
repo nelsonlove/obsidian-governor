@@ -15,7 +15,7 @@ import { registerExternalTools } from "./external-tools.js";
 import { registerLockTools } from "./tools-locks.js";
 import { registerUidTools } from "./tools-uid.js";
 import { registerPendingReviewTools, obsidianPendingReviewSource } from "./tools-pending-review.js";
-import { registerGovernanceRevisionTool } from "./tools-governance-revision.js";
+import { registerGovernanceRevisionTool, registerGovernanceRevisionsListTool } from "./tools-governance-revision.js";
 import { registerLinkTools, obsidianLinkSource } from "./tools-links.js";
 import { registerConformanceDebtTools, registerConformanceDebtRenderTool } from "./tools-conformance-debt.js";
 import { obsidianDebtRenderSource } from "./obsidian-debt-source.js";
@@ -25,6 +25,8 @@ import { obsidianProvenanceBackend } from "./tools-provenance.js";
 import { obsidianHealthBackend } from "./tools-health.js";
 import { mountModules } from "./modules-mount.js";
 import { FILECLASS_PLUGIN_ID } from "./tools-fileclass.js";
+import { obsidianCrosssessionSource, obsidianReceiptStore } from "./tools-crosssession.js";
+import { obsidianTriageSource } from "./obsidian-triage-source.js";
 import { registerCodeModeTools, makeCaptureRegister, type CapturedRegistry } from "./tools-code-mode.js";
 import { makeGuarded, resolveGuardedPath, withKernelArgs } from "./guarded.js";
 import { sealUnguardedRegistration } from "./seal-registration.js";
@@ -243,6 +245,20 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
     },
     now: () => new Date(),
   });
+  // The read-side discovery listing beside it — same always-on rationale
+  // (read-only, confers nothing; a dispatcher's view of waiting revision work).
+  registerGovernanceRevisionsListTool(server, {
+    listNotes: async () =>
+      app.vault.getMarkdownFiles().map((f) => ({
+        path: f.path,
+        frontmatter: (app.metadataCache.getFileCache(f)?.frontmatter ?? null) as Record<string, unknown> | null,
+      })),
+    read: async (p) => {
+      const f = app.vault.getAbstractFileByPath(p);
+      return f instanceof TFile ? app.vault.read(f) : null;
+    },
+    getSettings: () => ctx.getSettings(),
+  });
   // ── capability modules: scope-provider + vocab + skills ────────────────────
   // Ruled decision #2 realized: the two capability modules register THROUGH
   // the ModuleRegistry — settings-toggleable (`modules.<id>.enabled`), behind
@@ -264,6 +280,15 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
     // locked decision).
     vaultName: ctx.vaultName,
     fileclassPresent: () => !!(app as any).plugins?.plugins?.[FILECLASS_PLUGIN_ID],
+    // The crosssession module (#232): vault reads/appends via the duck-typed
+    // source; read-receipt state in the plugin dir beside the journal
+    // (`crosssession-receipts.json` — the install-id precedent), NOT data.json.
+    crosssessionSource: obsidianCrosssessionSource(app as any),
+    crosssessionReceipts: obsidianReceiptStore(app as any),
+    // The triage module (#221 phase 2): reads via the metadata cache, writes
+    // via the SHARED primitives — moveOne (link-healing renameFile),
+    // fileManager.trashFile, processFrontMatter — see obsidian-triage-source.ts.
+    triageSource: obsidianTriageSource(app),
   });
   // Skip-and-report only reports if someone reads the report: every mount
   // defect (unknown module id in settings, a gate-refused tool, a config
