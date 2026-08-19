@@ -16,6 +16,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { fakeServer } from "./fake-server.mjs";
+import { collectPaths } from "../src/guard.ts";
 import {
   registerImportTools,
   importerVersionSupported,
@@ -270,8 +271,21 @@ describe("registration gate", () => {
     assert.ok(tool);
     assert.equal(tool.def.annotations.readOnlyHint, false);
     assert.equal(tool.def.annotations.openWorldHint, true);
+    // destructive-but-recoverable convention (core's DESTRUCTIVE_RECOVERABLE /
+    // obsidian_trash): the "delete" disposition can send source notes to
+    // Recently Deleted, so the hint describes the capability, not the default.
+    assert.equal(tool.def.annotations.destructiveHint, true);
     // dry_run is mandatory, matching the scheme-write tools' convention.
     assert.equal(tool.def.inputSchema.dry_run.isOptional(), false);
+  });
+
+  test("output_folder is a guard-recognized path argument with a schema default", () => {
+    const { tool } = register({ plugin: fakePlugin() });
+    // Schema default: every parsed call carries the landing folder, so the
+    // kernel's collectPaths always finds it (journal target + lock consult).
+    assert.equal(tool.def.inputSchema.output_folder.parse(undefined), "Apple Notes");
+    // PATH_KEYS membership: the guard walker collects it like any named path.
+    assert.deepEqual(collectPaths({ output_folder: "Apple Notes" }), ["Apple Notes"]);
   });
 });
 
