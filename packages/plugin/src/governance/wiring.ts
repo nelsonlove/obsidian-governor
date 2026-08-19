@@ -192,6 +192,8 @@ function acceptanceSettings(plugin: Plugin) {
 }
 
 const cachedPending = new WeakMap<Plugin, PendingItem[]>();
+/** Monotonic per-plugin refresh generation — see the guard at the top of refresh(). */
+const refreshGen = new WeakMap<Plugin, number>();
 function getCachedPending(plugin: Plugin): PendingItem[] {
   return cachedPending.get(plugin) ?? [];
 }
@@ -800,6 +802,15 @@ class AdapterBlobFs implements BlobFs {
 
 // ── queue / badge refresh (read-only: recomputes the queue; advances no baseline) ──
 async function refresh(plugin: Plugin): Promise<void> {
+  // Generation guard. refresh() has several concurrent drivers (the journal poll, the pane's
+  // Refresh button, reconcile, and now vault deletes), and it AWAITS a cachedRead per governed
+  // file — so a refresh that started BEFORE a delete can settle AFTER the delete-driven one and
+  // republish a queue still containing the deleted note, reinstating the stale row. Rather than
+  // skip concurrent runs (callers await refresh() and then act on the result — pollJournal's
+  // auto-accept sweep does), each run takes a generation and only the NEWEST-STARTED run is
+  // allowed to publish; an overtaken run does its reads and then drops its result on the floor.
+  const myGen = (refreshGen.get(plugin) ?? 0) + 1;
+  refreshGen.set(plugin, myGen);
   const notes: NoteSnapshot[] = [];
   for (const file of governedMarkdownFiles(plugin)) {
     notes.push({ path: file.path, content: await plugin.app.vault.cachedRead(file) });
@@ -813,6 +824,9 @@ async function refresh(plugin: Plugin): Promise<void> {
     // properties for review (the drift is already inert — this makes it seen).
     protectedDrift: protectedPropertyDrift,
   });
+  // Overtaken by a newer refresh while we were reading: that run has fresher input and will
+  // publish its own result, so this one must not clobber it.
+  if (refreshGen.get(plugin) !== myGen) return;
   cachedPending.set(plugin, pending);
   // #261: PUBLISH the pending index — the governance module owns the queue, so it owns the
   // published view of it too (`<plugin dir>/governance/pending-index.json`, the file
@@ -1151,7 +1165,18 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
   component.registerEvent(plugin.app.vault.on("delete", (file) => {
     const isFolder = file instanceof TFolder;
     if (!isFolder && !(file instanceof TFile && file.extension === "md")) return;
-    if (!deleteInvalidatesQueue(file.path, isFolder, getCachedPending(plugin).map((p) => p.path))) return;
+    // TWO reasons to recompute, with different reach — the pane shows three lists, not one:
+    //  - the PENDING queue is cached and PUBLISHED (ribbon badge + pending-index.json, which
+    //    obsidian_pending_review reads), so a delete that hits it must refresh even with the pane
+    //    closed. That is the precise, cheap check.
+    //  - the Proposed and Revising sections are LIVE reads (listProposed/listRevising, straight
+    //    off the metadata cache), so their data is never stale — they simply never REPAINT. With a
+    //    pane open, any governed delete therefore needs a rerender, or a deleted proposed note
+    //    keeps its live Accept/Withdraw button. Gated on a pane actually being open so a closed
+    //    pane still pays only for queue-hitting deletes.
+    const paneOpen = plugin.app.workspace.getLeavesOfType(VIEW_TYPE_GOVERNANCE).length > 0;
+    const hitsQueue = deleteInvalidatesQueue(file.path, isFolder, getCachedPending(plugin).map((p) => p.path));
+    if (!hitsQueue && !(paneOpen && !isExcluded(file.path))) return;
     const timers = timersFor(plugin);
     const key = QUEUE_DELETE_TIMER;
     const existing = timers.get(key);
