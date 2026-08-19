@@ -80,7 +80,7 @@ The end-to-end shape:
 shipped module id, settings key, and source directory, and renaming a shipped id is a
 compatibility event with no offsetting benefit. *Acceptance* remains the capability's
 descriptive name in prose (the module's `capabilities: ["acceptance"]` entry). One id, one
-capability name, no third synonym; *Stewardship* is retired vocabulary for the pre-fold
+capability name, no third synonym; *Stewardship* is legacy vocabulary for the pre-fold
 standalone plugin (decommissioned 2026-08-18, #164).
 
 The fold this section once anticipated has long since landed (#83, 0.8.3) and been built
