@@ -9,7 +9,13 @@
 //       each covered by an ENABLED allowlisted detector, with NO residual. A write
 //       that mixes a mechanical stamp with ANY other content edit is NOT eligible;
 //       the whole write stays pending. A mechanical class can never smuggle content
-//       past review.
+//       past review. ONE additional partition EXISTS only under an honored per-note
+//       `auto-accept: appends` policy (#261): an appended body TAIL — bytes strictly
+//       extending the (identical or healed-only) existing body — counts as covered,
+//       by the policy rather than a class. The conjunctive rule itself is unchanged:
+//       every non-tail difference must still be class-attributed, an edit inside
+//       existing content is still residual, and no policy-less write gets the tail
+//       partition.
 //   (B) RAIL-CLEAN — the change introduces no new conformance finding. The four
 //       authorized classes are rail-neutral BY CONSTRUCTION (see classes.ts); a
 //       future non-neutral class MUST supply a real railCheck result via the seam
@@ -81,10 +87,12 @@ export interface EvalContext {
    * blessed BASELINE frontmatter via `autoAcceptPolicyOf`, never from the raw
    * current note — honor-only-if-blessed): `appends` accepts a change iff the
    * baseline is a byte-prefix of the current content (the #226 detector, same
-   * conservative discipline — a write that appends AND modifies anything
-   * existing is NOT an append and stays pending); `all` accepts any pending
-   * agent-attributed change. Absent/null ⇒ class-allowlist evaluation only,
-   * byte-identical to the pre-#135 behavior.
+   * conservative discipline), or — since #261 — iff the diff COMPOSES as
+   * allowlisted mechanical classes plus an appended body tail (see the header:
+   * the tail is one extra partition, nothing else is loosened — a write that
+   * appends AND modifies anything non-mechanical still stays pending); `all`
+   * accepts any pending agent-attributed change. Absent/null ⇒ class-allowlist
+   * evaluation only, byte-identical to the pre-#135 behavior.
    */
   policy?: AutoAcceptPolicy | null;
 }

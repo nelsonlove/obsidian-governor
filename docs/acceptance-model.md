@@ -303,7 +303,9 @@ non-accepted values stay deliberately agent-writable workflow state (`proposed`,
 **The first consumer — the per-note auto-accept policy (#135).** `auto-accept` ships in the
 default declared list as authority-conferring. A human delegates by writing
 `auto-accept: appends` (auto-accept append-only changes — the baseline must be a byte-prefix
-of the current content; a write that appends *and* edits stays pending) or
+of the current content; a write that appends *and* edits stays pending, with the ONE #261
+carve-out below: edits that are themselves allowlisted mechanical classes compose with the
+appended tail) or
 `auto-accept: all` in a note's own frontmatter — their editor write is human-attributed and
 therefore honored; no pane toggle exists. The eligibility engine consults the **honored**
 policy (from the blessed baseline) before the class allowlist, and every policy-driven
