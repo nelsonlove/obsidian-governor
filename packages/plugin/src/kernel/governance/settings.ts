@@ -40,11 +40,14 @@ export interface GovernanceAcceptanceSettings {
    * hardcodes no vault convention (the legacy QuickAdd macro's uid/title/description
    * gate maps onto this field). */
   requiredFrontmatterKeys: string[];
+  /** How the conformance gate responds: "soft" = modal choice (default), "hard" = refuse with notice, "off" = gate disabled. */
+  gateMode: "soft" | "hard" | "off";
 }
 
 export const DEFAULT_ACCEPTANCE_SETTINGS: GovernanceAcceptanceSettings = {
   acceptedBy: "local-human",
   requiredFrontmatterKeys: [],
+  gateMode: "soft",
 };
 
 // Coerce an untrusted config record into acceptance settings. Never throws. `acceptedBy`
@@ -57,7 +60,8 @@ export function governanceAcceptanceSettings(config: unknown): GovernanceAccepta
     typeof c.acceptedBy === "string" && c.acceptedBy.trim() !== ""
       ? c.acceptedBy.trim()
       : DEFAULT_ACCEPTANCE_SETTINGS.acceptedBy;
-  return { acceptedBy: by, requiredFrontmatterKeys: coerceKeyList(c.requiredFrontmatterKeys) };
+  const mode = c.gateMode === "hard" || c.gateMode === "off" ? c.gateMode : "soft";
+  return { acceptedBy: by, requiredFrontmatterKeys: coerceKeyList(c.requiredFrontmatterKeys), gateMode: mode };
 }
 
 function coerceKeyList(v: unknown): string[] {

@@ -61,6 +61,7 @@
 //  governance commands.
 // ============================================================================
 
+import type { AcceptOpts } from "../kernel/governance/accept.js";
 import { Component, TFile, MarkdownView, Notice, type WorkspaceLeaf, type Plugin, type DataAdapter } from "obsidian";
 import { BaselineStore, type BlobFs } from "../kernel/governance/baseline-store.js";
 import { parseJournal, recentAgentWrite, agentWritesSince, type JournalRecord } from "../kernel/governance/journal-reader.js";
@@ -412,13 +413,13 @@ function buildAcceptDeps(plugin: Plugin): AcceptDeps {
     now: () => new Date().toISOString(),
     nowLocal: () => formatLocalMinutes(new Date()),
     user: acceptance.acceptedBy,
-    requiredFrontmatterKeys: acceptance.requiredFrontmatterKeys,
+    requiredFrontmatterKeys: acceptance.gateMode === "off" ? [] : acceptance.requiredFrontmatterKeys,
   };
 }
 // The ONE context-aware accept (both the pending detail view's Accept and the Proposed
 // section's Accept land here). acceptNote stamps FIRST (proposed notes only) and advances
 // the baseline from the post-stamp content, so the stamp never re-queues; see accept.ts.
-async function performAccept(plugin: Plugin, path: string): Promise<AcceptResult> {
+async function performAccept(plugin: Plugin, path: string, opts?: AcceptOpts): Promise<AcceptResult> {
   // #228 race discipline, extended to the converged accept: the stamp is a PROGRAMMATIC
   // write, but the human just clicked (and may have typed in this note's editor moments
   // before). A lingering genuine-human-input record for this path would let the debounced
@@ -429,7 +430,7 @@ async function performAccept(plugin: Plugin, path: string): Promise<AcceptResult
   // accept (stamp landed, baseline advance threw) has still written.
   humanInputMap(plugin).delete(path);
   try {
-    return await acceptNote(buildAcceptDeps(plugin), path);
+    return await acceptNote(buildAcceptDeps(plugin), path, opts);
   } finally {
     humanInputMap(plugin).delete(path);
     await refresh(plugin);
@@ -543,7 +544,8 @@ function buildController(plugin: Plugin): ReviewController {
     getPending: () => getCachedPending(plugin),
     getBaselineContent: (path) => getStore(plugin).get(path)?.content ?? null,
     readCurrent: (path) => readNote(plugin, path),
-    accept: (path) => performAccept(plugin, path),
+    accept: (path, opts) => performAccept(plugin, path, opts),
+    gateMode: () => acceptanceSettings(plugin).gateMode,
     revert: (path) => performRevert(plugin, path),
     adopt: async () => { await performAdopt(plugin); },
     refresh: () => refresh(plugin),

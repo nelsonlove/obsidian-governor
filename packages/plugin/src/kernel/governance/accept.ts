@@ -230,16 +230,26 @@ export function formatLocalMinutes(d: Date): string {
 // false-aborting legitimate accepts. Such a write is journaled (it went through MCP) but
 // would be folded. This narrow residual is the value-level sliver of the same race window
 // the pre-convergence accept already had; it is documented in docs/acceptance-model.md.
-export async function acceptNote(deps: AcceptDeps, path: string): Promise<AcceptResult> {
+/** Options for a single accept call. `gateOverride` skips the conformance gate for THIS call
+ * only — reachable solely from the pane's gate modal ("Accept anyway"), i.e. a second explicit
+ * human gesture after the gate named what is missing. It can never be supplied by an agent:
+ * no transport reaches accept at all. */
+export interface AcceptOpts { gateOverride?: boolean; }
+
+export async function acceptNote(deps: AcceptDeps, path: string, opts?: AcceptOpts): Promise<AcceptResult> {
   const pre = await deps.readNote(path);
   const status = acceptanceStatusOf(pre);
   let content = pre;
   let stamped = false;
 
   if (status === "proposed") {
-    // Conformance gate — refuse BEFORE any write (no stamp AND no baseline advance).
-    const missing = missingRequiredKeys(pre, deps.requiredFrontmatterKeys);
-    if (missing.length > 0) throw new AcceptGateError(missing);
+    // Conformance gate — refuse BEFORE any write (no stamp AND no baseline advance), unless
+    // the human explicitly overrode it via the pane's gate modal ("Accept anyway" — a second
+    // real gesture). The refusal carries the missing keys so the modal can name them.
+    if (!opts?.gateOverride) {
+      const missing = missingRequiredKeys(pre, deps.requiredFrontmatterKeys);
+      if (missing.length > 0) throw new AcceptGateError(missing);
+    }
 
     // STAMP FIRST (see the ordering note above), then fold the stamp into the snapshot.
     await deps.stampAccepted(path, { status: "accepted", by: deps.user, on: deps.nowLocal() });

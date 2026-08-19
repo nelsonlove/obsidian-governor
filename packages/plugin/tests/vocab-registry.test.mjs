@@ -72,16 +72,49 @@ describe("VocabRegistry", () => {
     assert.equal(reg.problems.length, 1);
   });
 
-  test("the defaults: one registry over the vault registries slot, one glossary", () => {
+  test("the defaults: the live scope-tags model, one glossary (2026-08-19 correction)", () => {
     assert.deepEqual(
       DEFAULT_VOCABULARIES.map((v) => [v.id, v.provider]),
       [
-        ["registry", "blueprint"],
+        ["scope-tags", "scope-tags"],
         ["glossary", "glossary"],
       ]
     );
-    // The registry default must NOT point at gen3 — it moved (hard constraint).
-    assert.doesNotMatch(DEFAULT_VOCABULARIES[0].root, /gen3/);
+    // Stale-defaults regression pins: never gen3, never the dead 00.05
+    // registries slot (emptied by the 2026-08 reorganizations), never the
+    // vault-root Assent tree (refiled to 00.89).
+    for (const row of DEFAULT_VOCABULARIES) {
+      assert.doesNotMatch(row.root, /gen3/);
+      assert.doesNotMatch(row.root, /00\.05 Registries/);
+    }
+    assert.match(String(DEFAULT_VOCABULARIES[1].config?.termsRoot), /00\.89 Assent/);
+  });
+
+  test("the defaults parse a fixture mirroring the live vault shapes", () => {
+    // The live model, in miniature: a Meta/Tag registry note, the root scope
+    // note + a category folder-note carrying allowedTags, a definition note.
+    const reg = new VocabRegistry(DEFAULT_VOCABULARIES);
+    assert.deepEqual(reg.problems, []);
+    const instances = reg.build([
+      { path: "The system.md", frontmatter: { fileClass: "Scope/Root", allowedTags: ["system"] } },
+      {
+        path: "00-09 System/00 System management/00 System management.md",
+        frontmatter: { fileClass: "Scope/Category", allowedTags: [] },
+      },
+      {
+        path: "00-09 System/00 System management/00.01-00.09 Operations/00.05 Registries for the system/note task.md",
+        frontmatter: { fileClass: "Meta/Tag", tag: "note/task", description: "Actionable work." },
+      },
+      {
+        path: "00-09 System/01 System architecture/Glossary/Canonical.md",
+        frontmatter: { title: "Canonical", description: "Holding authority.", tags: ["note/definition"] },
+      },
+    ]);
+    const tags = instances.find((i) => i.id === "scope-tags");
+    assert.equal(tags.provider.resolve("note/task", "tag").canonical, "note/task");
+    assert.equal(tags.provider.list("tag").length, 1);
+    const gloss = instances.find((i) => i.id === "glossary");
+    assert.equal(gloss.provider.resolve("Canonical", "term").definition, "Holding authority.");
   });
 });
 

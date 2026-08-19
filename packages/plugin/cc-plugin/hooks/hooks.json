@@ -1,5 +1,5 @@
 {
-  "description": "vault-mcp connectivity — warn at session start when the Obsidian bridge socket is down.",
+  "description": "vault-mcp connectivity (SessionStart health warning) + record-class write guard (PreToolUse on Bash and mcp__vault-mcp__* \u2014 refuses non-append writes under 'Machinery record/').",
   "hooks": {
     "SessionStart": [
       {
@@ -8,6 +8,28 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PLUGIN_ROOT/hooks/scripts/vault-mcp-health.mjs\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PLUGIN_ROOT/hooks/scripts/block-record-writes.sh\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__vault-mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PLUGIN_ROOT/hooks/scripts/block-record-writes.sh\"",
             "timeout": 10
           }
         ]

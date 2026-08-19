@@ -15,21 +15,30 @@
 
 import { blueprintProvider, type VocabNote } from "./blueprint.js";
 import { glossaryProvider, DEFAULT_GLOSSARY_CONFIG } from "./glossary.js";
+import { scopeTagsProvider, validateScopeTagsConfig, DEFAULT_SCOPE_TAGS_CONFIG, type ScopeTagsConfig } from "./scope-tags.js";
 import type { VocabularyProvider } from "./provider.js";
 
 /** The provider names a vocabulary instance may name — the single source of
  * truth for both the registry's skip-unknown check and the settings-tab
  * provider dropdown (connection-ui.ts), so the two cannot drift. */
-export const VOCAB_PROVIDERS = ["blueprint", "glossary"] as const;
+export const VOCAB_PROVIDERS = ["blueprint", "glossary", "scope-tags"] as const;
 export type VocabProviderName = (typeof VOCAB_PROVIDERS)[number];
 
 export function isVocabProvider(name: unknown): name is VocabProviderName {
   return typeof name === "string" && (VOCAB_PROVIDERS as readonly string[]).includes(name);
 }
 
+/** Per-provider config validators (a provider validates its OWN config
+ * namespace, the scheme registry's `validateJdConfig` pattern). Absent means
+ * the provider takes any config shape it can coerce. */
+const CONFIG_VALIDATORS: Partial<Record<VocabProviderName, (config: unknown) => string[]>> = {
+  "scope-tags": validateScopeTagsConfig,
+};
+
 export interface VocabInstanceSettings {
   id: string;
-  /** Provider name: "blueprint" (registry grammar) or "glossary" (terms). */
+  /** Provider name: "scope-tags" (per-scope tag whitelists), "blueprint"
+   * (gen-old registry grammar), or "glossary" (terms). */
   provider: string;
   /** Vault-relative path prefix this vocabulary is read from; "" = whole vault. */
   root: string;
@@ -37,16 +46,26 @@ export interface VocabInstanceSettings {
 }
 
 export const DEFAULT_VOCABULARIES: VocabInstanceSettings[] = [
-  {
-    id: "registry",
-    provider: "blueprint",
-    // The post-consolidation registries slot (2026-08-09). Settings-overridable;
-    // never gen3 — that tree was emptied by the move.
-    root: "00-09 System/00 System management/00.05 Registries for the system",
-  },
+  // The live tag model (read from the vault 2026-08-19, #251): Meta/Tag
+  // registry notes + per-scope `allowedTags` chain-union, served by the
+  // scope-tags provider over the whole vault. This REPLACES the gen-old
+  // "registry" blueprint instance: its shipped root ("00-09 System/00 System
+  // management/00.05 Registries for the system") no longer exists — the slot
+  // moved under 00.01-00.09 Operations and holds only its folder note — and
+  // its `.tag.md` / `.property.md` / `.fileclass` grammar (tag-macros.blueprint
+  // / drift_audit.py, both dead) has no live surface. The blueprint provider
+  // itself remains available via settings for vaults still on that grammar.
+  { id: "scope-tags", provider: "scope-tags", root: "" },
   // termsRoot is read by the TOOL layer (it decides which bodies to read for
   // `## Terms` sections); the provider itself parses whatever bodies arrive.
-  { id: "glossary", provider: "glossary", root: "", config: { termsRoot: "Assent" } },
+  // The Assent chapters live under 00.89 since the vault-root `Assent/` tree
+  // was refiled (stale shipped default corrected 2026-08-19).
+  {
+    id: "glossary",
+    provider: "glossary",
+    root: "",
+    config: { termsRoot: "00-09 System/00 System management/00.89 Assent" },
+  },
 ];
 
 export interface VocabInstance {
@@ -79,6 +98,16 @@ export class VocabRegistry {
         this.problems.push(`unknown vocabulary provider '${row.provider}' (id '${row.id}') — skipped`);
         continue;
       }
+      // Per-provider config validation, the scheme registry's pattern: an
+      // invalid config skips that ONE instance and reports, never throws.
+      const validate = CONFIG_VALIDATORS[row.provider as VocabProviderName];
+      const configProblems = validate ? validate(row.config) : [];
+      if (configProblems.length > 0) {
+        this.problems.push(
+          `invalid config for vocabulary '${row.id}' (${row.provider}): ${configProblems.join("; ")} — skipped`
+        );
+        continue;
+      }
       this.rows.push(row);
     }
   }
@@ -91,7 +120,9 @@ export class VocabRegistry {
       const provider =
         row.provider === "blueprint"
           ? blueprintProvider({ root: "" }, scoped)
-          : glossaryProvider({ ...DEFAULT_GLOSSARY_CONFIG, ...(row.config ?? {}) } as { definitionTag: string }, scoped);
+          : row.provider === "scope-tags"
+            ? scopeTagsProvider({ ...DEFAULT_SCOPE_TAGS_CONFIG, ...(row.config ?? {}) } as ScopeTagsConfig, scoped)
+            : glossaryProvider({ ...DEFAULT_GLOSSARY_CONFIG, ...(row.config ?? {}) } as { definitionTag: string }, scoped);
       return { id: row.id, providerName: row.provider, root: row.root, provider };
     });
   }

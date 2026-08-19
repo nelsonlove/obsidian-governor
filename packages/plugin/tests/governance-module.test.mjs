@@ -130,6 +130,7 @@ describe("governance module: renders a config-tab section (badge toggles + conve
       "showRibbonBadge",
       "showViewTabBadge",
       "acceptedBy",
+      "gateMode",
       "requiredFrontmatterKeys",
     ]);
     const byKey = new Map(gov.fields.map((f) => [f.key, f]));
@@ -139,6 +140,8 @@ describe("governance module: renders a config-tab section (badge toggles + conve
     }
     assert.equal(byKey.get("acceptedBy").type, "text");
     assert.equal(byKey.get("acceptedBy").value, "local-human", "acceptedBy defaults to local-human");
+    assert.equal(byKey.get("gateMode").type, "select");
+    assert.equal(byKey.get("gateMode").value, "soft", "the gate responds softly by default");
     assert.equal(byKey.get("requiredFrontmatterKeys").type, "csv");
     assert.deepEqual(byKey.get("requiredFrontmatterKeys").value, [], "the conformance gate defaults EMPTY (no gate)");
     assert.equal(gov.enabled, false);
