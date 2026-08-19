@@ -165,6 +165,12 @@ export default class VaultMcpPlugin extends Plugin {
 
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    // A hand-edited/corrupt data.json must not silently DISABLE a guard: any
+    // value that isn't an explicit `false` reads as enforced (same
+    // fail-toward-the-safe-default discipline as the cliPolicy/protected-
+    // property normalization below, where a dropped malformed entry can only
+    // mean more denied, never less).
+    this.settings.enforceRecordImmutability = this.settings.enforceRecordImmutability !== false;
     // Object.assign is shallow: a hand-edited data.json carrying a PARTIAL
     // cliPolicy (one list, not both) would leave the other undefined and
     // crash the settings tab; a WRONG-TYPED one (a string where a list

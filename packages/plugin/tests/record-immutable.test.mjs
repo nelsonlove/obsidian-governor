@@ -93,6 +93,17 @@ describe("recordImmutableRefusal (pure core)", () => {
     assert.deepEqual([...RECORD_EXEMPT_OPS], ["obsidian_append_note"]);
   });
 
+  test("crosssession_post is NOT exempt — pinned deliberately, not by oversight", () => {
+    // The one other tool whose contract is a dated end-of-file append. It never
+    // reaches this check today (its target arrives as `channel`, which is not a
+    // PATH_KEY, so collectPaths yields nothing), so exempting it would widen a
+    // protective set on a guess about a future argument shape. This test exists
+    // so that if `channel` ever becomes path-keyed, the resulting refusal is a
+    // decision someone makes here rather than a surprise in production.
+    const err = recordImmutableRefusal("crosssession_post", ["Records/2026-08.md"], record);
+    assert.ok(err instanceof RecordImmutableError, "unexempted today — change this only on purpose");
+  });
+
   test("append-shaped ARGUMENTS on a different tool do not exempt it", () => {
     // The paths walked are the same either way; only the op name decides.
     const err = recordImmutableRefusal("obsidian_write_note", ["Records/2026-08.md"], record);

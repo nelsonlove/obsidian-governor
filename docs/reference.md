@@ -122,7 +122,7 @@ A note whose frontmatter carries **`record: true`** is a **record** — historic
 
 The check runs at the front of the write queue (same point as `if_rev`), reads the flag from Obsidian's already-parsed metadata cache, and **fails open**: a missing file, an unparsed cache, or an unreadable frontmatter never refuses anything — this guard is protective, and an unreadable note must not turn into a vault-wide write outage. It exists for fallible agents, not adversaries: the same threat model as the [accept guard](acceptance-model.md).
 
-Enforcement is on by default and toggleable in the settings tab (*Enforce record immutability*) — the check is deliberately over-inclusive, refusing on any path a call **names**, so the switch is the escape hatch for a legitimate operation it blocks.
+Enforcement is on by default and toggleable in the settings tab (*Enforce record immutability*) — the check is deliberately over-inclusive, refusing on any path a call **names**, so the switch is the escape hatch for a legitimate operation it blocks — concretely, `obsidian_repoint_link` refuses when its `target_path` is a record, even though the record is only the link *destination* and is never written.
 
 The scope is *addressed* mutation — the paths an operation **names**. An operation that *discovers* its blast radius can still touch a record's body as a side effect: `obsidian_repoint_link` rewrites whatever notes carry the matching wikilink, and a move's link-healing rename rewrites backlinks wherever they live (`update_backlinks: false` is advisory). Byte-exactness against that class is what a record's git history and backups are for.
 
