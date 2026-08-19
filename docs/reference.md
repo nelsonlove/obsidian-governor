@@ -160,7 +160,7 @@ Two agents working the same folder can at least *tell each other so*. `obsidian_
 - **Every path an operation names is consulted, not just the first.** A move *into* a claimed scope lands in somebody's work exactly as much as a move out of one does, so both halves of a move (and every path of a batch) are checked. Each claim is disclosed once however many of the paths it covers.
 - **Claims expire on their own** — default 5 minutes, maximum 30. A holder that crashes or disconnects cannot wedge a scope; expiry is lazy, so an expired claim is simply gone the next time anyone looks. `obsidian_renew_scope` restarts the clock on a claim you hold (by its `lock_id`, leaving scope and reason alone); **claiming a scope you already hold replaces that claim** rather than adding a second — same id, restated reason, restarted clock. `obsidian_release_scope` drops it early, and `obsidian_list_scope_claims` shows every live claim.
 - **At the cap, a claim is refused — never traded for someone else's.** A connection may hold 50 live claims and the vault 200; past your own cap `obsidian_claim_scope` fails with `Error [lock_cap]`, past the store's with `Error [lock_store_cap]`, and either way nothing is claimed and no existing claim is dropped. (Evicting the oldest claim to make room, which is what it used to do, let a client claiming in a loop silently delete every other session's claims.) The per-connection cap bounds a *connection*, not a client: connections are free, so a client running four of them can hold all 200 and a bystander's claim is then refused. What bounds that is time, not identity — every claim expires within 30 minutes (5 by default), so the store drains on its own, and because claims are advisory a full store costs a denied caller only the disclosure, never a read or a write.
-- **A path allowlist bounds claiming.** A claim is a statement about a region of the vault that every other session sees, so a session sandboxed to `Projects/` can claim inside `Projects/` and nowhere else — a scope outside it, or the whole-vault scope `""`, fails with `Error [out_of_allowlist]`. Sessions with no allowlist configured are unaffected, whole-vault claims included. Listing is never restricted: knowing who else is working is the entire value of the mechanism.
+- **A path allowlist bounds claiming.** A claim is a statement about a region of the vault that every other session sees, so a session sandboxed to `Projects/` can claim inside `Projects/` and nowhere else — a scope outside it, or the whole-vault scope `""`, fails with `Error [out_of_allowlist]`. Sessions with no allowlist configured are unaffected, whole-vault claims included. Listing follows the same rule on the read side: `obsidian_list_scope_claims` shows a claim only when its scope is itself inside the allowlist, and reports the rest as a `hidden_claims` count — an unfiltered listing was a path oracle for the territory the allowlist hides, and the count keeps the disclosure ("someone claimed territory outside your view") without naming where. With no allowlist the listing is unchanged and carries no `hidden_claims` key.
 
 A claim is held per **connection** — a reconnecting session starts with none — and claims live in memory, so a plugin reload clears them. Claiming and releasing are treated as **mutating** operations: not because they touch the vault (they don't) but because a claim is exactly the sort of act the audit stream should record, so each one is journaled like any other operation (`target.ref` = `scope:<prefix>` / `lock:<id>`). One consequence: **read-only mode blocks claiming and releasing** — in a session that cannot write, there is nothing for a claim to disclose. Listing still works.
 
@@ -205,9 +205,11 @@ With no allowlist configured, every one of these behaves exactly as it always di
 
 ## Publishing tools from other plugins
 
-Other Obsidian plugins can publish their own MCP tools through vault-mcp's bridge. Add the SDK:
+Other Obsidian plugins can publish their own MCP tools through vault-mcp's bridge. Add the SDK — `vault-mcp-api`, which lives in this monorepo at [`packages/vault-mcp-api`](../packages/vault-mcp-api) (folded from the standalone `github:nelsonlove/vault-mcp-api` repo, #86):
 
-    npm install github:nelsonlove/vault-mcp-api#v1.0.0
+    npm install vault-mcp-api
+
+(Before the first npm-published version lands, the pinned install from the old standalone repo — `npm install github:nelsonlove/vault-mcp-api#v1.0.0` — keeps working.)
 
 then in your plugin's `onload()`:
 
