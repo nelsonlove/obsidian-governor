@@ -507,8 +507,14 @@ function collectChoiceNotes(app: App): ChoiceNoteInput[] {
   for (const t of typed) {
     if (t.quickaddType === "multi") {
       const ownFolder = parentFolder(t.path);
-      const grandparent = parentFolder(ownFolder);
-      if (anchoredFolders.has(grandparent)) claimedBy.set(t.path, grandparent);
+      // A multi-note AT vault root (no folder above it) can never be claimed —
+      // parentFolder("") === "" would otherwise make it collide with its own
+      // anchor and incorrectly self-claim, silently dropping both itself and
+      // every other root-level choice note from the compile.
+      if (ownFolder !== "") {
+        const grandparent = parentFolder(ownFolder);
+        if (anchoredFolders.has(grandparent)) claimedBy.set(t.path, grandparent);
+      }
     } else {
       const folder = parentFolder(t.path);
       if (anchoredFolders.has(folder)) claimedBy.set(t.path, folder);

@@ -444,6 +444,38 @@ describe("obsidian_quickadd_compile — Multi discovery", () => {
     assert.equal(res.structuredContent.errors.length, 0);
     assert.deepEqual(res.structuredContent.choices[0].choices, []);
   });
+
+  // parentFolder("") === "" (idempotent at the vault-root boundary), so a
+  // multi-note living directly at vault root has ownFolder === "" and its
+  // "grandparent" would ALSO be "" — the same value that note itself
+  // anchors. Without a guard this reads as self-claiming and the note (plus
+  // every other root-level note it would have claimed) silently vanishes
+  // from the compile with zero errors. This is the vault-root analogue of
+  // the ordinary "sibling nests, not top-level" case above.
+  test("a root-level Multi note claims a root-level sibling as a member (vault-root boundary)", async () => {
+    const { handler } = build({
+      notes: [
+        multiNote("Multi.md", "Multi"),
+        captureNote("Capture.md", "Capture", { target: "some/path.md" }),
+      ],
+    });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.errors.length, 0);
+    assert.equal(res.structuredContent.choices.length, 1);
+    const multi = res.structuredContent.choices[0];
+    assert.equal(multi.type, "Multi");
+    assert.equal(multi.choices.length, 1);
+    assert.equal(multi.choices[0].name, "Capture");
+  });
+
+  test("a LONE root-level Multi note with no siblings compiles as an empty Multi, not vanishing", async () => {
+    const { handler } = build({ notes: [multiNote("Multi.md", "Multi")] });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.errors.length, 0);
+    assert.equal(res.structuredContent.choices.length, 1);
+    assert.equal(res.structuredContent.choices[0].type, "Multi");
+    assert.deepEqual(res.structuredContent.choices[0].choices, []);
+  });
 });
 
 describe("obsidian_quickadd_compile — mixed choice types in one compile", () => {
@@ -1094,8 +1126,11 @@ describe("obsidian_quickadd_compile: choice step", () => {
       links: { "Folder": "Choices/Folder.md" },
     });
     const res = await handler({ dry_run: true });
-    // ONE compiled choice — the empty "Folder" Multi. "Bad" fails outright
-    // (its only step is the invalid reference), so it never compiles.
+    // ONE compiled choice — the empty "Folder" Multi. "Bad" lives in the
+    // same folder Folder.md anchors, so it's claimed as a NESTED member of
+    // Folder rather than evaluated as a would-be top-level entry; its
+    // failed choice: step surfaces as a nested error bubbled up through
+    // transformMulti, and it is omitted from Folder's own (empty) `choices`.
     assert.equal(res.structuredContent.choices.length, 1);
     assert.equal(res.structuredContent.choices[0].type, "Multi");
     assert.equal(res.structuredContent.errors.length, 1);
