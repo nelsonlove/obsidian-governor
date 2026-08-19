@@ -50,8 +50,9 @@ The end-to-end shape:
    obsidian_pending_review ◀────────────────┼──────────────────────────┘
    (read: what's under review)              │                          │
                                             ▼                          ▼
-                                    Acceptance review pane ◀── reads journal + baseline
-                                    (obsidian-stewardship)     publishes pending-index.json
+                                    Governance review pane ◀── reads journal + baseline
+                                    (vault-mcp governance      publishes pending-index.json
+                                     module, folded #164)
                                             │
                                             ▼
                                     human accepts / reverts  ◀── the SOLE accept authority
@@ -129,7 +130,8 @@ tags for builds whose exact bytes are unrecoverable).
   plugin suite needs `@vault-mcp/core` built first — the monorepo wiring handles this.)*
 - **Deployed.** The kernel through the module-host mount, B1/B2, the CLI accept-guard,
   `jd:` addressing, and B3 `obsidian_pending_review` are deployed (0.8.0 released and
-  installed); the review plugin's pending-index publisher is live. Live-verification passes
+  installed); the pending-index publisher lives in the folded governance module since #261
+  (the retired standalone's publisher died with #164). Live-verification passes
   are recorded per-PR in the project's build records rather than restated here.
 - **Known-open perimeter issues** (tracked publicly, milestone `0.8.1 — perimeter`): the
   standalone `packages/server` fs-failover surface now **does** enforce the accept-forbidden

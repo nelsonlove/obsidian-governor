@@ -310,6 +310,21 @@ policy (from the blessed baseline) before the class allowlist, and every policy-
 auto-accept logs `policy: appends|all` in the acceptance log beside the class-driven
 records. The review pane badges the honored policy read-only.
 
+**The `appends` policy composes with the mechanical classes (#261).** A pending diff that is
+allowlisted mechanical classes **plus** an appended body tail is eligible where each half
+alone already would be: frontmatter differences must still be fully class-attributed
+(`modified:` stamp → timestamp, …), body changes before the tail must still be
+confirmed-rename link-heals only, and the tail must strictly extend the existing (or
+healed) body. Nothing is loosened — an edit inside existing content, an unconfirmed link
+rewrite, or a non-mechanical frontmatter change still wedges the whole write pending. This
+closes the live #261 failure: a host-side `modified:` stamp plus Obsidian's rename-driven
+wikilink rewrites landed between the blessing and the agent appends, byte-prefix failed,
+and the class path called the appended tail residual — every part individually blessed,
+the combination stuck pending forever (and silently; refusals on policy-carrying notes now
+log to the console, once per content-state). Supporting it, **rename captures persist**
+(`governance/rename-records.json`, TTL 30 days, capped) so the link-heal oracle still
+confirms a rename after a plugin reload.
+
 ## Every write surface is covered
 
 The guard lives at the shared primitive in `obsidian-backend.ts`, which every
