@@ -57,3 +57,53 @@ jobs:
             --title "$tag" \
             --notes "Release $tag" \
             $assets
+
+  # Publish the vault-mcp-api SDK (packages/vault-mcp-api) to npm when the
+  # version in its package.json is not on the registry yet. Independent of the
+  # plugin release above: it runs after it, but a skip here never blocks the
+  # plugin assets. Requires the NPM_TOKEN secret — when the secret is absent
+  # the job SKIPS cleanly (no failure), so releases work before npm publishing
+  # is set up.
+  publish-sdk:
+    runs-on: ubuntu-latest
+    needs: release
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+          cache: "npm"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Decide whether to publish
+        id: gate
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "::notice::NPM_TOKEN secret is not configured — skipping vault-mcp-api npm publish."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          name="$(node -p "require('./packages/vault-mcp-api/package.json').name")"
+          version="$(node -p "require('./packages/vault-mcp-api/package.json').version")"
+          if npm view "$name@$version" version >/dev/null 2>&1; then
+            echo "::notice::$name@$version is already on npm — nothing to publish."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::$name@$version is not on npm yet — publishing."
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dependencies
+        if: steps.gate.outputs.publish == 'true'
+        run: npm ci
+
+      - name: Publish vault-mcp-api to npm
+        if: steps.gate.outputs.publish == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --workspace packages/vault-mcp-api --access public

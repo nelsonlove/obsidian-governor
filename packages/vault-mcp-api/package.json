@@ -9,9 +9,13 @@
   "scripts": {
     "build": "tsc",
     "prepare": "tsc",
-    "test": "tsc --noEmit && node --import tsx --test tests/*.test.ts"
+    "test": "tsc --noEmit -p tsconfig.tests.json && node --import tsx --test tests/*.test.ts"
   },
-  "repository": "github:nelsonlove/vault-mcp-api",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nelsonlove/obsidian-governor.git",
+    "directory": "packages/vault-mcp-api"
+  },
   "license": "MIT",
   "peerDependencies": {
     "obsidian": ">=1.4.0",
