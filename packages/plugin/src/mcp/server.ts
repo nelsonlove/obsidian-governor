@@ -326,11 +326,14 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
     // Bases engine. The adapter feature-detects the public Bases API itself
     // and the registrar registers nothing when it is absent.
     basesSource: obsidianBasesSource(app),
-    // The jd-scaffold module (Stage A of the jd-dashboard fold): standard-zeros
-    // creation, category-index self-heal, promote-to-folder — reads via
+    // The jd-scaffold module (Stage A + A2 + A3 of the jd-dashboard fold):
+    // standard-zeros creation, category-index self-heal, promote-to-folder,
+    // reindex-category, and template-driven note creation — reads via
     // getAllLoadedFiles/getAbstractFileByPath, writes via vault.create/
-    // createFolder + fileManager.renameFile (link-healing).
+    // createFolder + fileManager.renameFile (link-healing). parseYaml feeds
+    // the template-creation tools' accept-forbidden content scan.
     jdScaffoldSource: obsidianJdScaffoldSource(app),
+    jdScaffoldParseYaml: parseYaml,
   });
   // Skip-and-report only reports if someone reads the report: every mount
   // defect (unknown module id in settings, a gate-refused tool, a config
