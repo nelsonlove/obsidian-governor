@@ -2271,12 +2271,63 @@ describe("scope-claim tools", () => {
       assert.equal(kernel.locks.list().length, 2);
     });
 
-    test("listing stays unrestricted — disclosure of who is working is its whole value", async () => {
+    // #85: the listing used to report every claim's scope unfiltered — a path
+    // oracle for the territory the allowlist hides. It now shows only claims
+    // whose scope is itself inside the allowlist, and COUNTS the rest, so the
+    // disclosure ("territory outside your view is claimed") survives without
+    // revealing where.
+    test("#85: listing hides out-of-allowlist scopes but counts them", async () => {
       const { kernel, call } = sandboxed(["Projects"]);
-      kernel.locks.claim({ scope: "Archive", holder: "someone-else", reason: "outside your sandbox", ttlMs: 120_000 });
-      const list = await call("obsidian_list_scope_claims");
-      assert.equal(list.isError, undefined);
-      assert.deepEqual(list.structuredContent.claims.map((c) => c.scope), ["Archive"]);
+      kernel.locks.claim({ scope: "Archive/Divorce", holder: "someone-else", reason: "outside your sandbox", ttlMs: 120_000 });
+      kernel.locks.claim({ scope: "Projects/Alpha", holder: "someone-else", reason: "visible", ttlMs: 120_000 });
+      await call("obsidian_claim_scope", { scope: "Projects/Beta", reason: "mine" });
+
+      const list = (await call("obsidian_list_scope_claims")).structuredContent;
+      assert.deepEqual(
+        list.claims.map((c) => [c.scope, c.mine]),
+        [["Projects/Alpha", false], ["Projects/Beta", true]],
+        "visible claims are intact, hidden scopes never named"
+      );
+      assert.equal(list.hidden_claims, 1, "the hidden claim is counted, not listed");
+      assert.equal(
+        JSON.stringify(list).includes("Archive"),
+        false,
+        "no hidden path reaches the response in any field"
+      );
+    });
+
+    test("#85: nothing hidden still reports hidden_claims: 0 under an allowlist", async () => {
+      const { call } = sandboxed(["Projects"]);
+      await call("obsidian_claim_scope", { scope: "Projects/Alpha", reason: "mine" });
+      const list = (await call("obsidian_list_scope_claims")).structuredContent;
+      assert.equal(list.hidden_claims, 0, "the field is present whenever an allowlist is active");
+      assert.equal(list.claims.length, 1);
+    });
+
+    test("#85: the whole-vault scope is hidden under an allowlist — 'everything' is not inside it", async () => {
+      const { kernel, call } = sandboxed(["Projects"]);
+      kernel.locks.claim({ scope: "", holder: "someone-else", reason: "all of it", ttlMs: 120_000 });
+      const list = (await call("obsidian_list_scope_claims")).structuredContent;
+      assert.deepEqual(list.claims, [], "isVisible('') passes vacuously; the listing must not");
+      assert.equal(list.hidden_claims, 1);
+    });
+
+    test("#85: a PREFIX scope covering visible territory is still hidden — within, never overlaps", async () => {
+      const { kernel, call } = sandboxed(["Projects/Alpha"]);
+      kernel.locks.claim({ scope: "Projects", holder: "someone-else", reason: "broad", ttlMs: 120_000 });
+      kernel.locks.claim({ scope: "Projects/Alpha", holder: "someone-else", reason: "exact", ttlMs: 120_000 });
+      const list = (await call("obsidian_list_scope_claims")).structuredContent;
+      assert.deepEqual(list.claims.map((c) => c.scope), ["Projects/Alpha"]);
+      assert.equal(list.hidden_claims, 1, "'Projects' names territory outside Projects/Alpha");
+    });
+
+    test("#85: with NO allowlist the listing is byte-identical — every claim, no hidden_claims key", async () => {
+      const { kernel, call } = sandboxed([]);
+      kernel.locks.claim({ scope: "", holder: "someone-else", reason: "all of it", ttlMs: 120_000 });
+      kernel.locks.claim({ scope: "Archive", holder: "someone-else", reason: "theirs", ttlMs: 120_000 });
+      const list = (await call("obsidian_list_scope_claims")).structuredContent;
+      assert.deepEqual(list.claims.map((c) => c.scope), ["", "Archive"]);
+      assert.equal("hidden_claims" in list, false, "the identity convention: no allowlist ⇒ the old shape exactly");
     });
 
     test("releasing and renewing your own claim stay allowed: they only ever shrink reach", async () => {

@@ -148,7 +148,10 @@ other so. A claim takes a **scope** (a vault path prefix), a **reason**, and an 
   someone else's. What bounds a client running many connections is *time*, not identity: every
   claim expires within 30 minutes, so the store drains on its own.
 - **Bounded by the path allowlist.** A session sandboxed to `Projects/` can claim inside it and
-  nowhere else (`Error [out_of_allowlist]` otherwise); listing is never restricted.
+  nowhere else (`Error [out_of_allowlist]` otherwise). Listing follows the same rule: claims
+  whose scope falls outside the allowlist are omitted and counted in `hidden_claims` — you
+  learn that territory outside your view is claimed, not where. No allowlist ⇒ every claim,
+  no `hidden_claims` key.
 
 Claiming and releasing are treated as **mutating** (journaled with `target.ref = scope:<prefix>`
 / `lock:<id>`), so **read-only mode blocks claiming and releasing** — there is nothing for a
