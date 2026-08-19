@@ -72,8 +72,14 @@ strip_heredocs() {
         }
         {
             print
-            if (match($0, /<<-?[[:space:]]*['\''"]?[A-Za-z_][A-Za-z_0-9]*/)) {
-                d = substr($0, RSTART, RLENGTH)
+            # Probe copy with here-strings (<<<) and arithmetic expansions
+            # ($((...)), which may contain << shifts) neutralized, so neither
+            # is mistaken for a heredoc opener (which would eat real commands).
+            probe = $0
+            gsub(/\$\(\([^)]*\)\)/, "ARITH", probe)
+            gsub(/<<</, "HSTR", probe)
+            if (match(probe, /<<-?[[:space:]]*['\''"]?[A-Za-z_][A-Za-z_0-9]*/)) {
+                d = substr(probe, RSTART, RLENGTH)
                 sub(/^<<-?[[:space:]]*['\''"]?/, "", d)
                 skip = d
             }
@@ -92,7 +98,7 @@ case "$tool" in
         esac
         # Truncating stdout redirect. Target run excludes quotes and & so it
         # can cross neither a quoting boundary nor a `2>&1`-style dup.
-        if grep -Eq "(^|[^>&])>[[:space:]]*['\"]?[^'\">&]*$MARKER" <<<"$stripped"; then
+        if grep -Eq "(^|[^>&])>\|?[[:space:]]*['\"]?[^'\">&]*$MARKER" <<<"$stripped"; then
             corrective "shell redirect (truncating '>')"
         fi
         # Truncating stdout+stderr redirect: `&>` (but not `&>>`).
@@ -108,15 +114,32 @@ case "$tool" in
         if grep -Eq "\bsed[[:space:]]+(-[[:alnum:]]+[[:space:]]+)*-i[^[:space:]]*[[:space:]][^|;]*$MARKER" <<<"$stripped"; then
             corrective "in-place sed"
         fi
-        # Destructive ops, anchored to command position so '-rm', '--rm', and
-        # 'rm' inside quoted prose do not fire; the target run excludes quotes.
-        if grep -Eq "(^|[|;&()[:space:]])(mv|rm|trash|/usr/bin/trash)[[:space:]]+(-[^[:space:]]+[[:space:]]+)*['\"]?[^|;&'\"]*$MARKER" <<<"$stripped"; then
+        # Destructive/overwriting ops (incl. cp INTO a record), anchored to
+        # command position so '-rm'/'--rm' never fire; the argument tail may
+        # cross quotes (any mention in a mv/cp/rm argument list blocks) but
+        # not |;& — command separators end the tail.
+        if grep -Eq "(^|[|;&()[:space:]])(mv|cp|rm|trash|/usr/bin/trash)[[:space:]]+[^|;&]*$MARKER" <<<"$stripped"; then
             corrective "destructive file operation (mv/rm/trash)"
         fi
         exit 0
         ;;
     mcp__vault-mcp__obsidian_append_note)
         exit 0
+        ;;
+    mcp__vault-mcp__obsidian_call_tool)
+        # Code Mode tunnels every call through obsidian_call_tool — apply the
+        # same policy to the INNER tool name.
+        inner=$(jq -r '.tool_input.name // empty' <<<"$input")
+        case "$inner" in
+            obsidian_append_note) exit 0 ;;
+            *read*|*search*|*list*|*get_*|*find_*|*check_links*|*resolve*|*note_history*|*note_diff*|*jump_to*|*open_*|*doctor*|*info*|*tags_list*|*conformance*|*pending_review*)
+                exit 0 ;;
+        esac
+        args=$(jq -r '.tool_input | tostring' <<<"$input")
+        case "$args" in
+            *"$MARKER"*) corrective "vault-mcp mutation via Code Mode ($inner)" ;;
+            *) exit 0 ;;
+        esac
         ;;
     mcp__vault-mcp__*)
         case "$tool" in
