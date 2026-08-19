@@ -89,6 +89,15 @@ import {
   type ClassId,
 } from "../kernel/governance/auto-accept/classes.js";
 import { evaluate, autoAcceptRecord, type AutoAcceptRecord } from "../kernel/governance/auto-accept/eligibility.js";
+import { serializePendingIndex } from "../kernel/governance/pending-index.js";
+import {
+  pruneRenameRecords,
+  serializeRenameRecords,
+  deserializeRenameRecords,
+  RENAME_RECORDS_CAP,
+  RENAME_RECORD_TTL_MS,
+  type RenameRecordData,
+} from "../kernel/governance/rename-records.js";
 import { autoAcceptPolicyOf, protectedPropertyDrift, type AutoAcceptPolicy } from "../kernel/governance/protected-policy.js";
 import type { RenameIndex } from "../kernel/governance/auto-accept/detectors.js";
 import { badgeVisible } from "../kernel/governance/badge.js";
@@ -150,6 +159,11 @@ interface PluginPaths {
   logPath: string;
   journalDir: string;
   allowlistPath: string;
+  /** Where refresh() PUBLISHES the pending-review index (#261) — the file
+   * obsidian_pending_review reads. Beside the acceptance log; vault-mcp-owned. */
+  pendingIndexPath: string;
+  /** Durable rename captures for the link-heal oracle (#261). */
+  renameRecordsPath: string;
 }
 const pluginPaths = new WeakMap<Plugin, PluginPaths>();
 function paths(plugin: Plugin): PluginPaths {
@@ -266,7 +280,12 @@ async function setClassEnabled(plugin: Plugin, cls: ClassId, on: boolean, evt: u
 }
 
 // ── rename index (link-heal's confirmation oracle) ───────────────────────────
-interface RenameRecord { oldTargets: Set<string>; newTargets: Set<string>; }
+// PERSISTED across reloads since #261 (governance/rename-records.json). Obsidian's own
+// link-updating rename rewrites wikilinks in other notes; when those rewrites reach review
+// AFTER a plugin reload, an in-memory-only oracle could no longer confirm them, so the
+// rewritten notes wedged pending forever (the live #261 repro). Records are plain data,
+// TTL'd + capped by the pure kernel module; losing them only makes MORE stay pending.
+interface RenameRecord { oldTargets: Set<string>; newTargets: Set<string>; at: number; }
 const renameRecords = new WeakMap<Plugin, RenameRecord[]>();
 function renameRecordsFor(plugin: Plugin): RenameRecord[] {
   let r = renameRecords.get(plugin);
@@ -280,7 +299,58 @@ function linkTargetsOf(path: string): Set<string> {
 }
 function recordRename(plugin: Plugin, newPath: string, oldPath: string): void {
   if (!newPath.toLowerCase().endsWith(".md")) return;
-  renameRecordsFor(plugin).push({ oldTargets: linkTargetsOf(oldPath), newTargets: linkTargetsOf(newPath) });
+  renameRecordsFor(plugin).push({
+    oldTargets: linkTargetsOf(oldPath),
+    newTargets: linkTargetsOf(newPath),
+    at: Date.now(),
+  });
+  pruneLiveRenameRecords(plugin, Date.now());
+  void persistRenameRecords(plugin);
+}
+// TTL/cap must bind the LIVE list the oracle consults, not just the persisted file — otherwise
+// a month-old record still confirms in a long-running session (review finding on #261).
+function pruneLiveRenameRecords(plugin: Plugin, nowMs: number): void {
+  const live = renameRecordsFor(plugin);
+  const kept = live.filter((r) => nowMs - r.at <= RENAME_RECORD_TTL_MS && nowMs - r.at >= 0);
+  const capped = kept.length > RENAME_RECORDS_CAP ? kept.slice(kept.length - RENAME_RECORDS_CAP) : kept;
+  if (capped.length !== live.length) renameRecords.set(plugin, capped);
+}
+async function loadRenameRecords(plugin: Plugin): Promise<void> {
+  let data: RenameRecordData[] = [];
+  try {
+    const p = paths(plugin).renameRecordsPath;
+    if (await plugin.app.vault.adapter.exists(p)) {
+      data = pruneRenameRecords(deserializeRenameRecords(await plugin.app.vault.adapter.read(p)), Date.now());
+    }
+  } catch (e) {
+    console.error("vault-mcp governance: failed to load rename records", e);
+    data = [];
+  }
+  renameRecords.set(
+    plugin,
+    data.map((r) => ({ oldTargets: new Set(r.old), newTargets: new Set(r.new), at: r.at })),
+  );
+}
+// Persist writes are CHAINED per plugin (the WriteJournal.append pattern): a batch move fires
+// many rename events back-to-back, and unserialized concurrent adapter.writes to one file can
+// land out of order — a smaller, earlier snapshot finishing last would silently truncate the
+// records the persistence exists to keep (review finding on #261).
+const renamePersistTails = new WeakMap<Plugin, Promise<void>>();
+async function persistRenameRecords(plugin: Plugin): Promise<void> {
+  const tail = renamePersistTails.get(plugin) ?? Promise.resolve();
+  const next = tail.then(async () => {
+    try {
+      const pruned = pruneRenameRecords(
+        renameRecordsFor(plugin).map((r) => ({ old: [...r.oldTargets], new: [...r.newTargets], at: r.at })),
+        Date.now(),
+      );
+      await plugin.app.vault.adapter.write(paths(plugin).renameRecordsPath, serializeRenameRecords(pruned));
+    } catch (e) {
+      console.error("vault-mcp governance: failed to persist rename records", e);
+    }
+  });
+  renamePersistTails.set(plugin, next);
+  await next;
 }
 class VaultRenameIndex implements RenameIndex {
   constructor(private readonly plugin: Plugin) {}
@@ -578,7 +648,9 @@ function scheduleReconcile(plugin: Plugin, file: TFile): void {
   const timers = timersFor(plugin);
   const existing = timers.get(path);
   if (existing) clearTimeout(existing);
-  timers.set(path, setTimeout(() => { void reconcile(plugin, file); }, SILENT_ADVANCE_DEBOUNCE_MS));
+  timers.set(path, setTimeout(() => {
+    void reconcile(plugin, file).catch((e) => console.error(`vault-mcp governance: reconcile failed for ${path}`, e));
+  }, SILENT_ADVANCE_DEBOUNCE_MS));
 }
 async function reconcile(plugin: Plugin, file: TFile): Promise<void> {
   timersFor(plugin).delete(file.path);
@@ -647,12 +719,21 @@ async function maybeAutoAccept(plugin: Plugin, path: string): Promise<boolean> {
     // BASELINE frontmatter, never the raw current note (honor-only-if-blessed,
     // #224). A side-door `auto-accept` sitting only in the current bytes
     // therefore confers nothing here.
+    const policy = autoAcceptPolicyOf(baseline.content);
     const result = evaluate(baseline.content, current, {
       enabled: getEnabledClasses(plugin),
       renameIndex: getRenameIndex(plugin),
-      policy: autoAcceptPolicyOf(baseline.content),
+      policy,
     });
-    if (!result.eligible) return false;
+    if (!result.eligible) {
+      // #261 visibility: when the HUMAN delegated (an honored per-note policy exists) and the
+      // machine still declines, that is the surprising case — say WHY, once per content-state
+      // (fromHash:toHash:reason), so a wedged note is diagnosable from the console instead of
+      // silently pending forever. Class-only refusals stay quiet (every ordinary agent edit
+      // is "not eligible" by design — logging those would be noise).
+      if (policy) logRefusalOnce(plugin, path, `${fromHash}:${toHash}:${result.reason}`, policy, result.reason);
+      return false;
+    }
 
     const nowIso = new Date().toISOString();
     await store.setBaseline(path, current, "auto-accept", nowIso);
@@ -667,12 +748,27 @@ async function maybeAutoAccept(plugin: Plugin, path: string): Promise<boolean> {
       policy: result.policy,
     }));
     return true;
-  } catch {
-    return false; // fail safe — never let an exception advance a baseline
+  } catch (e) {
+    // Fail safe — never let an exception advance a baseline. But NEVER silently (#261):
+    // a swallowed throw here made the whole sweep undiagnosable from outside.
+    console.error(`vault-mcp governance: auto-accept check failed for ${path}`, e);
+    return false;
   }
 }
+
+// One console.warn per (path → content-state) policy refusal — see maybeAutoAccept.
+const refusalLogState = new WeakMap<Plugin, Map<string, string>>();
+function logRefusalOnce(plugin: Plugin, path: string, key: string, policy: AutoAcceptPolicy, reason: string): void {
+  let m = refusalLogState.get(plugin);
+  if (!m) { m = new Map(); refusalLogState.set(plugin, m); }
+  if (m.get(path) === key) return;
+  m.set(path, key);
+  console.warn(`vault-mcp governance: auto-accept (policy: ${policy}) declined for ${path}: ${reason}`);
+}
 // Sweep the (agent-attributed) pending queue for auto-accept-eligible changes. Driven by the
-// journal-growth poll (an interval timer, NOT agent-reachable).
+// journal-growth poll — the interval timer plus, since #261, the kernel's post-append nudge
+// (nudgeGovernanceQueue below; still not agent-reachable as a callable — an agent can only
+// influence WHEN it runs by writing, which the interval already allowed).
 async function sweepAutoAccept(plugin: Plugin): Promise<number> {
   let n = 0;
   for (const item of getCachedPending(plugin)) {
@@ -711,6 +807,24 @@ async function refresh(plugin: Plugin): Promise<void> {
     protectedDrift: protectedPropertyDrift,
   });
   cachedPending.set(plugin, pending);
+  // #261: PUBLISH the pending index — the governance module owns the queue, so it owns the
+  // published view of it too (`<plugin dir>/governance/pending-index.json`, the file
+  // obsidian_pending_review reads; the retired standalone's stewardship path is dead since
+  // #164). Same read-only DATA shape the standalone published (kernel pending-index.ts).
+  // A publish failure must never break the refresh: log + continue. Gated on the LIVE mount
+  // so a refresh still in flight when the module unmounts cannot re-create the file the
+  // teardown just retracted (an unmounted module must read as not-published); the residual
+  // window between this check and the write completing is a single already-issued write.
+  if (mountedPlugins.has(plugin)) {
+    try {
+      await plugin.app.vault.adapter.write(
+        paths(plugin).pendingIndexPath,
+        serializePendingIndex(pending, new Date().toISOString()),
+      );
+    } catch (e) {
+      console.error("vault-mcp governance: failed to publish pending index", e);
+    }
+  }
   updateBadge(plugin, pending.length);
   for (const leaf of plugin.app.workspace.getLeavesOfType(VIEW_TYPE_GOVERNANCE)) {
     const view = leaf.view;
@@ -749,6 +863,26 @@ async function pollJournal(plugin: Plugin): Promise<void> {
   } finally {
     state.inFlight = false;
   }
+}
+
+/**
+ * #261 — the EVENT-DRIVEN drive for the queue refresh + auto-accept sweep. LIVE-DIAGNOSED:
+ * Chromium/Electron background throttling suspends renderer timers while the Obsidian window
+ * is occluded or unfocused, so the 2.5s poll interval above simply DOES NOT TICK during
+ * unattended sessions — which is exactly when agents write. (Observed live: interval armed,
+ * journal grown, zero ticks and zero refreshes for minutes with the window in the
+ * background.) The journal only grows through this plugin's own kernel, so main.ts nudges
+ * here right after every journal append — request handling is not throttled, so the sweep
+ * runs even with the window buried. The interval stays as the foreground catch-up.
+ *
+ * Reachability: this changes WHEN the poll runs, never what it may accept — the decision
+ * remains the eligibility engine over objective bytes (agents could already schedule the
+ * poll indirectly, by writing; the journal-growth signature gate is unchanged). Not a
+ * command, not a tool, not an instance method; a no-op unless governance is mounted.
+ */
+export function nudgeGovernanceQueue(plugin: Plugin): void {
+  if (!mountedPlugins.has(plugin)) return;
+  pollJournal(plugin).catch((e) => console.error("vault-mcp governance: journal-nudged poll failed", e));
 }
 
 // ── view activation ──────────────────────────────────────────────────────────
@@ -911,8 +1045,18 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
     // derived from it, so an agent's MCP content-write is what surfaces a note for review.
     journalDir: `${pluginDir}/journal`,
     allowlistPath: `${govDir}/auto-accept-allowlist.json`,
+    pendingIndexPath: `${govDir}/pending-index.json`,
+    renameRecordsPath: `${govDir}/rename-records.json`,
   });
   configReaders.set(plugin, deps.getConfig);
+
+  // The governance dir must exist before anything beside the baselines writes into it
+  // (acceptance log appends, the published pending index, rename records).
+  try {
+    if (!(await plugin.app.vault.adapter.exists(govDir))) await plugin.app.vault.adapter.mkdir(govDir);
+  } catch (e) {
+    console.error("vault-mcp governance: failed to ensure governance dir", e);
+  }
 
   const store = new BaselineStore(new AdapterBlobFs(plugin.app.vault.adapter), paths(plugin).baseDir);
   baselineStores.set(plugin, store);
@@ -921,6 +1065,7 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
   await store.load();
 
   await loadAllowlist(plugin);
+  await loadRenameRecords(plugin);
 
   // The lifecycle scope for this mount. Every registration below lands on `component`, so
   // `plugin.removeChild(component)` is a complete, on-demand teardown. `addChild` also links it to
@@ -998,6 +1143,11 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
     mountedPlugins.delete(plugin);
     const timers = silentTimers.get(plugin);
     if (timers) { for (const t of timers.values()) clearTimeout(t); timers.clear(); }
+    // #261: retract the published pending index on unmount — an unmounted governance module
+    // must read as NOT-published (obsidian_pending_review's explicit `published: false`), never
+    // as a stale-but-plausible queue. Best-effort + fire-and-forget: teardown is synchronous,
+    // and a failed removal only leaves a stale file whose generatedAt betrays its age.
+    void plugin.app.vault.adapter.remove(paths(plugin).pendingIndexPath).catch(() => {});
   });
 
   // Initial queue paint, then LIVE REFRESH: poll the vault-mcp write journal for growth and
@@ -1017,7 +1167,12 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
     await refresh(plugin);
     try { pollState(plugin).lastSig = await journalSignature(plugin); } catch { /* first poll will refresh */ }
     if (disposed) return; // an unmount/unload may have landed during the awaited refresh above
-    component.registerInterval(window.setInterval(() => void pollJournal(plugin), JOURNAL_POLL_MS));
+    // #261: a rejection here must die in a console.error, never escape into the interval as an
+    // unhandled rejection — the poll is the auto-accept sweep's only driver and it must survive
+    // any one tick failing.
+    component.registerInterval(window.setInterval(() => {
+      pollJournal(plugin).catch((e) => console.error("vault-mcp governance: journal poll failed", e));
+    }, JOURNAL_POLL_MS));
   });
 
   // Mark the mount live LAST — every await and registration above has succeeded, so the flag is

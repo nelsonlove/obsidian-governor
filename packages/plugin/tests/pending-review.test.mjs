@@ -1,15 +1,20 @@
 /**
  * pending-review.test.mjs — slice B3b: the READ-ONLY `obsidian_pending_review`
- * tool over Stewardship's review-queue index.
+ * tool over the governance module's published review-queue index (#261: the
+ * index moved from the retired Stewardship standalone's path to the vault-mcp
+ * plugin dir, and absence became an EXPLICIT `published: false` — never a
+ * silent empty queue).
  *
  * Same fake-server pattern as scheme-tools.test.mjs / uid-index.test.mjs:
  * register against a stand-in server, invoke the captured handler directly.
  * The tool is obsidian-free (defined over an injected PendingReviewSource), so
  * everything here runs headlessly — no live Obsidian.
  *
- * Covers: the pending list from a fixture index; allowlist-filtering drops
- * paths outside the caller's visible set; graceful empty on missing/malformed
- * file; schema-drift tolerance; and the config-dir-relative adapter path.
+ * Covers: the pending list from a fixture index; the publish→read round-trip
+ * against the REAL serializer the governance module uses; allowlist-filtering
+ * drops paths outside the caller's visible set; explicit not-published /
+ * unreadable states; schema-drift tolerance; and the plugin-dir-relative
+ * adapter path.
  */
 
 import { test, describe } from "node:test";
@@ -18,11 +23,13 @@ import { fakeServer } from "./fake-server.mjs";
 import {
   registerPendingReviewTools,
   parsePendingIndex,
+  parsePendingIndexStrict,
   obsidianPendingReviewSource,
   PENDING_INDEX_REL,
 } from "../src/mcp/tools-pending-review.ts";
+import { serializePendingIndex } from "../src/kernel/governance/pending-index.ts";
 
-// A well-formed index: the shape Stewardship publishes.
+// A well-formed index: the shape the governance module publishes.
 const INDEX = {
   version: 1,
   generatedAt: "2026-08-10T12:00:00Z",
@@ -73,11 +80,13 @@ describe("registration", () => {
 // ── happy path ────────────────────────────────────────────────────────────────
 
 describe("returns the pending list from a fixture index", () => {
-  test("no allowlist ⇒ every entry, fields passed through verbatim", async () => {
+  test("no allowlist ⇒ every entry, fields passed through verbatim, published: true", async () => {
     const { call } = toolServer();
     const res = await call();
+    assert.equal(res.structuredContent.published, true);
     assert.equal(res.structuredContent.count, 3);
     assert.deepEqual(res.structuredContent.pending, INDEX.pending);
+    assert.equal(res.structuredContent.reason, undefined);
   });
 
   test("count matches the list length", async () => {
@@ -90,6 +99,48 @@ describe("returns the pending list from a fixture index", () => {
     const { call } = toolServer();
     const res = await call();
     assert.notEqual(res.isError, true);
+  });
+
+  test("an empty-but-published index is published: true, count 0 — distinguishable from absence", async () => {
+    const { call } = toolServer({ raw: JSON.stringify({ version: 1, generatedAt: "2026-08-19T00:00:00Z", pending: [] }) });
+    const res = await call();
+    assert.equal(res.structuredContent.published, true);
+    assert.equal(res.structuredContent.count, 0);
+    assert.deepEqual(res.structuredContent.pending, []);
+  });
+});
+
+// ── publish → read round-trip against the REAL serializer (#261) ──────────────
+
+describe("round-trips the governance module's own published bytes", () => {
+  const items = [
+    {
+      path: "Projects/alpha.md", title: "alpha", agent: "assent/1", op: "obsidian_append_note",
+      when: "2026-08-19T11:34:59.009Z", writeCount: 2, writes: [], hadBaseline: true,
+    },
+    {
+      path: "Archive/old.md", title: "old", agent: "claude", op: "obsidian_write_note",
+      when: "2026-08-19T10:00:00.000Z", writeCount: 1, writes: [], hadBaseline: false,
+    },
+  ];
+
+  test("serializePendingIndex bytes read back as the same entries, published: true", async () => {
+    const raw = serializePendingIndex(items, "2026-08-19T12:00:00.000Z");
+    const { call } = toolServer({ raw });
+    const res = await call();
+    assert.equal(res.structuredContent.published, true);
+    assert.deepEqual(res.structuredContent.pending, [
+      { path: "Projects/alpha.md", status: "pending", agent: "assent/1", op: "obsidian_append_note", when: "2026-08-19T11:34:59.009Z", writeCount: 2 },
+      { path: "Archive/old.md", status: "pending", agent: "claude", op: "obsidian_write_note", when: "2026-08-19T10:00:00.000Z", writeCount: 1 },
+    ]);
+  });
+
+  test("the round-trip still honors the allowlist filter", async () => {
+    const raw = serializePendingIndex(items, "2026-08-19T12:00:00.000Z");
+    const { call } = toolServer({ raw, settings: { readOnly: false, allowlist: ["Projects"] } });
+    const res = await call();
+    assert.equal(res.structuredContent.published, true);
+    assert.deepEqual(res.structuredContent.pending.map((e) => e.path), ["Projects/alpha.md"]);
   });
 });
 
@@ -126,39 +177,67 @@ describe("allowlist-filtering drops paths outside the visible set", () => {
   });
 });
 
-// ── graceful degrade ──────────────────────────────────────────────────────────
+// ── explicit degrade (#261 — absence is NEVER a silent empty queue) ───────────
 
-describe("graceful empty on missing / malformed file", () => {
-  test("missing file (source ⇒ null) ⇒ empty list, not an error", async () => {
+describe("absent / unreadable index is an EXPLICIT published: false, never a bare empty", () => {
+  test("missing file (source ⇒ null) ⇒ published: false with a reason, not an error", async () => {
     const { call } = toolServer({ raw: null });
     const res = await call();
+    assert.equal(res.structuredContent.published, false);
+    assert.match(res.structuredContent.reason, /not-published/);
     assert.deepEqual(res.structuredContent.pending, []);
     assert.equal(res.structuredContent.count, 0);
     assert.notEqual(res.isError, true);
   });
 
-  test("unparseable JSON ⇒ empty list, not an error", async () => {
+  test("unparseable JSON ⇒ published: false (unreadable), not an error", async () => {
     const { call } = toolServer({ raw: "{ this is not json" });
     const res = await call();
+    assert.equal(res.structuredContent.published, false);
+    assert.match(res.structuredContent.reason, /unreadable/);
     assert.deepEqual(res.structuredContent.pending, []);
     assert.notEqual(res.isError, true);
   });
 
-  test("empty string ⇒ empty list", async () => {
+  test("empty string ⇒ published: false (unreadable)", async () => {
     const { call } = toolServer({ raw: "" });
     const res = await call();
+    assert.equal(res.structuredContent.published, false);
+    assert.match(res.structuredContent.reason, /unreadable/);
     assert.deepEqual(res.structuredContent.pending, []);
   });
 
-  test("a throwing source still degrades to empty, never an error", async () => {
+  test("a recognizable root with drifted entries is still PUBLISHED (per-entry tolerance)", async () => {
+    const { call } = toolServer({ raw: JSON.stringify({ pending: [null, { path: "keep.md" }] }) });
+    const res = await call();
+    assert.equal(res.structuredContent.published, true);
+    assert.deepEqual(res.structuredContent.pending, [{ path: "keep.md" }]);
+  });
+
+  test("an unrecognizable root (no pending array) is UNREADABLE, not empty", async () => {
+    const { call } = toolServer({ raw: JSON.stringify({ version: 1 }) });
+    const res = await call();
+    assert.equal(res.structuredContent.published, false);
+    assert.match(res.structuredContent.reason, /unreadable/);
+  });
+
+  test("a throwing source still degrades to published: false, never an error", async () => {
     const server = fakeServer();
     registerPendingReviewTools(server, {
       source: { read: async () => { throw new Error("adapter blew up"); } },
       getSettings: () => ({ readOnly: false, allowlist: [] }),
     });
     const res = await server.tools.get("obsidian_pending_review").handler({}, {});
+    assert.equal(res.structuredContent.published, false);
     assert.deepEqual(res.structuredContent.pending, []);
     assert.notEqual(res.isError, true);
+  });
+
+  test("parsePendingIndexStrict: null on non-index text, entries on a real index", () => {
+    assert.equal(parsePendingIndexStrict("nope"), null);
+    assert.equal(parsePendingIndexStrict(JSON.stringify({ version: 1 })), null);
+    assert.equal(parsePendingIndexStrict(JSON.stringify([1, 2])), null);
+    assert.deepEqual(parsePendingIndexStrict(JSON.stringify({ pending: [] })), []);
   });
 });
 
@@ -228,7 +307,7 @@ describe("schema-drift tolerance", () => {
 // ── the live adapter's path construction ───────────────────────────────────────
 
 describe("obsidianPendingReviewSource", () => {
-  test("reads from <configDir>/plugins/stewardship/pending-index.json", async () => {
+  test("reads from <plugin dir>/governance/pending-index.json when the host supplies the dir", async () => {
     const reads = [];
     const fakeApp = {
       vault: {
@@ -239,14 +318,14 @@ describe("obsidianPendingReviewSource", () => {
         },
       },
     };
-    const src = obsidianPendingReviewSource(fakeApp);
+    const src = obsidianPendingReviewSource(fakeApp, ".obsidian/plugins/vault-mcp");
     const raw = await src.read();
-    const expected = `.obsidian/${PENDING_INDEX_REL}`;
+    const expected = `.obsidian/plugins/vault-mcp/${PENDING_INDEX_REL}`;
     assert.deepEqual(reads, [["exists", expected], ["read", expected]]);
     assert.deepEqual(JSON.parse(raw), INDEX);
   });
 
-  test("respects a non-default config dir (not a hardwired .obsidian)", async () => {
+  test("no plugin dir supplied ⇒ falls back to <configDir>/plugins/vault-mcp (not hardwired .obsidian)", async () => {
     const seen = [];
     const fakeApp = {
       vault: {
@@ -258,7 +337,7 @@ describe("obsidianPendingReviewSource", () => {
       },
     };
     await obsidianPendingReviewSource(fakeApp).read();
-    assert.deepEqual(seen, [`.my-config/${PENDING_INDEX_REL}`]);
+    assert.deepEqual(seen, [`.my-config/plugins/vault-mcp/${PENDING_INDEX_REL}`]);
   });
 
   test("absent file ⇒ null (never reads)", async () => {

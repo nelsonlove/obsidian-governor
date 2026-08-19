@@ -13,7 +13,7 @@ import { Kernel, WriteQueue, WriteJournal, IdempotencyStore, LockStore, UidIndex
 import { obsidianProbe, obsidianServerIdentity, obsidianUidSource } from "./kernel/obsidian-probe.js";
 import { DEFAULT_SCHEMES, type SchemeInstanceConfig } from "./kernel/scheme/registry.js";
 import { DEFAULT_PROTECTED_PROPERTIES, setDeclaredProtectedProperties } from "@vault-mcp/core";
-import { wireGovernance } from "./governance/wiring.js";
+import { wireGovernance, nudgeGovernanceQueue } from "./governance/wiring.js";
 import { mountAction } from "./governance/mount-state.js";
 import { wireSkills } from "./skills/wiring.js";
 
@@ -310,9 +310,22 @@ export default class VaultMcpPlugin extends Plugin {
     // The identity substrate's uid index — one per plugin instance, like the
     // queue: it is a map of the vault, not of a connection.
     const uidIndex = new UidIndex(obsidianUidSource(this.app));
+    // #261: every journal append nudges the governance module's queue poll. Renderer timers
+    // are throttled/suspended by Chromium while the window is occluded, so the 2.5s poll
+    // interval does not tick during unattended sessions — exactly when agents write. The
+    // journal grows only through this kernel, so the append itself is the reliable
+    // "journal grew" event; the nudge is a no-op while governance is unmounted, and the
+    // signature/in-flight gates in pollJournal keep repeated nudges cheap.
+    const journal = new WriteJournal(this.app.vault.adapter, `${pluginDir}/journal`);
+    const journalAppend = journal.append.bind(journal);
+    journal.append = (record) => {
+      const done = journalAppend(record);
+      void done.then(() => nudgeGovernanceQueue(this));
+      return done;
+    };
     const kernel = new Kernel(
       new WriteQueue(),
-      new WriteJournal(this.app.vault.adapter, `${pluginDir}/journal`),
+      journal,
       obsidianProbe(this.app),
       new IdempotencyStore(),
       new LockStore(),
@@ -331,6 +344,7 @@ export default class VaultMcpPlugin extends Plugin {
       pluginVersion: this.manifest.version,
       socketPath: sock,
       vaultName,
+      pluginDir,
       enabledPlugins: () => Array.from((this.app as any).plugins.enabledPlugins as Set<string>),
       getSettings: () => ({
         readOnly: this.settings.readOnly,
