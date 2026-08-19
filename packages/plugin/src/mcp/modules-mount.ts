@@ -12,13 +12,18 @@
 // ── The hard security gate this file answers (recorded by the orchestrator
 //    on the module-host merge; verified by test where testable) ─────────────
 //
-//  1. HANDLER reachability: every tool either module contributes is
-//     `readOnlyHint: true` — a read-only registration cannot reach the write
-//     queue, the write primitive, or the accept-guard's territory at all (the
-//     guard routes ONLY `readOnlyHint === false` calls to the kernel's
-//     mutation path). Pinned by test: the mount's registerAll gate refuses a
-//     module tool whose annotations are not read-only (see `mountModules`),
-//     so a future module slipping a mutating handler in fails loudly (a
+//  1. HANDLER reachability: every tool a module contributes is
+//     `readOnlyHint: true` UNLESS the module itself declares `mutating: true`
+//     — a read-only registration cannot reach the write queue, the write
+//     primitive, or the accept-guard's territory at all (the guard routes
+//     ONLY `readOnlyHint === false` calls to the kernel's mutation path).
+//     `mutating: true` is a real, deliberate escape hatch (five modules use
+//     it today: skills, provenance, fileclass, crosssession, triage), not a
+//     bypass of this gate — a module that does NOT declare it still gets the
+//     original all-read-only enforcement. Pinned by test: the mount's
+//     registerAll gate refuses a non-mutating module's tool whose
+//     annotations are not read-only (see `mountModules`), so a future module
+//     slipping a mutating handler in without the declaration fails loudly (a
 //     `problems` entry, surfaced by server.ts) rather than registering
 //     quietly.
 //  2. The host ctx handed to modules is MINIMAL: `getSettings` + `visible`
