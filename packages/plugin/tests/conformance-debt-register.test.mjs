@@ -398,6 +398,11 @@ async function vault() {
   const root = await mkdtemp(path.join(tmpdir(), "conf-reg-"));
   await mkdir(path.join(root, "Notes"), { recursive: true });
   await writeFile(path.join(root, "Notes", "A.md"), "---\ntitle: A\ntags:\n  - rogue\n---\nbody\n");
+  // Seed one live-shape registry note (fileClass: Meta/Tag) so the default
+  // scope-tags vocabulary is SEEDED and `rogue` is carried debt — an unseeded
+  // registry deliberately forces no per-tag findings (#251).
+  await mkdir(path.join(root, "Registry"), { recursive: true });
+  await writeFile(path.join(root, "Registry", "keep.md"), "---\nfileClass: Meta/Tag\ntag: keep\n---\n");
   return root;
 }
 
