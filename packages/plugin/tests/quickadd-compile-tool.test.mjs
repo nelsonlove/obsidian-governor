@@ -11,7 +11,7 @@ function fakeFile(path) {
   return { path, extension: "md" };
 }
 
-function build({ notes = [], links = {}, existingChoices = [], settings = {}, commandApi = true } = {}) {
+function build({ notes = [], links = {}, existingChoices = [], settings = {}, commandApi = true, commands = {} } = {}) {
   const server = fakeServer();
   const files = notes.map((n) => fakeFile(n.path));
   const saveSettingsCalls = [];
@@ -40,6 +40,7 @@ function build({ notes = [], links = {}, existingChoices = [], settings = {}, co
       },
     },
     plugins: { plugins: { quickadd } },
+    commands: { commands: Object.fromEntries(Object.entries(commands).map(([id, name]) => [id, { name }])) },
   };
   const ctx = {
     pluginVersion: "0.0.0-test",
@@ -68,6 +69,10 @@ function macroNote(path, name, scriptLink) {
       steps: [{ kind: "userscript", script: `[[${scriptLink}]]` }],
     },
   };
+}
+
+function macroNoteWithSteps(path, name, steps) {
+  return { path, frontmatter: { "quickadd-type": "macro", name, steps } };
 }
 
 describe("obsidian_quickadd_compile: dry_run", () => {
@@ -499,5 +504,93 @@ describe("obsidian_quickadd_compile: script wikilink subpaths", () => {
     const res = await handler({ dry_run: true });
     assert.equal(res.structuredContent.errors.length, 1);
     assert.match(res.structuredContent.errors[0].message, /\[\[nope#Usage\]\]/);
+  });
+});
+
+describe("obsidian_quickadd_compile: choice step", () => {
+  test("resolves a choice: wikilink to the target note's derived choiceId", async () => {
+    const { handler } = build({
+      notes: [
+        macroNoteWithSteps("Choices/Outer.md", "Outer", [{ kind: "choice", choice: "[[Inner]]" }]),
+        macroNote("Choices/Inner.md", "Inner", "some-script"),
+      ],
+      links: { "Inner": "Choices/Inner.md", "some-script": "Scripts/some-script.md" },
+    });
+    const res = await handler({ dry_run: true });
+    const outer = res.structuredContent.choices.find((c) => c.name === "Outer");
+    assert.equal(outer.macro.commands[0].type, "Choice");
+    assert.match(outer.macro.commands[0].choiceId, /^qan:Choices\/Inner\.md#choice$/);
+  });
+
+  test("an unresolvable choice: link is a per-note error", async () => {
+    const { handler } = build({
+      notes: [macroNoteWithSteps("Choices/Bad.md", "Bad", [{ kind: "choice", choice: "[[Nope]]" }])],
+      links: {},
+    });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.choices.length, 0);
+    assert.match(res.structuredContent.errors[0].message, /could not resolve/);
+  });
+});
+
+describe("obsidian_quickadd_compile: wait step", () => {
+  test("time: defaults to 100 when omitted", async () => {
+    const { handler } = build({ notes: [macroNoteWithSteps("Choices/W.md", "W", [{ kind: "wait" }])] });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.choices[0].macro.commands[0].time, 100);
+  });
+
+  test("an explicit time: is used as-is", async () => {
+    const { handler } = build({ notes: [macroNoteWithSteps("Choices/W.md", "W", [{ kind: "wait", time: 500 }])] });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.choices[0].macro.commands[0].time, 500);
+  });
+
+  test("a negative or non-numeric time: is a per-note error", async () => {
+    const { handler } = build({ notes: [macroNoteWithSteps("Choices/W.md", "W", [{ kind: "wait", time: -5 }])] });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.choices.length, 0);
+    assert.match(res.structuredContent.errors[0].message, /time/i);
+  });
+});
+
+describe("obsidian_quickadd_compile: obsidian-command step", () => {
+  test("resolves command_id to the currently-registered command's display name", async () => {
+    const { handler } = build({
+      notes: [macroNoteWithSteps("Choices/O.md", "O", [{ kind: "obsidian-command", command_id: "obsidian-linter:lint-file-unless-ignored" }])],
+      commands: { "obsidian-linter:lint-file-unless-ignored": "Linter: Lint the current file unless ignored" },
+    });
+    const res = await handler({ dry_run: true });
+    const cmd = res.structuredContent.choices[0].macro.commands[0];
+    assert.equal(cmd.type, "Obsidian");
+    assert.equal(cmd.commandId, "obsidian-linter:lint-file-unless-ignored");
+    assert.equal(cmd.name, "Linter: Lint the current file unless ignored");
+  });
+
+  test("an unregistered command_id is a per-note error", async () => {
+    const { handler } = build({
+      notes: [macroNoteWithSteps("Choices/O.md", "O", [{ kind: "obsidian-command", command_id: "nope:nothing" }])],
+      commands: {},
+    });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.choices.length, 0);
+    assert.match(res.structuredContent.errors[0].message, /nope:nothing/);
+  });
+});
+
+describe("obsidian_quickadd_compile: editor-command step", () => {
+  test("a known editor_command value compiles", async () => {
+    const { handler } = build({ notes: [macroNoteWithSteps("Choices/E.md", "E", [{ kind: "editor-command", editor_command: "Copy" }])] });
+    const res = await handler({ dry_run: true });
+    const cmd = res.structuredContent.choices[0].macro.commands[0];
+    assert.equal(cmd.type, "EditorCommand");
+    assert.equal(cmd.editorCommandType, "Copy");
+  });
+
+  test("an unknown editor_command value is a per-note error naming the value", async () => {
+    const { handler } = build({ notes: [macroNoteWithSteps("Choices/E.md", "E", [{ kind: "editor-command", editor_command: "Not A Real One" }])] });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.choices.length, 0);
+    assert.match(res.structuredContent.errors[0].message, /Not A Real One/);
   });
 });

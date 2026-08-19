@@ -29,7 +29,7 @@ import type { ServerCtx } from "./tools-core.js";
 import { RW } from "./tools-vault-write.js";
 import type { GuardSettings } from "../guard.js";
 import { transformChoices, isCompilerOwnedId } from "../kernel/quickadd/transform.js";
-import type { ChoiceNoteInput, MacroStepResolved, QuickAddMacroChoice } from "../kernel/quickadd/types.js";
+import type { ChoiceNoteInput, MacroStepResolved, QuickAddMacroChoice, EditorCommandType } from "../kernel/quickadd/types.js";
 
 /** 0 fresh choices AND this many about-to-be-deleted ones reads as a cold
  *  metadata cache, not a real change — see the mass-removal guard below. */
@@ -73,6 +73,13 @@ function linkTarget(raw: string): string | null {
   return target.length > 0 ? target : null;
 }
 
+const EDITOR_COMMAND_TYPES: ReadonlySet<EditorCommandType> = new Set([
+  "Cut", "Copy", "Paste", "Paste with format",
+  "Select active line", "Select link on active line",
+  "Move cursor to file start", "Move cursor to file end",
+  "Move cursor to line start", "Move cursor to line end",
+]);
+
 function resolveUserScriptStep(app: App, notePath: string, step: any): MacroStepResolved {
   if (step?.kind !== "userscript") {
     return { kind: "unsupported", ok: false, declaredKind: String(step?.kind ?? "undefined") };
@@ -95,6 +102,69 @@ function resolveUserScriptStep(app: App, notePath: string, step: any): MacroStep
   };
 }
 
+function resolveChoiceStep(app: App, notePath: string, step: any): MacroStepResolved {
+  const raw = String(step.choice ?? "");
+  const target = linkTarget(raw);
+  if (target === null) {
+    return { kind: "choice", ok: false, error: `"${raw}" is not a [[wikilink]].` };
+  }
+  const dest = app.metadataCache.getFirstLinkpathDest(target, notePath);
+  if (!dest) {
+    return { kind: "choice", ok: false, error: `could not resolve "${raw}".` };
+  }
+  // The referenced note's compiled id is a pure function of its path — no
+  // need to wait for that note to be compiled in this same run. Whether it
+  // actually compiles into a valid choice is unchecked (see types.ts's
+  // ChoiceStepOk doc comment).
+  return { kind: "choice", ok: true, choiceId: `qan:${dest.path}#choice` };
+}
+
+function resolveWaitStep(_app: App, _notePath: string, step: any): MacroStepResolved {
+  const raw = step.time;
+  const timeMs = raw === undefined ? 100 : Number(raw);
+  if (!Number.isFinite(timeMs) || timeMs < 0) {
+    return { kind: "wait", ok: false, error: `"time" must be a non-negative number, got ${JSON.stringify(raw)}.` };
+  }
+  return { kind: "wait", ok: true, timeMs };
+}
+
+function resolveObsidianCommandStep(app: App, _notePath: string, step: any): MacroStepResolved {
+  const commandId = String(step.command_id ?? "");
+  if (!commandId) {
+    return { kind: "obsidian-command", ok: false, error: `"command_id" is missing or empty.` };
+  }
+  // app.commands is not in the public obsidian types — cast required.
+  const registered = (app as any).commands?.commands?.[commandId];
+  const displayName = registered?.name;
+  if (typeof displayName !== "string") {
+    return { kind: "obsidian-command", ok: false, error: `no registered command "${commandId}".` };
+  }
+  return { kind: "obsidian-command", ok: true, commandId, displayName };
+}
+
+function resolveEditorCommandStep(_app: App, _notePath: string, step: any): MacroStepResolved {
+  const value = String(step.editor_command ?? "");
+  if (!EDITOR_COMMAND_TYPES.has(value as EditorCommandType)) {
+    return {
+      kind: "editor-command",
+      ok: false,
+      error: `"${value}" is not a recognized editor_command (expected one of: ${[...EDITOR_COMMAND_TYPES].join(", ")}).`,
+    };
+  }
+  return { kind: "editor-command", ok: true, editorCommandType: value as EditorCommandType };
+}
+
+function resolveStep(app: App, notePath: string, step: any): MacroStepResolved {
+  switch (step?.kind) {
+    case "userscript": return resolveUserScriptStep(app, notePath, step);
+    case "choice": return resolveChoiceStep(app, notePath, step);
+    case "wait": return resolveWaitStep(app, notePath, step);
+    case "obsidian-command": return resolveObsidianCommandStep(app, notePath, step);
+    case "editor-command": return resolveEditorCommandStep(app, notePath, step);
+    default: return { kind: "unsupported", ok: false, declaredKind: String(step?.kind ?? "undefined") };
+  }
+}
+
 /** Reads every markdown note whose frontmatter declares `quickadd-type:
  *  macro` and builds its (unresolved-wikilink-aware) ChoiceNoteInput. Notes
  *  with no quickadd-type, or a quickadd-type other than "macro" (Stage B+
@@ -111,7 +181,7 @@ function collectChoiceNotes(app: App): ChoiceNoteInput[] {
       : file.path.split("/").pop()!.replace(/\.md$/, "");
 
     const rawSteps = Array.isArray(frontmatter.steps) ? frontmatter.steps : [];
-    const steps = rawSteps.map((s) => resolveUserScriptStep(app, file.path, s));
+    const steps = rawSteps.map((s) => resolveStep(app, file.path, s));
 
     inputs.push({ quickaddType: "macro", notePath: file.path, name, steps });
   }
@@ -153,9 +223,10 @@ export function registerQuickAddTools(server: McpServer, app: App, ctx: ServerCt
         "whole response carries isError: true so a partial compile is distinguishable from a clean one), never " +
         "the whole compile. A non-dry-run that would find zero choices while deleting three or more refuses " +
         "(`suspicious_mass_removal`) — that shape is a cold metadata cache far more often than a real change. " +
-        "Stage A: Macro choices whose steps are all UserScript. A note with a different quickadd-type, or a step " +
-        "of a different kind, is simply out of scope here — silently skipped (quickadd-type notes) or a " +
-        "per-choice error (unsupported step kind). Refuses outright while a path allowlist is active.",
+        "Supports Macro choices with userscript, choice, wait, obsidian-command, and editor-command steps. " +
+        "nested-choice and ai-assistant steps are not yet supported (per-choice error). A note with a different " +
+        "quickadd-type is simply out of scope here — silently skipped. Refuses outright while a path allowlist " +
+        "is active.",
       inputSchema: {
         dry_run: z.boolean().describe("If true, report the would-be diff and errors without writing anything."),
       },
