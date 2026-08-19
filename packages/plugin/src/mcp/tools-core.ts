@@ -17,6 +17,10 @@ export interface ServerCtx {
   pluginVersion: string;
   socketPath: string;
   vaultName: string;
+  /** The plugin's own directory (`<config dir>/plugins/vault-mcp` unless Obsidian's manifest
+   * says otherwise) — where plugin-owned state files live (journal, governance). Optional:
+   * absent in tests; consumers fall back to the default plugin path. */
+  pluginDir?: string;
   enabledPlugins: () => string[];
   /**
    * Guard settings plus policy gates:

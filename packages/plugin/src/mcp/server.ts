@@ -212,13 +212,14 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   // Addressing by uid needs no tool of its own — `uid:<value>` binds at the
   // interception point above — so this is purely the lookup, in both directions.
   registerUidTools(server, ctx);
-  // ── pending human-review queue, read-only (slice B3b; #83) ─────────────────
-  // A READ of the index Stewardship publishes at
-  // `<config dir>/plugins/stewardship/pending-index.json`, so an agent can see
-  // what a human is about to review and avoid stepping on it. Allowlist-filtered
-  // like tools-uid.ts (no path oracle), and graceful-empty when Stewardship is
-  // absent or its queue never refreshed. Read-only by construction: it reports
-  // review status another plugin published; it exposes no accept/baseline verb.
+  // ── pending human-review queue, read-only (slice B3b; #83; repointed #261) ──
+  // A READ of the index the governance module publishes at
+  // `<plugin dir>/governance/pending-index.json` (the stewardship standalone's
+  // path is dead since #164), so an agent can see what a human is about to
+  // review and avoid stepping on it. Allowlist-filtered like tools-uid.ts (no
+  // path oracle), and EXPLICITLY `published: false` — never silently empty —
+  // when the governance module is disabled or has never refreshed. Read-only by
+  // construction: it reports published review status; no accept/baseline verb.
   //
   // ALWAYS-ON, decoupled from the governance module toggle (#83 cycle 2 fix).
   // Cycle 1 mounted this THROUGH the governance module, which gated the only MCP
@@ -229,7 +230,7 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   // main.ts), and contributes ZERO tools to the MCP transport — the accept
   // surface never touches the bridge. See modules-mount.ts's governance module.
   registerPendingReviewTools(server, {
-    source: obsidianPendingReviewSource(app),
+    source: obsidianPendingReviewSource(app, ctx.pluginDir),
     getSettings: () => ctx.getSettings(),
   });
   // ── the revision round-trip's ONE agent verb (#101, phase 1 of #221) ───────
