@@ -73,6 +73,18 @@ function linkTarget(raw: string): string | null {
   return target.length > 0 ? target : null;
 }
 
+/** A choice note's own display name: frontmatter `name:` when it is a
+ *  non-empty string, else the basename with `.md` stripped. The ONE
+ *  definition, shared by `collectChoiceNotes` (the note being compiled) and
+ *  `resolveChoiceStep` (the note being referenced) so a Choice command's
+ *  `name` can never drift from the name of the choice it points at. */
+function displayNameOf(frontmatter: any, path: string): string {
+  const name = frontmatter?.name;
+  return typeof name === "string" && name.trim()
+    ? name
+    : path.split("/").pop()!.replace(/\.md$/, "");
+}
+
 const EDITOR_COMMAND_TYPES: ReadonlySet<EditorCommandType> = new Set([
   "Cut", "Copy", "Paste", "Paste with format",
   "Select active line", "Select link on active line",
@@ -112,16 +124,53 @@ function resolveChoiceStep(app: App, notePath: string, step: any): MacroStepReso
   if (!dest) {
     return { kind: "choice", ok: false, error: `could not resolve "${raw}".` };
   }
+  // Direct self-reference. QuickAdd has NO cycle detection in Choice-step
+  // execution (executeChoice re-enters the same path with no visited set and
+  // no depth cap — its only cycle guard is for template inclusion), so a
+  // choice referencing its own note would loop forever in Obsidian at run
+  // time. One typo away, so it is caught here rather than compiled. This is
+  // deliberately only the DIRECT case — a multi-note cycle (A → B → A) is
+  // not detected.
+  if (dest.path === notePath) {
+    return {
+      kind: "choice",
+      ok: false,
+      error:
+        `"${raw}" refers to this same note (${notePath}). A choice step must reference a DIFFERENT choice ` +
+        `note — QuickAdd has no cycle guard, so a self-reference would loop forever at run time.`,
+    };
+  }
+  // getFirstLinkpathDest returns any TFile, not just markdown. A choice step
+  // references another choice NOTE; anything else compiles a permanently
+  // dangling reference that only fails at run time.
+  if (dest.extension !== "md") {
+    return {
+      kind: "choice",
+      ok: false,
+      error:
+        `"${raw}" resolves to "${dest.path}", which is not a markdown note. A choice step must reference ` +
+        `another choice note (.md).`,
+    };
+  }
   // The referenced note's compiled id is a pure function of its path — no
   // need to wait for that note to be compiled in this same run. Whether it
   // actually compiles into a valid choice is unchecked (see types.ts's
   // ChoiceStepOk doc comment).
-  return { kind: "choice", ok: true, choiceId: deriveChoiceId(dest.path) };
+  return {
+    kind: "choice",
+    ok: true,
+    choiceId: deriveChoiceId(dest.path),
+    displayName: displayNameOf(app.metadataCache.getFileCache(dest)?.frontmatter, dest.path),
+  };
 }
 
 function resolveWaitStep(_app: App, _notePath: string, step: any): MacroStepResolved {
   const raw = step.time;
-  const timeMs = raw === undefined ? 100 : Number(raw);
+  // `time:` with no value parses to null in YAML (and `time: ""` to an empty
+  // string) — Number() maps both to 0, which would silently compile a 0ms
+  // wait instead of the documented default. Treat "no value" as absent.
+  const absent = raw === undefined || raw === null || (typeof raw === "string" && raw.trim() === "");
+  const timeMs = absent ? 100 : Number(raw);
   if (!Number.isFinite(timeMs) || timeMs < 0) {
     return { kind: "wait", ok: false, error: `"time" must be a non-negative number, got ${JSON.stringify(raw)}.` };
   }
@@ -176,9 +225,7 @@ function collectChoiceNotes(app: App): ChoiceNoteInput[] {
     const frontmatter = app.metadataCache.getFileCache(file)?.frontmatter;
     if (!frontmatter || frontmatter["quickadd-type"] !== "macro") continue;
 
-    const name = typeof frontmatter.name === "string" && frontmatter.name.trim()
-      ? frontmatter.name
-      : file.path.split("/").pop()!.replace(/\.md$/, "");
+    const name = displayNameOf(frontmatter, file.path);
 
     const rawSteps = Array.isArray(frontmatter.steps) ? frontmatter.steps : [];
     const steps = rawSteps.map((s) => resolveStep(app, file.path, s));

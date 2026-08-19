@@ -86,7 +86,11 @@ function transformOne(input: ChoiceNoteInput): OneResult {
         commands.push({ id, name: step.scriptPath, type: "UserScript", path: step.scriptPath, settings: step.settings });
         break;
       case "choice":
-        commands.push({ id, name: "Choice", type: "Choice", choiceId: step.choiceId });
+        // `name` is the TARGET choice's own display name, matching native
+        // QuickAdd — a generic "Choice" label would make QuickAdd's own
+        // dangling-reference message ("choice '…' could not be found.")
+        // name nothing at run time.
+        commands.push({ id, name: step.displayName, type: "Choice", choiceId: step.choiceId });
         break;
       case "wait":
         commands.push({ id, name: "Wait", type: "Wait", time: step.timeMs });

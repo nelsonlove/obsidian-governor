@@ -30,11 +30,20 @@ export interface UserScriptStepFailed {
  *  function of note path. Whether the referenced note actually compiles
  *  into a valid choice is NOT checked here — same discipline QuickAdd's
  *  own data.json uses (choiceId is just a stored reference; a dangling one
- *  fails at RUN time, not compile time). */
+ *  fails at RUN time, not compile time).
+ *
+ *  `displayName` is the TARGET note's own display name, derived exactly the
+ *  way a choice note's own name is (frontmatter `name:` if it is a non-empty
+ *  string, else the basename with `.md` stripped). A native QuickAdd Choice
+ *  command stores the referenced choice's name there, not a generic label —
+ *  and QuickAdd's own dangling-reference failure path logs
+ *  `choice '<command.name>' could not be found.`, so a generic label would
+ *  name nothing useful at run time. */
 export interface ChoiceStepOk {
   kind: "choice";
   ok: true;
   choiceId: string;
+  displayName: string;
 }
 export interface ChoiceStepFailed {
   kind: "choice";
@@ -58,7 +67,16 @@ export interface WaitStepFailed {
  *  command's own name (resolved by the glue layer via
  *  `app.commands.commands[commandId]?.name`), matching what QuickAdd's own
  *  UI does when a human adds this step type — never a separately-typed
- *  frontmatter field that could drift from the real command name. */
+ *  frontmatter field that could drift from the real command name.
+ *
+ *  That resolution is a COMPILE-TIME SNAPSHOT: if the plugin providing the
+ *  command is later disabled, the next compile fails this step and therefore
+ *  drops the whole choice from QuickAdd's live config (deregistering its
+ *  Obsidian command) on the strength of another plugin's load state rather
+ *  than any edit to the note. That is ACCEPTED, not mitigated — it is the
+ *  same "a malformed note fails only that note" discipline as everywhere
+ *  else here, and the failure is always surfaced (`errors` plus
+ *  `isError: true`, and visible up front under `dry_run`). */
 export interface ObsidianCommandStepOk {
   kind: "obsidian-command";
   ok: true;

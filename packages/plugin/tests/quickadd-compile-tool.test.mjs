@@ -7,8 +7,11 @@ installObsidianStub();
 const { registerQuickAddTools } = await import("../src/mcp/tools-quickadd.ts");
 
 // A minimal fake note: frontmatter + a resolvable-or-not set of wikilinks.
+// `extension` mirrors Obsidian's TFile — derived from the path, so a link
+// target can be a non-markdown file (an attachment) the way it can live.
 function fakeFile(path) {
-  return { path, extension: "md" };
+  const dot = path.lastIndexOf(".");
+  return { path, extension: dot > path.lastIndexOf("/") ? path.slice(dot + 1) : "" };
 }
 
 function build({ notes = [], links = {}, existingChoices = [], settings = {}, commandApi = true, commands = {} } = {}) {
@@ -531,6 +534,60 @@ describe("obsidian_quickadd_compile: choice step", () => {
     assert.equal(res.structuredContent.choices.length, 0);
     assert.match(res.structuredContent.errors[0].message, /could not resolve/);
   });
+
+  test("the compiled command carries the TARGET note's own name, not the literal \"Choice\"", async () => {
+    const { handler } = build({
+      notes: [
+        macroNoteWithSteps("Choices/Outer.md", "Outer", [{ kind: "choice", choice: "[[Inner]]" }]),
+        macroNote("Choices/Inner.md", "Add UID to current note", "some-script"),
+      ],
+      links: { "Inner": "Choices/Inner.md", "some-script": "Scripts/some-script.md" },
+    });
+    const res = await handler({ dry_run: true });
+    const outer = res.structuredContent.choices.find((c) => c.name === "Outer");
+    assert.equal(outer.macro.commands[0].name, "Add UID to current note");
+    assert.notEqual(outer.macro.commands[0].name, "Choice");
+  });
+
+  test("a target note with no name: frontmatter falls back to its basename", async () => {
+    const inner = macroNote("Choices/Inner Note.md", undefined, "some-script");
+    delete inner.frontmatter.name;
+    const { handler } = build({
+      notes: [
+        macroNoteWithSteps("Choices/Outer.md", "Outer", [{ kind: "choice", choice: "[[Inner Note]]" }]),
+        inner,
+      ],
+      links: { "Inner Note": "Choices/Inner Note.md", "some-script": "Scripts/some-script.md" },
+    });
+    const res = await handler({ dry_run: true });
+    const outer = res.structuredContent.choices.find((c) => c.name === "Outer");
+    assert.equal(outer.macro.commands[0].name, "Inner Note");
+  });
+
+  test("a self-referencing choice: link is rejected with a clear error and does not compile", async () => {
+    const { handler } = build({
+      notes: [macroNoteWithSteps("Choices/Self.md", "Self", [{ kind: "choice", choice: "[[Self]]" }])],
+      links: { "Self": "Choices/Self.md" },
+    });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.choices.length, 0);
+    assert.equal(res.structuredContent.errors.length, 1);
+    assert.equal(res.structuredContent.errors[0].notePath, "Choices/Self.md");
+    assert.match(res.structuredContent.errors[0].message, /same note/i);
+    assert.match(res.structuredContent.errors[0].message, /loop forever/i);
+  });
+
+  test("a choice: link resolving to a non-markdown file is rejected, naming the resolved path", async () => {
+    const { handler } = build({
+      notes: [macroNoteWithSteps("Choices/Bad.md", "Bad", [{ kind: "choice", choice: "[[diagram]]" }])],
+      links: { "diagram": "Attachments/diagram.png" },
+    });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.choices.length, 0);
+    assert.equal(res.structuredContent.errors.length, 1);
+    assert.match(res.structuredContent.errors[0].message, /Attachments\/diagram\.png/);
+    assert.match(res.structuredContent.errors[0].message, /not a markdown note/i);
+  });
 });
 
 describe("obsidian_quickadd_compile: wait step", () => {
@@ -538,6 +595,34 @@ describe("obsidian_quickadd_compile: wait step", () => {
     const { handler } = build({ notes: [macroNoteWithSteps("Choices/W.md", "W", [{ kind: "wait" }])] });
     const res = await handler({ dry_run: true });
     assert.equal(res.structuredContent.choices[0].macro.commands[0].time, 100);
+  });
+
+  test("a valueless `time:` (YAML null) defaults to 100, not 0", async () => {
+    const { handler } = build({ notes: [macroNoteWithSteps("Choices/W.md", "W", [{ kind: "wait", time: null }])] });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.errors.length, 0);
+    assert.equal(res.structuredContent.choices[0].macro.commands[0].time, 100);
+  });
+
+  test("an empty-string time: defaults to 100, not 0", async () => {
+    const { handler } = build({ notes: [macroNoteWithSteps("Choices/W.md", "W", [{ kind: "wait", time: "" }])] });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.errors.length, 0);
+    assert.equal(res.structuredContent.choices[0].macro.commands[0].time, 100);
+  });
+
+  test("a whitespace-only time: defaults to 100, not 0", async () => {
+    const { handler } = build({ notes: [macroNoteWithSteps("Choices/W.md", "W", [{ kind: "wait", time: "   " }])] });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.errors.length, 0);
+    assert.equal(res.structuredContent.choices[0].macro.commands[0].time, 100);
+  });
+
+  test("an explicit time: 0 is still honored as 0, not turned into the default", async () => {
+    const { handler } = build({ notes: [macroNoteWithSteps("Choices/W.md", "W", [{ kind: "wait", time: 0 }])] });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.errors.length, 0);
+    assert.equal(res.structuredContent.choices[0].macro.commands[0].time, 0);
   });
 
   test("an explicit time: is used as-is", async () => {

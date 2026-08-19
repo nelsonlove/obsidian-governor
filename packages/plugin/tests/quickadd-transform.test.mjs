@@ -13,7 +13,7 @@ function userscriptStep(overrides = {}) {
 }
 
 function choiceStep(overrides = {}) {
-  return { kind: "choice", ok: true, choiceId: "qan:Choices/Target.md#choice", ...overrides };
+  return { kind: "choice", ok: true, choiceId: "qan:Choices/Target.md#choice", displayName: "Target", ...overrides };
 }
 
 function waitStep(overrides = {}) {
@@ -184,6 +184,18 @@ describe("transformChoices — choice step", () => {
     assert.equal(cmd.type, "Choice");
     assert.equal(cmd.choiceId, "qan:Choices/Target.md#choice");
     assert.equal(cmd.id, deriveStepId("QuickAdd choices/Stamp title.md", 0));
+  });
+
+  test("the command's name is the TARGET choice's display name, never the literal \"Choice\"", () => {
+    const result = transformChoices([
+      macroInput({ steps: [choiceStep({ choiceId: "qan:Choices/Add UID.md#choice", displayName: "Add UID to current note" })] }),
+    ]);
+    assert.deepEqual(result.errors, []);
+    const cmd = result.choices[0].macro.commands[0];
+    // QuickAdd logs `choice '<name>' could not be found.` on a dangling
+    // reference — a generic label would name nothing useful there.
+    assert.equal(cmd.name, "Add UID to current note");
+    assert.notEqual(cmd.name, "Choice");
   });
 
   test("a failed choice-link resolution fails only that note", () => {
