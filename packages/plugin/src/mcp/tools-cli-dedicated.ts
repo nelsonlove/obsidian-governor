@@ -35,6 +35,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ok, fail, okError, codedError } from "./helpers.js";
+import { PLUGIN_ID } from "../id-migration.js";
 import type { ServerCtx } from "./tools-core.js";
 import {
   findObsidianBinary,
@@ -287,7 +288,7 @@ export function registerCliDedicatedTools(
         "Uninstall a community plugin by id (pinned CLI `plugin:uninstall` subcommand; the vault is pinned). " +
         "DANGEROUS and destructive: removes the plugin's code and settings from the vault — the human-only \"Allow " +
         "dangerous CLI commands\" setting must be on, exactly as for the raw proxy's plugin:uninstall. Refuses to " +
-        "uninstall vault-mcp itself (that would sever every connected session). Refuses while a path allowlist is " +
+        "uninstall the governor plugin itself (that would sever every connected session). Refuses while a path allowlist is " +
         "active (a plugin uninstall cannot be path-scoped).",
       inputSchema: {
         plugin_id: z.string().min(1).describe("Community plugin id, e.g. 'dataview'."),
@@ -308,9 +309,9 @@ export function registerCliDedicatedTools(
         if (denied) return codedError("cli_denied", denied);
         if (!settings.allowDangerousCli) return dangerRefusal(DEDICATED_CLI_COMMANDS.obsidian_plugin_uninstall);
         // Same self-preservation rule as obsidian_plugin_toggle's disable
-        // branch: removing vault-mcp would sever every connected session.
-        if (args.plugin_id === "vault-mcp") {
-          return fail("refusing to uninstall vault-mcp itself — that would sever every connected session.");
+        // branch: removing the host plugin would sever every connected session.
+        if (args.plugin_id === PLUGIN_ID) {
+          return fail(`refusing to uninstall ${PLUGIN_ID} itself — that would sever every connected session.`);
         }
         return await runPinned(
           DEDICATED_CLI_COMMANDS.obsidian_plugin_uninstall,

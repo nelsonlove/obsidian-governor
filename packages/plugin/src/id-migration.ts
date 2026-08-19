@@ -28,6 +28,12 @@
 /** Marker left in the old folder after a successful migration. */
 export const MIGRATION_MARKER = "MIGRATED.md";
 
+/** The plugin's own id (0.12.0+). Single source of truth for code that must
+ * name itself — the self-preservation refusals (don't disable/reload/uninstall
+ * the plugin hosting the connection) and the receipt store's plugin-dir
+ * default. Must match manifest.json's `id`. */
+export const PLUGIN_ID = "governor";
+
 /** The old plugin folder name under `<configDir>/plugins/`. */
 export const LEGACY_PLUGIN_ID = "vault-mcp";
 

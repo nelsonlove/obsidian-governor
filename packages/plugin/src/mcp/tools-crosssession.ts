@@ -56,6 +56,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ok, fail, codedError } from "./helpers.js";
+import { PLUGIN_ID } from "../id-migration.js";
 import type { GuardSettings } from "../guard.js";
 import {
   channelKey,
@@ -535,6 +536,6 @@ export function obsidianCrosssessionSource(app: {
 /** The receipt store over the plugin's own data directory — beside the journal
  * and install-id.json (see receipts.ts's header for why there and not
  * data.json or the note tree). */
-export function obsidianReceiptStore(app: { vault: { adapter: ReceiptAdapter; configDir: string } }, pluginId = "vault-mcp"): ReceiptStore {
+export function obsidianReceiptStore(app: { vault: { adapter: ReceiptAdapter; configDir: string } }, pluginId = PLUGIN_ID): ReceiptStore {
   return new ReceiptStore(app.vault.adapter, `${app.vault.configDir}/plugins/${pluginId}`);
 }

@@ -230,7 +230,7 @@ export class WriteJournal {
 
   constructor(
     private readonly adapter: JournalAdapter,
-    /** Directory for journal files, vault-relative (e.g. `.obsidian/plugins/vault-mcp/journal`). */
+    /** Directory for journal files, vault-relative (e.g. `.obsidian/plugins/governor/journal`). */
     private readonly dir: string,
     private readonly now: () => Date = () => new Date()
   ) {}

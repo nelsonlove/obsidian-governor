@@ -75,7 +75,7 @@ function sane(parsed: unknown): ReceiptsState {
 export class ReceiptStore implements ReceiptStoreLike {
   constructor(
     private readonly adapter: ReceiptAdapter,
-    /** The plugin's data directory (`.obsidian/plugins/vault-mcp`). */
+    /** The plugin's data directory (`.obsidian/plugins/governor`). */
     private readonly dir: string,
   ) {}
 

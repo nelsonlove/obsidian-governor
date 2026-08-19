@@ -181,11 +181,11 @@ describe("dedicated plugin tools — danger-gate parity with the raw proxy", () 
     assert.equal(calls.length, 0);
   });
 
-  test("uninstalling vault-mcp itself is refused even with the gate open", async () => {
+  test("uninstalling the governor plugin itself is refused even with the gate open", async () => {
     const { server, calls } = build({ allowDangerousCli: true });
-    const res = await server.tools.get("obsidian_plugin_uninstall").handler({ plugin_id: "vault-mcp" });
+    const res = await server.tools.get("obsidian_plugin_uninstall").handler({ plugin_id: "governor" });
     assert.equal(res.isError, true);
-    assert.match(res.content[0].text, /refusing to uninstall vault-mcp/);
+    assert.match(res.content[0].text, /refusing to uninstall governor/);
     assert.equal(calls.length, 0);
   });
 });

@@ -1,4 +1,8 @@
-# vault-mcp Plugin — Authoritative Tool Inventory
+# Governor Plugin — Authoritative Tool Inventory
+
+(Plugin id `governor` since 0.12.0; `vault-mcp` is the retired historical id.
+The always-on `governance_*` tool-name prefix is historical spelling — the
+module is the acceptance module.)
 
 Source of record for every tool the plugin's MCP server registers.  Generated
 by reading `packages/plugin/src/mcp/server.ts` and all `tools-*.ts` files.
@@ -107,7 +111,7 @@ Folded in from the standalone `obsidian-jd-survey` plugin. A note's mirror
 directory defaults to the same relative path under `mirror_root` as the
 note's own vault folder; `survey-mirror` frontmatter overrides it per note.
 Both are checked against a declared content-root boundary
-(`ASSENT_CONTENT_ROOT`/`ASSENT_VAULT_ROOT`, same env vars
+(`GOVERNOR_CONTENT_ROOT`/`GOVERNOR_VAULT_ROOT`, legacy `ASSENT_*` aliases honored — same env vars
 `conformance/snapshot.ts` uses) before anything is read — neither is a vault
 path, so `guard.ts`'s allowlist never sees them otherwise.
 `obsidian_survey_slot` refuses to touch a section last stamped
@@ -445,7 +449,7 @@ the disposition id ONLY — the binding is human-only-mutable config, so the
 `quickadd:*`/`js-engine:*` opaque-execution denies are not weakened. Choice
 rows **cannot dry-run** (typed `choice_dry_run_unsupported` without an
 explicit `dry_run: false`) and report `effects_unknown` (script writes
-surface in the governance review queue via non-human attribution).
+surface in the acceptance review queue via non-human attribution).
 
 Moves ride the **shared link-healing move primitive** (`moveOne`), never
 overwrite, and honor the configured **`moveWhitelist`/`moveBlacklist`**
@@ -529,7 +533,7 @@ the restored bytes cannot be scanned pre-exec (#110).
 | `obsidian_note_diff` | R | `diff` | List/diff local/sync versions of one note (`from`/`to`/`filter`); `path` is allowlist-scoped |
 | `obsidian_base_create` | W | `base:create` | Create an item in a Bases file; content runs the standard accept scan; refuses under an active allowlist (the landing folder is the base's config, not an argument) |
 | `obsidian_plugin_install` | W | `plugin:install` | DANGEROUS — gated behind "Allow dangerous CLI commands" exactly like the proxy; `openWorldHint: true` (network fetch); installs without enabling |
-| `obsidian_plugin_uninstall` | W | `plugin:uninstall` | DANGEROUS + `destructiveHint: true` — same gate; refuses to uninstall vault-mcp itself |
+| `obsidian_plugin_uninstall` | W | `plugin:uninstall` | DANGEROUS + `destructiveHint: true` — same gate; refuses to uninstall the governor plugin itself |
 
 ### Settings-gated raw proxy — conditional on the CLI binary AND the "Raw CLI proxy" setting (1, default OFF)
 
