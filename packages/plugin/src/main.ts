@@ -16,7 +16,7 @@ import { DEFAULT_PROTECTED_PROPERTIES, setDeclaredProtectedProperties } from "@v
 import { wireGovernance, nudgeGovernanceQueue } from "./governance/wiring.js";
 import { mountAction } from "./governance/mount-state.js";
 import { wireSkills } from "./skills/wiring.js";
-import { wireSchemeInbox } from "./scheme/wiring.js";
+import { wireSchemeInbox, wireSchemeDrift } from "./scheme/wiring.js";
 import { runFolderMigration, LEGACY_PLUGIN_ID } from "./id-migration.js";
 
 interface VaultMcpSettings {
@@ -551,6 +551,17 @@ export default class VaultMcpPlugin extends Plugin {
         wireSchemeInbox(this, { getSchemes: () => this.settings.schemes ?? DEFAULT_SCHEMES });
       } catch (e) {
         console.error("[governor] scheme inbox pane wiring failed", e);
+      }
+      // ── scheme Drift pane (jd-dashboard fold, Stage C) ───────────────────────
+      // Same gating and "registered, not auto-revealed" reasoning as the Inbox
+      // pane above. Runs the live conformance engine on demand (Refresh button
+      // or ribbon/command open) — see obsidian-drift-source.ts and
+      // scheme/drift-pane.ts for why this doesn't auto-refresh on vault events
+      // the way the Inbox pane does.
+      try {
+        wireSchemeDrift(this);
+      } catch (e) {
+        console.error("[governor] scheme drift pane wiring failed", e);
       }
     }
 
