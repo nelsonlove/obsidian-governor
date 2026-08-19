@@ -306,12 +306,14 @@ slots on hidden rows — visible rows past that limit silently never appear.
 
 ---
 
-## Section 2c — module-mounted, default DISABLED (2)
+## Section 2c — module-mounted, default DISABLED (5)
 
 Registered through the module host like Section 2b, but these modules ship
 `enabled: false` — a human turns them on in the config tab, and the tools appear
-on the next session connect. (The `skills`, `provenance`, `fileclass`,
-`crosssession` and `triage` modules also ship disabled, but their tools are named
+on the next session connect. `health` (2 tools) and `jd-scaffold` (3 tools, Stage
+A of the jd-dashboard fold) both use the locked `obsidian_*` naming, so both are
+documented here in full. (The `skills`, `provenance`, `fileclass`, `crosssession`
+and `triage` modules also ship disabled, but their tools are named
 `vault_skills_*` / `provenance_*` / `fileclass_*` / `crosssession_*` / `triage_*`,
 outside the `obsidian_*` family this inventory locks, so the first two are
 documented in their own module docs; `fileclass`, `crosssession` and `triage` are
@@ -328,6 +330,23 @@ Both tools are `readOnlyHint: true`; the module has no write path.
 |---|---|
 | `obsidian_health` | Full tiered vault health scan → findings by fix risk (auto-safe repointable links / approval-gated empty notes + orphan attachments / report-only dangling links + duplicate groups + low-signal tags) plus summary counts. Read-only, whole-vault |
 | `obsidian_lint` | The same scan restricted to one folder or note (`scope`); link resolution + orphan inbound-set stay vault-wide, low-signal tags omitted |
+
+### `tools-jd-scaffold.ts` — `registerJdScaffoldTools` via the `jd-scaffold` module (3 tools)
+
+Stage A of the jd-dashboard fold — ported from the standalone
+`obsidian-jd-dashboard`'s `standard-zeros.ts`/`promote-to-folder.ts`. All three
+are `readOnlyHint: false`; `dry_run` is mandatory (no default) on all three,
+matching `tools-scheme-write.ts`'s convention. No `jd-id:` frontmatter is
+written — vault-mcp's scheme module is path-canonical, the filename already
+carries the address (same call already made for the jd-numbering fold).
+Takes an injected `JdScaffoldSource` (mirroring `vocabSource`/`skillsSource`),
+not a raw `App` — the live adapter is `obsidian-jd-scaffold-source.ts`.
+
+| Tool name | Description |
+|---|---|
+| `obsidian_jd_standard_zeros` | Create the fixed 10-note standard-zeros set (JDex, Inbox, Task & project management, Templates, Links, Conventions & policies, Knowledge base, Dashboard, Someday, Archive) inside a category folder. An already-existing target is SKIPPED, never overwritten |
+| `obsidian_jd_ensure_category_indexes` | Vault-wide: create a minimal `XX.00` JDex index for every depth-2 `XX <name>` category folder that lacks one (accepts `XX.00 Title.md` / `XX.00.md` / `XX.00+SUF Title.md` as already-present) |
+| `obsidian_jd_promote_to_folder` | Convert an `XX.YY` (or 5-digit expanded-area id) note into a same-named folder with the note moved inside as the folder's cover note, via link-healing rename. Refuses (`not_id_note` / `already_cover_note` / `folder_exists`) rather than guessing |
 
 ### `tools-fileclass.ts` — `registerFileclassTools` via the `fileclass` module (8 tools)
 

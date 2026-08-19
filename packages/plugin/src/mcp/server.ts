@@ -29,6 +29,7 @@ import { FILECLASS_PLUGIN_ID } from "./tools-fileclass.js";
 import { obsidianCrosssessionSource, obsidianReceiptStore } from "./tools-crosssession.js";
 import { obsidianTriageSource } from "./obsidian-triage-source.js";
 import { obsidianBasesSource } from "./obsidian-bases-source.js";
+import { obsidianJdScaffoldSource } from "./obsidian-jd-scaffold-source.js";
 import { registerCodeModeTools, makeCaptureRegister, type CapturedRegistry } from "./tools-code-mode.js";
 import { makeGuarded, resolveGuardedPath, withKernelArgs } from "./guarded.js";
 import { sealUnguardedRegistration } from "./seal-registration.js";
@@ -303,6 +304,11 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
     // Bases engine. The adapter feature-detects the public Bases API itself
     // and the registrar registers nothing when it is absent.
     basesSource: obsidianBasesSource(app),
+    // The jd-scaffold module (Stage A of the jd-dashboard fold): standard-zeros
+    // creation, category-index self-heal, promote-to-folder — reads via
+    // getAllLoadedFiles/getAbstractFileByPath, writes via vault.create/
+    // createFolder + fileManager.renameFile (link-healing).
+    jdScaffoldSource: obsidianJdScaffoldSource(app),
   });
   // Skip-and-report only reports if someone reads the report: every mount
   // defect (unknown module id in settings, a gate-refused tool, a config
