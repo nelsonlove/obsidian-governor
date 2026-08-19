@@ -1,8 +1,10 @@
-# vault-mcp
+# Governor
 
 **Let AI agents do real work in your Obsidian vault — without giving up control of it.**
 
-vault-mcp is an Obsidian plugin that connects AI agents (Claude Code, or anything that speaks
+*Formerly “vault-mcp.” The plugin **id** stays `vault-mcp` (it is plumbing — folder, socket namespace, tool prefixes, the plugin-to-plugin API key); **Governor** is the product. Like a mechanical governor: the device that lets a powerful engine run hard while keeping it inside limits you set.*
+
+Governor is an Obsidian plugin that connects AI agents (Claude Code, or anything that speaks
 MCP) to your vault the *governed* way: agents see your vault the way Obsidian does, every change
 they make is recorded and attributed, and one rule is enforced at the shared write primitive:
 **an agent cannot mark its own work as accepted through it. That's yours.**
