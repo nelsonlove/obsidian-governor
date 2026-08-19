@@ -1,11 +1,17 @@
 // kernel/survey/section.ts — pure planning core for where a survey snapshot
 // goes in a note's body, and whether it's allowed to go there at all.
 //
-// This is new to vault-mcp: nothing else in the codebase gates a body-content
-// write on "who last touched this text." (The plugin's other `provenance`
-// module — kernel/provenance/ — is a different concept: DERIVATION metadata
-// on a generated artifact, not authorship-protection of a section. Checked
-// before writing this; they don't overlap.)
+// This is new to vault-mcp in mechanism, not in problem: kernel/provenance/
+// (checked before writing this) already protects human-authored content
+// across a regen, via extractSections/reinsertSections splicing named
+// `<!-- human:start NAME -->...<!-- human:end -->` blocks back in after
+// regeneration — a MERGE strategy, and it never refuses a write. This
+// module's strategy is a REFUSAL: PROTECTED means the whole section is left
+// untouched and the plan reports why, no attempt to merge. Same underlying
+// problem (don't let automated regen clobber authored prose), different
+// mechanism for it — provenance's marker-merge would work here too, but the
+// jd-survey gate this is ported from is refusal-shaped, and refusal is the
+// simpler thing to get right for a v1.
 //
 // Ported in spirit, not verbatim, from `obsidian-jd-survey`'s gate: a section
 // whose last stamp says `by: "claude-code"` or `by: "human"` is prose someone

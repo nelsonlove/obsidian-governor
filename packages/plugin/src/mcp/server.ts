@@ -182,12 +182,12 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
     notes: guardedOpts.schemeNotes,
     getSettings: () => ctx.getSettings(),
   });
-  // Folded in from obsidian-jd-survey (2026-08-19). Hand-registered here for
-  // the same reason registerSchemeWriteTools is above it: obsidian_survey_slot
-  // mutates, and modules-mount.ts's registerAll gate refuses any tool whose
-  // annotations.readOnlyHint !== true.
+  // Folded in from obsidian-jd-survey (2026-08-19). Hand-registered here, the
+  // same shape registerSchemeWriteTools above uses: modules-mount.ts's
+  // registerAll gate refuses a non-readOnlyHint tool unless its module opts
+  // in via `mutating: true` — a real path (five other modules take it), just
+  // not the one chosen for this v1's obsidian_survey_slot.
   registerSurveyTools(server, app, {
-    notes: () => app.vault.getMarkdownFiles().map((f) => f.path),
     getSettings: () => ctx.getSettings(),
   });
   registerComplementaryTools(server, app, ctx);
