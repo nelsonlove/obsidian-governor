@@ -104,34 +104,46 @@ A **read-only** view of the notes currently pending human review, so a well-beha
 (`packages/plugin/src/mcp/tools-pending-review.ts`). It is registered as a plain read tool
 (after `registerUidTools` in `server.ts`), not through the module host.
 
-- **It exposes data another plugin published — nothing more.** The Acceptance review plugin
-  rewrites a read-only index at `<config-dir>/plugins/stewardship/pending-index.json` (the
-  path keeps the legacy plugin id until #115) on every review-queue refresh; this tool reads
-  it. It is the same data the review pane shows — **no new source of
-  truth, and nothing here changes review state**. `readOnlyHint: true`, empty input schema, no
-  write and no accept/baseline verb: it reports pending-ness; it cannot accept ("the accept verb
-  is in no API").
+- **It exposes data the governance module published — nothing more.** The folded governance
+  module (`src/governance/wiring.ts`) rewrites a read-only index at
+  `<plugin-dir>/governance/pending-index.json` — beside the acceptance log — on every
+  review-queue refresh (`refresh()`, via the pure serializer in
+  `kernel/governance/pending-index.ts`); this tool reads it. It is the same data the review
+  pane shows — **no new source of truth, and nothing here changes review state**.
+  `readOnlyHint: true`, empty input schema, no write and no accept/baseline verb: it reports
+  pending-ness; it cannot accept ("the accept verb is in no API").
 - **Allowlist-filtered.** The index is written from the whole vault, so every returned entry is
   filtered through the **same `isVisible` guard** the uid/read tools use, *before* it is
   reported — a sandboxed session that could learn about pending notes in territory it cannot
   read would have a path oracle otherwise. `count` is the filtered length.
-- **Graceful degrade by construction.** A missing file (the review plugin not installed or never
-  refreshed), an unparseable one, or a schema-drifted one all read as an **empty pending list,
-  never an error** (`parsePendingIndex` tolerates non-JSON, a non-object root, a missing/
-  non-array `pending`, non-object items, and unknown fields; an entry with no `path` can't be
-  allowlist-checked so it is dropped). The path is a fixed constant derived from
-  `app.vault.configDir` (respecting a renamed config dir), so no index content can redirect the
-  read.
+- **Degrade is explicit, never silent (#261).** A missing index (governance module disabled, or
+  never refreshed — the module removes the file on unmount) or an unrecognizable one reads as
+  **`published: false` with a `reason`** — still never a tool error, but **never a bare empty
+  queue** (the #133/#142 silent-zero class). A genuinely clear queue is `published: true,
+  count: 0`. Within a well-formed index, entries stay drift-tolerant: non-object items and
+  unknown fields are ignored; an entry with no `path` can't be allowlist-checked so it is
+  dropped. The path is a fixed constant relative to the plugin dir (derived from
+  `app.vault.configDir`, respecting a renamed config dir), so no index content can redirect
+  the read.
 
 ```jsonc
 // obsidian_pending_review  (no arguments)
-→ { "pending": [{"path":"Projects/alpha.md","status":"pending","agent":"claude-code/1.0.0",
+→ { "published": true,
+    "pending": [{"path":"Projects/alpha.md","status":"pending","agent":"claude-code/1.0.0",
                  "op":"obsidian_write_note","when":"…","writeCount":2}, …],
     "count": 2 }
+// governance module disabled / index never published:
+→ { "published": false, "reason": "index-not-published — …", "pending": [], "count": 0 }
 ```
 
-The descriptive fields (`status`, `agent`, `op`, `when`, `writeCount`) are the review plugin's own,
-passed through verbatim when present and well-typed. See
+The descriptive fields (`status`, `agent`, `op`, `when`, `writeCount`) are the governance
+module's own, passed through verbatim when present and well-typed. See
 [the review channel](README.md#how-the-pieces-fit--the-assent-review-channel) for how this
 closes the loop back to the human.
-</content>
+
+> **Migration note (#261).** Before the #164 decommission this index was published by the
+> standalone Stewardship plugin at `<config-dir>/plugins/stewardship/pending-index.json`.
+> That path is dead: nothing publishes it, and this tool no longer reads it. The governance
+> module — which owns the queue — publishes the index at the vault-mcp-owned path above, and
+> the tool's absent-index state became the explicit `published: false` rather than a silent
+> `{pending: [], count: 0}`.
