@@ -6,16 +6,18 @@ The FULL set is locked by `tests/tool-inventory.test.mjs`: the names documented
 here must equal the names registered in source, both directions, or the suite
 fails (the fs-expressible and scheme sub-locks from #25/task-6 still apply).
 
-**Count summary:** 17 fs-expressible + 41 always-live + 10 module-mounted
-(default enabled, settings-toggleable) = **68 base** tools, plus up to
+**Count summary:** 17 fs-expressible + 44 always-live + 10 module-mounted
+(default enabled, settings-toggleable) = **71 base** tools, plus up to
 6 conditional integration tools, 5 CLI-binary-conditional dedicated tools
 (`obsidian_note_history`, `obsidian_note_diff`, `obsidian_base_create`,
 `obsidian_plugin_install`, `obsidian_plugin_uninstall`), and 1 settings-gated
 CLI-conditional tool (`obsidian_cli`, default OFF)
-= **up to 80 total**.  The 3 Code Mode meta-tools are an alternative
+= **up to 83 total**.  The 3 Code Mode meta-tools are an alternative
 per-connection surface and are not counted (a session sees one surface or the
 other, never both).  Not counted here (outside the locked `obsidian_*` family):
-the always-on `governance_submit_revision` + `governance_revisions` (2 tools, see their section below), and
+the always-on `governance_submit_revision` + `governance_revisions` (2 tools, see their section below),
+the default-ENABLED `bases` module (`base_list` + `base_query`, 2 tools,
+Bases-API-gated — see Section 2b), and
 the default-disabled `skills` (`vault_skills_*`), `provenance`
 (`provenance_*`), `fileclass` (`fileclass_*`, 8 tools, plugin+binary-gated),
 `crosssession` (`crosssession_*`, 4 tools), and `triage` (`triage_*`, 2 tools)
@@ -30,7 +32,7 @@ the scheme write surface (`obsidian_assign_address`,
 `obsidian_refile_address`, `obsidian_renumber_address`), and subsequent
 `main` additions (in-Obsidian dev tool-runner, conformance debt register,
 the snippet tools);
-the same plugin set today registers 17 + 41 + 10 + 6 = **74**.
+the same plugin set today registers 17 + 44 + 10 + 6 = **77**.
 
 ---
 
@@ -63,7 +65,7 @@ against its `FilesystemBackend`.
 
 ---
 
-## Section 2 — live-only, always registered (41)
+## Section 2 — live-only, always registered (42)
 
 These tools depend on live Obsidian `app.*` state and cannot be expressed on the
 filesystem.  They are unconditionally registered on every `buildMcpServer` call,
@@ -119,6 +121,18 @@ Claude Code round trip).
 |---|---|
 | `obsidian_survey_status` | Report whether a note's `## Contents (Filesystem)` section is stale relative to its mirror directory. Read-only |
 | `obsidian_survey_slot` | Regenerate the section (bare skeleton, or pass `snapshot_body` for pre-written prose) and stamp `survey:` frontmatter. `dry_run: true` (mandatory, no default) reports the plan only |
+
+### `tools-quickadd.ts` — `registerQuickAddTools` (1 tool, Stage A of "QuickAdd macros as notes")
+
+Registered directly in `server.ts`, alongside `registerSchemeWriteTools` — same
+reason: this tool mutates another plugin's config (QuickAdd's own `data.json`,
+applied via QuickAdd's own `saveSettings()`), not a vault note, so it cannot go
+through the module host (`modules-mount.ts`'s `registerAll` gate refuses any
+tool whose `readOnlyHint !== true`).
+
+| Tool name | Description |
+|---|---|
+| `obsidian_quickadd_compile` | Compiles every Macro/UserScript choice note (frontmatter `quickadd-type: macro`) into QuickAdd's live config. Both modes report the would-be diff (`added`/`changed`/`removed` compiler-owned choices) plus per-note `errors` (a non-empty `errors` sets `isError: true`, so a partial compile is distinguishable from a clean one). `dry_run: true` touches nothing; `dry_run: false` applies via a scoped merge — only choices this tool itself generated (a stable `qan:`-prefixed id derived from the note's path) are added/updated/removed, every other choice is left untouched — then (de)registers the Obsidian commands via QuickAdd's own `removeCommandForChoice`/`addCommandForChoice` (`commandsRegistered: false` ⇒ config written but that API was unavailable). Refuses `suspicious_mass_removal` when a non-dry-run would find 0 choices while deleting 3+ (a cold metadata cache), and `out_of_allowlist` outright while a path allowlist is active |
 
 ### `tools-write-notes.ts` — `registerWriteNotesTool` (1 tool, kernel B1)
 
@@ -228,9 +242,12 @@ journaled, and read-only mode or an allowlist blocks both mutators.
 Registered through the module host (`modules-mount.ts` → `ModuleRegistry`), not
 directly: `server.ts` calls `mountModules`, and each module's tools register
 only when the module is enabled (`settings.modules.<id>.enabled`, defaulting to
-the module's own `enabled: true`).  Both modules ship default-ON, so these 9
-are present on a stock connection; a settings toggle takes effect on the next
-session connect.
+the module's own `enabled: true`).  These modules ship default-ON, so the 10
+`obsidian_*` tools below are present on a stock connection; a settings toggle
+takes effect on the next session connect.  The `bases` module is also
+default-ON but its two tools are named `base_*`, outside the locked
+`obsidian_*` family and the (10) count — documented in its subsection below,
+locked by `tests/bases-module.test.mjs`'s own inventory check.
 
 ### `tools-scheme.ts` — `registerSchemeTools` via the `scheme` module (6 tools)
 
@@ -251,6 +268,41 @@ session connect.
 | `obsidian_resolve_term` | Token → canonical entry; path → its terms; parse-only mode |
 | `obsidian_validate_terms` | One note's frontmatter → vocabulary findings, report-only |
 | `obsidian_list_vocabulary` | Entries of a kind (tag/property/type/term), optionally scoped |
+
+### `tools-bases.ts` — `registerBasesTools` via the `bases` module (2 tools, #243)
+
+Evaluated Base result sets for agents. Obsidian's public Bases API (1.10+)
+evaluates a `.base` query only into a rendered view, so `base_query` opens the
+base in a **hidden background leaf** (detached `WorkspaceLeaf` parented under
+an invisible fixed-position host — real to the engine, absent from the
+human's workspace: no tab, no flash, no focus steal), waits for the engine's
+first completed data push, materializes the rows via the public
+`BasesEntry.getValue`, and detaches the leaf in a `finally` — success,
+failure, and timeout alike. **Full engine fidelity** (base + view filters,
+formulas, sort, the view's own limit): Obsidian computes; the module never
+parses the Bases expression language. Read-only module, **default ENABLED**
+(a pure read surface over rows the session could already assemble
+note-by-note); **feature-gated** — the registrar registers nothing on an
+Obsidian without the public Bases API. Queries are **serialized** (one
+capture at a time — the hidden leaf is a global resource) and **time-boxed**
+(`modules.bases.config.queryTimeoutMs`, default 30000ms — the engine's scan
+is heavily throttled while the window is hidden) with a typed, retryable
+`base_timeout` refusal; rows are capped (`rowCap`, default 500; the tool's
+`limit` clamps to it) with `truncated` + the pre-cap total. Allowlist: a
+hidden `.base` file is invisible to `base_list` and refused
+(`out_of_allowlist`) by `base_query`; result rows for hidden notes drop
+silently, disclosed only as a boolean `some_rows_hidden` (never a count —
+the visible-totals precedent against cardinality oracles). **Residual under
+an allowlist**, inherent to "Obsidian computes" (the same class as
+`obsidian_check_links`' documented resolution oracle): the engine evaluates
+over the whole vault BEFORE the row filter, so a formula value on a visible
+row can be computed from hidden notes, and a view's own `limit` consumes
+slots on hidden rows — visible rows past that limit silently never appear.
+
+| Tool name | R/W | Description |
+|---|---|---|
+| `base_list` | R | Every visible `.base` file with its declared views (name, type, column count); per-file `parse_error` / `invalid_shape` markers for broken YAML |
+| `base_query` | R | Evaluate one declared view (`{path, view?, limit?}`; default the file's first view) → `{columns, rows: [{path, properties}], total, truncated}`; values stringified via the engine's own `Value.toString()`; typed refusals `not_a_base` / `out_of_allowlist` / `not_found` / `base_parse_error` / `view_not_found` / `base_timeout` |
 
 ---
 
@@ -348,37 +400,49 @@ lock-claim precedent).
 
 ### `tools-triage.ts` — `registerTriageTools` via the `triage` module (2 tools)
 
-The inbox-triage surface (#221 phase 2): the disposition substrate's second
-instance, successor to the vault's retired `dispose-inbox-item` QuickAdd flow.
-Ten dispositions declared as data (`kernel/triage/descriptors.ts` — discard,
-route, establish-new-home, convert-to-action, develop-as-knowledge, register,
-curate-as-link, defer-to-someday, archive-as-record, escalate); **none confers
-standing**, so per the #221 authority axis all ten are `authority: "agent"` and
-the module has **no pane UI at all** (queue views for humans are native Bases
-over frontmatter; bespoke pane UI is reserved for gesture-gated authority
-dispositions, of which this instance has none). The single-source table drives
-the `triage_dispose` enum, its description, and the manifest directory.
+The inbox-triage surface (#221 phase 2, **phase-3 shape per #241**): the
+disposition substrate's second instance, successor to the vault's retired
+`dispose-inbox-item` QuickAdd flow. The built-in set is the three
+**primitives** (`kernel/triage/descriptors.ts` — trash, move, stamp; the
+frozen substrate instance, all `authority: "agent"`); everything richer is a
+**human-declared config row** (`declaredDispositions`: `{id, label?,
+description?, action: trash|move|stamp|choice, patch?, destination?,
+inPlace?, choice?}`), with **one default declared row — escalate**
+(stamp-in-place; its patch/tag configured via `escalateFrontmatter`,
+deletable like any row). The tool surface renders from the **merged**
+(built-in ∪ declared) table, single-sourced; id collisions are refused
+loudly. Built-in descriptions are human-overridable (`builtinDescriptions`)
+in the same description field declared rows carry. The module has **no pane
+UI at all** (queue views for humans are native Bases; nothing here confers
+standing).
 
-Inbox recognition, fallback destinations, and the frontmatter patches are all
-**per-vault config** (`modules.triage.config`) whose defaults mirror the legacy
-flow's live-vault behavior (`inboxMarkers: [" Inbox for "]`, action patch
-`tags+note/task, status open, priority normal`, someday patch `status:
-someday`, escalate patch `tags+attention/user`) — nothing vault-semantic is
-hardwired. Moves ride the **shared link-healing move primitive**
-(`tools-vault-write.ts`'s `moveOne` — `fileManager.renameFile`, parents
-created, never overwrites); discard is Obsidian's recoverable trash, never a
-hard delete; frontmatter transitions go through `processFrontMatter` with the
-shared accept-forbidden rule re-checked over every patch. `triage_dispose` is
-**dry-run by default** (the #214 report-first discipline) and its computed
-destination is allowlist-re-checked in the handler (it is not a call
-argument). With the scheme module enabled the dispose report carries a
-`scheme` advisory (the note's own address + expected folder); with scheme
-disabled the field is simply absent.
+A declared **`choice` row** binds a QuickAdd choice through the shared #225
+`executeChoice` seam (`quickadd-choice.ts`, the same path
+`obsidian_run_command`'s `variables` form rides): the agent-facing surface is
+the disposition id ONLY — the binding is human-only-mutable config, so the
+`quickadd:*`/`js-engine:*` opaque-execution denies are not weakened. Choice
+rows **cannot dry-run** (typed `choice_dry_run_unsupported` without an
+explicit `dry_run: false`) and report `effects_unknown` (script writes
+surface in the governance review queue via non-human attribution).
+
+Moves ride the **shared link-healing move primitive** (`moveOne`), never
+overwrite, and honor the configured **`moveWhitelist`/`moveBlacklist`**
+(path prefixes; enforced at plan AND re-checked at apply — `move_denied`).
+Trash is Obsidian's recoverable trash; frontmatter goes through
+`processFrontMatter` with the shared accept-forbidden rule re-checked over
+every patch. `triage_dispose` is **dry-run by default** and its computed
+destination is allowlist-re-checked in the handler. `triage_queue` serves the
+marker queue (default) or a **Base-backed queue** (`{base, view?}` or a
+config-named `{queue}` from `queues`) — evaluated rows via the bases module's
+shared `queryBaseRows` capture seam, allowlist discipline identical to
+`base_query`, typed `bases_unavailable` when the Bases API is absent or the
+bases module disabled. A phase-2 config stays sane (legacy keys ignored;
+`escalateFrontmatter` still feeds the default escalate row).
 
 | Tool name | R/W | Description |
 |---|---|---|
-| `triage_queue` | R | Inbox notes (any ancestor folder matching a configured marker; the inbox's own folder note excluded), allowlist-visible only, with path/inbox/created/modified/age/frontmatter type+status — oldest first, capped (`limit`, default 50) with `truncated` + the total |
-| `triage_dispose` | W | Apply ONE of the ten dispositions to an inbox note (`{path, disposition, target?, dry_run?}`); **dry-run by default**; `target` (a destination folder) required for route/establish-new-home/register/curate-as-link, an override for the config-backed movers, refused for discard/escalate; typed refusals (`not_inbox`, `target_required`, `target_unsupported`, `destination_unresolved`, `destination_occupied`, `out_of_allowlist`, `accept_forbidden`) |
+| `triage_queue` | R | Default: inbox notes (any ancestor folder matching a configured marker; the inbox's own folder note excluded), allowlist-visible only, with path/inbox/created/modified/age/frontmatter type+status — oldest first, capped (`limit`, default 50) with `truncated` + the total. With `base`/`view` or `queue`: the evaluated rows of that `.base` (engine order, `{path, properties}`), rows allowlist-filtered with boolean-only `some_rows_hidden`; typed refusals (`bases_unavailable`, `unknown_queue`, `invalid_arguments`, plus `base_query`'s own) |
+| `triage_dispose` | W | Apply ONE merged-table disposition to an inbox note (`{path, disposition, target?, dry_run?}`); **dry-run by default** (choice rows refuse without explicit `dry_run: false`); `target` required for the built-in move (and declared movers without a destination), an override for rows with one, refused for trash / in-place stamps / choice rows; typed refusals (`not_inbox`, `unknown_disposition`, `target_required`, `target_unsupported`, `invalid_target`, `patch_unresolved`, `move_denied`, `destination_occupied`, `out_of_allowlist`, `choice_dry_run_unsupported`, `accept_forbidden`) |
 
 ---
 
@@ -466,7 +530,7 @@ it stood then:
   default-off "Raw CLI proxy" setting is on)
 
 **No tool in the observed-44 list was unaccounted for in source.**  Under the
-same plugin set the current surface registers 74 (see the count summary); the
+same plugin set the current surface registers 75 (see the count summary); the
 source↔doc lock in `tests/tool-inventory.test.mjs` keeps this file current, and
 any future live observation should be checked against that lock rather than
 this historical snapshot.
@@ -482,6 +546,7 @@ this historical snapshot.
 | `packages/plugin/src/mcp/tools-core.ts` | `registerCoreTools` | 2 always-live |
 | `packages/plugin/src/mcp/tools-vault-write.ts` | `registerVaultWriteTools` | 2 always-live |
 | `packages/plugin/src/mcp/tools-scheme-write.ts` | `registerSchemeWriteTools` | 3 always-live |
+| `packages/plugin/src/mcp/tools-quickadd.ts` | `registerQuickAddTools` | 1 always-live |
 | `packages/plugin/src/mcp/tools-complementary.ts` | `registerComplementaryTools` | 9 always-live |
 | `packages/plugin/src/mcp/tools-nav.ts` | `registerNavTools` | 11 always-live |
 | `packages/plugin/src/mcp/tools-locks.ts` | `registerLockTools` | 4 always-live |
