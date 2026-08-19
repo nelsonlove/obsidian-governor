@@ -1,72 +1,81 @@
-// tools-triage.ts — the inbox-triage module's tool surface (#221, phase 2):
-// the disposition substrate's second instance given a real agent surface. TWO
-// tools, no pane:
+// tools-triage.ts — the inbox-triage module's tool surface (#221 phase 2,
+// reshaped by #241 phase 3): the disposition substrate's second instance
+// given a real agent surface. TWO tools, no pane:
 //
-//   triage_queue   — the agent's view of the inbox queue: inbox notes
-//                    (allowlist-visible only), oldest first, capped
-//                    (READ-ONLY). Humans use native Bases over frontmatter —
-//                    this duplicates nothing native, and deliberately emits
-//                    nothing view-like.
+//   triage_queue   — the agent's view of a triage queue (READ-ONLY). Default:
+//                    the inbox-marker queue (notes under a configured inbox
+//                    folder, oldest first). With `base`/`view` — or a
+//                    config-named `queue` — the queue is the EVALUATED rows
+//                    of a `.base` file, computed by Obsidian's own Bases
+//                    engine through the bases module's shared capture seam
+//                    (tools-bases.ts's queryBaseRows): the human authors the
+//                    queue predicate in the native Bases UI, and the same
+//                    definition drives the human view AND the agent sweep.
 //   triage_dispose — the ONE guarded mutating verb, disposition selected from
-//                    the ten-verb table (kernel/triage/descriptors.ts).
-//                    DRY-RUN BY DEFAULT (the #214 report-first discipline):
-//                    `dry_run: false` is the explicit opt-in to apply.
+//                    the MERGED table: three built-in primitives (trash /
+//                    move / stamp) ∪ human-declared config rows
+//                    (kernel/triage/descriptors.ts + config.ts). DRY-RUN BY
+//                    DEFAULT for the built-in actions (#214 report-first);
+//                    a declared `choice` row is opaque and CANNOT dry-run —
+//                    it refuses typed until the caller passes an explicit
+//                    `dry_run: false`.
 //
-// ── The authority axis, applied (#221) ──────────────────────────────────────
+// ── The authority axis, applied (#221/#241) ─────────────────────────────────
 //
-// None of the ten dispositions confers standing — each is a mechanical,
-// reversible write: a move through the SAME shared move primitive every other
-// move tool uses (tools-vault-write.ts's `moveOne`, the link-healing
-// fileManager.renameFile path — see obsidian-triage-source.ts), a frontmatter
-// transition via processFrontMatter, or Obsidian's recoverable trash (never a
-// hard delete). So all ten are `authority: "agent"` and there is NO pane UI
-// here at all. NO ACCEPTANCE SEMANTICS ANYWHERE: the module reads no
-// acceptance state, writes no acceptance field, and the shared
+// No disposition confers standing — built-ins are mechanical, reversible
+// writes (the shared link-healing move primitive, processFrontMatter,
+// Obsidian's recoverable trash), and a declared `choice` row runs a QuickAdd
+// choice the HUMAN bound in module config. The agent-facing surface is the
+// disposition id only; the binding is config (human-only-mutable), so this
+// does NOT weaken the quickadd:*/js-engine:* opaque-execution denies — an
+// agent still cannot name a macro, only pick from the human's menu. A choice
+// script's effects are not journaled as effects (unknown to this tool); they
+// surface in the governance review queue via non-human attribution, the
+// existing audit net. NO ACCEPTANCE SEMANTICS ANYWHERE: the shared
 // accept-forbidden rule (@vault-mcp/core) is re-checked over every
 // frontmatter patch before it is written (config validation already refused
 // acceptance-carrying patches loudly).
 //
 // ── Vault semantics are configuration ───────────────────────────────────────
 //
-// Inbox recognition (inboxMarkers), fallback destinations, and the
-// frontmatter patches are all per-vault config (kernel/triage/config.ts);
-// defaults mirror the live vault conventions the legacy `dispose-inbox-item`
-// flow implemented, and nothing scheme-semantic is hardwired here.
+// Inbox recognition (inboxMarkers), the stamp/escalate patches, the move
+// whitelist/blacklist, the declared disposition rows, and the named queues
+// are all per-vault config (kernel/triage/config.ts); nothing scheme-semantic
+// is hardwired here.
 //
 // ── Allowlist discipline ────────────────────────────────────────────────────
 //
-// The queue filters the listing through `host.visible` BEFORE reading any
-// stat/frontmatter (read-boundary rule). `triage_dispose`'s `path` argument
-// is guard-checked at the interception point; the COMPUTED destination is not
-// a call argument, so the handler re-checks it with the same filter before
-// planning anything to happen to it (the scheme-write discipline), in dry-run
-// and apply alike.
-//
-// ── Scheme integration (optional, degrades cleanly) ─────────────────────────
-//
-// When the scheme module is enabled, dispose reports a `scheme` advisory —
-// the note's own address and the folder the scheme expects it in
-// (obsidian_expected_location's answer) — as a routing hint. With scheme
-// disabled or unavailable the field is simply absent; nothing else changes.
+// The marker queue filters the listing through `host.visible` BEFORE reading
+// any stat/frontmatter (read-boundary rule); base-backed queues inherit
+// base_query's exact discipline through the shared seam (hidden base refused
+// `out_of_allowlist`, result rows filtered, boolean-only `some_rows_hidden`).
+// `triage_dispose`'s `path` argument is guard-checked at the interception
+// point; the COMPUTED destination is not a call argument, so the handler
+// re-checks it with the same filter before planning anything to happen to it
+// (the scheme-write discipline), in dry-run and apply alike — and the move
+// whitelist/blacklist is enforced at plan time AND re-checked at apply.
 //
 // Obsidian-free by construction: the vault arrives through the injected
-// TriageSource — every handler is headless-testable. The live adapter lives
-// in obsidian-triage-source.ts (it imports the shared move primitive, which
-// needs the real `obsidian` types).
+// TriageSource and the bases machinery through ctx.baseQuery — every handler
+// is headless-testable. The live adapters are obsidian-triage-source.ts and
+// (via modules-mount.ts) obsidian-bases-source.ts.
 
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { acceptForbiddenReason } from "@vault-mcp/core";
 import { ok, fail, okError, codedError } from "./helpers.js";
 import type { GuardSettings } from "../guard.js";
+import { allowlistActive, type BaseRowsRefusal, type BaseRowsResult } from "./tools-bases.js";
 import {
   applyFrontmatterPatch,
   inboxFolderOf,
+  mergedDispositionsOf,
+  mergedIds,
+  mergedLines,
+  moveDenied,
   planDispose,
   sortQueue,
   triageConfigOf,
-  triageDispositionIds,
-  triageDispositionLines,
   type QueueRow,
   type TriageConfig,
 } from "../kernel/triage/index.js";
@@ -97,6 +106,14 @@ export interface TriageSource {
   trashNote(path: string): Promise<void>;
   /** Atomically edit a note's frontmatter (processFrontMatter live). */
   updateFrontmatter(path: string, apply: (fm: Record<string, unknown>) => void): Promise<void>;
+  /** Execute a human-bound QuickAdd choice (a declared `choice` disposition)
+   * with variables — the shared #225 executeChoice seam
+   * (mcp/quickadd-choice.ts live). Typed refusals for unavailable/unresolved;
+   * a throw from the choice's own script propagates. */
+  runChoice(
+    binding: string,
+    variables: Record<string, string>,
+  ): Promise<{ ok: true; choice: string } | { ok: false; code: string; message: string }>;
 }
 
 /** An inert source — the mount's default when no vault is injected
@@ -113,14 +130,20 @@ export function emptyTriageSource(): TriageSource {
     move: async () => noVault(),
     trashNote: async () => noVault(),
     updateFrontmatter: async () => noVault(),
+    runChoice: async () => ({
+      ok: false,
+      code: "quickadd_unavailable",
+      message: "no vault source injected — choice dispositions need the live adapter",
+    }),
   };
 }
 
 export interface TriageToolsCtx {
   /** The merged `modules.triage.config` (defaults ∪ user override). */
   config: Record<string, unknown>;
-  /** Guard settings accessor — retained for parity with the other module
-   * ctxs (the allowlist arrives pre-applied via `visible`). */
+  /** Guard settings accessor — gates the `some_rows_hidden` disclosure for
+   * base-backed queues (the tools-bases rule) and keeps parity with the
+   * other module ctxs. */
   getSettings?: () => GuardSettings;
   /** The host's allowlist filter (`host.visible`). Absent ⇒ nothing filtered,
    * matching visiblePaths with no allowlist. */
@@ -132,6 +155,17 @@ export interface TriageToolsCtx {
    * the module degrades cleanly, it never depends on scheme.
    */
   schemeExpected?: (path: string) => { address: string; expected_folder: string | null } | null;
+  /**
+   * The bases module's evaluated-rows seam (tools-bases.ts's queryBaseRows,
+   * bound to the live BasesSource + the bases module config by
+   * modules-mount.ts). Absent ⇒ base-backed queues refuse typed
+   * (`bases_unavailable`); the marker queue is unaffected.
+   */
+  baseQuery?: (args: {
+    path: string;
+    view?: string;
+    limit?: number;
+  }) => Promise<{ refusal: BaseRowsRefusal } | { result: BaseRowsResult }>;
   /** Injectable clock for age computation (tests). Absent ⇒ run clock. */
   now?: () => Date;
 }
@@ -145,20 +179,32 @@ export function registerTriageTools(server: McpServer, source: TriageSource, ctx
   const now = ctx.now ?? (() => new Date());
   // Config is resolved per call (the per-call freshness discipline every tool
   // layer follows) — but from the ctx's merged record, so a module toggle
-  // still lands on the next connect like every module.
+  // still lands on the next connect like every module. The disposition ENUM
+  // and description are necessarily registration-time snapshots of the same
+  // config (the SDK fixes a tool's schema at registration); the planner
+  // re-resolves per call, so a raced config edit can only make a call refuse
+  // `unknown_disposition`, never run a stale row.
   const cfg = (): TriageConfig => triageConfigOf(ctx.config);
+  const registrationTable = mergedDispositionsOf(cfg());
+  const choiceIds = registrationTable.filter((d) => d.action === "choice").map((d) => d.id);
 
   server.registerTool(
     "triage_queue",
     {
-      title: "List the inbox triage queue",
+      title: "List a triage queue",
       description:
-        "List the notes currently sitting in inbox positions — the agent's view of the triage queue (humans use " +
-        "native Bases; this emits data, not a view). A note is an inbox item when any ancestor folder's name " +
-        "contains one of the configured inbox markers (default \" Inbox for \"); the inbox's own folder note is " +
-        "not an item. Returns path, enclosing inbox, created/modified times, age in days, and the note's " +
-        "frontmatter `type`/`status`, OLDEST FIRST, capped by `limit` (`truncated: true` + the total when more " +
-        "exist). Only allowlist-visible notes are listed or read. Read-only.",
+        "List a triage queue for the agent sweep (humans use native Bases; this emits data, not a view). " +
+        "DEFAULT (no base/queue): the inbox-marker queue — notes with any ancestor folder whose name contains a " +
+        "configured inbox marker (default \" Inbox for \"; the inbox's own folder note is not an item), with " +
+        "path, enclosing inbox, created/modified times, age in days, and frontmatter `type`/`status`, OLDEST " +
+        "FIRST. With `base` (a vault-relative .base path, optionally `view`) — or `queue`, a config-declared " +
+        "named queue (modules.triage.config.queues) — the queue is the EVALUATED rows of that Base, computed by " +
+        "Obsidian's own Bases engine (full fidelity: filters, formulas, sort) through the bases module's capture " +
+        "path, in the Base's own order: each row's note path plus the view's columns' values. Base-backed queues " +
+        "refuse typed (`bases_unavailable`) when the Bases API is absent or the bases module is disabled; the " +
+        "marker queue still works. Only allowlist-visible notes are listed or read (base rows are filtered; a " +
+        "hidden `.base` refuses `out_of_allowlist`). Capped by `limit` (`truncated: true` + the total when more " +
+        "exist). Read-only.",
       inputSchema: {
         limit: z
           .number()
@@ -167,13 +213,82 @@ export function registerTriageTools(server: McpServer, source: TriageSource, ctx
           .max(QUEUE_LIMIT_MAX)
           .default(QUEUE_LIMIT_DEFAULT)
           .describe(`Maximum rows to return (default ${QUEUE_LIMIT_DEFAULT}, max ${QUEUE_LIMIT_MAX}).`),
+        base: z
+          .string()
+          .min(1)
+          .optional()
+          .describe('Vault-relative `.base` path to evaluate as the queue, e.g. "Views/Acceptance.base".'),
+        view: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Declared view name within `base` (default: the file's first view). Requires `base`."),
+        queue: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("A config-declared named queue id (modules.triage.config.queues). Mutually exclusive with `base`."),
       },
       annotations: RO,
     },
-    async ({ limit }: { limit?: number }) => {
+    async ({ limit, base, view, queue }: { limit?: number; base?: string; view?: string; queue?: string }) => {
       try {
         const config = cfg();
         const cap = limit ?? QUEUE_LIMIT_DEFAULT;
+
+        // ── argument shape ────────────────────────────────────────────────
+        if (queue !== undefined && base !== undefined) {
+          return codedError("invalid_arguments", "pass `queue` OR `base`, not both");
+        }
+        if (view !== undefined && base === undefined) {
+          return codedError(
+            "invalid_arguments",
+            "`view` rides the `base` argument — a named queue's view is declared in its config row",
+          );
+        }
+
+        // ── base-backed queue (explicit base, or a config-named queue) ────
+        let basePath = base;
+        let baseView = view;
+        if (queue !== undefined) {
+          const decl = config.queues.find((q) => q.id === queue);
+          if (!decl) {
+            const known = config.queues.map((q) => q.id);
+            return codedError(
+              "unknown_queue",
+              `no declared queue '${queue}'` +
+                (known.length ? ` — declared: ${known.join(", ")}` : " — modules.triage.config.queues declares none"),
+            );
+          }
+          basePath = decl.base;
+          baseView = decl.view;
+        }
+        if (basePath !== undefined) {
+          if (!ctx.baseQuery) {
+            return codedError(
+              "bases_unavailable",
+              "base-backed queues need the bases module's capture path, which this host did not wire",
+            );
+          }
+          const outcome = await ctx.baseQuery({ path: basePath, view: baseView, limit: cap });
+          if ("refusal" in outcome) return codedError(outcome.refusal.code, outcome.refusal.message);
+          const r = outcome.result;
+          return ok({
+            ...(queue !== undefined ? { queue } : {}),
+            base: basePath,
+            view: r.view,
+            view_type: r.viewType,
+            columns: r.columns,
+            // The Base's own order IS the queue order — the human declared it.
+            notes: r.rows.map((row) => ({ path: row.path, properties: row.values })),
+            total: r.total,
+            returned: r.rows.length,
+            truncated: r.truncated,
+            ...(allowlistActive(ctx) ? { some_rows_hidden: r.someRowsHidden } : {}),
+          });
+        }
+
+        // ── the marker queue (unchanged phase-2 behavior) ─────────────────
         const rows: QueueRow[] = [];
         // Visible-filter BEFORE any stat/frontmatter read (read-boundary rule).
         for (const path of vis(source.paths())) {
@@ -219,35 +334,44 @@ export function registerTriageTools(server: McpServer, source: TriageSource, ctx
     {
       title: "Dispose of an inbox item",
       description:
-        "Dispose of one inbox note — the ten-verb successor to the retired dispose-inbox-item flow, every verb an " +
-        "ordinary reversible agent write (none confers standing; nothing here touches acceptance). DRY-RUN BY " +
-        "DEFAULT: the call reports exactly what would change and writes nothing until `dry_run: false`. " +
-        "Dispositions: " +
-        triageDispositionLines().join("; ") +
-        ". `target` names a destination FOLDER (the note keeps its filename): required for route / " +
-        "establish-new-home / register / curate-as-link; optional (overriding the configured destination) for " +
-        "convert-to-action / develop-as-knowledge / defer-to-someday / archive-as-record; refused for discard / " +
-        "escalate. Moves ride the link-healing move primitive and never overwrite (`destination_occupied`); " +
-        "frontmatter patches come from module config (array values union, scalars overwrite). When the scheme " +
-        "module is enabled the report includes a `scheme` advisory (the note's address + its expected folder); " +
-        "with scheme disabled the field is simply absent.",
+        "Dispose of one inbox note using the MERGED disposition table — three built-in primitives (trash / move / " +
+        "stamp) plus the human-declared rows in modules.triage.config.declaredDispositions (default: one declared " +
+        "row, escalate). Every disposition is an ordinary agent write (none confers standing; nothing here touches " +
+        "acceptance). DRY-RUN BY DEFAULT for built-in actions: the call reports exactly what would change and " +
+        "writes nothing until `dry_run: false`. Dispositions: " +
+        mergedLines(registrationTable).join("; ") +
+        ". `target` names a destination FOLDER (the note keeps its filename): required for the built-in move (and " +
+        "declared moving rows without a configured destination), an override for rows with one, refused for " +
+        "trash / in-place stamps / choice rows. Move destinations are checked against the configured " +
+        "moveWhitelist/moveBlacklist (`move_denied`), enforced at plan time and re-checked at apply. Moves ride " +
+        "the link-healing move primitive and never overwrite (`destination_occupied`); frontmatter patches come " +
+        "from module config or the declared row (array values union, scalars overwrite) and can never write " +
+        "acceptance. A declared `choice` row executes its human-bound QuickAdd choice" +
+        (choiceIds.length ? ` (here: ${choiceIds.join(", ")})` : "") +
+        " — opaque, so it CANNOT dry-run: it refuses until you pass an explicit `dry_run: false`, and its " +
+        "script's effects are not itemized here (they surface in the governance review queue via non-human " +
+        "attribution). When the scheme module is enabled the report includes a `scheme` advisory (the note's " +
+        "address + its expected folder); with scheme disabled the field is simply absent.",
       inputSchema: {
         path: z.string().min(1).describe("Vault-relative path of the inbox note to dispose of."),
         disposition: z
-          .enum(triageDispositionIds() as [string, ...string[]])
-          .describe("Which disposition to apply — one of the ten declared verbs."),
+          .enum(mergedIds(registrationTable) as [string, ...string[]])
+          .describe("Which disposition to apply — one of the merged (built-in ∪ declared) table's ids."),
         target: z
           .string()
           .optional()
           .describe(
-            "Destination FOLDER (vault-relative) for the moving dispositions. Required for route / " +
-              "establish-new-home / register / curate-as-link; overrides the configured destination for the " +
-              "config-backed ones; refused for discard / escalate.",
+            "Destination FOLDER (vault-relative) for the moving dispositions. Required for the built-in move " +
+              "(and declared moving rows without a configured destination); overrides a row's configured " +
+              "destination; refused for trash / in-place stamps / choice rows.",
           ),
         dry_run: z
           .boolean()
           .default(true)
-          .describe("DEFAULT TRUE: report what would change without writing. Pass false to apply."),
+          .describe(
+            "DEFAULT TRUE: report what would change without writing. Pass false to apply. A declared `choice` " +
+              "disposition cannot be previewed and refuses until this is explicitly false.",
+          ),
       },
       annotations: RW,
     },
@@ -270,6 +394,16 @@ export function registerTriageTools(server: McpServer, source: TriageSource, ctx
         const { plan } = planned;
 
         if (!source.exists(path)) return codedError("not_found", `not a note: ${path}`);
+
+        // A choice row is opaque — no preview exists. Refuse typed until the
+        // caller explicitly opts out of the dry-run default.
+        if (plan.choice !== null && dry) {
+          return codedError(
+            "choice_dry_run_unsupported",
+            `disposition '${plan.disposition.id}' runs a human-bound QuickAdd choice and cannot be previewed — ` +
+              "pass an explicit dry_run: false to execute it",
+          );
+        }
 
         // The computed destination is not a call argument, so the guard never
         // saw it — re-check it against the allowlist ourselves, dry-run and
@@ -313,15 +447,43 @@ export function registerTriageTools(server: McpServer, source: TriageSource, ctx
             action: plan.disposition.action,
             ...(plan.moveTo !== null ? { move_to: plan.moveTo } : {}),
             ...(plan.patch !== null ? { frontmatter_patch: plan.patch } : {}),
+            ...(plan.choice !== null ? { choice_binding: plan.choice } : {}),
           },
-          effect: plan.disposition.effect,
+          description: plan.disposition.description,
           ...(scheme !== null ? { scheme } : {}),
         };
 
         if (dry) return ok({ ...base, applied: false });
 
+        // ── apply: a choice row hands off to the human-bound QuickAdd choice
+        //    through the shared #225 seam ──────────────────────────────────
+        if (plan.choice !== null) {
+          const run = await source.runChoice(plan.choice, {
+            path,
+            disposition: plan.disposition.id,
+          });
+          if (!run.ok) return codedError(run.code, run.message);
+          return ok({
+            ...base,
+            applied: true,
+            choice: run.choice,
+            // The script's writes are not visible from here: no effects claim
+            // (the journal records the disposition id; script writes surface
+            // in the governance review queue via non-human attribution).
+            effects_unknown: true,
+          });
+        }
+
         // ── apply: frontmatter first (while the path is stable), then the
         //    move/trash — the legacy flow's order ─────────────────────────────
+        // The move whitelist/blacklist RE-CHECK at apply time (the ruling's
+        // "enforced at plan time AND re-checked at apply"), against a FRESH
+        // config read, beside the allowlist re-check above.
+        if (plan.moveTo !== null) {
+          const folder = plan.moveTo.split("/").slice(0, -1).join("/");
+          const denied = moveDenied(folder, cfg());
+          if (denied) return codedError("move_denied", denied);
+        }
         let patchApplied = false;
         if (plan.patch !== null) {
           const patch = plan.patch;

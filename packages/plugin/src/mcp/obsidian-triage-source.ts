@@ -16,6 +16,7 @@
 
 import { TFile, type App } from "obsidian";
 import { moveOne } from "./tools-vault-write.js";
+import { executeQuickAddChoice } from "./quickadd-choice.js";
 import type { TriageSource } from "./tools-triage.js";
 
 export function obsidianTriageSource(app: App): TriageSource {
@@ -42,5 +43,11 @@ export function obsidianTriageSource(app: App): TriageSource {
       if (!f) throw new Error(`not a note: ${p}`);
       await app.fileManager.processFrontMatter(f, (fm: Record<string, unknown>) => apply(fm));
     },
+    // A declared `choice` disposition's execution — the SHARED #225
+    // executeChoice seam (quickadd-choice.ts), the same path
+    // obsidian_run_command's `variables` form rides. The binding arrives from
+    // human-only module config; nothing here consults or bypasses the
+    // cli-policy denies (see the seam's header).
+    runChoice: (binding, variables) => executeQuickAddChoice(app, { binding }, variables),
   };
 }

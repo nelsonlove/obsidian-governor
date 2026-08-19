@@ -171,17 +171,21 @@ Known-overstated section instead — see its header for the format.
 
 ## docs/triage.md
 
-Reviewed at authoring time (#221 phase 2). Each claim is substantiated by
-`tests/triage-module.test.mjs`: the all-agent authority table + empty
-gesture-gated set, the acceptance-patch sanitize-at-coercion pin, the
-handler's accept-forbidden re-check, and the computed-destination
-`out_of_allowlist` refusal (dry-run included).
+Reviewed at authoring time (#221 phase 2), re-reviewed for the phase-3
+rewrite (#241). Each claim is substantiated by
+`tests/triage-module.test.mjs`: the all-agent built-in table + empty
+gesture-gated set, the merged-table collision/enum pins (no accept-shaped
+id, a raw command id is not a disposition), the acceptance-patch
+refuse-at-validation + sanitize/drop-at-coercion pins (config patches AND
+declared-row patches) with the handler's accept-forbidden re-check belt,
+the destination_occupied / out_of_allowlist / move_denied refusals (dry-run
+included, apply re-check proven), and — for the move-primitive claim — the
+shared `moveOne` seam pinned by `tests/link-healing.test.mjs`'s source scan.
 
 - The **authority axis** sorts every verb with one rule: a disposition that **confers standing** (accept, adopt, revert-of-standing) is a human gesture — never an API; a disposition that is an ordinary reversible write is agent-expressible through the guarded path.
-- **Inbox-triage instance** (`kernel/triage/descriptors.ts`): ten verbs, **all `authority: "agent"`** — none confers standing, every effect is a reversible guarded write — so per Nelson's native-tooling rule there is nothing to gesture-gate and no bespoke UI to build.
-- A patch carrying an acceptance field is refused at validation AND sanitized to the clean default at coercion — it can never reach a note.
-- **Frontmatter transitions go through `processFrontMatter`**, and the shared accept-forbidden rule (`@vault-mcp/core`) is re-checked over every effective patch before it is written.
-- The **computed destination is not a call argument**, so the guard's argument check never sees it — the handler re-checks it against the allowlist itself (the scheme-write discipline), in dry-run and apply alike.
+- Declared rows are *not* runtime additions to that table: they are **configuration** the planner interprets — human-only-mutable data whose authority answer is uniform (every declared row is exercised by an agent through the one guarded `triage_dispose` tool; none confers standing).
+- A patch carrying an acceptance field is refused at validation AND sanitized/dropped at coercion — it can never reach a note.
+- Moves ride the shared link-healing move primitive (`moveOne` — `fileManager.renameFile`, parents created, **never an overwrite**: `destination_occupied`); trash is Obsidian's trash; frontmatter transitions go through `processFrontMatter` with the shared accept-forbidden rule re-checked over every effective patch.
 
 
 ## Known-overstated (tracked, not approved-as-true)
