@@ -59,7 +59,20 @@ export class RecordImmutableError extends Error {
  * is that. Deliberately keyed on the op name and never on argument shapes: an
  * argument-sniffed exemption ("looks like an append") is exactly the kind of
  * guess a different tool's arguments could satisfy while rewriting the file.
- * (`obsidian_append_at_heading` inserts MID-file, so it is not exempt.)
+ * (`obsidian_append_at_heading` CAN insert mid-file — its heading-absent +
+ * create_if_missing branch happens to append at EOF, but the common branch
+ * does not, and an exemption keyed on a tool whose contract is only
+ * sometimes an append is exactly the guess this set avoids.)
+ *
+ * KNOWN, deliberately NOT exempted: `crosssession_post` (tools-crosssession.ts)
+ * is the one other tool whose whole contract is a dated end-of-file append.
+ * It is unreachable by this check today — its target arrives as `channel`,
+ * which is not in guard.ts's PATH_KEYS, so `collectPaths` yields nothing to
+ * check — so exempting it would change no behavior now while WIDENING a
+ * protective set on a guess about a future argument shape. Pinned by a test
+ * below the exemption test; the day `channel` becomes path-keyed (or the tool
+ * gains a `path`), appending to a record-flagged channel note starts refusing
+ * and this set is where that gets decided, on purpose, by a human.
  */
 export const RECORD_EXEMPT_OPS: ReadonlySet<string> = new Set(["obsidian_append_note"]);
 
