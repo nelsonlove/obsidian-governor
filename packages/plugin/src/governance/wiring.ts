@@ -62,10 +62,11 @@
 // ============================================================================
 
 import type { AcceptOpts } from "../kernel/governance/accept.js";
-import { Component, TFile, MarkdownView, Notice, type WorkspaceLeaf, type Plugin, type DataAdapter } from "obsidian";
+import { Component, TFile, TFolder, MarkdownView, Notice, type WorkspaceLeaf, type Plugin, type DataAdapter } from "obsidian";
 import { BaselineStore, type BlobFs } from "../kernel/governance/baseline-store.js";
 import { parseJournal, recentAgentWrite, agentWritesSince, type JournalRecord } from "../kernel/governance/journal-reader.js";
 import { computeQueue, type PendingItem, type NoteSnapshot } from "../kernel/governance/queue.js";
+import { deleteInvalidatesQueue } from "./queue-invalidation.js";
 import { classifyModify, shouldAdvanceBaselineSilently } from "../kernel/governance/classify.js";
 import {
   acceptNote,
@@ -123,6 +124,12 @@ const RECENT_WRITE_WINDOW_MS = 15_000;
 const SILENT_ADVANCE_DEBOUNCE_MS = 1200;
 const HUMAN_INPUT_WINDOW_MS = 5_000;
 const JOURNAL_POLL_MS = 2500;
+/** Coalesce a burst of deletes (a folder of pending notes) into ONE queue recompute. Short enough
+ *  that the row disappears as the user watches, long enough to absorb a multi-file delete. */
+const QUEUE_DELETE_DEBOUNCE_MS = 300;
+/** Reserved key in the shared per-plugin timer map (timersFor) — that map is otherwise keyed by
+ *  note path, and the teardown hook clears every timer in it, this one included. */
+const QUEUE_DELETE_TIMER = "\u0000queue-delete";
 
 /** What wireGovernance needs from the host plugin beyond the base Plugin surface: a reader for
  * the acceptance module's config (`settings.modules.acceptance.config`), from which the badge
@@ -1129,6 +1136,33 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
   // module-private WeakMap; this confers no accept capability.
   component.registerEvent(plugin.app.vault.on("rename", (file, oldPath) => {
     if (file instanceof TFile) recordRename(plugin, file.path, oldPath);
+  }));
+
+  // DELETE → recompute the queue. The live-refresh poll only fires when the write JOURNAL grows,
+  // and a human deleting a note in Obsidian writes no journal record — so without this the queue
+  // kept offering Accept on a file that no longer exists until an unrelated agent write landed or
+  // the user clicked Refresh. (An MCP delete DID self-heal, via the journal; the reported bug is
+  // the human one.) The predicate is pure and tested (queue-invalidation.ts): only a deletion that
+  // actually hits the cached queue pays for a recompute, so unrelated deletes stay free — and a
+  // folder is matched as a segment-boundary prefix, since a folder delete does not reliably fire
+  // a per-child event. Debounced through the SAME timer map the reconcile path uses (cleared by
+  // the teardown hook below), so deleting a folder of pending notes coalesces into one refresh
+  // instead of one per file.
+  component.registerEvent(plugin.app.vault.on("delete", (file) => {
+    const isFolder = file instanceof TFolder;
+    if (!isFolder && !(file instanceof TFile && file.extension === "md")) return;
+    if (!deleteInvalidatesQueue(file.path, isFolder, getCachedPending(plugin).map((p) => p.path))) return;
+    const timers = timersFor(plugin);
+    const key = QUEUE_DELETE_TIMER;
+    const existing = timers.get(key);
+    if (existing) clearTimeout(existing);
+    timers.set(key, setTimeout(() => {
+      timers.delete(key);
+      if (disposed) return; // an unmount between the delete and this tick
+      void refresh(plugin).catch((e) =>
+        console.error("vault-mcp governance: queue refresh after delete failed", e)
+      );
+    }, QUEUE_DELETE_DEBOUNCE_MS));
   }));
 
   // Clear the debounce timers on unmount/unload (Obsidian tears down views/events/dom-events/ribbon
