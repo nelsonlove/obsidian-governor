@@ -9,7 +9,13 @@
 //       each covered by an ENABLED allowlisted detector, with NO residual. A write
 //       that mixes a mechanical stamp with ANY other content edit is NOT eligible;
 //       the whole write stays pending. A mechanical class can never smuggle content
-//       past review.
+//       past review. ONE additional partition EXISTS only under an honored per-note
+//       `auto-accept: appends` policy (#261): an appended body TAIL — bytes strictly
+//       extending the (identical or healed-only) existing body — counts as covered,
+//       by the policy rather than a class. The conjunctive rule itself is unchanged:
+//       every non-tail difference must still be class-attributed, an edit inside
+//       existing content is still residual, and no policy-less write gets the tail
+//       partition.
 //   (B) RAIL-CLEAN — the change introduces no new conformance finding. The four
 //       authorized classes are rail-neutral BY CONSTRUCTION (see classes.ts); a
 //       future non-neutral class MUST supply a real railCheck result via the seam
@@ -39,6 +45,7 @@ import {
 } from "./classes.js";
 import {
   evaluateFrontmatter,
+  evaluateBodyWithAppend,
   evaluateLinkHeal,
   type RenameIndex,
 } from "./detectors.js";
@@ -80,10 +87,12 @@ export interface EvalContext {
    * blessed BASELINE frontmatter via `autoAcceptPolicyOf`, never from the raw
    * current note — honor-only-if-blessed): `appends` accepts a change iff the
    * baseline is a byte-prefix of the current content (the #226 detector, same
-   * conservative discipline — a write that appends AND modifies anything
-   * existing is NOT an append and stays pending); `all` accepts any pending
-   * agent-attributed change. Absent/null ⇒ class-allowlist evaluation only,
-   * byte-identical to the pre-#135 behavior.
+   * conservative discipline), or — since #261 — iff the diff COMPOSES as
+   * allowlisted mechanical classes plus an appended body tail (see the header:
+   * the tail is one extra partition, nothing else is loosened — a write that
+   * appends AND modifies anything non-mechanical still stays pending); `all`
+   * accepts any pending agent-attributed change. Absent/null ⇒ class-allowlist
+   * evaluation only, byte-identical to the pre-#135 behavior.
    */
   policy?: AutoAcceptPolicy | null;
 }
@@ -170,11 +179,18 @@ export function evaluate(base: string, cur: string, ctx: EvalContext): EvalResul
     // mechanical class to be enabled). `ctx.policy` is the HONORED (blessed)
     // policy only; see EvalContext. `appends` that does not pass the byte-prefix
     // detector falls THROUGH to class evaluation — a pure uid-stamp on a
-    // policy-carrying note still auto-accepts by class.
+    // policy-carrying note still auto-accepts by class, and (#261) the class
+    // evaluation below COMPOSES with the policy: a change that is allowlisted
+    // mechanical classes PLUS an appended body tail is eligible, where either
+    // half alone already would be. (The live #261 wedge: a `modified:` stamp +
+    // rename-driven link rewrites landed between the blessing and the appends,
+    // so byte-prefix failed AND the class path refused the appended tail —
+    // each half provably fine, the combination stuck pending forever.)
     if (ctx.policy === "all") {
       return { eligible: true, classes: [], reason: "policy-all", rail: null, policy: "all" };
     }
-    if (ctx.policy === "appends" && isAppendOnly(base, cur)) {
+    const appendsPolicy = ctx.policy === "appends";
+    if (appendsPolicy && isAppendOnly(base, cur)) {
       return { eligible: true, classes: [], reason: "policy-appends", rail: null, policy: "appends" };
     }
 
@@ -200,9 +216,15 @@ export function evaluate(base: string, cur: string, ctx: EvalContext): EvalResul
       }
     }
 
-    // BODY: byte-identical, or ONLY confirmed link-heals (if enabled + index present).
+    // BODY: byte-identical, or ONLY confirmed link-heals (if enabled + index present) — and,
+    // under an honored `appends` policy (#261), optionally PLUS an appended tail after the
+    // (identical or healed-only) existing content. The strict evaluator stays in force for
+    // class-only notes: an appended tail is residual there.
     const bodyEnabled = new Set<ClassId>(enabled);
-    const body = evaluateLinkHeal(bp.body, cp.body, bodyEnabled.has("link-heal") ? ctx.renameIndex : null);
+    const bodyIndex = bodyEnabled.has("link-heal") ? ctx.renameIndex : null;
+    const body = appendsPolicy
+      ? evaluateBodyWithAppend(bp.body, cp.body, bodyIndex)
+      : { ...evaluateLinkHeal(bp.body, cp.body, bodyIndex), appended: false };
     if (!body.ok) return notEligible(`body:${body.reason}`);
 
     // FRONTMATTER: every FM difference attributed to an enabled class, no residual.
@@ -212,9 +234,16 @@ export function evaluate(base: string, cur: string, ctx: EvalContext): EvalResul
     // Combine matched classes.
     const matched = new Set<ClassId>(fm.classes);
     if (body.healed) matched.add("link-heal");
+    const appended = body.appended === true;
 
-    // No matched class but bytes differ → an unexplained residual we could not attribute.
-    if (matched.size === 0) return notEligible("no-class-matched-residual");
+    // No matched class but bytes differ → an unexplained residual we could not attribute —
+    // UNLESS the whole difference is an appended body tail under the appends policy (only
+    // reachable when frontmatter changed in a way classes explain as "nothing", i.e. it is
+    // identical; the pure whole-note byte-append normally exits via the fast path above).
+    if (matched.size === 0) {
+      if (appended) return { eligible: true, classes: [], reason: "policy-appends", rail: null, policy: "appends" };
+      return notEligible("no-class-matched-residual");
+    }
 
     // Defensive: every matched class must be enabled (attribution already enforces this).
     for (const c of matched) {
@@ -226,7 +255,11 @@ export function evaluate(base: string, cur: string, ctx: EvalContext): EvalResul
     const rail = evaluateRail(classes, base, cur, ctx);
     if (!rail.clean) return notEligible("rail-not-clean", rail);
 
-    return { eligible: true, classes, reason: "ok", rail };
+    // The policy is recorded on the result iff it did real work (covered the appended tail);
+    // a pure class-accept on a policy-carrying note stays a class accept, as before.
+    return appended
+      ? { eligible: true, classes, reason: "policy-appends+classes", rail, policy: "appends" }
+      : { eligible: true, classes, reason: "ok", rail };
   } catch (e) {
     // Any thrown error → fail safe.
     return notEligible(`exception:${e instanceof Error ? e.message : String(e)}`);

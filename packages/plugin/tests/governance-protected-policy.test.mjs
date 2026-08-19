@@ -152,6 +152,80 @@ describe("eligibility — the per-note policy branch (#135)", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// #261 — the appends policy COMPOSES with the mechanical classes.
+//
+// The live failure this pins: CROSS-SESSION.md carried an honored
+// `auto-accept: appends`; between the blessing and the agent appends, two
+// non-agent mechanical mutations landed (an update-time `modified:` stamp and
+// Obsidian's rename-driven wikilink rewrites), so the baseline was no longer a
+// byte-prefix of the current content. The old evaluate() refused BOTH ways:
+// byte-prefix failed (policy branch) AND the class path treated the appended
+// tail as body residual — each half individually blessed, the combination
+// wedged pending forever, silently (zero auto-accept records ever).
+// ---------------------------------------------------------------------------
+describe("eligibility — appends policy composes with mechanical classes (#261)", () => {
+  const RENAMED = { confirms: (from, to) => from === "Vault machinery" && to === "00.16 Vault machinery" };
+
+  // The live repro's shape, miniaturized byte-for-byte in kind:
+  const base =
+    "---\nname: CROSS-SESSION\nmodified: 2026-08-19T01:37\nauto-accept: appends\n---\n" +
+    "# Log\n\nSee the [[Vault machinery]] index.\n";
+  const cur =
+    "---\nname: CROSS-SESSION\nmodified: 2026-08-19T06:40\nauto-accept: appends\n---\n" +
+    "# Log\n\nSee the [[00.16 Vault machinery]] index.\n\n## probe append\n\nentry body\n";
+
+  test("timestamp change + confirmed link rewrite + appended tail → eligible, policy + classes", () => {
+    const r = evaluate(base, cur, { enabled: ALL, renameIndex: RENAMED, policy: "appends" });
+    assert.equal(r.eligible, true, r.reason);
+    assert.equal(r.reason, "policy-appends+classes");
+    assert.equal(r.policy, "appends", "the policy did real work (covered the tail) so it is recorded");
+    assert.deepEqual(r.classes, ["timestamp", "link-heal"]);
+    assert.equal(r.rail.clean, true);
+  });
+
+  test("same diff with an UNCONFIRMED rename → NOT eligible (the live wedge after a reload with no rename records)", () => {
+    const r = evaluate(base, cur, { enabled: ALL, renameIndex: { confirms: () => false }, policy: "appends" });
+    assert.equal(r.eligible, false);
+    assert.equal(r.reason, "body:unconfirmed-link");
+  });
+
+  test("same diff WITHOUT the policy → NOT eligible (the appended tail is residual for classes)", () => {
+    const r = evaluate(base, cur, { enabled: ALL, renameIndex: RENAMED, policy: null });
+    assert.equal(r.eligible, false);
+  });
+
+  test("timestamp change + appended tail (no link rewrites) → eligible without any rename index", () => {
+    const b = "---\nmodified: 2026-01-01\nauto-accept: appends\n---\nlog\n";
+    const c = "---\nmodified: 2026-08-19\nauto-accept: appends\n---\nlog\nnew entry\n";
+    const r = evaluate(b, c, { enabled: ALL, policy: "appends" });
+    assert.equal(r.eligible, true, r.reason);
+    assert.deepEqual(r.classes, ["timestamp"]);
+    assert.equal(r.policy, "appends");
+  });
+
+  test("composition never loosens the tail rule: append that ALSO edits existing body → still pending", () => {
+    const b = "---\nmodified: 2026-01-01\n---\nlog line\n";
+    const c = "---\nmodified: 2026-08-19\n---\nlog line EDITED\nnew entry\n";
+    const r = evaluate(b, c, { enabled: ALL, policy: "appends" });
+    assert.equal(r.eligible, false);
+  });
+
+  test("composition never loosens the frontmatter rule: append + non-mechanical fm change → pending", () => {
+    const b = "---\nstatus: draft\n---\nlog\n";
+    const c = "---\nstatus: final\n---\nlog\nnew entry\n";
+    const r = evaluate(b, c, { enabled: ALL, policy: "appends" });
+    assert.equal(r.eligible, false);
+  });
+
+  test("classes still gate on the allowlist under the policy: timestamp disabled → pending", () => {
+    const b = "---\nmodified: 2026-01-01\n---\nlog\n";
+    const c = "---\nmodified: 2026-08-19\n---\nlog\nnew entry\n";
+    const r = evaluate(b, c, { enabled: ["uid-stamp"], policy: "appends" });
+    assert.equal(r.eligible, false);
+  });
+});
+
 describe("protectedPropertyDrift + the queue's side-door surfacing (#224 §3)", () => {
   const blessed = "---\nauto-accept: appends\ntitle: T\n---\nbody\n";
 

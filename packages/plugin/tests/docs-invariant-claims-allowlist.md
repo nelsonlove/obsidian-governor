@@ -128,9 +128,22 @@ Known-overstated section instead — see its header for the format.
 - **Journal-only.** It is recorded verbatim on the journal record beside `op`/`actor` (`JournalRecord.intent`, `packages/plugin/src/kernel/journal.ts`) and **never reaches note content** — it is peeled before the handler, so it structurally cannot be written into a note's frontmatter or body.
 - **Never an accept or idempotency signal.** It is **excluded from idempotency identity** — a retried call may reword its intent freely and still dedupe — and it is **never read back** as any kind of acceptance or approval signal.
 - **Batch-aware.** `obsidian_write_notes` accepts a batch-level `intent` describing the change-*set*; the guarded single-writer peels it per item, so **every** item's journal record carries it and the Acceptance pane's per-note rows each show it.
-- **It exposes data another plugin published — nothing more.** The Acceptance review plugin rewrites a read-only index at `<config-dir>/plugins/stewardship/pending-index.json` (the path keeps the legacy plugin id until #115) on every review-queue refresh; this tool reads it.
+- **It exposes data the governance module published — nothing more.** The folded governance module (`src/governance/wiring.ts`) rewrites a read-only index at `<plugin-dir>/governance/pending-index.json` — beside the acceptance log — on every review-queue refresh (`refresh()`, via the pure serializer in `kernel/governance/pending-index.ts`); this tool reads it.
+  approved 2026-08-19 (#261): substantiated by the publisher wired in `refresh()`
+  (wiring.ts writes `serializePendingIndex` bytes to `pendingIndexPath` on every queue
+  recompute) and the pending-review round-trip tests; the retired stewardship path is dead
+  since #164 and no longer read.
 - `readOnlyHint: true`, empty input schema, no write and no accept/baseline verb: it reports pending-ness; it cannot accept ("the accept verb is in no API").
 - **Allowlist-filtered.** The index is written from the whole vault, so every returned entry is filtered through the **same `isVisible` guard** the uid/read tools use, *before* it is reported — a sandboxed session that could learn about pending notes in territory it cannot read would have a path oracle otherwise.
+
+## docs/acceptance-model.md (#261 additions)
+
+- **The sweep is event-driven, not timer-only (#261).** Live diagnosis showed Chromium suspends renderer timers while the Obsidian window is occluded — the 2.5s journal poll simply never ticked during unattended sessions, which is exactly when agents write (the observed "zero auto-accept records ever").
+  approved 2026-08-19 (#261): the "never ticked" is a live observation (armed interval, grown journal, zero ticks over minutes with the window occluded), recorded in the PR's live-verification log — a diagnosis statement, not a security guarantee.
+- The kernel now nudges the governance poll after **every journal append** (`nudgeGovernanceQueue`, wired in `main.ts`), so queue refresh + sweep run within seconds of an agent write even with the window buried; the interval remains as foreground catch-up.
+  approved 2026-08-19 (#261): substantiated by the main.ts append wrapper + the
+  governance-module source pins ("main.ts nudges the governance queue after every journal
+  append") and the live nudge run (write → refresh + sweep in ~4s, window occluded).
 
 ## docs/conformance.md
 
