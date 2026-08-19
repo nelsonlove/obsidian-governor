@@ -26,6 +26,7 @@ import { mountModules } from "./modules-mount.js";
 import { FILECLASS_PLUGIN_ID } from "./tools-fileclass.js";
 import { obsidianCrosssessionSource, obsidianReceiptStore } from "./tools-crosssession.js";
 import { obsidianTriageSource } from "./obsidian-triage-source.js";
+import { obsidianBasesSource } from "./obsidian-bases-source.js";
 import { registerCodeModeTools, makeCaptureRegister, type CapturedRegistry } from "./tools-code-mode.js";
 import { makeGuarded, resolveGuardedPath, withKernelArgs } from "./guarded.js";
 import { sealUnguardedRegistration } from "./seal-registration.js";
@@ -282,6 +283,10 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
     // via the SHARED primitives — moveOne (link-healing renameFile),
     // fileManager.trashFile, processFrontMatter — see obsidian-triage-source.ts.
     triageSource: obsidianTriageSource(app),
+    // The bases module (#243): the hidden-leaf capture over Obsidian's own
+    // Bases engine. The adapter feature-detects the public Bases API itself
+    // and the registrar registers nothing when it is absent.
+    basesSource: obsidianBasesSource(app),
   });
   // Skip-and-report only reports if someone reads the report: every mount
   // defect (unknown module id in settings, a gate-refused tool, a config
