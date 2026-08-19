@@ -4,7 +4,7 @@
 // and is headless-testable with a fake source; only this adapter needs to be
 // verified against a running Obsidian.
 
-import { TFolder, type App } from "obsidian";
+import { TFile, TFolder, type App } from "obsidian";
 import type { JdScaffoldSource } from "./tools-jd-scaffold.js";
 import type { CategoryFolderInput } from "../kernel/jd-scaffold/types.js";
 
@@ -52,6 +52,18 @@ export function obsidianJdScaffoldSource(app: App): JdScaffoldSource {
     },
     today(): string {
       return new Date().toISOString().slice(0, 10);
+    },
+    allNotePaths(): string[] {
+      return app.vault.getMarkdownFiles().map((f) => f.path);
+    },
+    async read(path: string): Promise<string | null> {
+      const file = app.vault.getAbstractFileByPath(path);
+      return file instanceof TFile ? app.vault.read(file) : null;
+    },
+    async modify(path: string, content: string): Promise<void> {
+      const file = app.vault.getAbstractFileByPath(path);
+      if (!(file instanceof TFile)) throw new Error(`"${path}" no longer exists.`);
+      await app.vault.modify(file, content);
     },
   };
 }
