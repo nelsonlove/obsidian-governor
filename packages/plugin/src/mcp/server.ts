@@ -157,7 +157,10 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   // enumerate the vault with no path to guard, so they filter their own
   // iteration through the allowlist. The filter is resolved per call, like the
   // guard's own settings, so a settings change lands without a reconnect.
-  const probe = obsidianProbe(app);
+  // Same live enforcement getter as the plugin-singleton probe in main.ts:
+  // only `.rev` is consumed here today, but a probe whose `record()` ignored
+  // the setting would be a silent bypass the moment anything reads it.
+  const probe = obsidianProbe(app, () => ctx.getSettings().enforceRecordImmutability !== false);
   const visible = (paths: string[]) => visiblePaths(paths, ctx.getSettings());
   // Hoisted so obsidian_write_notes can drive the same backend writeNote through
   // its own per-item guarded dispatch (see the write-notes block below).

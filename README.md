@@ -172,6 +172,9 @@ journal, the path allowlist, and third-party tool trust, live in
   session for reads and writes alike. See [reference](docs/reference.md#the-path-allowlist).
 - **Scheme & vocabulary modules** — per-module toggles and configuration (Johnny Decimal
   instance, excluded roots, vocabulary sources).
+- **Enforce record immutability** — on by default; refuses non-append writes to notes carrying
+  `record: true` (historical archives are extended by a dated end-of-file append, never edited,
+  moved, or deleted). See [reference](docs/reference.md#records).
 - **Disable socket** — stops the server without uninstalling the plugin.
 
 ## Troubleshooting

@@ -116,6 +116,16 @@ Every **mutating** tool call (write, append, patch, move, delete, trash, frontma
 
 Each queued operation gets a **30-second budget** (a constant, not a setting). If it hasn't finished by then it is abandoned, that *one* call fails with `Error [write_timeout]: …`, and the queue immediately moves on — a wedged operation can never take the bridge, or anyone else's session, down with it. The vault may or may not have been modified when this happens; re-read before retrying.
 
+### Record notes are append-only (`record: true`)
+
+A note whose frontmatter carries **`record: true`** is a **record** — historical, never edited in place. The kernel refuses **every mutating operation that names one** (write, patch, frontmatter edit, move, trash, delete — and a move whose *destination* is a record, which would overwrite it) with `Error [record_immutable]: …` before the handler runs, journaled like any other refused operation. The **one exemption is `obsidian_append_note`** — the pure end-of-file append, which is how a record grows: a new dated `## YYYY-MM-DD …` section at the bottom. The exemption is by **tool identity**, not by what the arguments look like.
+
+The check runs at the front of the write queue (same point as `if_rev`), reads the flag from Obsidian's already-parsed metadata cache, and **fails open**: a missing file, an unparsed cache, or an unreadable frontmatter never refuses anything — this guard is protective, and an unreadable note must not turn into a vault-wide write outage. It exists for fallible agents, not adversaries: the same threat model as the [accept guard](acceptance-model.md).
+
+Enforcement is on by default and toggleable in the settings tab (*Enforce record immutability*) — the check is deliberately over-inclusive, refusing on any path a call **names**, so the switch is the escape hatch for a legitimate operation it blocks — concretely, `obsidian_repoint_link` refuses when its `target_path` is a record, even though the record is only the link *destination* and is never written.
+
+The scope is *addressed* mutation — the paths an operation **names**. An operation that *discovers* its blast radius can still touch a record's body as a side effect: `obsidian_repoint_link` rewrites whatever notes carry the matching wikilink, and a move's link-healing rename rewrites backlinks wherever they live (`update_backlinks: false` is advisory). Byte-exactness against that class is what a record's git history and backups are for.
+
 ### Conditional writes (`if_rev`) and safe retries (`idempotency_key`)
 
 Every mutating tool takes two optional arguments beyond its own. They are declared on every mutating schema automatically, so they work on the full surface, in Code Mode, and on mutating tools published by other plugins alike; no handler ever sees them.
