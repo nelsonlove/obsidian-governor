@@ -3,11 +3,13 @@ import assert from "node:assert/strict";
 import { fakeServer } from "./fake-server.mjs";
 import { registerJdScaffoldTools } from "../src/mcp/tools-jd-scaffold.ts";
 
-function fakeSource({ allPaths = [], folders = [], now = "2026-08-19" } = {}) {
+function fakeSource({ allPaths = [], folders = [], now = "2026-08-19", noteContent = {} } = {}) {
   const paths = new Set(allPaths);
   const created = [];
   const renamed = [];
   const foldersCreated = [];
+  const modified = [];
+  const notes = new Map(Object.entries(noteContent));
   const source = {
     exists: (p) => paths.has(p),
     categoryFolders: () => folders,
@@ -25,16 +27,22 @@ function fakeSource({ allPaths = [], folders = [], now = "2026-08-19" } = {}) {
       paths.add(toPath);
     },
     today: () => now,
+    allNotePaths: () => allPaths,
+    read: async (p) => (notes.has(p) ? notes.get(p) : null),
+    modify: async (p, content) => {
+      modified.push({ path: p, content });
+      notes.set(p, content);
+    },
   };
-  return { source, created, renamed, foldersCreated };
+  return { source, created, renamed, foldersCreated, modified, notes };
 }
 
 function build({ allowlist = [], ...sourceOpts } = {}) {
   const server = fakeServer();
-  const { source, created, renamed, foldersCreated } = fakeSource(sourceOpts);
+  const { source, created, renamed, foldersCreated, modified, notes } = fakeSource(sourceOpts);
   const ctx = { getSettings: () => ({ readOnly: false, allowlist }) };
   registerJdScaffoldTools(server, source, ctx);
-  return { server, source, created, renamed, foldersCreated };
+  return { server, source, created, renamed, foldersCreated, modified, notes };
 }
 
 describe("obsidian_jd_standard_zeros", () => {
@@ -302,5 +310,139 @@ describe("obsidian_jd_promote_to_folder", () => {
     });
     assert.equal(res.isError, true);
     assert.match(res.content[0].text, /^Error \[out_of_allowlist\]/);
+  });
+});
+
+describe("obsidian_jd_reindex_category", () => {
+  test("dry_run: false rewrites the target's Contents section via source.modify", async () => {
+    const allPaths = [
+      "10-19 Personal/06 Digital tools/06.00 JDex.md",
+      "10-19 Personal/06 Digital tools/06.13 Bar.md",
+    ];
+    const { server, modified } = build({
+      allPaths,
+      noteContent: { "10-19 Personal/06 Digital tools/06.00 JDex.md": "# JDex\n" },
+    });
+    const res = await server.tools.get("obsidian_jd_reindex_category").handler({
+      path: "10-19 Personal/06 Digital tools/06.00 JDex.md",
+      dry_run: false,
+    });
+    assert.notEqual(res.isError, true);
+    assert.equal(modified.length, 1);
+    assert.match(modified[0].content, /\[\[06\.13 Bar\]\]/);
+    assert.equal(res.structuredContent.filesChanged, 1);
+    assert.deepEqual(res.structuredContent.files, ["10-19 Personal/06 Digital tools/06.00 JDex.md"]);
+  });
+
+  test("dry_run: true reports the new content without writing", async () => {
+    const allPaths = ["10-19 Personal/06 Digital tools/06.00 JDex.md", "10-19 Personal/06 Digital tools/06.13 Bar.md"];
+    const { server, modified } = build({
+      allPaths,
+      noteContent: { "10-19 Personal/06 Digital tools/06.00 JDex.md": "# JDex\n" },
+    });
+    const res = await server.tools.get("obsidian_jd_reindex_category").handler({
+      path: "10-19 Personal/06 Digital tools/06.00 JDex.md",
+      dry_run: true,
+    });
+    assert.notEqual(res.isError, true);
+    assert.match(res.structuredContent.new_content, /\[\[06\.13 Bar\]\]/);
+    assert.deepEqual(modified, []);
+  });
+
+  test("a preserved description round-trips through the tool", async () => {
+    const allPaths = ["10-19 Personal/06 Digital tools/06.00 JDex.md", "10-19 Personal/06 Digital tools/06.13 Bar.md"];
+    const { server } = build({
+      allPaths,
+      noteContent: { "10-19 Personal/06 Digital tools/06.00 JDex.md": "## Contents\n\n- [[06.13 Bar]] *(the real one)*\n" },
+    });
+    const res = await server.tools.get("obsidian_jd_reindex_category").handler({
+      path: "10-19 Personal/06 Digital tools/06.00 JDex.md",
+      dry_run: false,
+    });
+    assert.match(res.structuredContent.preserved[0].description, /the real one/);
+  });
+
+  test("a coded refusal when the path isn't XX.00-shaped", async () => {
+    const { server } = build({ allPaths: ["06 Digital tools/Not an id note.md"] });
+    const res = await server.tools.get("obsidian_jd_reindex_category").handler({
+      path: "06 Digital tools/Not an id note.md",
+      dry_run: true,
+    });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[not_index_file\]/);
+  });
+
+  test("out_of_allowlist refusal when path is outside an active allowlist", async () => {
+    const { server } = build({ allPaths: ["10-19 Personal/06 Digital tools/06.00 JDex.md"], allowlist: ["Somewhere Else"] });
+    const res = await server.tools.get("obsidian_jd_reindex_category").handler({
+      path: "10-19 Personal/06 Digital tools/06.00 JDex.md",
+      dry_run: true,
+    });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[out_of_allowlist\]/);
+  });
+
+  test("the ordinary tier does NOT fetch every sibling index file — only its own content", async () => {
+    let readCalls = [];
+    const server = fakeServer();
+    const source = {
+      exists: () => false,
+      categoryFolders: () => [],
+      create: async () => {},
+      createFolder: async () => {},
+      renameFile: async () => {},
+      today: () => "2026-08-19",
+      allNotePaths: () => [
+        "10-19 Personal/06 Digital tools/06.00 JDex.md",
+        "10-19 Personal/06 Digital tools/06.13 Bar.md",
+        "20-29 Work/20 Work management/20.00 Other index.md", // a SEPARATE category's XX.00 — must not be read
+      ],
+      read: async (p) => {
+        readCalls.push(p);
+        return p === "10-19 Personal/06 Digital tools/06.00 JDex.md" ? "# JDex\n" : null;
+      },
+      modify: async () => {},
+    };
+    registerJdScaffoldTools(server, source, { getSettings: () => ({ readOnly: false, allowlist: [] }) });
+    await server.tools.get("obsidian_jd_reindex_category").handler({
+      path: "10-19 Personal/06 Digital tools/06.00 JDex.md",
+      dry_run: true,
+    });
+    assert.deepEqual(readCalls, ["10-19 Personal/06 Digital tools/06.00 JDex.md"]);
+  });
+
+  test("the area-management tier DOES fetch sibling index files, to consolidate their Contents", async () => {
+    let readCalls = [];
+    const server = fakeServer();
+    const allPaths = [
+      "10-19 Personal/10 Foo/10.00 Area index.md",
+      "10-19 Personal/06 Digital tools/06.00 JDex.md",
+      "10-19 Personal/06 Digital tools/06.13 Bar.md",
+    ];
+    const notes = {
+      "10-19 Personal/10 Foo/10.00 Area index.md": "## Contents\n\n",
+      "10-19 Personal/06 Digital tools/06.00 JDex.md": "## Contents\n\n- [[06.13 Bar]]\n",
+    };
+    const source = {
+      exists: () => false,
+      categoryFolders: () => [],
+      create: async () => {},
+      createFolder: async () => {},
+      renameFile: async () => {},
+      today: () => "2026-08-19",
+      allNotePaths: () => allPaths,
+      read: async (p) => {
+        readCalls.push(p);
+        return notes[p] ?? null;
+      },
+      modify: async () => {},
+    };
+    registerJdScaffoldTools(server, source, { getSettings: () => ({ readOnly: false, allowlist: [] }) });
+    const res = await server.tools.get("obsidian_jd_reindex_category").handler({
+      path: "10-19 Personal/10 Foo/10.00 Area index.md",
+      dry_run: true,
+    });
+    assert.ok(readCalls.includes("10-19 Personal/06 Digital tools/06.00 JDex.md"));
+    assert.match(res.structuredContent.new_content, /\[\[06\.13 Bar\]\]/);
   });
 });

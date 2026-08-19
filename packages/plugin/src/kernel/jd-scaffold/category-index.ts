@@ -188,11 +188,20 @@ interface CategoryData {
   memberBasenames: string[];
 }
 
+/** True for an `XX.00`-shaped filename (next char space/dot/plus), matching
+ *  ensureCategoryIndexes' acceptance rule. Exported so the glue layer can
+ *  discover which of a note listing to fetch content for at the
+ *  area/system tiers — the same discovery regex `buildCategoriesMap` uses
+ *  internally, not a second copy of it. */
+export function isIndexFilePath(path: string): boolean {
+  return /^\d{2}\.00(?:\s|\.|\+|$)/.test(basenameOf(path));
+}
+
 /** Build the prefix -> CategoryData map, discovering categories by `XX.00`
  *  filename (next char space/dot/plus), matching ensureCategoryIndexes'
  *  acceptance rule. First-write-wins on a duplicate prefix. */
 function buildCategoriesMap(allPaths: string[]): Map<string, CategoryData> {
-  const indexPaths = allPaths.filter((p) => /^\d{2}\.00(?:\s|\.|\+|$)/.test(basenameOf(p)));
+  const indexPaths = allPaths.filter(isIndexFilePath);
   const out = new Map<string, CategoryData>();
   for (const indexPath of indexPaths) {
     const m = basenameOf(indexPath).match(/^(\d{2})/);
@@ -292,6 +301,28 @@ function reindexSystem(targetIndexPath: string, categories: Map<string, Category
 
   const newContent = setSection(currentContent, "## Contents", body);
   return { newContent, preserved };
+}
+
+export type ReindexTier = "ordinary" | "area-management" | "system";
+
+/**
+ * Which tier `path` dispatches to, WITHOUT planning anything — the cheap,
+ * I/O-free half of `planReindexCategory`'s own dispatch check, exported so
+ * the glue layer can decide how much sibling content to fetch before
+ * calling the planner, without re-implementing the same prefix regex a
+ * second time (the exact duplication-risk lesson from this module's own
+ * standard-zeros.ts). Only the ordinary tier needs no sibling content at
+ * all — area-management and system both cross-read other index files'
+ * `## Contents` (`bulletsForCategory`). Returns `null` for the same reason
+ * `planReindexCategory` would: not `XX.00`-shaped at all.
+ */
+export function reindexTier(path: string): ReindexTier | null {
+  const prefixMatch = basenameOf(path).match(/^(\d{2})/);
+  if (!prefixMatch) return null;
+  const prefix = prefixMatch[1];
+  if (prefix === "00") return "system";
+  if (isAreaManagement(prefix)) return "area-management";
+  return "ordinary";
 }
 
 /**
