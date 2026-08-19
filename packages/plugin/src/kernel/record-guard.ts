@@ -38,8 +38,12 @@ export class RecordImmutableError extends Error {
     readonly op: string,
     readonly path: string
   ) {
+    // "names", not "would modify": collectPaths walks every path-key argument,
+    // including ones an op only reads (a template_path flagged record: true
+    // refuses the whole call — over-blocking is the safe direction, but the
+    // message must not assert a write that wasn't going to happen).
     super(
-      `'${op}' would modify '${path}', whose frontmatter carries record: true. Record notes are historical and ` +
+      `'${op}' names '${path}', whose frontmatter carries record: true. Record notes are historical and ` +
         `append-only: nothing was written. Extend the record with a dated end-of-file append ` +
         `(obsidian_append_note, a new '## YYYY-MM-DD …' section) or write a NEW record note — never edit, ` +
         `move, or delete an existing one.`

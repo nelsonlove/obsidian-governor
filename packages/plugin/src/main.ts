@@ -94,6 +94,16 @@ interface VaultMcpSettings {
    */
   cliPolicy: { deny: string[]; allowOpaque: string[] };
   /**
+   * Enforce record immutability (#264): refuse non-append mutation of a note
+   * whose frontmatter carries `record: true`. Default ON — the guard exists
+   * because a mis-quoted write destroyed a byte-verified record archive. The
+   * off switch is here because the check is deliberately over-inclusive (it
+   * refuses on ANY named path, including one an operation only reads), so a
+   * legitimate workflow it blocks needs a way through that isn't hand-editing
+   * frontmatter. Read live per call — no reconnect needed.
+   */
+  enforceRecordImmutability: boolean;
+  /**
    * The in-Obsidian dev tool-runner ("Vault MCP: Run tool…" — src/tool-runner.ts).
    * Default ON: it grants nothing the MCP surface doesn't already grant — it
    * invokes the same guarded captured tools a code-mode connection gets, so
@@ -122,6 +132,7 @@ const DEFAULT_SETTINGS: VaultMcpSettings = {
   schemes: structuredClone(DEFAULT_SCHEMES),
   modules: {},
   cliPolicy: { deny: [], allowOpaque: [] },
+  enforceRecordImmutability: true,
   devToolRunner: true,
 };
 
@@ -326,7 +337,7 @@ export default class VaultMcpPlugin extends Plugin {
     const kernel = new Kernel(
       new WriteQueue(),
       journal,
-      obsidianProbe(this.app),
+      obsidianProbe(this.app, () => this.settings.enforceRecordImmutability),
       new IdempotencyStore(),
       new LockStore(),
       uidIndex,

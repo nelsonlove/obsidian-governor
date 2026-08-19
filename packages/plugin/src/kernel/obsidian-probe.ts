@@ -43,7 +43,14 @@ export function obsidianUidSource(app: App): UidSource {
   };
 }
 
-export function obsidianProbe(app: App): TargetProbe {
+export function obsidianProbe(
+  app: App,
+  /**
+   * Live read of the record-immutability enforcement setting (#264). Absent ⇒
+   * enforced, which is what every test and bare embed gets. See `record()`.
+   */
+  recordImmutability?: () => boolean
+): TargetProbe {
   const fileAt = (path: string): TFile | null => {
     const f = app.vault.getAbstractFileByPath(path);
     return f instanceof TFile ? f : null;
@@ -67,6 +74,12 @@ export function obsidianProbe(app: App): TargetProbe {
     // unrelated operation. What counts as "true" is record-guard.ts's decision,
     // not this adapter's.
     record(path) {
+      // The enforcement toggle lands HERE rather than in the kernel: reporting
+      // "cannot show this is a record" routes a disabled guard down the same
+      // fail-open path an unreadable cache already takes (recordImmutableRefusal
+      // never sees a flag), so the off switch adds no second refusal path to
+      // reason about. Read live per call, so flipping it needs no reconnect.
+      if (recordImmutability && !recordImmutability()) return undefined;
       const f = fileAt(path);
       if (!f) return undefined;
       const fm = app.metadataCache.getFileCache(f)?.frontmatter;
