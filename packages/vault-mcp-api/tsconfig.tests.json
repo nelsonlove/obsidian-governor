@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // The contract test imports the host's source (packages/plugin/src/mcp/
+    // external-tools.ts), whose import graph is compiled under the plugin's
+    // own options — mirror the ones that matter so the same sources check.
+    "lib": ["ES2022", "DOM"],
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true
+  },
+  "include": ["src", "tests"]
+}
