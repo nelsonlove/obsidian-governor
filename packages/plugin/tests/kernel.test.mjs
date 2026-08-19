@@ -189,7 +189,12 @@ describe("WriteQueue timeout", () => {
     // entirely: the queue's 20ms timer only fires when the test explicitly
     // advances the clock, so "held" cannot time out behind the test's back no
     // matter how slow or contended the machine running it is.
-    t.mock.timers.enable({ apis: ["setTimeout"] });
+    // Date is mocked alongside setTimeout since #272: the queue's deadline is
+    // now wall-clock math re-evaluated on every enqueue, so an unmocked
+    // Date.now would reintroduce the exact real-time race mocking the timers
+    // was meant to remove ("jumper"'s enqueue could abandon "held" on a slow
+    // machine). Mocked, both clocks advance only via t.mock.timers.tick.
+    t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
 
     const queue = new WriteQueue(20);
     const wedged = deferred();

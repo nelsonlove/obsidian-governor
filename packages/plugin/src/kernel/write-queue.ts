@@ -15,6 +15,19 @@
 // cancelled — Obsidian's app.* APIs expose no cancellation, so the alternative
 // is a queue (and therefore a bridge, and therefore every concurrent session)
 // wedged behind one stuck call. Losing one operation beats losing the transport.
+//
+// HOW the deadline fires matters as much as what it means (#272): this code
+// runs in Obsidian's renderer, where Chromium suspends timers while the window
+// is occluded — a setTimeout-only deadline simply never fired during unattended
+// sessions, and one stalled renameFile wedged the queue indefinitely, which is
+// the exact failure the timeout exists to prevent. So the deadline is
+// WALL-CLOCK MATH, not a timer: dequeue stamps `startedAt`, and every queue
+// event — an enqueue, an explicit nudge() — re-evaluates the running
+// operation's elapsed time and abandons it if the budget is spent. A setTimeout
+// still arms per operation as a best-effort prompt abandon for the foreground
+// case, but the guarantee never DEPENDS on it: any new mutating call (and any
+// journal append — main.ts wires journal→nudge, the #270 pattern) unwedges the
+// queue even in a world where no timer ever fires.
 
 /**
  * Wall-clock budget for a single queued mutating operation.
@@ -53,11 +66,28 @@ interface QueueItem {
   onLate?: (settlement: LateSettlement) => void;
 }
 
+/** The operation currently holding the queue, as the deadline check sees it. */
+interface RunningOp {
+  /** Dequeue time (`now()`), the base of the wall-clock deadline. */
+  startedAt: number;
+  /** Abandon this operation: reject it WriteTimeoutError and release the slot. No-op if it already settled. */
+  abandon: () => void;
+}
+
 export class WriteQueue {
   private readonly pending: QueueItem[] = [];
-  private busy = false;
+  private current: RunningOp | null = null;
 
-  constructor(private readonly timeoutMs: number = WRITE_TIMEOUT_MS) {}
+  constructor(
+    private readonly timeoutMs: number = WRITE_TIMEOUT_MS,
+    /**
+     * Clock, injectable for tests. MUST be wall clock (Date.now), never a
+     * monotonic-while-running source tied to timers — the whole point is that
+     * the deadline keeps advancing while Chromium has the renderer's timers
+     * suspended.
+     */
+    private readonly now: () => number = Date.now
+  ) {}
 
   /** Operations waiting behind the one currently running. */
   get depth(): number {
@@ -66,7 +96,7 @@ export class WriteQueue {
 
   /** True while an operation holds the queue. */
   get running(): boolean {
-    return this.busy;
+    return this.current !== null;
   }
 
   /**
@@ -82,39 +112,66 @@ export class WriteQueue {
   run<T>(op: string, fn: () => Promise<T> | T, onLate?: (settlement: LateSettlement) => void): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       this.pending.push({ op, fn, resolve, reject, onLate });
-      this.pump();
+      // Enqueue is a queue event: check the running operation's wall-clock
+      // deadline before pumping, so a newcomer never sits behind an operation
+      // whose budget is already spent just because the timer never fired.
+      this.nudge();
     });
   }
 
+  /**
+   * Queue-activity hook: re-evaluate the running operation's wall-clock
+   * deadline — abandoning it if the budget is spent — then run the next
+   * operation if the slot is free. Idempotent and cheap when nothing is
+   * overdue; safe to call from any event that implies the world moved on
+   * (an enqueue calls it internally; main.ts wires journal appends to it).
+   *
+   * This, not the per-operation timer, is what carries the "never wedge the
+   * bridge" guarantee: renderer timers are suspended while the Obsidian window
+   * is occluded, but queue events keep arriving exactly because callers are
+   * still trying to write.
+   */
+  nudge(): void {
+    const cur = this.current;
+    if (cur !== null && this.now() - cur.startedAt >= this.timeoutMs) cur.abandon();
+    this.pump();
+  }
+
   private pump(): void {
-    if (this.busy) return;
+    if (this.current !== null) return;
     const item = this.pending.shift();
     if (!item) return;
-    this.busy = true;
 
     let timer: ReturnType<typeof setTimeout>;
     let settled = false;
-    // Single release point: whoever gets here first (the operation or the
-    // timer) owns the outcome; the loser is a no-op. Guarantees the slot is
-    // released exactly once even when an abandoned operation settles later.
+    // Single release point: whoever gets here first (the operation, the timer,
+    // or a wall-clock abandon via nudge()) owns the outcome; the loser is a
+    // no-op. Guarantees the slot is released exactly once even when an
+    // abandoned operation settles later.
     const claim = (): boolean => {
       if (settled) return false;
       settled = true;
       clearTimeout(timer);
-      this.busy = false;
+      this.current = null;
       // Microtask, not a direct call: keeps the next operation off this one's
       // stack (no unbounded recursion on a long queue of sync-resolving ops).
       queueMicrotask(() => this.pump());
       return true;
     };
 
-    timer = setTimeout(() => {
+    // Shared by the timer (best-effort, prompt in the foreground) and the
+    // wall-clock check in nudge() (the guarantee — fires even in a world where
+    // timers never do). Both paths produce the identical abandonment.
+    const abandon = (): void => {
       if (claim()) item.reject(new WriteTimeoutError(item.op, this.timeoutMs));
-    }, this.timeoutMs);
+    };
 
-    // Losing the claim means the timer already abandoned this operation: the
-    // caller has its WriteTimeoutError and the slot belongs to someone else, so
-    // the settlement is reported through onLate instead of being dropped.
+    this.current = { startedAt: this.now(), abandon };
+    timer = setTimeout(abandon, this.timeoutMs);
+
+    // Losing the claim means this operation was already abandoned: the caller
+    // has its WriteTimeoutError and the slot belongs to someone else, so the
+    // settlement is reported through onLate instead of being dropped.
     const late = (settlement: LateSettlement): void => {
       try {
         item.onLate?.(settlement);
