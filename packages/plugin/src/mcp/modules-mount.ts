@@ -1267,19 +1267,20 @@ const BASES_MANIFEST: ModuleManifest = {
   },
 };
 
-// jd-scaffold, Stage A of the jd-dashboard fold
-// (docs/superpowers/specs/2026-08-19-jd-dashboard-fold-design.md): three
-// mutating tools ported from obsidian-jd-dashboard's standard-zeros.ts and
-// promote-to-folder.ts. No config fields for Stage A — no per-vault knobs to
-// expose yet (unlike scheme's prefix/area config, jd-scaffold's shape is
-// fixed: the standard-zeros set, and the ID-note regex, are not
-// user-configurable in this stage).
+// jd-scaffold, Stage A + Stage A2 of the jd-dashboard fold
+// (docs/superpowers/specs/2026-08-19-jd-dashboard-fold-design.md): four
+// mutating tools ported from obsidian-jd-dashboard's standard-zeros.ts,
+// promote-to-folder.ts, and category-index.ts. No config fields yet — no
+// per-vault knobs to expose (unlike scheme's prefix/area config,
+// jd-scaffold's shape is fixed: the standard-zeros set and the ID-note
+// regex are not user-configurable at this stage).
 const JD_SCAFFOLD_MANIFEST: ModuleManifest = {
   summary:
     "Johnny Decimal category scaffolding, ported from obsidian-jd-dashboard: create the fixed standard-zeros set " +
-    "(XX.00-XX.09) in a category, self-heal a vault-wide missing XX.00, and promote a leaf id note into a " +
-    "same-named folder. No jd-id: frontmatter is written — vault-mcp's scheme module is path-canonical, the " +
-    "filename already carries the address (same call already made for the jd-numbering fold).",
+    "(XX.00-XX.09) in a category, self-heal a vault-wide missing XX.00, promote a leaf id note into a " +
+    "same-named folder, and rebuild an XX.00 index file's Contents section from vault truth. No jd-id: " +
+    "frontmatter is written — vault-mcp's scheme module is path-canonical, the filename already carries the " +
+    "address (same call already made for the jd-numbering fold).",
   directory: {
     tools: [
       {
@@ -1634,14 +1635,14 @@ export function builtinModules(deps: MountDeps): VaultModule[] {
         visible: host.visible,
       }),
     ),
-    // jd-scaffold (Stage A of the jd-dashboard fold): another MUTATING
+    // jd-scaffold (Stage A + A2 of the jd-dashboard fold): another MUTATING
     // capability module (skills' own reasoning applies here too) — it declares
-    // `mutating: true` so its three write tools (standard_zeros,
-    // ensure_category_indexes, promote_to_folder) register with
-    // `readOnlyHint: false`, still through the guard-patched registrar (queue,
-    // journal, allowlist, read-only mode). Default DISABLED, matching the
-    // skills module's own precedent ("a newly-folded mutating surface stays
-    // off until a human turns it on"). No config for Stage A (see
+    // `mutating: true` so its four write tools (standard_zeros,
+    // ensure_category_indexes, promote_to_folder, reindex_category) register
+    // with `readOnlyHint: false`, still through the guard-patched registrar
+    // (queue, journal, allowlist, read-only mode). Default DISABLED, matching
+    // the skills module's own precedent ("a newly-folded mutating surface
+    // stays off until a human turns it on"). No config yet (see
     // JD_SCAFFOLD_MANIFEST's own comment), so ctxOf needs only getSettings —
     // no `host`/`config` plumbing, unlike bases above.
     moduleFromRegistrar(
