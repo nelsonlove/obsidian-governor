@@ -7,16 +7,20 @@
 // before planning, and every path a plan COMPUTES is re-checked before being
 // applied, unconditionally, even under dry_run: true.
 //
-// Existence checks feed the planners as an `exists` predicate
-// (`app.vault.getAbstractFileByPath`), not a pre-built Set — see
-// kernel/jd-scaffold/types.ts's own comment on PlanStandardZerosInput.exists
-// for why: a pre-built listing would make this file independently enumerate
-// the same candidate paths the planner itself computes, risking the two
-// falling out of sync.
+// Registered as a proper `mutating: true` capability module through
+// modules-mount.ts (see builtinModules), NOT hand-registered in server.ts —
+// unlike tools-scheme-write.ts/tools-survey.ts/tools-quickadd.ts, these three
+// tools mutate real vault NOTES, not another plugin's config, so nothing
+// blocks them from going the module-host route and picking up its free
+// settings-tab enable/disable toggle. That route means this file takes an
+// injected JdScaffoldSource (mirroring vocabSource/skillsSource/
+// provenanceSource) rather than a raw `App` — modules-mount.ts's MountDeps
+// deliberately never carries one, so the Obsidian binding lives in the
+// adapter (obsidian-jd-scaffold-source.ts) instead, keeping this file
+// Obsidian-free and headless-testable like every other module's tool layer.
 
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { App, TFolder } from "obsidian";
 import { ok, codedError } from "./helpers.js";
 import { isVisible, type GuardSettings } from "../guard.js";
 import {
@@ -28,18 +32,54 @@ import type { CategoryFolderInput, PlannedCreate } from "../kernel/jd-scaffold/t
 
 const RW = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } as const;
 
+/** The Obsidian-facing seam this module needs — nothing more. The live
+ *  implementation is `obsidianJdScaffoldSource` in
+ *  obsidian-jd-scaffold-source.ts; tests supply a fake directly. */
+export interface JdScaffoldSource {
+  /** True iff a vault path already exists (any type — note or folder). */
+  exists(path: string): boolean;
+  /** Every depth-2 `XX <name>` category folder, vault-wide. */
+  categoryFolders(): CategoryFolderInput[];
+  create(path: string, content: string): Promise<void>;
+  createFolder(path: string): Promise<void>;
+  /** Link-healing rename — must go through app.fileManager.renameFile in the
+   *  live adapter, never vault.rename (packages/plugin/CLAUDE.md's "Link
+   *  healing" guarantee). */
+  renameFile(fromPath: string, toPath: string): Promise<void>;
+  /** Today's date, `YYYY-MM-DD`. Injected (not `new Date()` inline) so tests
+   *  can pin it without a fake clock plumbed through every call. */
+  today(): string;
+}
+
 export interface JdScaffoldToolsCtx {
   getSettings: () => GuardSettings;
 }
 
-/** Applies a list of planned creates via app.vault.create, one at a time. One
+/** MountDeps.jdScaffoldSource's absent-case fallback — matches the
+ *  emptyBasesSource/crosssession-empty-source precedent: reads answer empty
+ *  rather than throwing (so dry_run always works), writes throw a clear
+ *  error that applyCreates' per-item catch (or the tool's own thrown-error
+ *  path for promote) turns into a refusal rather than a silent no-op. */
+export function emptyJdScaffoldSource(): JdScaffoldSource {
+  const unwired = () => { throw new Error("jd-scaffold source not wired (no live Obsidian adapter)."); };
+  return {
+    exists: () => false,
+    categoryFolders: () => [],
+    create: async () => unwired(),
+    createFolder: async () => unwired(),
+    renameFile: async () => unwired(),
+    today: () => new Date().toISOString().slice(0, 10),
+  };
+}
+
+/** Applies a list of planned creates via source.create, one at a time. One
  *  failure is reported per-item and does not abort the rest — matches
  *  jd-dashboard's own original CreateZerosResult/EnsureCategoryIndexesResult
  *  shape. Every path is allowlist-checked immediately before its own write,
  *  not just once up front — a long-running batch must not outlive a
  *  mid-batch settings change. */
 async function applyCreates(
-  app: App,
+  source: JdScaffoldSource,
   settings: GuardSettings,
   creates: PlannedCreate[]
 ): Promise<{ created: number; failures: { path: string; error: string }[] }> {
@@ -51,7 +91,7 @@ async function applyCreates(
       continue;
     }
     try {
-      await app.vault.create(c.path, c.content);
+      await source.create(c.path, c.content);
       created++;
     } catch (e) {
       failures.push({ path: c.path, error: (e as Error).message });
@@ -60,35 +100,7 @@ async function applyCreates(
   return { created, failures };
 }
 
-/** Depth-2 `XX <name>` folders, vault-wide — the same scope
- *  ensureCategoryIndexes' original walk used. Duck-types TFolder via
- *  `"children" in f` rather than an `instanceof` check against the real
- *  class, so this stays free of a value-level `obsidian` import (only the
- *  TFolder type is imported, erased at compile time). */
-function categoryFolders(app: App): CategoryFolderInput[] {
-  const CATEGORY_RE = /^(\d{2})\s+(.+)$/;
-  const out: CategoryFolderInput[] = [];
-  for (const f of app.vault.getAllLoadedFiles()) {
-    if (!("children" in f)) continue;
-    const folder = f as TFolder;
-    if (folder.path.split("/").length !== 2) continue;
-    const m = folder.name.match(CATEGORY_RE);
-    if (!m) continue;
-    out.push({
-      path: folder.path,
-      name: folder.name,
-      prefix: m[1],
-      childBasenames: folder.children.map((c: any) => c.name as string),
-    });
-  }
-  return out;
-}
-
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-export function registerJdScaffoldTools(server: McpServer, app: App, ctx: JdScaffoldToolsCtx): void {
+export function registerJdScaffoldTools(server: McpServer, source: JdScaffoldSource, ctx: JdScaffoldToolsCtx): void {
   server.registerTool(
     "obsidian_jd_standard_zeros",
     {
@@ -115,13 +127,13 @@ export function registerJdScaffoldTools(server: McpServer, app: App, ctx: JdScaf
         folderPath: folder_path,
         folderName,
         prefix,
-        now: today(),
-        exists: (p) => !!app.vault.getAbstractFileByPath(p),
+        now: source.today(),
+        exists: (p) => source.exists(p),
       });
 
       if (dry_run) return ok({ dry_run: true, creates: plan.creates, skipped: plan.skipped });
 
-      const applied = await applyCreates(app, settings, plan.creates);
+      const applied = await applyCreates(source, settings, plan.creates);
       return ok({ dry_run: false, created: applied.created, skipped: plan.skipped, failures: applied.failures });
     }
   );
@@ -141,12 +153,11 @@ export function registerJdScaffoldTools(server: McpServer, app: App, ctx: JdScaf
     },
     async ({ dry_run }) => {
       const settings = ctx.getSettings();
-      const folders = categoryFolders(app);
-      const plan = planEnsureCategoryIndexes(folders, today());
+      const plan = planEnsureCategoryIndexes(source.categoryFolders(), source.today());
 
       if (dry_run) return ok({ dry_run: true, creates: plan.creates });
 
-      const applied = await applyCreates(app, settings, plan.creates);
+      const applied = await applyCreates(source, settings, plan.creates);
       return ok({ dry_run: false, created: applied.created, failures: applied.failures });
     }
   );
@@ -171,7 +182,7 @@ export function registerJdScaffoldTools(server: McpServer, app: App, ctx: JdScaf
         return codedError("out_of_allowlist", `"${path}" is outside the active path allowlist.`);
       }
 
-      const plan = planPromoteToFolder({ path, exists: (p) => !!app.vault.getAbstractFileByPath(p) });
+      const plan = planPromoteToFolder({ path, exists: (p) => source.exists(p) });
 
       if (!plan.ok) return codedError(plan.reason, promoteRefusalMessage(plan.reason, path));
       if (!isVisible(plan.folderPath, settings) || !isVisible(plan.newFilePath, settings)) {
@@ -180,9 +191,8 @@ export function registerJdScaffoldTools(server: McpServer, app: App, ctx: JdScaf
 
       if (dry_run) return ok({ dry_run: true, folder_path: plan.folderPath, new_file_path: plan.newFilePath });
 
-      await app.vault.createFolder(plan.folderPath);
-      const file = app.vault.getAbstractFileByPath(path);
-      await app.fileManager.renameFile(file as any, plan.newFilePath);
+      await source.createFolder(plan.folderPath);
+      await source.renameFile(path, plan.newFilePath);
       return ok({ dry_run: false, folder_path: plan.folderPath, new_file_path: plan.newFilePath });
     }
   );

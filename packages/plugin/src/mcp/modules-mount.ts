@@ -77,6 +77,7 @@ import {
 } from "../kernel/crosssession/index.js";
 import { registerTriageTools, emptyTriageSource, type TriageSource, type TriageToolsCtx } from "./tools-triage.js";
 import { registerBasesTools, emptyBasesSource, queryBaseRows, type BasesSource, type BasesToolsCtx } from "./tools-bases.js";
+import { registerJdScaffoldTools, emptyJdScaffoldSource, type JdScaffoldSource, type JdScaffoldToolsCtx } from "./tools-jd-scaffold.js";
 import { DEFAULT_BASES_CONFIG, validateBasesConfig } from "../kernel/bases/index.js";
 import {
   DEFAULT_TRIAGE_CONFIG,
@@ -1255,6 +1256,54 @@ const BASES_MANIFEST: ModuleManifest = {
   },
 };
 
+// jd-scaffold, Stage A of the jd-dashboard fold
+// (docs/superpowers/specs/2026-08-19-jd-dashboard-fold-design.md): three
+// mutating tools ported from obsidian-jd-dashboard's standard-zeros.ts and
+// promote-to-folder.ts. No config fields for Stage A — no per-vault knobs to
+// expose yet (unlike scheme's prefix/area config, jd-scaffold's shape is
+// fixed: the standard-zeros set, and the ID-note regex, are not
+// user-configurable in this stage).
+const JD_SCAFFOLD_MANIFEST: ModuleManifest = {
+  summary:
+    "Johnny Decimal category scaffolding, ported from obsidian-jd-dashboard: create the fixed standard-zeros set " +
+    "(XX.00-XX.09) in a category, self-heal a vault-wide missing XX.00, and promote a leaf id note into a " +
+    "same-named folder. No jd-id: frontmatter is written — vault-mcp's scheme module is path-canonical, the " +
+    "filename already carries the address (same call already made for the jd-numbering fold).",
+  directory: {
+    tools: [
+      {
+        name: "obsidian_jd_standard_zeros",
+        purpose:
+          "Create the fixed 10-note standard-zeros set (JDex, Inbox, Task & project management, Templates, " +
+          "Links, Conventions & policies, Knowledge base, Dashboard, Someday, Archive) inside a category folder.",
+        readOnly: false,
+        options: [
+          { name: "folder_path", what: "vault path of the category folder" },
+          { name: "prefix", what: "the category's two-digit prefix" },
+        ],
+        caveats: ["An already-existing target is SKIPPED, never overwritten — safe to re-run."],
+      },
+      {
+        name: "obsidian_jd_ensure_category_indexes",
+        purpose:
+          "Vault-wide: walk every depth-2 `XX <name>` category folder and create a minimal `XX.00` JDex index for " +
+          "any that lack one.",
+        readOnly: false,
+        caveats: ["Accepts `XX.00 Title.md`, `XX.00.md`, or `XX.00+SUF Title.md` as already-present."],
+      },
+      {
+        name: "obsidian_jd_promote_to_folder",
+        purpose:
+          "Convert an XX.YY (or 5-digit expanded-area id) note into a same-named folder with the note moved " +
+          "inside as the folder's cover note, via link-healing rename.",
+        readOnly: false,
+        options: [{ name: "path", what: "vault path of the note to promote" }],
+        caveats: ["Refuses (not_id_note / already_cover_note / folder_exists) rather than guessing."],
+      },
+    ],
+  },
+};
+
 /** What the mount needs from the live plugin (server.ts supplies the Obsidian
  * adapters; tests supply fakes). The same per-call freshness discipline as
  * the direct registrations it replaces: config the HANDLERS read (allowlist,
@@ -1319,6 +1368,12 @@ export interface MountDeps {
   triageSource?: TriageSource;
   /** Injectable clock for triage queue ages (tests). */
   triageNow?: () => Date;
+  /** The jd-scaffold module's injected vault reader/writer
+   *  (obsidianJdScaffoldSource live — standard-zeros creation, category-index
+   *  self-heal, promote-to-folder). Absent ⇒ emptyJdScaffoldSource(): reads
+   *  answer empty, writes refuse with a clear error rather than a silent
+   *  no-op — same "registers, degrades cleanly" shape as bases/triage. */
+  jdScaffoldSource?: JdScaffoldSource;
 }
 
 /**
@@ -1554,6 +1609,22 @@ export function builtinModules(deps: MountDeps): VaultModule[] {
         getSettings: deps.getSettings,
         visible: host.visible,
       }),
+    ),
+    // jd-scaffold (Stage A of the jd-dashboard fold): the second MUTATING
+    // capability module after skills, same reasoning — it declares
+    // `mutating: true` so its three write tools (standard_zeros,
+    // ensure_category_indexes, promote_to_folder) register with
+    // `readOnlyHint: false`, still through the guard-patched registrar (queue,
+    // journal, allowlist, read-only mode). Default DISABLED, matching the
+    // skills module's own precedent ("a newly-folded mutating surface stays
+    // off until a human turns it on"). No config for Stage A (see
+    // JD_SCAFFOLD_MANIFEST's own comment), so ctxOf needs only getSettings —
+    // no `host`/`config` plumbing, unlike bases above.
+    moduleFromRegistrar(
+      { id: "jd-scaffold", capabilities: ["scaffolding"], enabled: false, mutating: true, manifest: JD_SCAFFOLD_MANIFEST },
+      (server: any, ctx: JdScaffoldToolsCtx) =>
+        registerJdScaffoldTools(server, deps.jdScaffoldSource ?? emptyJdScaffoldSource(), ctx),
+      () => ({ getSettings: deps.getSettings }),
     ),
     // The triage module (#221 phase 2, phase-3 shape per #241): the
     // disposition substrate's second instance — inbox triage. A MUTATING
