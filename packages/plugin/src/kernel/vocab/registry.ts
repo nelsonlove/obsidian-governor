@@ -37,7 +37,8 @@ const CONFIG_VALIDATORS: Partial<Record<VocabProviderName, (config: unknown) => 
 
 export interface VocabInstanceSettings {
   id: string;
-  /** Provider name: "blueprint" (registry grammar) or "glossary" (terms). */
+  /** Provider name: "scope-tags" (per-scope tag whitelists), "blueprint"
+   * (gen-old registry grammar), or "glossary" (terms). */
   provider: string;
   /** Vault-relative path prefix this vocabulary is read from; "" = whole vault. */
   root: string;

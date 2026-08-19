@@ -446,6 +446,14 @@ describe("tool layer", () => {
     assert.equal(full.structuredContent.vocabularies[0].counts.tag, 6);
   });
 
+  test("a list tag field repeating one token is a single declaration, not a self-duplicate (review fix)", () => {
+    const p = scopeTagsProvider(DEFAULT_SCOPE_TAGS_CONFIG, [
+      { path: "R/x.md", frontmatter: { fileClass: "Meta/Tag", tag: ["note", "note"] } },
+    ]);
+    assert.equal(p.resolve("note", "tag").canonical, "note");
+    assert.equal(p.registryFindings().some((f) => f.code === "registry_duplicate"), false);
+  });
+
   test("allowlist — a hidden scope note contributes nothing to the chain", async () => {
     // Band note hidden: a band-level note loses the band's meta/tag allowance
     const allowlist = [

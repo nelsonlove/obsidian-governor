@@ -179,7 +179,9 @@ export function scopeTagsProvider(cfg: ScopeTagsConfig, listing: VocabNote[]): S
     const fm = note.frontmatter;
     if (!fm) continue;
     if (isRegistryNote(fm, cfg.registryClass)) {
-      const tokens = asStrings(fm[cfg.tagKey]).map(normalize).filter((t) => t !== "");
+      // Deduped per note: a list value repeating one token is a single
+      // declaration, not a self-duplicate for `registry_duplicate` to report.
+      const tokens = [...new Set(asStrings(fm[cfg.tagKey]).map(normalize).filter((t) => t !== ""))];
       if (tokens.length === 0) {
         untagged.push(note.path);
       } else {
