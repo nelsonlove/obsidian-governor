@@ -15,17 +15,25 @@
 
 import { blueprintProvider, type VocabNote } from "./blueprint.js";
 import { glossaryProvider, DEFAULT_GLOSSARY_CONFIG } from "./glossary.js";
+import { scopeTagsProvider, validateScopeTagsConfig, DEFAULT_SCOPE_TAGS_CONFIG, type ScopeTagsConfig } from "./scope-tags.js";
 import type { VocabularyProvider } from "./provider.js";
 
 /** The provider names a vocabulary instance may name — the single source of
  * truth for both the registry's skip-unknown check and the settings-tab
  * provider dropdown (connection-ui.ts), so the two cannot drift. */
-export const VOCAB_PROVIDERS = ["blueprint", "glossary"] as const;
+export const VOCAB_PROVIDERS = ["blueprint", "glossary", "scope-tags"] as const;
 export type VocabProviderName = (typeof VOCAB_PROVIDERS)[number];
 
 export function isVocabProvider(name: unknown): name is VocabProviderName {
   return typeof name === "string" && (VOCAB_PROVIDERS as readonly string[]).includes(name);
 }
+
+/** Per-provider config validators (a provider validates its OWN config
+ * namespace, the scheme registry's `validateJdConfig` pattern). Absent means
+ * the provider takes any config shape it can coerce. */
+const CONFIG_VALIDATORS: Partial<Record<VocabProviderName, (config: unknown) => string[]>> = {
+  "scope-tags": validateScopeTagsConfig,
+};
 
 export interface VocabInstanceSettings {
   id: string;
@@ -79,6 +87,16 @@ export class VocabRegistry {
         this.problems.push(`unknown vocabulary provider '${row.provider}' (id '${row.id}') — skipped`);
         continue;
       }
+      // Per-provider config validation, the scheme registry's pattern: an
+      // invalid config skips that ONE instance and reports, never throws.
+      const validate = CONFIG_VALIDATORS[row.provider as VocabProviderName];
+      const configProblems = validate ? validate(row.config) : [];
+      if (configProblems.length > 0) {
+        this.problems.push(
+          `invalid config for vocabulary '${row.id}' (${row.provider}): ${configProblems.join("; ")} — skipped`
+        );
+        continue;
+      }
       this.rows.push(row);
     }
   }
@@ -91,7 +109,9 @@ export class VocabRegistry {
       const provider =
         row.provider === "blueprint"
           ? blueprintProvider({ root: "" }, scoped)
-          : glossaryProvider({ ...DEFAULT_GLOSSARY_CONFIG, ...(row.config ?? {}) } as { definitionTag: string }, scoped);
+          : row.provider === "scope-tags"
+            ? scopeTagsProvider({ ...DEFAULT_SCOPE_TAGS_CONFIG, ...(row.config ?? {}) } as ScopeTagsConfig, scoped)
+            : glossaryProvider({ ...DEFAULT_GLOSSARY_CONFIG, ...(row.config ?? {}) } as { definitionTag: string }, scoped);
       return { id: row.id, providerName: row.provider, root: row.root, provider };
     });
   }

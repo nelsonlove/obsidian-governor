@@ -132,6 +132,14 @@ async function buildListing(
         if (under(p, row.root)) want(p, "fm");
         if (termsRoot !== null && under(p, termsRoot) && under(p, row.root)) want(p, "body");
       }
+    } else if (row.provider === "scope-tags") {
+      // Registry notes (`fileClass: Meta/Tag`) and scope folder-notes are
+      // recognized by FRONTMATTER, which only the provider can inspect — so
+      // every markdown note under the root arrives with its cached
+      // frontmatter. No body is ever read: this provider needs none.
+      for (const p of all) {
+        if (p.endsWith(".md") && under(p, row.root)) want(p, "fm");
+      }
     }
   }
 
