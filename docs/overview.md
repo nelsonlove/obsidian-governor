@@ -275,7 +275,9 @@ note whose frontmatter is a derivation stamp, accept-checked before writing).
 ## External tools + trust
 
 Other Obsidian plugins publish MCP tools via `app.plugins.plugins['vault-mcp'].api`
-(`apiVersion: 1`; SDK: `vault-mcp-api`). The boundary is pure data: plain JSON Schema in,
+(`apiVersion: 1`; SDK: `vault-mcp-api`, in this monorepo at
+[`packages/vault-mcp-api`](../packages/vault-mcp-api) since #86, published to npm under
+the unchanged name). The boundary is pure data: plain JSON Schema in,
 plain JSON out, registered through the guarded path per connection. A published
 `readOnly: true` is **distrusted by default** — believing it would exempt third-party code
 from the queue, the journal, the allowlist, the kernel args and read-only mode at once — so
