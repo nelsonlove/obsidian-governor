@@ -136,6 +136,15 @@ Known-overstated section instead — see its header for the format.
 - `readOnlyHint: true`, empty input schema, no write and no accept/baseline verb: it reports pending-ness; it cannot accept ("the accept verb is in no API").
 - **Allowlist-filtered.** The index is written from the whole vault, so every returned entry is filtered through the **same `isVisible` guard** the uid/read tools use, *before* it is reported — a sandboxed session that could learn about pending notes in territory it cannot read would have a path oracle otherwise.
 
+## docs/acceptance-model.md (#261 additions)
+
+- **The sweep is event-driven, not timer-only (#261).** Live diagnosis showed Chromium suspends renderer timers while the Obsidian window is occluded — the 2.5s journal poll simply never ticked during unattended sessions, which is exactly when agents write (the observed "zero auto-accept records ever").
+  approved 2026-08-19 (#261): the "never ticked" is a live observation (armed interval, grown journal, zero ticks over minutes with the window occluded), recorded in the PR's live-verification log — a diagnosis statement, not a security guarantee.
+- The kernel now nudges the governance poll after **every journal append** (`nudgeGovernanceQueue`, wired in `main.ts`), so queue refresh + sweep run within seconds of an agent write even with the window buried; the interval remains as foreground catch-up.
+  approved 2026-08-19 (#261): substantiated by the main.ts append wrapper + the
+  governance-module source pins ("main.ts nudges the governance queue after every journal
+  append") and the live nudge run (write → refresh + sweep in ~4s, window occluded).
+
 ## docs/conformance.md
 
 - An explicit `--baseline=` fixture path is always allowed; the guard flips once the port set is complete and the cutover rebaseline is reviewed.

@@ -325,6 +325,16 @@ log to the console, once per content-state). Supporting it, **rename captures pe
 (`governance/rename-records.json`, TTL 30 days, capped) so the link-heal oracle still
 confirms a rename after a plugin reload.
 
+**The sweep is event-driven, not timer-only (#261).** Live diagnosis showed Chromium
+suspends renderer timers while the Obsidian window is occluded — the 2.5s journal poll
+simply never ticked during unattended sessions, which is exactly when agents write (the
+observed "zero auto-accept records ever"). The kernel now nudges the governance poll after
+**every journal append** (`nudgeGovernanceQueue`, wired in `main.ts`), so queue refresh +
+sweep run within seconds of an agent write even with the window buried; the interval
+remains as foreground catch-up. The nudge changes only *when* the poll runs — the
+journal-growth signature gate, the in-flight guard, and the eligibility decision are
+untouched, and it is a no-op while governance is unmounted.
+
 ## Every write surface is covered
 
 The guard lives at the shared primitive in `obsidian-backend.ts`, which every
