@@ -2,11 +2,13 @@
 //
 // Pure types for the QuickAdd-macros-as-notes transform. Covers Macro
 // choices (userscript, choice, wait, obsidian-command and editor-command
-// steps), Template choices and Capture choices; `multi` is not compiled yet.
+// steps), Template choices, Capture choices, and Multi choices (a
+// folder-anchored choice whose members are resolved by the glue layer).
 // No `obsidian` import anywhere in
 // this file or transform.ts — see packages/plugin/CLAUDE.md's kernel
-// discipline. Wikilink resolution happens in the glue layer
-// (mcp/tools-quickadd.ts); everything here works on already-resolved data.
+// discipline. Wikilink resolution and folder-anchoring discovery happen in
+// the glue layer (mcp/tools-quickadd.ts); everything here works on
+// already-resolved data.
 
 /** A UserScript step whose `script:` wikilink resolved to a real vault path. */
 export interface UserScriptStepOk {
@@ -233,7 +235,39 @@ export interface CaptureChoiceNoteInput {
   createIfMissing: boolean;
 }
 
-export type ChoiceNoteInput = MacroChoiceNoteInput | TemplateChoiceNoteInput | CaptureChoiceNoteInput;
+/** A `quickadd-type: multi` note's folder, resolved by the glue layer (see
+ *  mcp/tools-quickadd.ts's folder-anchoring discovery). `MultiFolderOk`
+ *  carries the recursively-resolved membership: every note directly inside
+ *  the multi note's OWN parent folder that this compiler claims — sibling
+ *  notes with a recognized quickadd-type, and sibling SUBFOLDERS that are
+ *  themselves anchored by their own multi-note (nested Multi-in-Multi,
+ *  arbitrarily deep — folders cannot cycle, so this recursion always
+ *  terminates). `MultiFolderFailed` covers the one way a Multi note itself
+ *  can fail: another quickadd-type: multi note claims the SAME folder —
+ *  ambiguous, so neither compiles (their sibling notes are unaffected and
+ *  stay top-level, since an authoring mistake in one note's frontmatter
+ *  must not make unrelated notes vanish). */
+export interface MultiFolderOk {
+  ok: true;
+  members: ChoiceNoteInput[];
+}
+export interface MultiFolderFailed {
+  ok: false;
+  error: string;
+}
+
+/** One `quickadd-type: multi` choice note's data, already resolved by the
+ *  glue layer. Unlike Macro/Template/Capture, a Multi note carries no
+ *  required companion frontmatter field of its own — its members come
+ *  entirely from folder membership, not from anything written in the note. */
+export interface MultiChoiceNoteInput {
+  quickaddType: "multi";
+  notePath: string;
+  name: string;
+  folder: MultiFolderOk | MultiFolderFailed;
+}
+
+export type ChoiceNoteInput = MacroChoiceNoteInput | TemplateChoiceNoteInput | CaptureChoiceNoteInput | MultiChoiceNoteInput;
 
 /** QuickAdd's own native macro-command shapes — verified against a real
  *  vault's `.obsidian/plugins/quickadd/data.json`. UserScript first; the
@@ -357,6 +391,35 @@ export interface QuickAddCaptureChoice {
   templater: { afterCapture: "none" };
 }
 
+/** QuickAdd's native Multi-choice shape — verified against QuickAdd's
+ *  decompiled source (class `ng`). The whole shape: base fields plus
+ *  `choices` (RECURSIVE — any choice type, including another Multi) and
+ *  `collapsed` (UI-only; not exposed via frontmatter this stage, always
+ *  false).
+ *
+ *  `command` is always `false` here — a DELIBERATE COMPILER CHOICE, not a
+ *  restriction QuickAdd imposes. Verified against QuickAdd's installed
+ *  source: its base choice class sets `command` on EVERY choice type
+ *  (Macro, Template, Capture and Multi alike), its choice context menu
+ *  offers "Enable in command palette" unconditionally for every type, and
+ *  `addCommandForChoice` registers a real `choice:<id>` palette command for
+ *  a Multi exactly like any other type. (The one place QuickAdd does refuse
+ *  a Multi is its own CLI surface — "Multi choices are interactive and
+ *  cannot be run via CLI" — which is that surface's rule, not the
+ *  runtime's: `ChoiceExecutor.execute` has a real `case "Multi"` that opens
+ *  the Multi's picker.) A palette command that can only ever open an
+ *  interactive picker buys this compiler's automation-oriented use case
+ *  nothing, so the compiler fixes it at `false` rather than exposing it —
+ *  never a configurable field on this type. */
+export interface QuickAddMultiChoice {
+  id: string;
+  name: string;
+  type: "Multi";
+  command: false;
+  choices: Array<QuickAddMacroChoice | QuickAddTemplateChoice | QuickAddCaptureChoice | QuickAddMultiChoice>;
+  collapsed: false;
+}
+
 /** One choice note that failed to compile. The choice is OMITTED from
  *  `TransformResult.choices` entirely — never partially included. */
 export interface ChoiceError {
@@ -365,6 +428,6 @@ export interface ChoiceError {
 }
 
 export interface TransformResult {
-  choices: Array<QuickAddMacroChoice | QuickAddTemplateChoice | QuickAddCaptureChoice>;
+  choices: Array<QuickAddMacroChoice | QuickAddTemplateChoice | QuickAddCaptureChoice | QuickAddMultiChoice>;
   errors: ChoiceError[];
 }

@@ -20,6 +20,12 @@ function build({ notes = [], links = {}, existingChoices = [], settings = {}, co
   const saveSettingsCalls = [];
   const addedCommands = [];
   const removedCommands = [];
+  // The FULL argument list of each removeCommandForChoice call. QuickAdd's own
+  // removeCommandForChoice(choice, opts) recurses into a Multi's nested
+  // choices only when `opts.recursive === true` (addCommandForChoice recurses
+  // unconditionally), so the second argument is load-bearing, not decoration —
+  // `removedCommands` alone cannot see it.
+  const removedCommandCalls = [];
   const getMarkdownFilesCalls = [];
   const quickadd = {
     settings: { choices: existingChoices },
@@ -27,7 +33,10 @@ function build({ notes = [], links = {}, existingChoices = [], settings = {}, co
   };
   if (commandApi) {
     quickadd.addCommandForChoice = (c) => addedCommands.push(c);
-    quickadd.removeCommandForChoice = (c) => removedCommands.push(c);
+    quickadd.removeCommandForChoice = (...args) => {
+      removedCommands.push(args[0]);
+      removedCommandCalls.push(args);
+    };
   }
   const app = {
     vault: { getMarkdownFiles: () => { getMarkdownFilesCalls.push(1); return files; } },
@@ -59,6 +68,7 @@ function build({ notes = [], links = {}, existingChoices = [], settings = {}, co
     saveSettingsCalls,
     addedCommands,
     removedCommands,
+    removedCommandCalls,
     getMarkdownFilesCalls,
   };
 }
@@ -84,6 +94,10 @@ function templateNote(path, name, extra = {}) {
 
 function captureNote(path, name, extra = {}) {
   return { path, frontmatter: { "quickadd-type": "capture", name, ...extra } };
+}
+
+function multiNote(path, name, extra = {}) {
+  return { path, frontmatter: { "quickadd-type": "multi", name, ...extra } };
 }
 
 describe("obsidian_quickadd_compile — Template discovery", () => {
@@ -343,6 +357,174 @@ describe("obsidian_quickadd_compile — Capture discovery", () => {
   });
 });
 
+describe("obsidian_quickadd_compile — Multi discovery", () => {
+  test("a sibling capture/template/macro note directly in a Multi's folder nests, not top-level", async () => {
+    const { handler } = build({
+      notes: [
+        multiNote("Choices/My Multi/My Multi.md", "My Multi"),
+        captureNote("Choices/My Multi/A Capture.md", "A Capture", { target: "some/path.md" }),
+      ],
+    });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.errors.length, 0);
+    // ONE top-level choice — the Multi. The Capture note does NOT ALSO
+    // appear top-level.
+    assert.equal(res.structuredContent.choices.length, 1);
+    const multi = res.structuredContent.choices[0];
+    assert.equal(multi.type, "Multi");
+    assert.equal(multi.choices.length, 1);
+    assert.equal(multi.choices[0].name, "A Capture");
+  });
+
+  test("multiple siblings nest in alphabetical order by path", async () => {
+    const { handler } = build({
+      notes: [
+        multiNote("Choices/My Multi/My Multi.md", "My Multi"),
+        captureNote("Choices/My Multi/Zebra.md", "Zebra", { target: "z.md" }),
+        captureNote("Choices/My Multi/Apple.md", "Apple", { target: "a.md" }),
+      ],
+    });
+    const res = await handler({ dry_run: true });
+    const multi = res.structuredContent.choices[0];
+    assert.deepEqual(multi.choices.map((c) => c.name), ["Apple", "Zebra"]);
+  });
+
+  test("Multi-in-Multi: a subfolder anchored by its own multi-note nests as a nested Multi", async () => {
+    const { handler } = build({
+      notes: [
+        multiNote("Choices/Outer/Outer.md", "Outer"),
+        multiNote("Choices/Outer/Inner/Inner.md", "Inner"),
+        captureNote("Choices/Outer/Inner/Leaf.md", "Leaf", { target: "leaf.md" }),
+      ],
+    });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.errors.length, 0);
+    assert.equal(res.structuredContent.choices.length, 1);
+    const outer = res.structuredContent.choices[0];
+    assert.equal(outer.choices.length, 1);
+    const inner = outer.choices[0];
+    assert.equal(inner.type, "Multi");
+    assert.equal(inner.choices.length, 1);
+    assert.equal(inner.choices[0].name, "Leaf");
+  });
+
+  test("a note in a folder with NO multi-note stays top-level (regression check)", async () => {
+    const { handler } = build({
+      notes: [captureNote("Choices/Plain/A Capture.md", "A Capture", { target: "x.md" })],
+    });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.choices.length, 1);
+    assert.equal(res.structuredContent.choices[0].type, "Capture");
+  });
+
+  test("an ambiguous folder (2 multi-notes claiming the same folder) fails BOTH notes; siblings stay top-level", async () => {
+    const { handler } = build({
+      notes: [
+        multiNote("Choices/Ambiguous/First.md", "First"),
+        multiNote("Choices/Ambiguous/Second.md", "Second"),
+        captureNote("Choices/Ambiguous/Sibling.md", "Sibling", { target: "s.md" }),
+      ],
+    });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.errors.length, 2);
+    assert.ok(res.structuredContent.errors.every((e) => /ambiguous/i.test(e.message)));
+    // The sibling capture note is unaffected — it's neither an ambiguous
+    // multi-note nor claimed by one (an ambiguous folder is treated as
+    // UNCLAIMED for membership purposes), so it stays top-level.
+    assert.equal(res.structuredContent.choices.length, 1);
+    assert.equal(res.structuredContent.choices[0].name, "Sibling");
+  });
+
+  // PIN, not a fix. An ambiguous SUBFOLDER nested inside an otherwise-valid
+  // outer Multi is treated as UNCLAIMED for membership purposes (the same
+  // rule the flat ambiguous-folder case above states), and an unclaimed
+  // folder's contents fall through to TOP LEVEL — so `Sib`, living two
+  // folders deep, compiles as its own separate top-level choice rather than
+  // nesting anywhere. Surprising enough to pin: this is the current, ruled
+  // behavior, and any future change to it must be a deliberate design call
+  // rather than an accidental regression.
+  test("an ambiguous SUBFOLDER inside an outer Multi hoists its unrelated sibling to TOP LEVEL", async () => {
+    const { handler } = build({
+      notes: [
+        multiNote("Out/Out.md", "Out"),
+        multiNote("Out/Amb/One.md", "One"),
+        multiNote("Out/Amb/Two.md", "Two"),
+        captureNote("Out/Amb/Sib.md", "Sib", { target: "s.md" }),
+      ],
+    });
+    const res = await handler({ dry_run: true });
+    // Both ambiguous multi-notes fail, and only those two.
+    assert.equal(res.structuredContent.errors.length, 2);
+    assert.deepEqual(res.structuredContent.errors.map((e) => e.notePath).sort(), [
+      "Out/Amb/One.md",
+      "Out/Amb/Two.md",
+    ]);
+    assert.ok(res.structuredContent.errors.every((e) => /ambiguous/i.test(e.message)));
+
+    // TWO top-level choices: the outer Multi (whose only subfolder-member
+    // failed to resolve, so it compiles EMPTY) and the hoisted sibling.
+    assert.equal(res.structuredContent.choices.length, 2);
+    const outer = res.structuredContent.choices.find((c) => c.name === "Out");
+    assert.equal(outer.type, "Multi");
+    assert.deepEqual(outer.choices, []);
+    const sib = res.structuredContent.choices.find((c) => c.name === "Sib");
+    assert.equal(sib.type, "Capture");
+    assert.equal(sib.id, "qan:Out/Amb/Sib.md#choice");
+  });
+
+  test("a Macro choice: step CANNOT target a Multi choice — still a dangling-reference error", async () => {
+    const { handler } = build({
+      notes: [
+        multiNote("Choices/My Multi/My Multi.md", "My Multi"),
+        macroNoteWithSteps("Choices/Referrer.md", "Referrer", [{ kind: "choice", choice: "[[My Multi]]" }]),
+      ],
+      links: { "My Multi": "Choices/My Multi/My Multi.md" },
+    });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.errors.length, 1);
+    assert.match(res.structuredContent.errors[0].message, /does not declare a quickadd-type a choice step may target/);
+  });
+
+  test("an empty Multi folder (no members) compiles a Multi with an empty choices array", async () => {
+    const { handler } = build({ notes: [multiNote("Choices/Empty/Empty.md", "Empty")] });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.errors.length, 0);
+    assert.deepEqual(res.structuredContent.choices[0].choices, []);
+  });
+
+  // parentFolder("") === "" (idempotent at the vault-root boundary), so a
+  // multi-note living directly at vault root has ownFolder === "" and its
+  // "grandparent" would ALSO be "" — the same value that note itself
+  // anchors. Without a guard this reads as self-claiming and the note (plus
+  // every other root-level note it would have claimed) silently vanishes
+  // from the compile with zero errors. This is the vault-root analogue of
+  // the ordinary "sibling nests, not top-level" case above.
+  test("a root-level Multi note claims a root-level sibling as a member (vault-root boundary)", async () => {
+    const { handler } = build({
+      notes: [
+        multiNote("Multi.md", "Multi"),
+        captureNote("Capture.md", "Capture", { target: "some/path.md" }),
+      ],
+    });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.errors.length, 0);
+    assert.equal(res.structuredContent.choices.length, 1);
+    const multi = res.structuredContent.choices[0];
+    assert.equal(multi.type, "Multi");
+    assert.equal(multi.choices.length, 1);
+    assert.equal(multi.choices[0].name, "Capture");
+  });
+
+  test("a LONE root-level Multi note with no siblings compiles as an empty Multi, not vanishing", async () => {
+    const { handler } = build({ notes: [multiNote("Multi.md", "Multi")] });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.errors.length, 0);
+    assert.equal(res.structuredContent.choices.length, 1);
+    assert.equal(res.structuredContent.choices[0].type, "Multi");
+    assert.deepEqual(res.structuredContent.choices[0].choices, []);
+  });
+});
+
 describe("obsidian_quickadd_compile — mixed choice types in one compile", () => {
   test("Macro, Template, and Capture notes all compile together", async () => {
     const { handler } = build({
@@ -488,10 +670,14 @@ describe("obsidian_quickadd_compile: per-choice error isolation", () => {
     assert.equal(res.structuredContent.errors[0].notePath, "Choices/Bad.md");
   });
 
-  test("a note with an unrecognized quickadd-type (e.g. multi, Stage D territory) is ignored, not an error", async () => {
+  // `multi` used to be this test's example of an "unrecognized" type before
+  // Stage D made it discoverable — it no longer fits here (see the "Multi
+  // discovery" describe block above for its own coverage, including
+  // folder-anchoring). This test now uses a genuinely unrecognized type.
+  test("a note with an unrecognized quickadd-type is ignored, not an error", async () => {
     const { handler } = build({
       notes: [
-        { path: "Choices/M.md", frontmatter: { "quickadd-type": "multi", name: "M" } },
+        { path: "Choices/M.md", frontmatter: { "quickadd-type": "unknown-type", name: "M" } },
         macroNote("Choices/Good.md", "Good", "stamp-title"),
       ],
       links: { "stamp-title": "Scripts/stamp-title.md" },
@@ -645,6 +831,43 @@ describe("obsidian_quickadd_compile: Obsidian command registration", () => {
     assert.equal(addedCommands[0].name, "Stamp title");
   });
 
+  // QuickAdd's addCommandForChoice recurses into a Multi's nested choices
+  // UNCONDITIONALLY, but removeCommandForChoice(choice, opts) recurses only
+  // when `opts.recursive === true`. Without the option, a nested choice whose
+  // containing Multi is removed or replaced keeps a palette command nobody can
+  // service — it throws "Choice … not found" until Obsidian reloads.
+  test("removeCommandForChoice is called with { recursive: true }", async () => {
+    const stale = { id: "qan:Choices/Gone.md#choice", name: "Gone", type: "Macro" };
+    const { handler, removedCommandCalls } = build({
+      notes: [macroNote("Choices/Stamp title.md", "Stamp title", "stamp-title")],
+      links: { "stamp-title": "Scripts/stamp-title.md" },
+      existingChoices: [stale],
+    });
+    await handler({ dry_run: false });
+    assert.equal(removedCommandCalls.length, 1);
+    assert.deepEqual(removedCommandCalls[0], [stale, { recursive: true }]);
+  });
+
+  test("a removed MULTI is deregistered recursively, so its nested commands go too", async () => {
+    const nested = { id: "qan:Choices/Gone/Leaf.md#choice", name: "Leaf", type: "Capture" };
+    const staleMulti = {
+      id: "qan:Choices/Gone/Gone.md#choice",
+      name: "Gone",
+      type: "Multi",
+      choices: [nested],
+    };
+    const { handler, removedCommandCalls } = build({
+      notes: [macroNote("Choices/Stamp title.md", "Stamp title", "stamp-title")],
+      links: { "stamp-title": "Scripts/stamp-title.md" },
+      existingChoices: [staleMulti],
+    });
+    await handler({ dry_run: false });
+    // The compiler hands QuickAdd the CONTAINER plus the recursive flag —
+    // walking the nested choices itself is QuickAdd's own job, and doing it
+    // here would double-deregister on every version that honors the flag.
+    assert.deepEqual(removedCommandCalls, [[staleMulti, { recursive: true }]]);
+  });
+
   test("dry_run: true registers and deregisters nothing", async () => {
     const stale = { id: "qan:Choices/Gone.md#choice", name: "Gone", type: "Macro" };
     const { handler, addedCommands, removedCommands } = build({
@@ -752,6 +975,100 @@ describe("obsidian_quickadd_compile: mass-removal guard", () => {
     assert.equal(res.structuredContent.removed.length, 2);
   });
 
+  // Stage D regression. Before Multi existed, a vault with 40 Capture notes
+  // had 40 TOP-LEVEL compiler-owned choices, so a cold-cache compile removing
+  // all of them tripped the guard at 40. Move those same notes into one Multi
+  // folder and the top-level count drops to 1 — nominally below the threshold,
+  // while the deletion is exactly as large. The guard therefore counts the
+  // FULL removed subtree, not the top-level entries.
+  test("removing ONE Multi that holds many nested choices trips the guard (nested count, not top-level)", async () => {
+    const nested = [];
+    for (let i = 0; i < 40; i++) {
+      nested.push({ id: `qan:Choices/Big/N${i}.md#choice`, name: `N${i}`, type: "Capture" });
+    }
+    const bigMulti = { id: "qan:Choices/Big/Big.md#choice", name: "Big", type: "Multi", choices: nested };
+    // notes: [] is the cold-cache shape — collectChoiceNotes finds nothing.
+    const { handler, quickadd, saveSettingsCalls, removedCommands } = build({
+      notes: [],
+      existingChoices: [bigMulti],
+    });
+    const res = await handler({ dry_run: false });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[suspicious_mass_removal\]/);
+    // Only ONE top-level entry is nominally "removed" — the guard fired on the
+    // 41 choices that entry really carries.
+    assert.match(res.content[0].text, /41 choices in total/);
+    assert.deepEqual(saveSettingsCalls, []);
+    assert.deepEqual(quickadd.settings.choices, [bigMulti]);
+    assert.deepEqual(removedCommands, []);
+  });
+
+  test("nesting is counted RECURSIVELY — a Multi inside a Multi still trips the guard", async () => {
+    const inner = {
+      id: "qan:Choices/Out/In/In.md#choice",
+      name: "In",
+      type: "Multi",
+      choices: [
+        { id: "qan:Choices/Out/In/A.md#choice", name: "A", type: "Capture" },
+        { id: "qan:Choices/Out/In/B.md#choice", name: "B", type: "Capture" },
+      ],
+    };
+    const outer = { id: "qan:Choices/Out/Out.md#choice", name: "Out", type: "Multi", choices: [inner] };
+    const { handler, saveSettingsCalls } = build({ notes: [], existingChoices: [outer] });
+    const res = await handler({ dry_run: false });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[suspicious_mass_removal\]/);
+    assert.deepEqual(saveSettingsCalls, []);
+  });
+
+  // The flip side of the nested count: it must not turn every Multi removal
+  // into a refusal. One Multi holding one member is 2 choices — still below
+  // the threshold, and still applies.
+  test("a small Multi (2 choices in total) stays below the threshold and applies", async () => {
+    const smallMulti = {
+      id: "qan:Choices/Small/Small.md#choice",
+      name: "Small",
+      type: "Multi",
+      choices: [{ id: "qan:Choices/Small/One.md#choice", name: "One", type: "Capture" }],
+    };
+    const { handler, quickadd, saveSettingsCalls } = build({ notes: [], existingChoices: [smallMulti] });
+    const res = await handler({ dry_run: false });
+    assert.notEqual(res.isError, true);
+    assert.equal(saveSettingsCalls.length, 1);
+    assert.deepEqual(quickadd.settings.choices, []);
+  });
+
+  test("dry_run still SHOWS a nested mass removal instead of refusing", async () => {
+    const bigMulti = {
+      id: "qan:Choices/Big/Big.md#choice",
+      name: "Big",
+      type: "Multi",
+      choices: [
+        { id: "qan:Choices/Big/A.md#choice", name: "A", type: "Capture" },
+        { id: "qan:Choices/Big/B.md#choice", name: "B", type: "Capture" },
+      ],
+    };
+    const { handler } = build({ notes: [], existingChoices: [bigMulti] });
+    const res = await handler({ dry_run: true });
+    assert.notEqual(res.isError, true);
+    // The DIFF stays per top-level choice (its ruled granularity) — only the
+    // guard's threshold comparison counts nested members.
+    assert.deepEqual(res.structuredContent.removed, [{ id: "qan:Choices/Big/Big.md#choice", name: "Big" }]);
+  });
+
+  // `quickadd.settings.choices` is other code's array, so the nested count
+  // must survive junk exactly the way `ownedId` does — never a TypeError.
+  test("a Multi with a missing/hostile nested choices array counts sanely", async () => {
+    const noArray = { id: "qan:Choices/M1.md#choice", name: "M1", type: "Multi" };
+    const junkArray = { id: "qan:Choices/M2.md#choice", name: "M2", type: "Multi", choices: [null, "x", 42] };
+    const { handler, quickadd } = build({ notes: [], existingChoices: [noArray, junkArray] });
+    const res = await handler({ dry_run: false });
+    // 2 top-level + 0 nested + 3 junk nested = 5, over the threshold.
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[suspicious_mass_removal\]/);
+    assert.deepEqual(quickadd.settings.choices, [noArray, junkArray]);
+  });
+
   test("removing 3 while at least one fresh choice compiles is NOT suspicious", async () => {
     const { handler, saveSettingsCalls } = build({
       notes: [macroNote("Choices/Stamp title.md", "Stamp title", "stamp-title")],
@@ -762,6 +1079,82 @@ describe("obsidian_quickadd_compile: mass-removal guard", () => {
     assert.notEqual(res.isError, true);
     assert.equal(saveSettingsCalls.length, 1);
     assert.equal(res.structuredContent.removed.length, 3);
+  });
+
+  // The OTHER shape of the same risk: the Multi is not removed at all — its
+  // id is on both sides, so it is neither `added` nor `removed`, merely
+  // `changed` — while every one of its 40 members went missing from this
+  // compile's discovery (a partially-warm metadata cache that handed over the
+  // anchor note but none of its siblings). Weighing only top-level
+  // disappearances saw nothing here and applied a 40-choice deletion silently.
+  test("a SURVIVING Multi whose members all vanished trips the guard", async () => {
+    const nested = [];
+    for (let i = 0; i < 40; i++) {
+      nested.push({ id: `qan:Choices/Big/N${i}.md#choice`, name: `N${i}`, type: "Capture" });
+    }
+    const bigMulti = { id: "qan:Choices/Big/Big.md#choice", name: "Big", type: "Multi", choices: nested };
+    // Discovery finds ONLY the anchor note — its 40 siblings are invisible.
+    const { handler, quickadd, saveSettingsCalls, removedCommands } = build({
+      notes: [multiNote("Choices/Big/Big.md", "Big")],
+      existingChoices: [bigMulti],
+    });
+    const dry = await handler({ dry_run: true });
+    // Nothing in the DIFF flags it: the Multi survives with the same id.
+    assert.deepEqual(dry.structuredContent.removed, []);
+    assert.deepEqual(dry.structuredContent.added, []);
+    assert.equal(dry.structuredContent.choices[0].choices.length, 0);
+
+    const res = await handler({ dry_run: false });
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /^Error \[suspicious_mass_removal\]/);
+    assert.match(res.content[0].text, /40 nested choices in total/);
+    assert.deepEqual(saveSettingsCalls, []);
+    assert.deepEqual(quickadd.settings.choices, [bigMulti]);
+    assert.deepEqual(removedCommands, []);
+  });
+
+  // Below the threshold, the surviving-Multi case applies like any other.
+  test("a surviving Multi that empties out of only 2 members stays below the threshold", async () => {
+    const smallMulti = {
+      id: "qan:Choices/Small/Small.md#choice",
+      name: "Small",
+      type: "Multi",
+      choices: [
+        { id: "qan:Choices/Small/A.md#choice", name: "A", type: "Capture" },
+        { id: "qan:Choices/Small/B.md#choice", name: "B", type: "Capture" },
+      ],
+    };
+    const { handler, quickadd, saveSettingsCalls } = build({
+      notes: [multiNote("Choices/Small/Small.md", "Small")],
+      existingChoices: [smallMulti],
+    });
+    const res = await handler({ dry_run: false });
+    assert.notEqual(res.isError, true);
+    assert.equal(saveSettingsCalls.length, 1);
+    assert.equal(quickadd.settings.choices[0].choices.length, 0);
+  });
+
+  // The guard is EMPTY-only on purpose (it has no override argument, so a
+  // refusal is unappliable until the vault changes): genuinely deleting some
+  // members of a Multi must still apply. One surviving member is enough.
+  test("a surviving Multi that keeps one member applies even when many members went away", async () => {
+    const nested = [{ id: "qan:Choices/Big/Kept.md#choice", name: "Kept", type: "Capture" }];
+    for (let i = 0; i < 40; i++) {
+      nested.push({ id: `qan:Choices/Big/N${i}.md#choice`, name: `N${i}`, type: "Capture" });
+    }
+    const bigMulti = { id: "qan:Choices/Big/Big.md#choice", name: "Big", type: "Multi", choices: nested };
+    const { handler, quickadd, saveSettingsCalls } = build({
+      notes: [
+        multiNote("Choices/Big/Big.md", "Big"),
+        captureNote("Choices/Big/Kept.md", "Kept", { target: "Log.md" }),
+      ],
+      existingChoices: [bigMulti],
+    });
+    const res = await handler({ dry_run: false });
+    assert.notEqual(res.isError, true);
+    assert.equal(saveSettingsCalls.length, 1);
+    assert.equal(quickadd.settings.choices[0].choices.length, 1);
+    assert.equal(quickadd.settings.choices[0].choices[0].name, "Kept");
   });
 });
 
@@ -934,7 +1327,7 @@ describe("obsidian_quickadd_compile: choice step", () => {
     assert.equal(res.structuredContent.choices.length, 0);
     assert.equal(res.structuredContent.errors.length, 1);
     assert.match(res.structuredContent.errors[0].message, /Notes\/Plain\.md/);
-    assert.match(res.structuredContent.errors[0].message, /quickadd-type this compiler compiles/);
+    assert.match(res.structuredContent.errors[0].message, /quickadd-type a choice step may target/);
   });
 
   // QuickAdd's ChoiceExecutor.execute() switches on the referenced choice's
@@ -973,7 +1366,14 @@ describe("obsidian_quickadd_compile: choice step", () => {
     assert.equal(outer.macro.commands[0].name, "Log");
   });
 
-  test("a choice: link to a quickadd-type: multi note is still rejected (not compiled yet)", async () => {
+  // Stage D: quickadd-type: multi notes are now discovered and compiled (a
+  // Multi choice, here an empty one — see the "Multi discovery" describe
+  // block above), so the Multi note itself DOES appear in `choices`. What's
+  // still rejected is using it as a choice: step TARGET — matching QuickAdd's
+  // own macro-builder UI, whose Choice-step picker flattens Multi containers
+  // away, so a Multi is opened, never invoked from a Macro step. (QuickAdd's
+  // RUNTIME has no such restriction — see CHOICE_STEP_TARGET_TYPES.)
+  test("a choice: link to a quickadd-type: multi note is rejected as a choice: step target", async () => {
     const { handler } = build({
       notes: [
         macroNoteWithSteps("Choices/Bad.md", "Bad", [{ kind: "choice", choice: "[[Folder]]" }]),
@@ -982,9 +1382,15 @@ describe("obsidian_quickadd_compile: choice step", () => {
       links: { "Folder": "Choices/Folder.md" },
     });
     const res = await handler({ dry_run: true });
-    assert.equal(res.structuredContent.choices.length, 0);
+    // ONE compiled choice — the empty "Folder" Multi. "Bad" lives in the
+    // same folder Folder.md anchors, so it's claimed as a NESTED member of
+    // Folder rather than evaluated as a would-be top-level entry; its
+    // failed choice: step surfaces as a nested error bubbled up through
+    // transformMulti, and it is omitted from Folder's own (empty) `choices`.
+    assert.equal(res.structuredContent.choices.length, 1);
+    assert.equal(res.structuredContent.choices[0].type, "Multi");
     assert.equal(res.structuredContent.errors.length, 1);
-    assert.match(res.structuredContent.errors[0].message, /quickadd-type this compiler compiles/);
+    assert.match(res.structuredContent.errors[0].message, /quickadd-type a choice step may target/);
     assert.match(res.structuredContent.errors[0].message, /macro, template, capture/);
   });
 
@@ -997,7 +1403,7 @@ describe("obsidian_quickadd_compile: choice step", () => {
     });
     const res = await handler({ dry_run: true });
     assert.equal(res.structuredContent.choices.length, 0);
-    assert.match(res.structuredContent.errors[0].message, /quickadd-type this compiler compiles/);
+    assert.match(res.structuredContent.errors[0].message, /quickadd-type a choice step may target/);
   });
 });
 

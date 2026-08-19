@@ -37,6 +37,7 @@ import type {
   QuickAddMacroChoice,
   QuickAddTemplateChoice,
   QuickAddCaptureChoice,
+  QuickAddMultiChoice,
   EditorCommandType,
   TemplateChoiceNoteInput,
   CaptureChoiceNoteInput,
@@ -46,8 +47,12 @@ import type {
   CaptureTargetFailed,
 } from "../kernel/quickadd/types.js";
 
-/** 0 fresh choices AND this many about-to-be-deleted ones reads as a cold
- *  metadata cache, not a real change — see the mass-removal guard below. */
+/** A compiler-owned CONTAINER coming back EMPTY while it previously held this
+ *  many choices reads as a cold metadata cache, not a real change — see the
+ *  mass-removal guard below. Two containers can empty: the top-level
+ *  compiler-owned set itself, and any surviving Multi's nested set. The count
+ *  it is compared against is the NESTED-AWARE total (`countAll`), not the
+ *  number of top-level entries. */
 const MASS_REMOVAL_THRESHOLD = 3;
 
 /** obsidian_quickadd_compile is disabled while a path allowlist is active: it
@@ -105,14 +110,29 @@ function displayNameOf(frontmatter: any, path: string): string {
  *  the type and the check cannot drift. Never re-list the strings here. */
 const EDITOR_COMMAND_TYPE_SET: ReadonlySet<string> = new Set(EDITOR_COMMAND_TYPES);
 
-/** The `quickadd-type` values this compiler actually compiles into a choice.
- *  The ONE list, shared by `collectChoiceNotes` (what gets discovered) and
- *  `resolveChoiceStep` (what a `choice:` step may reference), because the two
- *  answer the same question: does this compile produce a choice for that
- *  note? `multi` is deliberately absent — Stage D territory, so a reference
- *  to one is still permanently dangling. */
-const COMPILED_QUICKADD_TYPES = ["macro", "template", "capture"] as const;
-const COMPILED_QUICKADD_TYPE_SET: ReadonlySet<unknown> = new Set(COMPILED_QUICKADD_TYPES);
+/** Every `quickadd-type` this compiler discovers and compiles into a
+ *  choice — used by `collectChoiceNotes`'s discovery gate. Widened in
+ *  Stage D to include `multi`. */
+const DISCOVERABLE_QUICKADD_TYPES = ["macro", "template", "capture", "multi"] as const;
+const DISCOVERABLE_QUICKADD_TYPE_SET: ReadonlySet<unknown> = new Set(DISCOVERABLE_QUICKADD_TYPES);
+
+/** The `quickadd-type` values a Macro `choice:` step may reference —
+ *  DELIBERATELY NARROWER than `DISCOVERABLE_QUICKADD_TYPES` as of Stage D.
+ *  `multi` is discoverable/compilable but is NOT a valid choice-step target,
+ *  and the reason is a UI-level restriction, NOT a runtime one: verified
+ *  against QuickAdd's installed source, the macro-builder's Choice-step
+ *  picker is fed by a helper that FLATTENS Multi containers away (it
+ *  recurses into a Multi's members and pushes only the non-Multi leaves),
+ *  so a human wiring a Choice step in QuickAdd's own UI can never point one
+ *  at a Multi. QuickAdd's runtime, by contrast, has no such rule —
+ *  `ChoiceExecutor.execute` has a real `case "Multi"` and would open that
+ *  Multi's picker if some other means supplied its id. This compiler
+ *  matches the UI restriction on purpose (you open a Multi, you don't
+ *  invoke it from a Macro step). Do not widen this to match
+ *  DISCOVERABLE_QUICKADD_TYPES without re-verifying that picker — the two
+ *  constants answering DIFFERENT questions is the point, not a gap. */
+const CHOICE_STEP_TARGET_TYPES = ["macro", "template", "capture"] as const;
+const CHOICE_STEP_TARGET_TYPE_SET: ReadonlySet<unknown> = new Set(CHOICE_STEP_TARGET_TYPES);
 
 function resolveUserScriptStep(app: App, notePath: string, step: any): MacroStepResolved {
   if (step?.kind !== "userscript") {
@@ -180,23 +200,29 @@ function resolveChoiceStep(app: App, notePath: string, step: any): MacroStepReso
   // reference. A Choice step is NOT restricted to Macro targets: QuickAdd's
   // ChoiceExecutor.execute() switches on the referenced choice's own `type`
   // with real cases for Template, Capture, Macro and Multi (verified against
-  // QuickAdd's bundled main.js), and its own macro-builder feeds the Choice-
-  // step picker every non-Multi choice. So the only thing that makes a target
-  // unusable here is that THIS COMPILER never produces a choice for it — a
-  // note with no `quickadd-type`, an unrecognized one, or `multi` (not
-  // compiled yet) leaves a permanently dangling choiceId that fails only at
-  // run time. Symmetric with the non-md check above, which already catches the
+  // QuickAdd's bundled main.js). Two DIFFERENT things narrow the target set
+  // here:
+  //   - a note this compiler never turns into a choice at all (no
+  //     `quickadd-type`, or an unrecognized one) would leave a permanently
+  //     dangling choiceId that fails only at run time; and
+  //   - `multi`, which this compiler DOES compile, but which QuickAdd's own
+  //     macro-builder excludes from its Choice-step picker (that picker's
+  //     list flattens Multi containers away), so a human could never wire
+  //     this step by hand either — see CHOICE_STEP_TARGET_TYPES above.
+  // Symmetric with the non-md check above, which already catches the
   // equivalent problem for a non-markdown target.
   const destFrontmatter = app.metadataCache.getFileCache(dest)?.frontmatter;
-  if (!COMPILED_QUICKADD_TYPE_SET.has(destFrontmatter?.["quickadd-type"])) {
+  if (!CHOICE_STEP_TARGET_TYPE_SET.has(destFrontmatter?.["quickadd-type"])) {
     return {
       kind: "choice",
       ok: false,
       error:
-        `"${raw}" resolves to "${dest.path}", whose frontmatter does not declare a quickadd-type this compiler ` +
-        `compiles (${COMPILED_QUICKADD_TYPES.join(", ")}). A choice step must reference a note this same compile ` +
-        `turns into a choice; a note with no quickadd-type, an unrecognized one, or one not compiled yet (multi) ` +
-        `leaves a dangling reference that fails only at run time.`,
+        `"${raw}" resolves to "${dest.path}", whose frontmatter does not declare a quickadd-type a choice step may ` +
+        `target (${CHOICE_STEP_TARGET_TYPES.join(", ")}). A note with no quickadd-type, or an unrecognized one, is ` +
+        `never turned into a choice by this compile at all, so referencing it leaves a dangling reference that ` +
+        `fails only at run time. quickadd-type: multi IS compiled by this tool, but is deliberately excluded as a ` +
+        `choice-step target: QuickAdd's own macro-builder leaves Multi choices out of its Choice-step picker, so a ` +
+        `Multi is opened, never invoked from a Macro step.`,
     };
   }
   // The referenced note's compiled id is a pure function of its path — no
@@ -419,33 +445,146 @@ function resolveStep(app: App, notePath: string, step: any): MacroStepResolved {
   }
 }
 
+/** The folder a note lives directly inside — vault-root notes (no `/` in
+ *  their path) return `""`. Pure path math; no `obsidian` folder API is
+ *  needed anywhere in this file, because "does folder F have an anchored
+ *  subfolder" reduces to "is some anchored folder's OWN parent === F",
+ *  computable entirely from the flat markdown-file listing this function
+ *  already has. */
+function parentFolder(path: string): string {
+  const i = path.lastIndexOf("/");
+  return i === -1 ? "" : path.slice(0, i);
+}
+
 /** Reads every markdown note whose frontmatter declares a recognized
- *  `quickadd-type` (`macro`, `template`, `capture`) and builds its
+ *  `quickadd-type` (`macro`, `template`, `capture`, `multi`) and builds its
  *  (unresolved-wikilink-aware) ChoiceNoteInput. Notes with no quickadd-type,
- *  or a quickadd-type this compiler doesn't yet recognize (`multi` — Stage D
- *  territory), are silently skipped: they are simply out of scope here, not
- *  an error. */
+ *  or one this compiler doesn't recognize, are silently skipped: simply out
+ *  of scope, not an error.
+ *
+ *  As of Stage D this is no longer a flat, independent per-note walk. A
+ *  `quickadd-type: multi` note ANCHORS its own parent folder — every OTHER
+ *  recognized note directly inside that same folder, and every direct
+ *  SUBFOLDER that is itself anchored by its own multi-note, becomes a
+ *  MEMBER of that Multi (compiled nested inside it) rather than a top-level
+ *  entry. This function returns only the TOP-LEVEL inputs; membership is
+ *  resolved recursively via `buildInput` below and lives inside each
+ *  Multi's own `folder.members`. */
 function collectChoiceNotes(app: App): ChoiceNoteInput[] {
-  const inputs: ChoiceNoteInput[] = [];
+  type Typed = { path: string; frontmatter: Record<string, unknown>; quickaddType: string };
+  const typed: Typed[] = [];
+  const multiNotesByFolder = new Map<string, string[]>();
+
   for (const file of app.vault.getMarkdownFiles()) {
     const frontmatter = app.metadataCache.getFileCache(file)?.frontmatter;
     if (!frontmatter) continue;
     const quickaddType = frontmatter["quickadd-type"];
-    if (!COMPILED_QUICKADD_TYPE_SET.has(quickaddType)) continue;
-
-    const name = displayNameOf(frontmatter, file.path);
-
-    if (quickaddType === "macro") {
-      const rawSteps = Array.isArray(frontmatter.steps) ? frontmatter.steps : [];
-      const steps = rawSteps.map((s) => resolveStep(app, file.path, s));
-      inputs.push({ quickaddType: "macro", notePath: file.path, name, steps });
-    } else if (quickaddType === "template") {
-      inputs.push(resolveTemplateChoice(app, file.path, name, frontmatter));
-    } else {
-      inputs.push(resolveCaptureChoice(app, file.path, name, frontmatter));
+    if (!DISCOVERABLE_QUICKADD_TYPE_SET.has(quickaddType)) continue;
+    typed.push({ path: file.path, frontmatter, quickaddType: quickaddType as string });
+    if (quickaddType === "multi") {
+      const folder = parentFolder(file.path);
+      const list = multiNotesByFolder.get(folder) ?? [];
+      list.push(file.path);
+      multiNotesByFolder.set(folder, list);
     }
   }
-  return inputs;
+
+  // A folder with exactly one multi-note is cleanly anchored. A folder with
+  // 2+ is ambiguous — neither compiles, but this does NOT remove the folder
+  // from consideration for its OTHER (non-multi) siblings, which stay
+  // top-level (an authoring mistake in one note must not disappear unrelated
+  // notes).
+  const anchoredFolders = new Map<string, string>();
+  const ambiguousFolders = new Map<string, string[]>();
+  for (const [folder, notes] of multiNotesByFolder) {
+    if (notes.length === 1) anchoredFolders.set(folder, notes[0]);
+    else ambiguousFolders.set(folder, notes);
+  }
+
+  // `claimedBy` maps a CLAIMED note's path to the folder that claims it —
+  // not just a Set, because the "claiming folder" is NOT always the note's
+  // own parent (see below), and `buildInput` needs to filter "which notes
+  // does THIS SPECIFIC anchored folder own" without re-deriving that
+  // relationship from scratch.
+  //
+  // A plain note (macro/template/capture) is claimed by its own parent
+  // folder, when that folder is anchored — straightforward.
+  //
+  // A MULTI-note is different: it anchors its OWN parent folder (call it
+  // F), so `anchoredFolders.get(F)` is trivially itself — checking F for
+  // anchoring would never determine whether the multi-note is ALSO nested
+  // under some ANCESTOR Multi. The right question is one level further out:
+  // is F's own parent (F's grandparent relative to the note) anchored by a
+  // DIFFERENT multi-note? If so, F itself is a subfolder-member of that
+  // outer anchor, and the note that anchors F (this multi-note) is what
+  // ends up nested inside the outer Multi's `choices` — compiled recursively
+  // via its own `folder.members`, which is unaffected by any of this.
+  const claimedBy = new Map<string, string>();
+  for (const t of typed) {
+    if (t.quickaddType === "multi") {
+      const ownFolder = parentFolder(t.path);
+      // A multi-note AT vault root (no folder above it) can never be claimed —
+      // parentFolder("") === "" would otherwise make it collide with its own
+      // anchor and incorrectly self-claim, silently dropping both itself and
+      // every other root-level choice note from the compile.
+      if (ownFolder !== "") {
+        const grandparent = parentFolder(ownFolder);
+        if (anchoredFolders.has(grandparent)) claimedBy.set(t.path, grandparent);
+      }
+    } else {
+      const folder = parentFolder(t.path);
+      if (anchoredFolders.has(folder)) claimedBy.set(t.path, folder);
+    }
+  }
+
+  const byPath = new Map(typed.map((t) => [t.path, t]));
+
+  function buildInput(path: string): ChoiceNoteInput {
+    const t = byPath.get(path)!;
+    const name = displayNameOf(t.frontmatter, path);
+    if (t.quickaddType === "macro") {
+      const rawSteps = Array.isArray(t.frontmatter.steps) ? t.frontmatter.steps : [];
+      const steps = rawSteps.map((s) => resolveStep(app, path, s));
+      return { quickaddType: "macro", notePath: path, name, steps };
+    }
+    if (t.quickaddType === "template") return resolveTemplateChoice(app, path, name, t.frontmatter);
+    if (t.quickaddType === "capture") return resolveCaptureChoice(app, path, name, t.frontmatter);
+
+    // multi
+    const folder = parentFolder(path); // == the folder this note anchors
+    const ambiguous = ambiguousFolders.get(folder);
+    if (ambiguous) {
+      return {
+        quickaddType: "multi",
+        notePath: path,
+        name,
+        folder: {
+          ok: false,
+          error:
+            `${ambiguous.length} quickadd-type: multi notes claim the same folder "${folder}" (${ambiguous.join(", ")}) ` +
+            "— ambiguous, so none of them compiled. Move one to a different folder or remove the duplicate marking.",
+        },
+      };
+    }
+    // A member of THIS folder is exactly a note claimedBy THIS folder — not
+    // `parentFolder(p) === folder`, which is only true for plain-note
+    // members. A nested multi-note's own path lives one level DEEPER than
+    // `folder` (inside the subfolder it itself anchors), so its claim was
+    // recorded against `folder` (its grandparent-relative anchor) above,
+    // not against its own immediate parent — `claimedBy` is exactly the
+    // lookup that already encodes which is which.
+    const memberPaths = [...byPath.keys()]
+      .filter((p) => p !== path && claimedBy.get(p) === folder)
+      .sort();
+    return {
+      quickaddType: "multi",
+      notePath: path,
+      name,
+      folder: { ok: true, members: memberPaths.map((p) => buildInput(p)) },
+    };
+  }
+
+  return typed.filter((t) => !claimedBy.has(t.path)).map((t) => buildInput(t.path));
 }
 
 /** The compiler-owned id of a live QuickAdd choice, or null if this entry is
@@ -465,14 +604,92 @@ function describeChoice(choice: unknown, id: string): { id: string; name: string
   return { id, name: typeof name === "string" ? name : null };
 }
 
+/** How many choices a list of choices REALLY represents: 1 per entry, plus
+ *  everything nested inside any Multi, recursively.
+ *
+ *  Stage D made this necessary. Before Multi existed, "n top-level entries"
+ *  and "n choices" were the same number, so the mass-removal guard could
+ *  count top-level entries. Now one top-level Multi can hold dozens of nested
+ *  choices, and deleting it deletes all of them — a vault whose 40 Capture
+ *  notes moved into one Multi folder would otherwise trip the guard at 41
+ *  before the move and at 1 after it, for the exact same loss. The guard
+ *  weighs an about-to-be-removed Multi by what it is actually removing.
+ *
+ *  Defensive like `ownedId`: `quickadd.settings.choices` (and the nested
+ *  `choices` inside it) is other code's data — a stray null, string, or
+ *  missing/blank `choices` array must count sanely rather than throw. A
+ *  non-array `choices` on a Multi contributes 0 nested; every array ELEMENT
+ *  counts 1 whatever it is, since a junk entry is still an entry that would
+ *  disappear. */
+function countAll(choices: unknown): number {
+  if (!Array.isArray(choices)) return 0;
+  let total = 0;
+  for (const choice of choices) {
+    total += 1;
+    if (choice && typeof choice === "object" && (choice as { type?: unknown }).type === "Multi") {
+      total += countAll((choice as { choices?: unknown }).choices);
+    }
+  }
+  return total;
+}
+
+/** How many choices ONE entry holds nested inside it: `countAll` of a Multi's
+ *  own `choices`, and 0 for anything that is not a Multi (a Capture holds
+ *  nothing, and neither does a stray null/string in other code's array). A
+ *  compiled Multi whose members all vanished therefore reads as 0, exactly
+ *  like a note whose `quickadd-type` changed away from `multi` altogether. */
+function nestedCount(choice: unknown): number {
+  if (!choice || typeof choice !== "object") return 0;
+  if ((choice as { type?: unknown }).type !== "Multi") return 0;
+  return countAll((choice as { choices?: unknown }).choices);
+}
+
+/** Every compiler-owned Multi that SURVIVES this compile (same id on both
+ *  sides) yet comes back holding NOTHING, while it previously held members —
+ *  and how many choices each of them is about to drop.
+ *
+ *  This is the second shape of the mass-removal guard's one risk. A partially
+ *  warm metadata cache can hand `collectChoiceNotes` a Multi's anchor note
+ *  while hiding all 40 of its siblings: the Multi's id is then in BOTH the
+ *  previous and the fresh set — neither `added` nor `removed`, merely
+ *  `changed` — so a guard that only weighs top-level DISAPPEARANCES never
+ *  looks at it, and 40 nested choices are silently discarded. Same cause and
+ *  same cost as an outright top-level removal, different visible shape.
+ *
+ *  Deliberately EMPTY-only, not "shrank a lot": the guard has no override
+ *  argument, so anything it refuses is unappliable until the vault changes.
+ *  Requiring the container to come back empty keeps the refusal exactly as
+ *  narrow as the top-level rule it mirrors (which fires only on 0 fresh
+ *  choices), so genuinely deleting some members of a Multi still applies —
+ *  keep one note in the folder and the compile goes through. The flip side is
+ *  accepted: a partial cache that surfaces even one member slips past, just as
+ *  one discovered note has always let a top-level mass removal through. */
+function emptiedContainers(
+  previouslyOwned: Array<{ choice: unknown; id: string }>,
+  fresh: Array<{ id: string }>,
+): Array<{ id: string; name: string | null; lost: number }> {
+  const freshById = new Map(fresh.map((c) => [c.id, c as unknown]));
+  const emptied: Array<{ id: string; name: string | null; lost: number }> = [];
+  for (const p of previouslyOwned) {
+    const now = freshById.get(p.id);
+    // Absent from the fresh set = an outright top-level removal, already
+    // weighed (with its whole subtree) by `removedTotal`. Not this case.
+    if (now === undefined) continue;
+    if (nestedCount(now) > 0) continue;
+    const lost = nestedCount(p.choice);
+    if (lost > 0) emptied.push({ ...describeChoice(p.choice, p.id), lost });
+  }
+  return emptied;
+}
+
 export function registerQuickAddTools(server: McpServer, app: App, ctx: ServerCtx): void {
   server.registerTool(
     "obsidian_quickadd_compile",
     {
       title: "Compile QuickAdd choice notes",
       description:
-        "Compiles every Macro/UserScript, Template, and Capture choice note (frontmatter quickadd-type: macro, " +
-        "template, or capture) into QuickAdd's live config. `dry_run: true` reports the would-be diff " +
+        "Compiles every Macro/UserScript, Template, Capture, and Multi choice note (frontmatter quickadd-type: " +
+        "macro, template, capture, or multi) into QuickAdd's live config. `dry_run: true` reports the would-be diff " +
         "(`added`/`changed`/`removed` compiler-owned choices) and any per-note errors without touching anything; " +
         "`dry_run: false` applies it via QuickAdd's own saveSettings() and (re)registers each choice's Obsidian " +
         "command via QuickAdd's own addCommandForChoice/removeCommandForChoice — `commandsRegistered: false` in " +
@@ -482,11 +699,14 @@ export function registerQuickAddTools(server: McpServer, app: App, ctx: ServerCt
         "note's path) are added/updated/removed; every other choice in QuickAdd's config is left completely " +
         "untouched, whatever manages it. One malformed note fails only that note (reported in `errors`, and the " +
         "whole response carries isError: true so a partial compile is distinguishable from a clean one), never " +
-        "the whole compile. A non-dry-run that would find zero choices while deleting three or more refuses " +
-        "(`suspicious_mass_removal`) — that shape is a cold metadata cache far more often than a real change. " +
+        "the whole compile. A non-dry-run that would EMPTY a compiler-owned container of three or more choices " +
+        "refuses (`suspicious_mass_removal`) — either the whole compiler-owned set (zero choice notes found while " +
+        "three or more would be deleted) or a Multi that survives this compile with none of its members " +
+        "rediscovered; both shapes are a cold or partly-warm metadata cache far more often than a real change. " +
         "Supports Macro choices with userscript, choice, wait, obsidian-command, and editor-command steps. A " +
-        "choice step must point at another note this compiler compiles (quickadd-type: macro, template, or " +
-        "capture — anything else is a dangling reference), and choice steps that form a reference " +
+        "choice step must point at another note whose quickadd-type may be targeted (macro, template, or " +
+        "capture — an unrecognized type is a dangling reference, and multi is excluded on purpose, see below), " +
+        "and choice steps that form a reference " +
         "cycle (A → B → A, or a self-reference) fail every note in the cycle — QuickAdd has no cycle guard, so " +
         "such a chain would loop forever at run time. " +
         "nested-choice and ai-assistant steps are not yet supported (per-choice error). " +
@@ -499,8 +719,18 @@ export function registerQuickAddTools(server: McpServer, app: App, ctx: ServerCt
         "string-valued fields (`folder:`, `file_name_format:`, `insert_after_heading:`) are trimmed, and a " +
         "non-string value in one of them is a per-note error rather than a silently ignored field. Every other native " +
         "Template/Capture field not listed here compiles to QuickAdd's own default, matching a freshly-created " +
-        "choice. A note with an unrecognized quickadd-type (e.g. multi) is simply out of scope here — silently " +
-        "skipped. Refuses outright while a path allowlist is active.",
+        "choice. Multi choice notes (quickadd-type: multi) are also compiled — a Multi note anchors its own " +
+        "parent folder, and every other recognized choice note (or anchored subfolder, itself a nested Multi) " +
+        "directly inside that same folder becomes a member, compiled NESTED inside the Multi rather than as a " +
+        "separate top-level entry; two or more multi-notes claiming the same folder is a per-note error for each " +
+        "of them (their unrelated siblings are unaffected); a Multi choice is discoverable and compilable but is " +
+        "NOT a valid choice: step target (matching QuickAdd's own macro-builder UI, whose Choice-step picker " +
+        "leaves Multi choices out — a Multi is opened, not invoked from a Macro step). A multi note placed at the " +
+        "VAULT ROOT anchors the entire vault root, so it " +
+        "claims EVERY other root-level choice note as a member — the largest blast radius any single note's " +
+        "placement has in this compiler, and worth checking before putting one there. " +
+        "A note with an unrecognized quickadd-type is simply out of scope here — " +
+        "silently skipped. Refuses outright while a path allowlist is active.",
       inputSchema: {
         dry_run: z.boolean().describe("If true, report the would-be diff and errors without writing anything."),
       },
@@ -529,6 +759,14 @@ export function registerQuickAddTools(server: McpServer, app: App, ctx: ServerCt
       // the COMPILER-OWNED half of QuickAdd's config is ever in scope; a
       // hand-authored choice is neither added, changed nor removed by
       // definition, so it never appears here.
+      //
+      // GRANULARITY (ruled, accepted): the diff is per TOP-LEVEL compiler-owned
+      // choice. A change nested INSIDE an otherwise-identical Multi reports that
+      // Multi as `changed` and never names which member changed — the same
+      // granularity QuickAdd's own data.json has, where a nested choice carries
+      // no identity outside its container. A caller who needs finer detail
+      // should inspect the full `choices` field, which the response includes in
+      // full under both `dry_run: true` and `dry_run: false`.
       const liveChoices = quickadd.settings.choices as unknown[];
       const previouslyOwned: Array<{ choice: unknown; id: string }> = [];
       const preserved: unknown[] = [];
@@ -542,9 +780,12 @@ export function registerQuickAddTools(server: McpServer, app: App, ctx: ServerCt
 
       const added = result.choices.filter((c) => !previousIds.has(c.id)).map((c) => describeChoice(c, c.id));
       const changed = result.choices.filter((c) => previousIds.has(c.id)).map((c) => describeChoice(c, c.id));
-      const removed = previouslyOwned
-        .filter((p) => !freshIds.has(p.id))
-        .map((p) => describeChoice(p.choice, p.id));
+      const removedEntries = previouslyOwned.filter((p) => !freshIds.has(p.id));
+      const removed = removedEntries.map((p) => describeChoice(p.choice, p.id));
+      // What the removal would ACTUALLY cost, counting everything nested
+      // inside an about-to-be-removed Multi — the number the mass-removal
+      // guard weighs. `removed.length` is only the top-level entry count.
+      const removedTotal = countAll(removedEntries.map((p) => p.choice));
 
       const respond = (data: Record<string, unknown>) =>
         result.errors.length > 0 ? okError(data) : ok(data);
@@ -560,18 +801,56 @@ export function registerQuickAddTools(server: McpServer, app: App, ctx: ServerCt
         });
       }
 
-      // Mass-removal guard. "Found nothing at all, about to delete several"
-      // is the signature of a metadata cache that hasn't finished warming
-      // (getFileCache returns no frontmatter for every note, so
-      // collectChoiceNotes returns zero inputs) far more often than it is a
+      // Mass-removal guard. "A container came back EMPTY while it held several
+      // choices a moment ago" is the signature of a metadata cache that hasn't
+      // finished warming (getFileCache returns no frontmatter, so
+      // collectChoiceNotes never sees those notes) far more often than it is a
       // real change. A dry run still SHOWS it — this only refuses to DO it.
-      if (result.choices.length === 0 && removed.length >= MASS_REMOVAL_THRESHOLD) {
+      //
+      // TWO containers can empty, and they are the same risk wearing different
+      // shapes at the top level, so ONE quantity — `lostTotal`, the choices
+      // this compile is about to lose out of an emptied container — feeds ONE
+      // refusal:
+      //   - the ROOT container (the whole compiler-owned top level) comes back
+      //     empty ⇒ it loses `removedTotal`, the FULL subtree of every removed
+      //     entry, not `removed.length`: one top-level Multi holding 40 nested
+      //     choices is a 40-choice deletion, and counting top-level entries
+      //     would let exactly that shape slip through at a nominal count of 1;
+      //   - a surviving Multi's own container comes back empty ⇒ it loses
+      //     everything it used to hold, even though its top-level id is
+      //     present on both sides and so appears merely `changed`
+      //     (`emptiedContainers`, above, and the reason it exists).
+      // The two never double-count: with 0 fresh choices nothing survives, so
+      // an empty root makes the survivor term 0, and a non-empty root
+      // contributes nothing itself.
+      const emptied = emptiedContainers(previouslyOwned, result.choices);
+      const rootLost = result.choices.length === 0 ? removedTotal : 0;
+      const lostTotal = rootLost + emptied.reduce((n, e) => n + e.lost, 0);
+      if (lostTotal >= MASS_REMOVAL_THRESHOLD) {
+        const tail =
+          " That usually means Obsidian's metadata cache is still warming rather than that the notes are really " +
+          "gone. Retry in a moment, or run with dry_run: true to inspect the would-be diff first.";
+        if (rootLost > 0) {
+          // The MESSAGE still lists the top-level names — they are the entries
+          // a reader can go look for — and says how many choices that really
+          // adds up to when the two differ.
+          const nested =
+            removedTotal > removed.length
+              ? `, ${removedTotal} choices in total once everything nested inside them is counted`
+              : "";
+          return codedError(
+            "suspicious_mass_removal",
+            `Refusing to apply: this compile found 0 choice notes while ${removed.length} top-level compiler-owned ` +
+              `choices (${removed.map((r) => r.name ?? r.id).join(", ")}) would be removed${nested}.` + tail,
+          );
+        }
+        const which = emptied.map((e) => `"${e.name ?? e.id}" (${e.lost})`).join(", ");
         return codedError(
           "suspicious_mass_removal",
-          `Refusing to apply: this compile found 0 choice notes while ${removed.length} compiler-owned choices ` +
-            `(${removed.map((r) => r.name ?? r.id).join(", ")}) would be removed. That usually means Obsidian's ` +
-            "metadata cache is still warming rather than that the notes are really gone. Retry in a moment, or " +
-            "run with dry_run: true to inspect the would-be diff first.",
+          `Refusing to apply: this compile kept ${emptied.length} compiler-owned Multi ` +
+            `${emptied.length === 1 ? "choice" : "choices"} but discovered no members for ` +
+            `${emptied.length === 1 ? "it" : "them"} — ${which} — dropping ${lostTotal} nested ` +
+            `${lostTotal === 1 ? "choice" : "choices"} in total.` + tail,
         );
       }
 
@@ -610,17 +889,28 @@ export function registerQuickAddTools(server: McpServer, app: App, ctx: ServerCt
 /** Deregister then re-register the compiler-owned Obsidian commands. Returns
  *  false (rather than throwing) if QuickAdd doesn't expose the command API or
  *  it fails: the config is already saved at that point, and reporting
- *  "commands not registered" is strictly more useful than losing the result. */
+ *  "commands not registered" is strictly more useful than losing the result.
+ *
+ *  The two halves are ASYMMETRIC in QuickAdd's own source, and the asymmetry
+ *  is why the remove call carries an options argument and the add call does
+ *  not: `addCommandForChoice` recurses into a Multi's nested choices
+ *  UNCONDITIONALLY, while `removeCommandForChoice(choice, opts)` recurses only
+ *  when `opts?.recursive === true`. Without it, a nested choice that
+ *  disappears (its note deleted or moved, or its containing Multi removed or
+ *  replaced) keeps a palette command nobody can service — running it throws
+ *  "Choice … not found" until Obsidian reloads. Passing the option is safe
+ *  against every QuickAdd version: a version that doesn't read a second
+ *  argument simply ignores it. */
 function applyCommands(
   quickadd: any,
   previouslyOwned: unknown[],
-  fresh: Array<QuickAddMacroChoice | QuickAddTemplateChoice | QuickAddCaptureChoice>,
+  fresh: Array<QuickAddMacroChoice | QuickAddTemplateChoice | QuickAddCaptureChoice | QuickAddMultiChoice>,
 ): boolean {
   if (typeof quickadd.addCommandForChoice !== "function" || typeof quickadd.removeCommandForChoice !== "function") {
     return false;
   }
   try {
-    for (const choice of previouslyOwned) quickadd.removeCommandForChoice(choice);
+    for (const choice of previouslyOwned) quickadd.removeCommandForChoice(choice, { recursive: true });
     for (const choice of fresh) quickadd.addCommandForChoice(choice);
     return true;
   } catch (e) {
