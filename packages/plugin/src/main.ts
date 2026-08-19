@@ -331,6 +331,7 @@ export default class VaultMcpPlugin extends Plugin {
       pluginVersion: this.manifest.version,
       socketPath: sock,
       vaultName,
+      pluginDir,
       enabledPlugins: () => Array.from((this.app as any).plugins.enabledPlugins as Set<string>),
       getSettings: () => ({
         readOnly: this.settings.readOnly,
