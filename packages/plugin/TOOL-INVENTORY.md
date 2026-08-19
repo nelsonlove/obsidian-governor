@@ -103,13 +103,22 @@ read tools; `dry_run` never mutates.
 Folded in from the standalone `obsidian-jd-survey` plugin. A note's mirror
 directory defaults to the same relative path under `mirror_root` as the
 note's own vault folder; `survey-mirror` frontmatter overrides it per note.
+Both are checked against a declared content-root boundary
+(`ASSENT_CONTENT_ROOT`/`ASSENT_VAULT_ROOT`, same env vars
+`conformance/snapshot.ts` uses) before anything is read — neither is a vault
+path, so `guard.ts`'s allowlist never sees them otherwise.
 `obsidian_survey_slot` refuses to touch a section last stamped
-`by: "claude-code"` or `by: "human"` unless `force: true`.
+`by: "claude-code"` or `by: "human"` unless `force: true`, and routes its
+result through `tools-complementary.ts`'s `guardAppendResult` before writing.
+Prose generation (`kernel/survey/ask-claude.ts`) is a standalone utility, not
+called from either tool — pass pre-written text as `snapshot_body` instead;
+see that file's header for why (the write-queue's 30s budget vs. a real
+Claude Code round trip).
 
 | Tool name | Description |
 |---|---|
 | `obsidian_survey_status` | Report whether a note's `## Contents (Filesystem)` section is stale relative to its mirror directory. Read-only |
-| `obsidian_survey_slot` | Regenerate the section (skeleton, or `generate_prose: true` for a headless Claude Code call) and stamp `survey:` frontmatter. `apply: false` reports the plan only |
+| `obsidian_survey_slot` | Regenerate the section (bare skeleton, or pass `snapshot_body` for pre-written prose) and stamp `survey:` frontmatter. `dry_run: true` (mandatory, no default) reports the plan only |
 
 ### `tools-write-notes.ts` — `registerWriteNotesTool` (1 tool, kernel B1)
 
