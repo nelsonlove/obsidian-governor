@@ -120,10 +120,22 @@ convention. Nothing runs; the refusal is journaled (`outcome: "error"`).
 - The flag is `record: true` (boolean; the quoted string `"true"` is honored too —
   `isRecordFlag`). `false`, absence, or anything else is not a record.
 
-Threat model matches the accept guard: fallible agents, not adversaries. This layer holds for
-any client that reaches the vault **through the MCP server**; a write that bypasses it — a
-shell redirect, another process touching disk directly (the class behind the incident that
-motivated #264) — is out of its reach and stays with the client-side hooks and backups.
+Enforcement is on by default; the `enforceRecordImmutability` setting turns it off at the probe (the flag reads as unknown, which is the same fail-open path a cold cache takes).
+
+Threat model matches the accept guard: fallible agents, not adversaries. Two boundaries are
+deliberate, and both are the flip side of "the check covers the paths an operation **names**":
+
+- **Writes that bypass the MCP server entirely** — a shell redirect, another process touching
+  disk directly (the class behind the incident that motivated #264) — are out of this layer's
+  reach and stay with the client-side hooks and backups.
+- **Operations that *discover* their blast radius instead of naming it** can still rewrite a
+  record note's body as a side effect, refusal-free: `obsidian_repoint_link` rewrites the body
+  of whatever notes carry the matching wikilink, a move's link-healing rename rewrites
+  backlinks wherever they live (records included, and `update_backlinks: false` is advisory —
+  see [identity-and-links.md](identity-and-links.md)), and `obsidian_cli` eval / external
+  tools reach the vault through their own code. Byte-exactness of a record against that class
+  is what the record's git history and backups are for; this refusal is the guard against
+  *addressed* mutation, not a checksum.
 
 ## `idempotency_key` — safe retries
 

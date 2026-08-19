@@ -711,6 +711,26 @@ export class VaultMcpSettingTab extends PluginSettingTab {
         });
       });
 
+    // Record immutability (#264) — the write-perimeter sibling of the
+    // protected-property list above: a whole-note rule rather than a per-key
+    // one. Default ON; the toggle exists as the escape hatch for the check's
+    // deliberate over-inclusiveness (it refuses on any NAMED path).
+    new Setting(containerEl)
+      .setName("Enforce record immutability")
+      .setDesc(
+        "Refuse non-append writes to notes whose frontmatter carries `record: true` — historical, byte-verified " +
+          "archives are extended by a dated end-of-file append (obsidian_append_note) and never edited, moved, or " +
+          "deleted. Refusals are typed (record_immutable) and journaled. Turn OFF only to unblock a legitimate " +
+          "operation the check over-blocks; it refuses on any path a call names, including one it only reads. " +
+          "Takes effect immediately."
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.enforceRecordImmutability).onChange(async (value) => {
+          this.plugin.settings.enforceRecordImmutability = value;
+          await this.plugin.saveSettings();
+        })
+      );
+
     // Developer affordances. The tool-runner defaults ON because it grants no
     // capability beyond the MCP surface itself: it invokes the same guarded
     // captured tools a code-mode connection gets (read-only mode, allowlist,
