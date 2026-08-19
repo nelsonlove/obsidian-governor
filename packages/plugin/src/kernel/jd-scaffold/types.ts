@@ -24,8 +24,13 @@ export interface PlanStandardZerosInput {
   folderName: string;
   prefix: string;
   now: string;
-  /** Every vault path that already exists — the planner never overwrites. */
-  existingPaths: Set<string>;
+  /** Existence check for a candidate path — the planner never overwrites.
+   *  A predicate rather than a pre-built Set: the glue layer would otherwise
+   *  have to independently enumerate the same 10 candidate paths this
+   *  planner computes just to build the Set, risking the two falling out of
+   *  sync. `(path) => !!app.vault.getAbstractFileByPath(path)` is the real
+   *  implementation. */
+  exists: (path: string) => boolean;
 }
 
 export interface PlanStandardZerosResult {
@@ -51,7 +56,11 @@ export interface PlanEnsureResult {
 
 export interface PlanPromoteInput {
   path: string;
-  existingPaths: Set<string>;
+  /** Existence check for the single computed folder-destination path — same
+   *  predicate shape as PlanStandardZerosInput.exists, for the same reason:
+   *  the glue layer checks the ONE real path via
+   *  app.vault.getAbstractFileByPath directly, no pre-built listing. */
+  exists: (path: string) => boolean;
 }
 
 export type PromoteToFolderPlan =

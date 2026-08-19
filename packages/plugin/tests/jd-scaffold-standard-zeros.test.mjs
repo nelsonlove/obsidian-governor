@@ -51,13 +51,17 @@ describe("buildZeroFrontmatter — jd-id line dropped (this fold's own ruling)",
 });
 
 describe("planStandardZeros", () => {
-  function input(overrides = {}) {
+  // existingPaths is this test file's own convenience shape; planStandardZeros
+  // itself takes an `exists` predicate (see types.ts's own comment for why:
+  // a pre-built Set would make the glue layer independently enumerate the
+  // same 10 candidate paths the planner computes, risking drift).
+  function input({ existingPaths = new Set(), ...overrides } = {}) {
     return {
       folderPath: "10-19 Personal/06 Digital tools",
       folderName: "06 Digital tools",
       prefix: "06",
       now: "2026-08-19",
-      existingPaths: new Set(),
+      exists: (p) => existingPaths.has(p),
       ...overrides,
     };
   }

@@ -3,10 +3,13 @@ import assert from "node:assert/strict";
 import { planPromoteToFolder } from "../src/kernel/jd-scaffold/promote-to-folder.ts";
 
 describe("planPromoteToFolder", () => {
-  function input(overrides = {}) {
+  // existingPaths is this test file's own convenience shape; planPromoteToFolder
+  // itself takes an `exists` predicate over the single computed folder path
+  // (see types.ts's own comment).
+  function input({ existingPaths = new Set(["06 Digital tools/06.13 Bar.md"]), ...overrides } = {}) {
     return {
       path: "06 Digital tools/06.13 Bar.md",
-      existingPaths: new Set(["06 Digital tools/06.13 Bar.md"]),
+      exists: (p) => existingPaths.has(p),
       ...overrides,
     };
   }
