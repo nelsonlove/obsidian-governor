@@ -3,7 +3,11 @@ import { posix } from "node:path";
 export interface GuardSettings { readOnly: boolean; allowlist: string[]; }
 
 // Path-bearing argument keys across the tool surface.
-const PATH_KEYS = ["path", "from", "to", "target_path", "template_path", "subdir", "file_path"];
+// `output_folder` is obsidian_import_apple_notes' landing folder (every file
+// that import creates lands under it) — recognized here so the kernel journals
+// it as the operation's target and consults advisory locks over it, exactly
+// like any other named path.
+const PATH_KEYS = ["path", "from", "to", "target_path", "template_path", "subdir", "file_path", "output_folder"];
 // Keys whose ARRAY values carry paths (refs = obsidian_resolve's batch input).
 const ARRAY_PATH_KEYS = ["paths", "refs"];
 // Defensive depth cap: MCP args arrive as parsed JSON, so nesting is bounded in

@@ -8,11 +8,12 @@ fails (the fs-expressible and scheme sub-locks from #25/task-6 still apply).
 
 **Count summary:** 17 fs-expressible + 44 always-live + 10 module-mounted
 (default enabled, settings-toggleable) = **71 base** tools, plus up to
-6 conditional integration tools, 5 CLI-binary-conditional dedicated tools
+6 conditional integration tools, 1 Importer-plugin-conditional import tool
+(`obsidian_import_apple_notes`), 5 CLI-binary-conditional dedicated tools
 (`obsidian_note_history`, `obsidian_note_diff`, `obsidian_base_create`,
 `obsidian_plugin_install`, `obsidian_plugin_uninstall`), and 1 settings-gated
 CLI-conditional tool (`obsidian_cli`, default OFF)
-= **up to 83 total**.  The 3 Code Mode meta-tools are an alternative
+= **up to 84 total**.  The 3 Code Mode meta-tools are an alternative
 per-connection surface and are not counted (a session sees one surface or the
 other, never both).  Not counted here (outside the locked `obsidian_*` family):
 the always-on `governance_submit_revision` + `governance_revisions` (2 tools, see their section below),
@@ -446,7 +447,7 @@ bases module disabled. A phase-2 config stays sane (legacy keys ignored;
 
 ---
 
-## Section 3 — live-only, conditional (up to 6)
+## Section 3 — live-only, conditional (up to 7)
 
 Registered only when the gating community plugin's instance is actually loaded
 (`app.plugins.plugins[id]` is truthy — NOT just in `enabledPlugins`, which can
@@ -460,6 +461,33 @@ list stale/uninstalled entries).  New tools appear on session reconnect.
 | `obsidian_omnisearch` | Omnisearch | `omnisearch` |
 | `obsidian_fileclass_schema` | Metadata Menu | `metadata-menu` |
 | `obsidian_fileclass_insert_fields` | Metadata Menu | `metadata-menu` |
+
+### Conditional on the community Importer plugin (1, mutating)
+
+`tools-import.ts` — `registerImportTools` (#252). Drives the STOCK community
+obsidian-importer plugin's Apple Notes importer headlessly: null-element
+`ImporterHost` construction, ZFOLDERTYPE-based folder selection via the system
+`sqlite3` binary (Smart/Trash excluded by folder TYPE, never localized name),
+duck-typed DOM-free `ImportContext`, optional AppleScript source disposition
+(move to an Exported folder / delete to Recently Deleted) with a provably
+mutation-free `disposition_dry_run`. Registered like the integration tools
+(loaded instance, not `enabledPlugins`), re-resolved per call, and
+**version-gated**: any installed importer version outside the known-good set
+(currently 2.6.2) refuses `importer_version_unsupported` — the tool rides
+undocumented importer internals with no stability contract. Mutating
+(`readOnlyHint: false`; `destructiveHint: true` per the
+destructive-but-recoverable convention — the "delete" disposition sends
+source notes to Recently Deleted; `openWorldHint: true` — reads the Notes
+database and, with a disposition, drives Notes.app), so it gets the queue,
+journal, kernel args and read-only-mode blocking; `output_folder` is a
+recognized `PATH_KEYS` name and schema-defaulted, so the guard
+allowlist-checks it, the journal records it as the target, and advisory
+locks over it are disclosed. `dry_run` (mandatory) reports the folder
+selection + note counts without importing.
+
+| Tool name | R/W | Gating plugin | Plugin ID |
+|---|---|---|---|
+| `obsidian_import_apple_notes` | W | Importer | `obsidian-importer` |
 
 ### Conditional on the official Obsidian CLI binary (5)
 
@@ -560,6 +588,7 @@ this historical snapshot.
 | `packages/plugin/src/mcp/tools-health.ts` | `registerHealthTools` (via `modules-mount.ts`) | 2 module-mounted (default-disabled) |
 | `packages/plugin/src/mcp/tools-snippets.ts` | `registerSnippetTools` | 4 always-live |
 | `packages/plugin/src/mcp/tools-integrations.ts` | `registerIntegrationTools` | up to 6 conditional |
+| `packages/plugin/src/mcp/tools-import.ts` | `registerImportTools` | 1 conditional (Importer plugin, version-gated) |
 | `packages/plugin/src/mcp/tools-cli-dedicated.ts` | `registerCliDedicatedTools` | 5 conditional (CLI binary) |
 | `packages/plugin/src/mcp/tools-cli.ts` | `registerCliTools` | 1 conditional (CLI binary + "Raw CLI proxy" setting, default off) |
 | `packages/plugin/src/mcp/tools-code-mode.ts` | `registerCodeModeTools` | 3 (alternative surface, uncounted) |
