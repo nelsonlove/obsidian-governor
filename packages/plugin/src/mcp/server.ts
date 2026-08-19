@@ -9,6 +9,7 @@ import { registerQuickAddTools } from "./tools-quickadd.js";
 import { registerComplementaryTools } from "./tools-complementary.js";
 import { registerNavTools } from "./tools-nav.js";
 import { registerIntegrationTools } from "./tools-integrations.js";
+import { registerImportTools, IMPORTER_PLUGIN_ID } from "./tools-import.js";
 import { registerCliTools, obsidianTemplateReader } from "./tools-cli.js";
 import { registerCliDedicatedTools } from "./tools-cli-dedicated.js";
 import { registerSnippetTools, obsidianSnippetSource } from "./tools-snippets.js";
@@ -203,6 +204,16 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   // is another argument-less read of vault structure.
   registerNavTools(server, app, ctx);
   registerIntegrationTools(server, app, ctx);
+  // ── headless Apple Notes import (#252) ─────────────────────────────────────
+  // Conditional on the community Importer plugin's LOADED instance, same
+  // gate discipline as registerIntegrationTools; mutating, so it registers
+  // directly here (modules-mount.ts refuses readOnlyHint !== true). The
+  // handler re-resolves the instance per call and version-gates against the
+  // known-good importer versions — see tools-import.ts's header.
+  registerImportTools(server, app, {
+    importerPlugin: () => ((app as any).plugins?.plugins?.[IMPORTER_PLUGIN_ID] ?? null),
+    getSettings: () => ctx.getSettings(),
+  });
   // ── advisory scope claims (kernel v0) ──────────────────────────────────────
   // Registered here, after the interception patch, so a claim is guarded,
   // serialized and journaled like any other mutating operation — the claim is
