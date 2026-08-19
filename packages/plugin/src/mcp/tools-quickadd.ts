@@ -105,6 +105,15 @@ function displayNameOf(frontmatter: any, path: string): string {
  *  the type and the check cannot drift. Never re-list the strings here. */
 const EDITOR_COMMAND_TYPE_SET: ReadonlySet<string> = new Set(EDITOR_COMMAND_TYPES);
 
+/** The `quickadd-type` values this compiler actually compiles into a choice.
+ *  The ONE list, shared by `collectChoiceNotes` (what gets discovered) and
+ *  `resolveChoiceStep` (what a `choice:` step may reference), because the two
+ *  answer the same question: does this compile produce a choice for that
+ *  note? `multi` is deliberately absent — Stage D territory, so a reference
+ *  to one is still permanently dangling. */
+const COMPILED_QUICKADD_TYPES = ["macro", "template", "capture"] as const;
+const COMPILED_QUICKADD_TYPE_SET: ReadonlySet<unknown> = new Set(COMPILED_QUICKADD_TYPES);
+
 function resolveUserScriptStep(app: App, notePath: string, step: any): MacroStepResolved {
   if (step?.kind !== "userscript") {
     return { kind: "unsupported", ok: false, declaredKind: String(step?.kind ?? "undefined") };
@@ -168,24 +177,26 @@ function resolveChoiceStep(app: App, notePath: string, step: any): MacroStepReso
     };
   }
   // ...and a markdown note is still not necessarily a note this step can
-  // reference. `quickadd-type: template` and `capture` notes ARE compiled by
-  // this same tool, so the target is not necessarily dangling — but a Choice
-  // step runs another choice's MACRO command sequence, which only a
-  // `quickadd-type: macro` note compiles to. Pointed at a Template or Capture
-  // note (or at a plain note that is never compiled at all, which really is
-  // permanently dangling), the step fails only at run time. Symmetric with the
-  // non-md check above, which already catches the equivalent problem for a
-  // non-markdown target.
+  // reference. A Choice step is NOT restricted to Macro targets: QuickAdd's
+  // ChoiceExecutor.execute() switches on the referenced choice's own `type`
+  // with real cases for Template, Capture, Macro and Multi (verified against
+  // QuickAdd's bundled main.js), and its own macro-builder feeds the Choice-
+  // step picker every non-Multi choice. So the only thing that makes a target
+  // unusable here is that THIS COMPILER never produces a choice for it — a
+  // note with no `quickadd-type`, an unrecognized one, or `multi` (not
+  // compiled yet) leaves a permanently dangling choiceId that fails only at
+  // run time. Symmetric with the non-md check above, which already catches the
+  // equivalent problem for a non-markdown target.
   const destFrontmatter = app.metadataCache.getFileCache(dest)?.frontmatter;
-  if (destFrontmatter?.["quickadd-type"] !== "macro") {
+  if (!COMPILED_QUICKADD_TYPE_SET.has(destFrontmatter?.["quickadd-type"])) {
     return {
       kind: "choice",
       ok: false,
       error:
-        `"${raw}" resolves to "${dest.path}", whose frontmatter does not declare quickadd-type: macro. A choice ` +
-        `step runs another choice's macro command sequence, so it must reference a quickadd-type: macro note — ` +
-        `a template/capture note (compiled, but with no command sequence) or an uncompiled note both fail only ` +
-        `at run time.`,
+        `"${raw}" resolves to "${dest.path}", whose frontmatter does not declare a quickadd-type this compiler ` +
+        `compiles (${COMPILED_QUICKADD_TYPES.join(", ")}). A choice step must reference a note this same compile ` +
+        `turns into a choice; a note with no quickadd-type, an unrecognized one, or one not compiled yet (multi) ` +
+        `leaves a dangling reference that fails only at run time.`,
     };
   }
   // The referenced note's compiled id is a pure function of its path — no
@@ -285,8 +296,8 @@ function resolveTemplateChoice(app: App, notePath: string, name: string, frontma
  *  shaped, it resolves like `template:` above (must be markdown). If it
  *  contains `[[` but is not well-formed, it is a MALFORMED wikilink and
  *  fails the note (see below). Only a string with no `[[` in it at all is
- *  used verbatim as `captureTo` — QuickAdd's own dynamic-path format syntax,
- *  never interpreted here. */
+ *  used (trimmed, but otherwise verbatim) as `captureTo` — QuickAdd's own
+ *  dynamic-path format syntax, never interpreted here. */
 function resolveCaptureChoice(app: App, notePath: string, name: string, frontmatter: Record<string, unknown>): CaptureChoiceNoteInput {
   const raw = frontmatter?.["target"];
   let target: CaptureTargetOk | CaptureTargetFailed;
@@ -312,8 +323,11 @@ function resolveCaptureChoice(app: App, notePath: string, name: string, frontmat
       };
     } else if (linkedTarget === null) {
       // Not wikilink-shaped at all — a literal dynamic-path string, used
-      // as-is (QuickAdd's own format syntax, never interpreted here).
-      target = { ok: true, captureTo: raw };
+      // as-is (QuickAdd's own format syntax, never interpreted here) apart
+      // from a trim: same rationale as `optionalStringField`'s, and as the
+      // wikilink branch, whose `linkTarget` already trims internally. A padded
+      // path is a path nobody has, and QuickAdd would create it verbatim.
+      target = { ok: true, captureTo: raw.trim() };
     } else {
       const dest = app.metadataCache.getFirstLinkpathDest(linkedTarget, notePath);
       if (!dest) {
@@ -417,7 +431,7 @@ function collectChoiceNotes(app: App): ChoiceNoteInput[] {
     const frontmatter = app.metadataCache.getFileCache(file)?.frontmatter;
     if (!frontmatter) continue;
     const quickaddType = frontmatter["quickadd-type"];
-    if (quickaddType !== "macro" && quickaddType !== "template" && quickaddType !== "capture") continue;
+    if (!COMPILED_QUICKADD_TYPE_SET.has(quickaddType)) continue;
 
     const name = displayNameOf(frontmatter, file.path);
 
@@ -471,7 +485,8 @@ export function registerQuickAddTools(server: McpServer, app: App, ctx: ServerCt
         "the whole compile. A non-dry-run that would find zero choices while deleting three or more refuses " +
         "(`suspicious_mass_removal`) — that shape is a cold metadata cache far more often than a real change. " +
         "Supports Macro choices with userscript, choice, wait, obsidian-command, and editor-command steps. A " +
-        "choice step must point at another quickadd-type: macro note, and choice steps that form a reference " +
+        "choice step must point at another note this compiler compiles (quickadd-type: macro, template, or " +
+        "capture — anything else is a dangling reference), and choice steps that form a reference " +
         "cycle (A → B → A, or a self-reference) fail every note in the cycle — QuickAdd has no cycle guard, so " +
         "such a chain would loop forever at run time. " +
         "nested-choice and ai-assistant steps are not yet supported (per-choice error). " +

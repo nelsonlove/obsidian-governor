@@ -264,6 +264,17 @@ describe("obsidian_quickadd_compile — Capture discovery", () => {
     assert.equal(compiled.captureTo, "Journal/{{DATE}}.md");
   });
 
+  // Same rationale as folder:/file_name_format:/insert_after_heading: — a
+  // padded path is a path nobody has, and QuickAdd would create it verbatim.
+  test("a padded literal target: string is trimmed", async () => {
+    const { handler } = build({
+      notes: [captureNote("Choices/Log.md", "Log", { target: "  Journal/{{DATE}}.md  " })],
+    });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.errors.length, 0);
+    assert.equal(res.structuredContent.choices[0].captureTo, "Journal/{{DATE}}.md");
+  });
+
   // Other genuinely-literal shapes must keep compiling: the malformed-
   // wikilink guard keys on the "[[" substring and nothing else.
   for (const literal of ["Journal/{{DATE}}.md", "Inbox.md", "{{VALUE:folder}}/Log.md", "Journal/[2026]/Log.md"]) {
@@ -923,20 +934,58 @@ describe("obsidian_quickadd_compile: choice step", () => {
     assert.equal(res.structuredContent.choices.length, 0);
     assert.equal(res.structuredContent.errors.length, 1);
     assert.match(res.structuredContent.errors[0].message, /Notes\/Plain\.md/);
-    assert.match(res.structuredContent.errors[0].message, /quickadd-type: macro/);
+    assert.match(res.structuredContent.errors[0].message, /quickadd-type this compiler compiles/);
   });
 
-  test("a choice: link to a note with a DIFFERENT quickadd-type is rejected too", async () => {
+  // QuickAdd's ChoiceExecutor.execute() switches on the referenced choice's
+  // own type with real cases for Template, Capture, Macro and Multi — a Choice
+  // step is NOT restricted to Macro targets. Anything this compiler actually
+  // compiles is a legitimate target.
+  test("a choice: link to a quickadd-type: template note compiles", async () => {
     const { handler } = build({
       notes: [
-        macroNoteWithSteps("Choices/Bad.md", "Bad", [{ kind: "choice", choice: "[[Tmpl]]" }]),
-        { path: "Choices/Tmpl.md", frontmatter: { "quickadd-type": "template", name: "Tmpl" } },
+        macroNoteWithSteps("Choices/Outer.md", "Outer", [{ kind: "choice", choice: "[[Tmpl]]" }]),
+        templateNote("Choices/Tmpl.md", "Tmpl", { template: "[[Daily Template]]" }),
       ],
-      links: { "Tmpl": "Choices/Tmpl.md" },
+      links: { "Tmpl": "Choices/Tmpl.md", "Daily Template": "Templates/Daily.md" },
+    });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.errors.length, 0);
+    const outer = res.structuredContent.choices.find((c) => c.name === "Outer");
+    assert.equal(outer.macro.commands[0].type, "Choice");
+    assert.equal(outer.macro.commands[0].choiceId, "qan:Choices/Tmpl.md#choice");
+    assert.equal(outer.macro.commands[0].name, "Tmpl");
+  });
+
+  test("a choice: link to a quickadd-type: capture note compiles", async () => {
+    const { handler } = build({
+      notes: [
+        macroNoteWithSteps("Choices/Outer.md", "Outer", [{ kind: "choice", choice: "[[Log]]" }]),
+        captureNote("Choices/Log.md", "Log", { target: "Journal/Log.md" }),
+      ],
+      links: { "Log": "Choices/Log.md" },
+    });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.errors.length, 0);
+    const outer = res.structuredContent.choices.find((c) => c.name === "Outer");
+    assert.equal(outer.macro.commands[0].type, "Choice");
+    assert.equal(outer.macro.commands[0].choiceId, "qan:Choices/Log.md#choice");
+    assert.equal(outer.macro.commands[0].name, "Log");
+  });
+
+  test("a choice: link to a quickadd-type: multi note is still rejected (not compiled yet)", async () => {
+    const { handler } = build({
+      notes: [
+        macroNoteWithSteps("Choices/Bad.md", "Bad", [{ kind: "choice", choice: "[[Folder]]" }]),
+        { path: "Choices/Folder.md", frontmatter: { "quickadd-type": "multi", name: "Folder" } },
+      ],
+      links: { "Folder": "Choices/Folder.md" },
     });
     const res = await handler({ dry_run: true });
     assert.equal(res.structuredContent.choices.length, 0);
-    assert.match(res.structuredContent.errors[0].message, /quickadd-type: macro/);
+    assert.equal(res.structuredContent.errors.length, 1);
+    assert.match(res.structuredContent.errors[0].message, /quickadd-type this compiler compiles/);
+    assert.match(res.structuredContent.errors[0].message, /macro, template, capture/);
   });
 
   test("a choice: link to a note with NO frontmatter cache at all is rejected, never a TypeError", async () => {
@@ -948,7 +997,7 @@ describe("obsidian_quickadd_compile: choice step", () => {
     });
     const res = await handler({ dry_run: true });
     assert.equal(res.structuredContent.choices.length, 0);
-    assert.match(res.structuredContent.errors[0].message, /quickadd-type: macro/);
+    assert.match(res.structuredContent.errors[0].message, /quickadd-type this compiler compiles/);
   });
 });
 

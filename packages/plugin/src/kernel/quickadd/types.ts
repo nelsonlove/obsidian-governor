@@ -1,7 +1,9 @@
 // packages/plugin/src/kernel/quickadd/types.ts
 //
-// Pure types for the QuickAdd-macros-as-notes transform (Stage A: Macro
-// choices whose steps are all UserScript). No `obsidian` import anywhere in
+// Pure types for the QuickAdd-macros-as-notes transform. Covers Macro
+// choices (userscript, choice, wait, obsidian-command and editor-command
+// steps), Template choices and Capture choices; `multi` is not compiled yet.
+// No `obsidian` import anywhere in
 // this file or transform.ts — see packages/plugin/CLAUDE.md's kernel
 // discipline. Wikilink resolution happens in the glue layer
 // (mcp/tools-quickadd.ts); everything here works on already-resolved data.
@@ -130,8 +132,9 @@ export interface EditorCommandStepFailed {
   error: string;
 }
 
-/** A step whose declared `kind:` isn't implemented yet (Stage B+: choice,
- *  wait, obsidian-command, nested-choice, editor-command, ai-assistant).
+/** A step whose declared `kind:` isn't implemented yet (nested-choice,
+ *  ai-assistant — choice, wait, obsidian-command and editor-command all
+ *  landed in Stage B), or isn't a recognized kind at all.
  *  Carried through as a normal per-choice failure rather than a thrown
  *  error, so one note using a not-yet-supported step kind doesn't take
  *  down the whole compile. */
@@ -154,10 +157,10 @@ export type MacroStepResolved =
   | EditorCommandStepFailed
   | UnsupportedStep;
 
-/** One choice note's data, already resolved by the glue layer. Stage A only
- *  ever constructs `quickaddType: "macro"` — the union grows in later
- *  stages (template/capture/multi), which is why this is a union of one
- *  today rather than a bare object type. */
+/** One Macro choice note's data, already resolved by the glue layer. The
+ *  `quickaddType` discriminant is what makes `ChoiceNoteInput` a
+ *  discriminated union — three members today (macro/template/capture), and
+ *  `multi` still to come. */
 export interface MacroChoiceNoteInput {
   quickaddType: "macro";
   notePath: string;
@@ -196,9 +199,9 @@ export interface TemplateChoiceNoteInput {
 }
 
 /** The `target:` field resolved. `captureTo` is either the resolved
- *  wikilink's note path (when `target:` was wikilink-shaped) or the raw
- *  literal string verbatim (QuickAdd's own dynamic-path format syntax —
- *  this compiler does not interpret it, only passes it through). */
+ *  wikilink's note path (when `target:` was wikilink-shaped) or the trimmed
+ *  literal string (QuickAdd's own dynamic-path format syntax — this compiler
+ *  does not interpret it, only passes it through). */
 export interface CaptureTargetOk {
   ok: true;
   captureTo: string;
@@ -232,9 +235,10 @@ export interface CaptureChoiceNoteInput {
 
 export type ChoiceNoteInput = MacroChoiceNoteInput | TemplateChoiceNoteInput | CaptureChoiceNoteInput;
 
-/** QuickAdd's own native shapes (the Stage A subset — UserScript commands
- *  only) — verified against a real vault's
- *  `.obsidian/plugins/quickadd/data.json`. */
+/** QuickAdd's own native macro-command shapes — verified against a real
+ *  vault's `.obsidian/plugins/quickadd/data.json`. UserScript first; the
+ *  Choice/Wait/Obsidian/EditorCommand shapes below are the rest of the set
+ *  this compiler emits. */
 export interface QuickAddUserScriptCommand {
   id: string;
   name: string;
