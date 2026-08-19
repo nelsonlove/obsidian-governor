@@ -22,6 +22,7 @@ import { z } from "zod";
 import { guardCall, type GuardSettings } from "../guard.js";
 import {
   IdempotencyMismatchError,
+  RecordImmutableError,
   RevConflictError,
   UidAmbiguousError,
   UidUnresolvedError,
@@ -473,6 +474,7 @@ export function makeGuarded(opts: GuardedOpts) {
       // threw keeps propagating to the SDK exactly as before.
       if (e instanceof WriteTimeoutError) return codedError(e.code, e.message);
       if (e instanceof RevConflictError) return codedError(e.code, e.message);
+      if (e instanceof RecordImmutableError) return codedError(e.code, e.message);
       if (e instanceof IdempotencyMismatchError) return codedError(e.code, e.message);
       throw e;
     }

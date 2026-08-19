@@ -4,6 +4,7 @@
 
 import { TFile, type App } from "obsidian";
 import type { TargetProbe } from "./index.js";
+import { isRecordFlag } from "./record-guard.js";
 import type { ServerIdentity } from "./install-id.js";
 import type { UidSource } from "./uid-index.js";
 
@@ -59,6 +60,18 @@ export function obsidianProbe(app: App): TargetProbe {
     // identity substrate (Delivery step 2).
     rev(path) {
       return fileAt(path)?.stat.mtime;
+    },
+    // Cache lookup only, same contract as uid(): `undefined` when the file is
+    // missing or the cache hasn't parsed its frontmatter — the kernel's record
+    // check (#264) fails OPEN on that, so a cold cache can never refuse an
+    // unrelated operation. What counts as "true" is record-guard.ts's decision,
+    // not this adapter's.
+    record(path) {
+      const f = fileAt(path);
+      if (!f) return undefined;
+      const fm = app.metadataCache.getFileCache(f)?.frontmatter;
+      if (!fm || !("record" in fm)) return undefined;
+      return isRecordFlag(fm.record);
     },
   };
 }
