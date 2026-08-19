@@ -37,6 +37,7 @@ import type {
   QuickAddMacroChoice,
   QuickAddTemplateChoice,
   QuickAddCaptureChoice,
+  QuickAddMultiChoice,
   EditorCommandType,
   TemplateChoiceNoteInput,
   CaptureChoiceNoteInput,
@@ -614,7 +615,7 @@ export function registerQuickAddTools(server: McpServer, app: App, ctx: ServerCt
 function applyCommands(
   quickadd: any,
   previouslyOwned: unknown[],
-  fresh: Array<QuickAddMacroChoice | QuickAddTemplateChoice | QuickAddCaptureChoice>,
+  fresh: Array<QuickAddMacroChoice | QuickAddTemplateChoice | QuickAddCaptureChoice | QuickAddMultiChoice>,
 ): boolean {
   if (typeof quickadd.addCommandForChoice !== "function" || typeof quickadd.removeCommandForChoice !== "function") {
     return false;

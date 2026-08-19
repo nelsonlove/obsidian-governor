@@ -66,6 +66,16 @@ function captureInput(overrides = {}) {
   };
 }
 
+function multiInput(overrides = {}) {
+  return {
+    notePath: "QuickAdd choices/My Multi/My Multi.md",
+    quickaddType: "multi",
+    name: "My Multi",
+    folder: { ok: true, members: [] },
+    ...overrides,
+  };
+}
+
 describe("deriveChoiceId / deriveMacroId / deriveStepId", () => {
   test("deterministic — same note path produces the same id every time", () => {
     assert.equal(deriveChoiceId("a/b.md"), deriveChoiceId("a/b.md"));
@@ -548,5 +558,124 @@ describe("transformChoices — mixed Macro/Template/Capture in one compile", () 
     assert.equal(result.errors.length, 1);
     assert.ok(result.choices.some((c) => c.type === "Macro"));
     assert.ok(result.choices.some((c) => c.type === "Capture"));
+  });
+});
+
+describe("transformChoices — Multi", () => {
+  test("compiles an empty Multi (no members) using QuickAdd's own defaults", () => {
+    const result = transformChoices([multiInput()]);
+    assert.equal(result.errors.length, 0);
+    assert.equal(result.choices.length, 1);
+    const choice = result.choices[0];
+    assert.equal(choice.type, "Multi");
+    assert.equal(choice.command, false);
+    assert.deepEqual(choice.choices, []);
+    assert.equal(choice.collapsed, false);
+  });
+
+  test("compiles a Multi with Macro/Template/Capture members, nested inline", () => {
+    const result = transformChoices([
+      multiInput({
+        folder: {
+          ok: true,
+          members: [
+            macroInput({ notePath: "QuickAdd choices/My Multi/A Macro.md", name: "A Macro" }),
+            templateInput({ notePath: "QuickAdd choices/My Multi/B Template.md", name: "B Template" }),
+            captureInput({ notePath: "QuickAdd choices/My Multi/C Capture.md", name: "C Capture" }),
+          ],
+        },
+      }),
+    ]);
+    assert.equal(result.errors.length, 0);
+    // The Multi is the ONE top-level entry — its members do not ALSO appear
+    // top-level, matching native QuickAdd's own data.json shape (no folder
+    // concept; a Multi's choices array is the only place members live).
+    assert.equal(result.choices.length, 1);
+    const multi = result.choices[0];
+    assert.equal(multi.choices.length, 3);
+    assert.deepEqual(multi.choices.map((c) => c.type), ["Macro", "Template", "Capture"]);
+  });
+
+  test("Multi-in-Multi nests correctly, arbitrarily deep", () => {
+    const inner = multiInput({
+      notePath: "QuickAdd choices/Outer/Inner/Inner.md",
+      name: "Inner",
+      folder: { ok: true, members: [macroInput({ notePath: "QuickAdd choices/Outer/Inner/Leaf.md", name: "Leaf" })] },
+    });
+    const outer = multiInput({
+      notePath: "QuickAdd choices/Outer/Outer.md",
+      name: "Outer",
+      folder: { ok: true, members: [inner] },
+    });
+    const result = transformChoices([outer]);
+    assert.equal(result.errors.length, 0);
+    assert.equal(result.choices.length, 1);
+    const outerChoice = result.choices[0];
+    assert.equal(outerChoice.choices.length, 1);
+    const innerChoice = outerChoice.choices[0];
+    assert.equal(innerChoice.type, "Multi");
+    assert.equal(innerChoice.choices.length, 1);
+    assert.equal(innerChoice.choices[0].name, "Leaf");
+  });
+
+  test("an ambiguous folder (glue layer's MultiFolderFailed) fails only that Multi note", () => {
+    const result = transformChoices([
+      multiInput({ folder: { ok: false, error: "ambiguous — 2 multi notes claim this folder" } }),
+    ]);
+    assert.equal(result.choices.length, 0);
+    assert.equal(result.errors.length, 1);
+    assert.match(result.errors[0].message, /ambiguous/);
+  });
+
+  test("a broken MEMBER fails only that member — the Multi still compiles with its other members", () => {
+    const result = transformChoices([
+      multiInput({
+        folder: {
+          ok: true,
+          members: [
+            captureInput({ notePath: "QuickAdd choices/My Multi/Good.md", name: "Good" }),
+            templateInput({
+              notePath: "QuickAdd choices/My Multi/Bad.md",
+              name: "Bad",
+              template: { ok: false, error: "could not resolve" },
+            }),
+          ],
+        },
+      }),
+    ]);
+    assert.equal(result.choices.length, 1); // the Multi itself still compiles
+    assert.equal(result.choices[0].choices.length, 1); // only the good member
+    assert.equal(result.choices[0].choices[0].name, "Good");
+    assert.equal(result.errors.length, 1); // the bad member's failure IS reported
+    assert.match(result.errors[0].message, /could not resolve/);
+  });
+});
+
+describe("transformChoices — cycle detection sees nested choices", () => {
+  test("a cycle between a NESTED Macro (inside a Multi) and a TOP-LEVEL Macro is caught, and only the cyclic pair is pruned", () => {
+    const nestedMacro = macroInput({
+      notePath: "QuickAdd choices/My Multi/Nested.md",
+      name: "Nested",
+      steps: [choiceStep({ choiceId: "qan:QuickAdd choices/TopLevel.md#choice", displayName: "TopLevel" })],
+    });
+    const survivingSibling = captureInput({ notePath: "QuickAdd choices/My Multi/Survivor.md", name: "Survivor" });
+    const multi = multiInput({ folder: { ok: true, members: [nestedMacro, survivingSibling] } });
+    const topLevelMacro = macroInput({
+      notePath: "QuickAdd choices/TopLevel.md",
+      name: "TopLevel",
+      steps: [choiceStep({ choiceId: "qan:QuickAdd choices/My Multi/Nested.md#choice", displayName: "Nested" })],
+    });
+    const result = transformChoices([multi, topLevelMacro]);
+    // The top-level Macro is dropped entirely (it WAS the cyclic choice).
+    assert.equal(result.choices.length, 1);
+    assert.equal(result.choices[0].type, "Multi");
+    // The Multi survives, but its NESTED cyclic member is pruned — only the
+    // surviving sibling remains inside it.
+    assert.equal(result.choices[0].choices.length, 1);
+    assert.equal(result.choices[0].choices[0].name, "Survivor");
+    // Both cyclic notes are reported as errors, by their real note paths.
+    assert.equal(result.errors.length, 2);
+    assert.ok(result.errors.some((e) => e.notePath === "QuickAdd choices/My Multi/Nested.md"));
+    assert.ok(result.errors.some((e) => e.notePath === "QuickAdd choices/TopLevel.md"));
   });
 });
