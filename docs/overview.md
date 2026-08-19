@@ -224,10 +224,11 @@ guard-patched interception point as hand-registered tools. See [modules.md](modu
 - **`bases`** (default on, read-only, feature-gated) — evaluated Base result sets:
   `base_list` + `base_query` via a hidden detached-leaf capture of Obsidian's own Bases
   engine. Full doc: [bases.md](bases.md).
-- **The QuickAdd compile tool** — `obsidian_quickadd_compile` (Stage A of "QuickAdd macros
+- **The QuickAdd compile tool** — `obsidian_quickadd_compile` ("QuickAdd macros
   as notes") registers directly in `server.ts`, not through the module host, because it
-  mutates QuickAdd's own config rather than a vault note: it compiles Macro/UserScript
-  choice notes (frontmatter `quickadd-type: macro`) into QuickAdd's live config via a scoped
+  mutates QuickAdd's own config rather than a vault note: it compiles Macro/UserScript,
+  Template, and Capture choice notes (frontmatter `quickadd-type: macro`, `template`, or
+  `capture`) into QuickAdd's live config via a scoped
   merge (only compiler-owned `qan:`-prefixed choices are touched), reports the diff in both
   modes, refuses `suspicious_mass_removal` and refuses outright under an active path
   allowlist.

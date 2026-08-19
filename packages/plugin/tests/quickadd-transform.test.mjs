@@ -39,6 +39,33 @@ function macroInput(overrides = {}) {
   };
 }
 
+function templateInput(overrides = {}) {
+  return {
+    notePath: "QuickAdd choices/Daily Note.md",
+    quickaddType: "template",
+    name: "Daily Note",
+    template: { ok: true, templatePath: "Templates/Daily.md" },
+    folder: undefined,
+    fileNameFormat: undefined,
+    openFile: false,
+    ...overrides,
+  };
+}
+
+function captureInput(overrides = {}) {
+  return {
+    notePath: "QuickAdd choices/Log entry.md",
+    quickaddType: "capture",
+    name: "Log entry",
+    target: { ok: true, captureTo: "Journal/Log.md" },
+    prepend: false,
+    task: false,
+    insertAfterHeading: undefined,
+    createIfMissing: false,
+    ...overrides,
+  };
+}
+
 describe("deriveChoiceId / deriveMacroId / deriveStepId", () => {
   test("deterministic — same note path produces the same id every time", () => {
     assert.equal(deriveChoiceId("a/b.md"), deriveChoiceId("a/b.md"));
@@ -419,5 +446,107 @@ describe("transformChoices — nested-choice and ai-assistant stay unsupported (
     ]);
     assert.equal(result.choices.length, 0);
     assert.match(result.errors[0].message, /unsupported step kind "ai-assistant"/);
+  });
+});
+
+describe("transformChoices — Template", () => {
+  test("compiles a minimal Template choice using QuickAdd's own defaults for every unexposed field", () => {
+    const result = transformChoices([templateInput()]);
+    assert.equal(result.errors.length, 0);
+    assert.equal(result.choices.length, 1);
+    const choice = result.choices[0];
+    assert.equal(choice.type, "Template");
+    assert.equal(choice.command, true);
+    assert.equal(choice.templatePath, "Templates/Daily.md");
+    assert.deepEqual(choice.folder, {
+      enabled: false, folders: [], chooseWhenCreatingNote: false,
+      createInSameFolderAsActiveFile: false, chooseFromSubfolders: false,
+    });
+    assert.deepEqual(choice.fileNameFormat, { enabled: false, format: "" });
+    assert.equal(choice.openFile, false);
+    assert.equal(choice.discoverExistingNotesBeforeCreate, false);
+    assert.equal(choice.appendLink, false);
+    assert.deepEqual(choice.fileOpening, { location: "tab", direction: "vertical", mode: "default", focus: true });
+    assert.deepEqual(choice.fileExistsBehavior, { kind: "prompt" });
+  });
+
+  test("compiles folder/fileNameFormat/openFile when the note sets them", () => {
+    const result = transformChoices([templateInput({ folder: "Journal/Daily", fileNameFormat: "{{DATE}} note", openFile: true })]);
+    const choice = result.choices[0];
+    assert.deepEqual(choice.folder.folders, ["Journal/Daily"]);
+    assert.equal(choice.folder.enabled, true);
+    assert.deepEqual(choice.fileNameFormat, { enabled: true, format: "{{DATE}} note" });
+    assert.equal(choice.openFile, true);
+  });
+
+  test("a Template note whose template: wikilink failed to resolve fails only that note", () => {
+    const result = transformChoices([
+      templateInput({ template: { ok: false, error: 'could not resolve "[[Missing]]".' } }),
+    ]);
+    assert.equal(result.choices.length, 0);
+    assert.equal(result.errors.length, 1);
+    assert.match(result.errors[0].message, /could not resolve/);
+  });
+});
+
+describe("transformChoices — Capture", () => {
+  test("compiles a minimal Capture choice using QuickAdd's own defaults for every unexposed field", () => {
+    const result = transformChoices([captureInput()]);
+    assert.equal(result.errors.length, 0);
+    const choice = result.choices[0];
+    assert.equal(choice.type, "Capture");
+    assert.equal(choice.command, true);
+    assert.equal(choice.captureTo, "Journal/Log.md");
+    assert.equal(choice.prepend, false);
+    assert.equal(choice.task, false);
+    assert.deepEqual(choice.insertAfter, {
+      enabled: false, after: "", insertAtEnd: false, considerSubsections: false,
+      createIfNotFound: false, createIfNotFoundLocation: "top", inline: false,
+      replaceExisting: false, blankLineAfterMatchMode: "auto", promptHeading: false,
+    });
+    assert.deepEqual(choice.createFileIfItDoesntExist, { enabled: false, createWithTemplate: false, template: "" });
+    assert.equal(choice.activeFileWritePosition, "cursor");
+    assert.deepEqual(choice.templater, { afterCapture: "none" });
+  });
+
+  test("compiles prepend/task/insertAfterHeading/createIfMissing when the note sets them", () => {
+    const result = transformChoices([
+      captureInput({ prepend: true, task: true, insertAfterHeading: "## Inbox", createIfMissing: true }),
+    ]);
+    const choice = result.choices[0];
+    assert.equal(choice.prepend, true);
+    assert.equal(choice.task, true);
+    assert.equal(choice.insertAfter.enabled, true);
+    assert.equal(choice.insertAfter.after, "## Inbox");
+    assert.equal(choice.createFileIfItDoesntExist.enabled, true);
+  });
+
+  test("a dynamic (non-wikilink) target: string is used verbatim as captureTo", () => {
+    const result = transformChoices([
+      captureInput({ target: { ok: true, captureTo: "Journal/{{DATE:YYYY-MM-DD}}.md" } }),
+    ]);
+    assert.equal(result.choices[0].captureTo, "Journal/{{DATE:YYYY-MM-DD}}.md");
+  });
+
+  test("a Capture note whose target: failed to resolve fails only that note", () => {
+    const result = transformChoices([
+      captureInput({ target: { ok: false, error: 'could not resolve "[[Missing]]".' } }),
+    ]);
+    assert.equal(result.choices.length, 0);
+    assert.equal(result.errors.length, 1);
+  });
+});
+
+describe("transformChoices — mixed Macro/Template/Capture in one compile", () => {
+  test("a failure in one choice type doesn't affect the others", () => {
+    const result = transformChoices([
+      macroInput(),
+      templateInput({ notePath: "Choices/Broken.md", name: "Broken", template: { ok: false, error: "boom" } }),
+      captureInput({ notePath: "Choices/Good.md", name: "Good" }),
+    ]);
+    assert.equal(result.choices.length, 2);
+    assert.equal(result.errors.length, 1);
+    assert.ok(result.choices.some((c) => c.type === "Macro"));
+    assert.ok(result.choices.some((c) => c.type === "Capture"));
   });
 });
