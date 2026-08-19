@@ -186,7 +186,11 @@ export function structurePack(opts: StructurePackOpts = {}): RulePack {
       // so it is not a silent zero). Each unresolved site reports at the
       // blueprint whose text CONTAINS it (a nested miss reports at the nested
       // blueprint's own entry), scoped like the note scan: no dot/.trash
-      // segments, no `_` roots, no ungoverned roots.
+      // segments, no `_` roots, no ungoverned roots. Known residual of that
+      // scoping: a governed blueprint including an UNGOVERNED one whose own
+      // include is unresolved still shrinks silently — the nested site sits in
+      // a blueprint this scan skips. Deliberate (a cross-governance include is
+      // itself the anomaly), not an oversight.
       for (const bp of blueprints) {
         if (hasDotOrTrashSegment(bp.path)) continue;
         const bpRoot = firstSegment(bp.path);
