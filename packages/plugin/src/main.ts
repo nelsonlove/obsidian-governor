@@ -535,18 +535,20 @@ export default class VaultMcpPlugin extends Plugin {
     }
 
     // ── scheme Inbox pane (jd-dashboard fold, Stage B) ─────────────────────────
-    // Gated on the scheme module's own enabled flag, matching its default-true
-    // semantics elsewhere (modules-mount.ts: `settings.modules?.scheme?.enabled
-    // === false` is the disabled check, so an absent settings row means on) —
-    // the pane is meaningless without scheme addressing configured, same
-    // reasoning as skills' GUI riding its own module's toggle above. Unlike
-    // skills' pane this one is read-only chrome with no write capability at
-    // all, so it mounts unconditionally at onload rather than live-following a
-    // settings-tab toggle — there's no acceptance-relevant state for a live
-    // mount/unmount to protect.
+    // Registered on the scheme module's own enabled flag, matching its
+    // default-true semantics elsewhere (modules-mount.ts:
+    // `settings.modules?.scheme?.enabled === false` is the disabled check, so
+    // an absent settings row means on) — the pane is meaningless without
+    // scheme addressing configured, same reasoning as skills' GUI riding its
+    // own module's toggle above. Unlike skills' pane this one is read-only
+    // chrome with no write capability at all, so registration itself doesn't
+    // need to live-follow a settings-tab toggle the way acceptance's does —
+    // there's no acceptance-relevant state for a live mount/unmount to
+    // protect. "Registered" only: like skills' Preview pane, it doesn't force
+    // a leaf open at onload — the ribbon icon / command opens it on demand.
     if (this.settings.modules?.scheme?.enabled !== false) {
       try {
-        wireSchemeInbox(this);
+        wireSchemeInbox(this, { getSchemes: () => this.settings.schemes ?? DEFAULT_SCHEMES });
       } catch (e) {
         console.error("[governor] scheme inbox pane wiring failed", e);
       }

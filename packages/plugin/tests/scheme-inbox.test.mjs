@@ -116,4 +116,31 @@ describe("scanInboxes", () => {
     const notes = ["00-09 System/03 Agents/03.01 Inbox/03.01 Inbox.md"];
     assert.deepEqual(scanInboxes(notes), []);
   });
+
+  test("a dot-prefixed name in the inbox is excluded from the count, matching the original", () => {
+    const notes = [
+      "00-09 System/03 Agents/03.01 Inbox/.hidden.md",
+      "00-09 System/03 Agents/03.01 Inbox/real.md",
+    ];
+    const groups = scanInboxes(notes);
+    assert.equal(groups[0].items[0].count, 1);
+  });
+
+  test("a +README leftover in the inbox is excluded from the count, matching the original", () => {
+    const notes = [
+      "00-09 System/03 Agents/03.01 Inbox/+README.md",
+      "00-09 System/03 Agents/03.01 Inbox/real.md",
+    ];
+    const groups = scanInboxes(notes);
+    assert.equal(groups[0].items[0].count, 1);
+  });
+
+  test("an inbox with only dot-files/+README (nothing real) is omitted entirely", () => {
+    const notes = [
+      "00-09 System/03 Agents/03.01 Inbox/03.01 Inbox.md",
+      "00-09 System/03 Agents/03.01 Inbox/.hidden.md",
+      "00-09 System/03 Agents/03.01 Inbox/+README.md",
+    ];
+    assert.deepEqual(scanInboxes(notes), []);
+  });
 });

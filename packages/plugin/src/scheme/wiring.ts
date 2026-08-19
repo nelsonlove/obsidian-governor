@@ -1,15 +1,33 @@
-// Wiring for the scheme Inbox pane (jd-dashboard fold, Stage B) — registers the
-// view, mounts it in the right sidebar on first load (matching the original
-// standalone plugin's default placement), and adds a command + ribbon icon to
-// reveal it. Read-only chrome: no MCP tool, no write capability, no gesture
-// gate — it's the same trust boundary as Obsidian's own file explorer, which
-// is why (unlike an MCP tool's `ctx.notes()`) it reads `app.vault` directly
-// rather than going through any path-visibility allowlist. That allowlist
-// exists to bound what an MCP-connected AGENT can reach; a human's own
-// sidebar in their own Obsidian is not that boundary — jd-dashboard's
-// original inbox panel had no allowlist concept either.
+// Wiring for the scheme Inbox pane (jd-dashboard fold, Stage B) — registers
+// the view and adds a ribbon icon + command that open it in the right
+// sidebar (matching the original standalone plugin's placement); like the
+// original, and like this plugin's skills Preview pane, it does not force a
+// leaf open on its own at onload — "wired" means registered and reachable,
+// not auto-revealed. Read-only chrome: no MCP tool, no write capability, no
+// gesture gate — it's the same trust boundary as Obsidian's own file
+// explorer, which is why (unlike an MCP tool's `ctx.notes()`) it reads
+// `app.vault` directly rather than going through the MCP path-visibility
+// allowlist (guard.ts's `visiblePaths`). That allowlist bounds what an
+// MCP-connected AGENT can reach; a human's own sidebar in their own Obsidian
+// is not that boundary.
+//
+// It DOES still respect a configured scheme instance's `excludedRoots`,
+// though — that is a "what does this vault's addressing scheme
+// consider live JD territory at all" judgment (config is not hardwired,
+// Nelson's ruling — see tools-scheme.ts's callers of `excludeRoots`),
+// independent of the agent-facing allowlist. A vault-relative folder an
+// instance is configured to never resolve/list/claim (e.g. an archive tree
+// reusing a live spine's addresses) should not show up as a "real" inbox
+// here either. Excluded from every configured instance's union, not just
+// one — with several instances configured differently, any of them saying
+// "this isn't live JD territory" is reason enough to leave it out of a
+// human-facing rollup, even though only one instance's grammar is what
+// actually finds the inbox folders in the first place (inbox.ts's own
+// regexes, JD-specific — see its header for why that isn't threaded through
+// ScopeProvider itself).
 
 import { type App, type Plugin, TFolder } from "obsidian";
+import { makeRegistry, excludeRoots, type SchemeInstanceConfig } from "../kernel/scheme/registry.js";
 import { INBOX_VIEW_TYPE, InboxPaneView, type InboxPaneController } from "./inbox-pane.js";
 
 function revealFolder(app: App, path: string): void {
@@ -19,15 +37,30 @@ function revealFolder(app: App, path: string): void {
   if (!fileExplorer) return;
   app.workspace.revealLeaf(fileExplorer);
   // No public Obsidian API for "select this folder in the file tree" —
-  // reaching the built-in file-explorer view's internal method, same as the
-  // original jd-dashboard plugin did.
+  // reaching the built-in file-explorer view's internal method (a typed
+  // structural cast, not `any` — same reach, tighter typing than the
+  // original jd-dashboard plugin's `(view as any).revealInFolder?.(...)`).
   (fileExplorer.view as unknown as { revealInFolder?: (f: TFolder) => void }).revealInFolder?.(folder);
 }
 
-export function wireSchemeInbox(plugin: Plugin): void {
+export interface WireSchemeInboxOpts {
+  /** The vault's configured scheme instances, read fresh per call — mirrors
+   *  server.ts's own `schemes: () => makeRegistry(...)` (a cheap, pure,
+   *  rebuild-don't-cache factory), so a settings-tab edit to `excludedRoots`
+   *  takes effect on the pane's next refresh without a plugin reload. */
+  getSchemes: () => SchemeInstanceConfig[];
+}
+
+export function wireSchemeInbox(plugin: Plugin, opts: WireSchemeInboxOpts): void {
   const app = plugin.app;
   const controller: InboxPaneController = {
-    notes: () => app.vault.getMarkdownFiles().map((f) => f.path),
+    notes: () => {
+      const notes = app.vault.getMarkdownFiles().map((f) => f.path);
+      const roots = makeRegistry(opts.getSchemes())
+        .instances()
+        .flatMap((inst) => inst.excludedRoots ?? []);
+      return excludeRoots(notes, roots.length ? roots : undefined);
+    },
     revealFolder: (path) => revealFolder(app, path),
   };
   plugin.registerView(INBOX_VIEW_TYPE, (leaf) => new InboxPaneView(leaf, controller));
