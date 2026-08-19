@@ -94,6 +94,37 @@ not a pass. On a multi-target operation, `if_rev` applies to the **first** targe
 [kernel arguments](#kernel-arguments)), so it works on the full surface, in Code Mode, and on
 mutating tools published by other plugins; no handler ever sees it.
 
+## Record immutability — `record: true` notes are append-only
+
+A note whose frontmatter carries **`record: true`** is a record: historical, extended only by a
+dated end-of-file append, never edited in place (issue #264 — the durable, every-client layer
+behind the client-side record-write hooks). The kernel refuses any mutating operation that
+names one with **`Error [record_immutable]`**, naming the path and pointing at the dated-append
+convention. Nothing runs; the refusal is journaled (`outcome: "error"`).
+
+- **The one exemption is `obsidian_append_note`**, by **tool identity**
+  (`RECORD_EXEMPT_OPS`, `packages/plugin/src/kernel/record-guard.ts`) — the only tool whose
+  whole contract is a pure end-of-file append. Argument shapes never exempt anything;
+  `obsidian_append_at_heading` inserts mid-file and is refused like any other mutation.
+- **Every named path counts**, not just the primary: a move **onto** a record note would
+  overwrite it, so either half of a move (or any member of a batch) being a record refuses the
+  whole operation.
+- **Checked at dequeue**, in the same closure that samples `revBefore` and consults advisory
+  locks — against the vault as it is when the operation actually runs, not as it was at enqueue.
+- **Fails open**, the deliberate mirror of `if_rev`'s fail-closed: the flag is read from
+  Obsidian's already-parsed metadata cache (`TargetProbe.record`, cache lookup only), and a
+  missing file, an unparsed cache, a throwing probe, or a build with no probe at all refuses
+  nothing. The check is protective, not load-bearing — a broken cache must not become a
+  vault-wide write outage. (`if_rev` fails closed because the caller explicitly asked for a
+  precondition; nobody asked this check to block a note it cannot read.)
+- The flag is `record: true` (boolean; the quoted string `"true"` is honored too —
+  `isRecordFlag`). `false`, absence, or anything else is not a record.
+
+Threat model matches the accept guard: fallible agents, not adversaries. This layer holds for
+any client that reaches the vault **through the MCP server**; a write that bypasses it — a
+shell redirect, another process touching disk directly (the class behind the incident that
+motivated #264) — is out of its reach and stays with the client-side hooks and backups.
+
 ## `idempotency_key` — safe retries
 
 A repeat call carrying an **`idempotency_key`** this plugin has already **completed** returns
