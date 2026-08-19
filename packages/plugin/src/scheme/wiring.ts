@@ -41,7 +41,7 @@
 // command while the module is off shows a Notice instead of silently
 // trying to open an unregistered view type.
 
-import { type App, Component, type Plugin, Notice, TFolder } from "obsidian";
+import { type App, Component, type Plugin, type ViewCreator, Notice, TFolder } from "obsidian";
 import { makeRegistry, excludeRoots, type SchemeInstanceConfig } from "../kernel/scheme/registry.js";
 import { INBOX_VIEW_TYPE, InboxPaneView, type InboxPaneController } from "./inbox-pane.js";
 import { DRIFT_VIEW_TYPE, DriftPaneView, type DriftPaneController } from "./drift-pane.js";
@@ -94,53 +94,75 @@ export interface WireSchemePanesOpts {
 /** Mount both panes on one shared child Component — they're gated by the
  *  same "scheme" module toggle and always mount/unmount together, so one
  *  Component (one `removeChild` call) is a complete teardown of both. */
+/** One pane's registration: view + teardown hook + ribbon, all landing on
+ *  the shared `component`. Isolated in its own try/catch (see
+ *  `wireSchemePanes`'s doc comment) so a failure setting up ONE pane cannot
+ *  orphan the other's already-successful registration with no reference
+ *  left to tear it down. */
+function wirePane(plugin: Plugin, component: Component, viewType: string, label: string, icon: string, factory: ViewCreator): void {
+  const app = plugin.app;
+  try {
+    plugin.registerView(viewType, factory);
+  } catch (e) {
+    console.warn(`[governor] ${viewType} view type already registered — reusing it`, e);
+  }
+  component.register(() => {
+    for (const leaf of app.workspace.getLeavesOfType(viewType)) leaf.detach();
+    try { viewRegistryOf(plugin)?.unregisterView(viewType); }
+    catch (e) { console.warn(`[governor] ${viewType} view unregister failed`, e); }
+  });
+  const ribbon = plugin.addRibbonIcon(icon, label, () => void activateView(app, viewType));
+  component.register(() => ribbon.remove());
+}
+
+/**
+ * Mount both panes on one shared child Component — they're gated by the
+ * same "scheme" module toggle and always mount/unmount together, so one
+ * Component (one `removeChild` call) is a complete teardown of both.
+ *
+ * Each pane's registration is isolated (`wirePane`'s own try/catch) rather
+ * than left to a single try/catch around this whole function (which is what
+ * the CALLER, `applySchemePanesMount`, still wraps this in too) — a mount
+ * cycle is now live and REPEATABLE (toggle off/on, off/on...), so a failure
+ * setting up one pane must not silently orphan the other pane's ribbon/view
+ * with no surviving reference to tear it down: the caller's catch only sees
+ * a thrown `wireSchemePanes` and nulls its component handle, which would
+ * otherwise abandon whatever already-registered pane never makes it into
+ * that null'd reference. With isolation, the worst case on a genuine
+ * failure is "one pane failed to mount, the other didn't" — never "a pane
+ * mounted successfully and nothing can ever unmount it again."
+ */
 export function wireSchemePanes(plugin: Plugin, opts: WireSchemePanesOpts): Component {
   const app = plugin.app;
   const component = new Component();
   plugin.addChild(component);
 
-  // ── Inbox pane ──────────────────────────────────────────────────────────
-  const inboxController: InboxPaneController = {
-    notes: () => {
-      const notes = app.vault.getMarkdownFiles().map((f) => f.path);
-      const roots = makeRegistry(opts.getSchemes())
-        .instances()
-        .flatMap((inst) => inst.excludedRoots ?? []);
-      return excludeRoots(notes, roots.length ? roots : undefined);
-    },
-    revealFolder: (path) => revealFolder(app, path),
-  };
   try {
-    plugin.registerView(INBOX_VIEW_TYPE, (leaf) => new InboxPaneView(leaf, inboxController));
+    const inboxController: InboxPaneController = {
+      notes: () => {
+        const notes = app.vault.getMarkdownFiles().map((f) => f.path);
+        const roots = makeRegistry(opts.getSchemes())
+          .instances()
+          .flatMap((inst) => inst.excludedRoots ?? []);
+        return excludeRoots(notes, roots.length ? roots : undefined);
+      },
+      revealFolder: (path) => revealFolder(app, path),
+    };
+    wirePane(plugin, component, INBOX_VIEW_TYPE, "Open JD inboxes", "inbox", (leaf) => new InboxPaneView(leaf, inboxController));
   } catch (e) {
-    console.warn("[governor] scheme inbox view type already registered — reusing it", e);
+    console.error("[governor] scheme inbox pane wiring failed", e);
   }
-  component.register(() => {
-    for (const leaf of app.workspace.getLeavesOfType(INBOX_VIEW_TYPE)) leaf.detach();
-    try { viewRegistryOf(plugin)?.unregisterView(INBOX_VIEW_TYPE); }
-    catch (e) { console.warn("[governor] scheme inbox view unregister failed", e); }
-  });
-  const inboxRibbon = plugin.addRibbonIcon("inbox", "Open JD inboxes", () => void activateView(app, INBOX_VIEW_TYPE));
-  component.register(() => inboxRibbon.remove());
 
-  // ── Drift pane ──────────────────────────────────────────────────────────
-  const driftSource = obsidianDriftSource(app);
-  const driftController: DriftPaneController = {
-    scan: () => driftSource.scan(),
-    openNote: (path) => void app.workspace.openLinkText(path, ""),
-  };
   try {
-    plugin.registerView(DRIFT_VIEW_TYPE, (leaf) => new DriftPaneView(leaf, driftController));
+    const driftSource = obsidianDriftSource(app);
+    const driftController: DriftPaneController = {
+      scan: () => driftSource.scan(),
+      openNote: (path) => void app.workspace.openLinkText(path, ""),
+    };
+    wirePane(plugin, component, DRIFT_VIEW_TYPE, "Open JD drift", "alert-triangle", (leaf) => new DriftPaneView(leaf, driftController));
   } catch (e) {
-    console.warn("[governor] scheme drift view type already registered — reusing it", e);
+    console.error("[governor] scheme drift pane wiring failed", e);
   }
-  component.register(() => {
-    for (const leaf of app.workspace.getLeavesOfType(DRIFT_VIEW_TYPE)) leaf.detach();
-    try { viewRegistryOf(plugin)?.unregisterView(DRIFT_VIEW_TYPE); }
-    catch (e) { console.warn("[governor] scheme drift view unregister failed", e); }
-  });
-  const driftRibbon = plugin.addRibbonIcon("alert-triangle", "Open JD drift", () => void activateView(app, DRIFT_VIEW_TYPE));
-  component.register(() => driftRibbon.remove());
 
   return component;
 }
