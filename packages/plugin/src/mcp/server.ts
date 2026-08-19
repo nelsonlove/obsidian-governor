@@ -4,6 +4,7 @@ import { registerFsTools, ok } from "@vault-mcp/core";
 import { registerCoreTools, type ServerCtx } from "./tools-core.js";
 import { registerVaultWriteTools } from "./tools-vault-write.js";
 import { registerSchemeWriteTools } from "./tools-scheme-write.js";
+import { registerSurveyTools } from "./tools-survey.js";
 import { registerComplementaryTools } from "./tools-complementary.js";
 import { registerNavTools } from "./tools-nav.js";
 import { registerIntegrationTools } from "./tools-integrations.js";
@@ -179,6 +180,14 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   registerSchemeWriteTools(server, app, {
     registry: guardedOpts.schemes,
     notes: guardedOpts.schemeNotes,
+    getSettings: () => ctx.getSettings(),
+  });
+  // Folded in from obsidian-jd-survey (2026-08-19). Hand-registered here for
+  // the same reason registerSchemeWriteTools is above it: obsidian_survey_slot
+  // mutates, and modules-mount.ts's registerAll gate refuses any tool whose
+  // annotations.readOnlyHint !== true.
+  registerSurveyTools(server, app, {
+    notes: () => app.vault.getMarkdownFiles().map((f) => f.path),
     getSettings: () => ctx.getSettings(),
   });
   registerComplementaryTools(server, app, ctx);

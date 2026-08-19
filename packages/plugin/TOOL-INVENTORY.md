@@ -98,6 +98,19 @@ read tools; `dry_run` never mutates.
 | `obsidian_refile_address` | Move a note back to the folder its own address says it belongs in |
 | `obsidian_renumber_address` | Move a note to a specific target address, optionally displacing (`on_occupied`: `auto`/`manual`/`fail`) whatever already occupies it |
 
+### `tools-survey.ts` — `registerSurveyTools` (2 tools)
+
+Folded in from the standalone `obsidian-jd-survey` plugin. A note's mirror
+directory defaults to the same relative path under `mirror_root` as the
+note's own vault folder; `survey-mirror` frontmatter overrides it per note.
+`obsidian_survey_slot` refuses to touch a section last stamped
+`by: "claude-code"` or `by: "human"` unless `force: true`.
+
+| Tool name | Description |
+|---|---|
+| `obsidian_survey_status` | Report whether a note's `## Contents (Filesystem)` section is stale relative to its mirror directory. Read-only |
+| `obsidian_survey_slot` | Regenerate the section (skeleton, or `generate_prose: true` for a headless Claude Code call) and stamp `survey:` frontmatter. `apply: false` reports the plan only |
+
 ### `tools-write-notes.ts` — `registerWriteNotesTool` (1 tool, kernel B1)
 
 | Tool name | Description |
