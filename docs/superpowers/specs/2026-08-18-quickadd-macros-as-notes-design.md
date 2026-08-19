@@ -30,10 +30,12 @@ An ordered `steps:` list. Each entry's shape is keyed by its own `kind:`:
 |---|---|
 | `userscript` | `script: [[note]]` (wikilink to the script note) + `settings: {...}` (the script's own configurable options, e.g. `snippet` for a shared insert-at-cursor script) |
 | `choice` | `choice: [[note]]` (wikilink to another top-level choice note — reuses the same reference mechanism) |
-| `wait` | no fields — a bare marker |
+| `wait` | `time: <ms>` (optional, defaults to 100ms) — not a bare marker; native QuickAdd's `Wait` command always carries a `time` field |
 | `obsidian-command` | `command_id: "<string>"` — literal, since not every registered Obsidian command has (or should have) a note |
-| `nested-choice` | `choices: [[[note]], [[note]], ...]` — an ordered list of wikilinks, presented as a runtime picker |
-| `editor-command` | `command_id: "<string>"` — literal, same reasoning as obsidian-command |
+| `nested-choice` | `choice: [[[note]], ...]` — recursive: native QuickAdd embeds the entire chosen choice object inline (`{id, name, type: "NestedChoice", choice: <embedded choice>}`), not a flat list of wikilinks as originally written here |
+| `editor-command` | `editor_command: "<string>"` — literal, but NOT the same reasoning as `obsidian-command`: native QuickAdd's `EditorCommand` step has no `commandId` field at all. It carries `editorCommandType` against a closed, fixed enum of QuickAdd's own built-in editor actions (Cut, Copy, Paste, Paste with format, Select active line, Select link on active line, Move cursor to {file,line} {start,end}) — there is no user-extensible variant of this step kind |
+
+> **Corrected during Stage B implementation** (2026-08-19): the `wait`, `nested-choice`, and `editor-command` rows above were wrong in the original spec — verified against a real installed QuickAdd's decompiled source and live `data.json`, not assumed. `nested-choice` remains deferred (its recursive embedded-choice shape doesn't fit this compiler's flat per-note model without further design work); `wait`, `obsidian-command`, and `editor-command` shipped in Stage B (#271) using the corrected shapes above.
 | `ai-assistant` | literal config (prompt, model, and whatever else QuickAdd's AI-assistant step exposes) — no note reference |
 
 ### Template
