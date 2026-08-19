@@ -52,8 +52,12 @@ describe("acceptNote gateOverride", () => {
     assert.equal(res.stamped, true);
   });
 
-  test("override is per-call only — a following un-overridden call still gates", async () => {
-    const { deps } = fakeDeps();
-    await assert.rejects(() => acceptNote(deps, "N.md"), AcceptGateError);
+  test("override is per-call only — after an overridden accept whose stamp did not land, the next un-overridden call still gates", async () => {
+    // A no-op stamp keeps the note `proposed`, so the overridden call runs the
+    // gate-skipped path but fails the fold check — and the FOLLOWING plain call
+    // must still gate: the override never persists anywhere.
+    const { deps } = fakeDeps({ stampAccepted: async () => {} });
+    await assert.rejects(() => acceptNote(deps, "N.md", { gateOverride: true })); // fold failure, not gate
+    await assert.rejects(() => acceptNote(deps, "N.md"), AcceptGateError); // gate is back
   });
 });
