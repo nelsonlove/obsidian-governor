@@ -30,7 +30,7 @@ import { executeQuickAddChoice } from "./quickadd-choice.js";
 // AcceptForbiddenError → the write refuses), and only when the result asserts
 // acceptance at all read the BEFORE frontmatter so a legitimate edit carrying
 // an existing human-granted accepted value forward UNCHANGED is allowed.
-function guardAppendResult(beforeText: string | null, resultingContent: string): void {
+export function guardAppendResult(beforeText: string | null, resultingContent: string): void {
   const after = parseGuardFrontmatter(resultingContent);
   // Result-only shortcut delegated to the shared helper (#224): an absent
   // declared protected property can be a removal, decidable only against the

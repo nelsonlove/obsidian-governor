@@ -4,6 +4,7 @@ import { registerFsTools, ok } from "@vault-mcp/core";
 import { registerCoreTools, type ServerCtx } from "./tools-core.js";
 import { registerVaultWriteTools } from "./tools-vault-write.js";
 import { registerSchemeWriteTools } from "./tools-scheme-write.js";
+import { registerSurveyTools } from "./tools-survey.js";
 import { registerQuickAddTools } from "./tools-quickadd.js";
 import { registerComplementaryTools } from "./tools-complementary.js";
 import { registerNavTools } from "./tools-nav.js";
@@ -181,6 +182,14 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   registerSchemeWriteTools(server, app, {
     registry: guardedOpts.schemes,
     notes: guardedOpts.schemeNotes,
+    getSettings: () => ctx.getSettings(),
+  });
+  // Folded in from obsidian-jd-survey (2026-08-19). Hand-registered here, the
+  // same shape registerSchemeWriteTools above uses: modules-mount.ts's
+  // registerAll gate refuses a non-readOnlyHint tool unless its module opts
+  // in via `mutating: true` — a real path (five other modules take it), just
+  // not the one chosen for this v1's obsidian_survey_slot.
+  registerSurveyTools(server, app, {
     getSettings: () => ctx.getSettings(),
   });
   // ── QuickAdd macros as notes, Stage A (#quickadd-macros-as-notes) ──────────

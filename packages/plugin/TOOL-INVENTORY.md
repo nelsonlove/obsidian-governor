@@ -6,13 +6,13 @@ The FULL set is locked by `tests/tool-inventory.test.mjs`: the names documented
 here must equal the names registered in source, both directions, or the suite
 fails (the fs-expressible and scheme sub-locks from #25/task-6 still apply).
 
-**Count summary:** 17 fs-expressible + 42 always-live + 10 module-mounted
-(default enabled, settings-toggleable) = **69 base** tools, plus up to
+**Count summary:** 17 fs-expressible + 44 always-live + 10 module-mounted
+(default enabled, settings-toggleable) = **71 base** tools, plus up to
 6 conditional integration tools, 5 CLI-binary-conditional dedicated tools
 (`obsidian_note_history`, `obsidian_note_diff`, `obsidian_base_create`,
 `obsidian_plugin_install`, `obsidian_plugin_uninstall`), and 1 settings-gated
 CLI-conditional tool (`obsidian_cli`, default OFF)
-= **up to 81 total**.  The 3 Code Mode meta-tools are an alternative
+= **up to 83 total**.  The 3 Code Mode meta-tools are an alternative
 per-connection surface and are not counted (a session sees one surface or the
 other, never both).  Not counted here (outside the locked `obsidian_*` family):
 the always-on `governance_submit_revision` + `governance_revisions` (2 tools, see their section below),
@@ -32,7 +32,7 @@ the scheme write surface (`obsidian_assign_address`,
 `obsidian_refile_address`, `obsidian_renumber_address`), and subsequent
 `main` additions (in-Obsidian dev tool-runner, conformance debt register,
 the snippet tools);
-the same plugin set today registers 17 + 42 + 10 + 6 = **75**.
+the same plugin set today registers 17 + 44 + 10 + 6 = **77**.
 
 ---
 
@@ -99,6 +99,28 @@ read tools; `dry_run` never mutates.
 | `obsidian_assign_address` | Assign a note the next free address in a scope, then move it there |
 | `obsidian_refile_address` | Move a note back to the folder its own address says it belongs in |
 | `obsidian_renumber_address` | Move a note to a specific target address, optionally displacing (`on_occupied`: `auto`/`manual`/`fail`) whatever already occupies it |
+
+### `tools-survey.ts` — `registerSurveyTools` (2 tools)
+
+Folded in from the standalone `obsidian-jd-survey` plugin. A note's mirror
+directory defaults to the same relative path under `mirror_root` as the
+note's own vault folder; `survey-mirror` frontmatter overrides it per note.
+Both are checked against a declared content-root boundary
+(`ASSENT_CONTENT_ROOT`/`ASSENT_VAULT_ROOT`, same env vars
+`conformance/snapshot.ts` uses) before anything is read — neither is a vault
+path, so `guard.ts`'s allowlist never sees them otherwise.
+`obsidian_survey_slot` refuses to touch a section last stamped
+`by: "claude-code"` or `by: "human"` unless `force: true`, and routes its
+result through `tools-complementary.ts`'s `guardAppendResult` before writing.
+Prose generation (`kernel/survey/ask-claude.ts`) is a standalone utility, not
+called from either tool — pass pre-written text as `snapshot_body` instead;
+see that file's header for why (the write-queue's 30s budget vs. a real
+Claude Code round trip).
+
+| Tool name | Description |
+|---|---|
+| `obsidian_survey_status` | Report whether a note's `## Contents (Filesystem)` section is stale relative to its mirror directory. Read-only |
+| `obsidian_survey_slot` | Regenerate the section (bare skeleton, or pass `snapshot_body` for pre-written prose) and stamp `survey:` frontmatter. `dry_run: true` (mandatory, no default) reports the plan only |
 
 ### `tools-quickadd.ts` — `registerQuickAddTools` (1 tool, Stage A of "QuickAdd macros as notes")
 
