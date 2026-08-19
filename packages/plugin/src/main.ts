@@ -16,7 +16,7 @@ import { DEFAULT_PROTECTED_PROPERTIES, setDeclaredProtectedProperties } from "@v
 import { wireGovernance, nudgeGovernanceQueue } from "./governance/wiring.js";
 import { mountAction } from "./governance/mount-state.js";
 import { wireSkills } from "./skills/wiring.js";
-import { wireSchemeInbox, wireSchemeDrift } from "./scheme/wiring.js";
+import { wireSchemePanes, registerSchemeCommands } from "./scheme/wiring.js";
 import { runFolderMigration, LEGACY_PLUGIN_ID } from "./id-migration.js";
 
 interface VaultMcpSettings {
@@ -158,6 +158,11 @@ export default class VaultMcpPlugin extends Plugin {
   // enable→disable can't interleave a half-finished mount with a teardown.
   private governanceComponent: Component | null = null;
   private governanceReconcile: Promise<void> = Promise.resolve();
+  // Same live-mount handle/serialization pattern as governance's, for the scheme Inbox + Drift
+  // panes (jd-dashboard fold Stages B/C, governor#286): one shared Component for both panes,
+  // since they're gated by the same "scheme" module toggle and always mount/unmount together.
+  private schemePanesComponent: Component | null = null;
+  private schemePanesReconcile: Promise<void> = Promise.resolve();
   // Public plugin-to-plugin API: app.plugins.plugins['governor'].api (the
   // property rides the plugin instance, so it moved with the 0.12.0 id
   // migration automatically; the old 'vault-mcp' lookup finds nothing once
@@ -534,36 +539,26 @@ export default class VaultMcpPlugin extends Plugin {
       }
     }
 
-    // ── scheme Inbox pane (jd-dashboard fold, Stage B) ─────────────────────────
-    // Registered on the scheme module's own enabled flag, matching its
+    // ── scheme Inbox + Drift panes (jd-dashboard fold, Stages B/C) ─────────────
+    // Mounted on the scheme module's own enabled flag, matching its
     // default-true semantics elsewhere (modules-mount.ts:
     // `settings.modules?.scheme?.enabled === false` is the disabled check, so
-    // an absent settings row means on) — the pane is meaningless without
+    // an absent settings row means on) — both panes are meaningless without
     // scheme addressing configured, same reasoning as skills' GUI riding its
-    // own module's toggle above. Unlike skills' pane this one is read-only
-    // chrome with no write capability at all, so registration itself doesn't
-    // need to live-follow a settings-tab toggle the way acceptance's does —
-    // there's no acceptance-relevant state for a live mount/unmount to
-    // protect. "Registered" only: like skills' Preview pane, it doesn't force
-    // a leaf open at onload — the ribbon icon / command opens it on demand.
+    // own module's toggle above. LIVE mount/unmount (governor#286, fixed
+    // after #285/#287 shipped with the pre-#200 onload-only shape): flipping
+    // the toggle in settings mounts or unmounts both panes immediately, no
+    // plugin reload, via `setSchemePanesMounted` below — same pattern as
+    // governance's pane, minus any accept-relevant state (there is none
+    // here; both panes are read-only). Neither pane forces a leaf open on
+    // its own — the ribbon icon / command opens it on demand.
     if (this.settings.modules?.scheme?.enabled !== false) {
-      try {
-        wireSchemeInbox(this, { getSchemes: () => this.settings.schemes ?? DEFAULT_SCHEMES });
-      } catch (e) {
-        console.error("[governor] scheme inbox pane wiring failed", e);
-      }
-      // ── scheme Drift pane (jd-dashboard fold, Stage C) ───────────────────────
-      // Same gating and "registered, not auto-revealed" reasoning as the Inbox
-      // pane above. Runs the live conformance engine on demand (Refresh button
-      // or ribbon/command open) — see obsidian-drift-source.ts and
-      // scheme/drift-pane.ts for why this doesn't auto-refresh on vault events
-      // the way the Inbox pane does.
-      try {
-        wireSchemeDrift(this);
-      } catch (e) {
-        console.error("[governor] scheme drift pane wiring failed", e);
-      }
+      void this.setSchemePanesMounted(true);
     }
+    // Commands register unconditionally, once, regardless of live mount
+    // state — see scheme/wiring.ts's registerSchemeCommands doc comment for
+    // why (no public Obsidian API to live-unregister a command).
+    registerSchemeCommands(this, () => this.settings.modules?.scheme?.enabled !== false);
 
     this.addCommand({
       id: "connect-claude-code",
@@ -644,13 +639,15 @@ export default class VaultMcpPlugin extends Plugin {
 
   /**
    * The settings tab calls this when a module's enable toggle flips (connection-ui.ts's per-module
-   * "Enabled" toggle). Acceptance is the ONE module whose Obsidian surface — the review pane + gavel
-   * ribbon — mounts/unmounts LIVE from here, with no plugin reload. Every other module is tool-only:
-   * its MCP surface mounts per connection, so its toggle still takes effect on the next session
-   * connect (unchanged semantics) and there is nothing to mount or unmount in-app.
+   * "Enabled" toggle). Acceptance and scheme are the two modules whose Obsidian surface mounts/
+   * unmounts LIVE from here, with no plugin reload — acceptance's review pane + gavel ribbon, and
+   * scheme's Inbox + Drift panes (governor#286). Every other module is tool-only: its MCP surface
+   * mounts per connection, so its toggle still takes effect on the next session connect (unchanged
+   * semantics) and there is nothing to mount or unmount in-app.
    */
   async onModuleEnabledChanged(moduleId: string, enabled: boolean): Promise<void> {
     if (moduleId === "acceptance") await this.setGovernanceMounted(enabled);
+    if (moduleId === "scheme") await this.setSchemePanesMounted(enabled);
   }
 
   /**
@@ -686,6 +683,38 @@ export default class VaultMcpPlugin extends Plugin {
     } else {
       this.removeChild(this.governanceComponent!);
       this.governanceComponent = null;
+    }
+  }
+
+  /**
+   * Drive the scheme Inbox + Drift panes' mount state to `enabled`, live, without a plugin reload —
+   * same idempotent, serialized shape as `setGovernanceMounted` (governor#286). Mount runs
+   * `wireSchemePanes` (both views + both ribbons, on one shared child Component); unmount is
+   * `removeChild`, which detaches any open leaves and unregisters both view types. Neither pane
+   * carries acceptance-relevant state, so unlike governance's cycle there's nothing beyond
+   * existence for mount/unmount to change.
+   */
+  async setSchemePanesMounted(enabled: boolean): Promise<void> {
+    const next = this.schemePanesReconcile.then(() => this.applySchemePanesMount(enabled));
+    this.schemePanesReconcile = next.catch(() => {});
+    await next;
+  }
+
+  private async applySchemePanesMount(enabled: boolean): Promise<void> {
+    const action = mountAction(this.schemePanesComponent !== null, enabled);
+    if (action === "none") return;
+    if (action === "mount") {
+      try {
+        this.schemePanesComponent = wireSchemePanes(this, {
+          getSchemes: () => this.settings.schemes ?? DEFAULT_SCHEMES,
+        });
+      } catch (e) {
+        console.error("[governor] scheme panes wiring failed", e);
+        this.schemePanesComponent = null;
+      }
+    } else {
+      this.removeChild(this.schemePanesComponent!);
+      this.schemePanesComponent = null;
     }
   }
 
