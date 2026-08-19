@@ -29,6 +29,7 @@ import {
 } from "../kernel/jd-scaffold/standard-zeros.js";
 import { planPromoteToFolder } from "../kernel/jd-scaffold/promote-to-folder.js";
 import type { CategoryFolderInput, PlannedCreate } from "../kernel/jd-scaffold/types.js";
+import { planReindexCategory, reindexTier, isIndexFilePath } from "../kernel/jd-scaffold/category-index.js";
 
 const RW = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } as const;
 
@@ -49,6 +50,13 @@ export interface JdScaffoldSource {
   /** Today's date, `YYYY-MM-DD`. Injected (not `new Date()` inline) so tests
    *  can pin it without a fake clock plumbed through every call. */
   today(): string;
+  /** Every markdown note's vault path — feeds planReindexCategory's allPaths. */
+  allNotePaths(): string[];
+  /** A note's current content, or null if it doesn't exist. */
+  read(path: string): Promise<string | null>;
+  /** Overwrite a note's content in place — the file already exists (unlike
+   *  `create`, which is for NEW notes). */
+  modify(path: string, content: string): Promise<void>;
 }
 
 export interface JdScaffoldToolsCtx {
@@ -69,6 +77,9 @@ export function emptyJdScaffoldSource(): JdScaffoldSource {
     createFolder: async () => unwired(),
     renameFile: async () => unwired(),
     today: () => new Date().toISOString().slice(0, 10),
+    allNotePaths: () => [],
+    read: async () => null,
+    modify: async () => unwired(),
   };
 }
 
@@ -249,6 +260,63 @@ export function registerJdScaffoldTools(server: McpServer, source: JdScaffoldSou
         filesChanged: 2,
         files: [plan.folderPath, plan.newFilePath],
       });
+    }
+  );
+
+  server.registerTool(
+    "obsidian_jd_reindex_category",
+    {
+      title: "Rebuild an XX.00 JDex file's Contents section from vault truth",
+      description:
+        "Rebuilds the `## Contents` section of an `XX.00` index file from the vault's own structure — NOT a " +
+        "jd-index.yaml registry. Three tiers, dispatched by the target's own prefix: ordinary per-category " +
+        "(`XX.00`, XX not a multiple of 10) lists the category's own folder members; area-management (`X0.00`) " +
+        "consolidates every category `## Contents` within the same area; system (`00.00`) consolidates every " +
+        "category across every area. Descriptions written as `[[link]] *(note)*` are preserved across every " +
+        "regen, at every tier — the target file's own local description always wins over an inherited one. " +
+        "`dry_run: true` reports the planned new content without writing.",
+      inputSchema: {
+        path: z.string().describe('Vault path of the XX.00 index file to reindex (e.g. "10-19 Personal/06 Digital tools/06.00 JDex.md").'),
+        dry_run: z.boolean().describe("If true, report the plan without writing anything."),
+      },
+      annotations: RW,
+    },
+    async ({ path, dry_run }) => {
+      const settings = ctx.getSettings();
+      if (!isVisible(path, settings)) {
+        return codedError("out_of_allowlist", `"${path}" is outside the active path allowlist.`);
+      }
+
+      const tier = reindexTier(path);
+      if (!tier) {
+        return codedError("not_index_file", `"${path}" doesn't look like an XX.00 index file (expected a leading two-digit prefix).`);
+      }
+
+      const allPaths = source.allNotePaths();
+      // Only area-management/system tiers cross-read sibling XX.00 files
+      // (bulletsForCategory, ported in kernel/jd-scaffold/category-index.ts)
+      // — the ordinary tier needs only its own current content. Checking the
+      // tier first (no I/O — reindexTier is a pure regex check) avoids
+      // reading every category index file vault-wide for the common,
+      // single-category case.
+      const toFetch = tier === "ordinary" ? [path] : allPaths.filter(isIndexFilePath);
+      const siblingContent = new Map<string, string>();
+      for (const p of toFetch) {
+        const content = await source.read(p);
+        if (content !== null) siblingContent.set(p, content);
+      }
+
+      const plan = planReindexCategory({ targetIndexPath: path, allPaths, siblingContent });
+      if (!plan) {
+        // reindexTier already returned non-null above, so this would mean
+        // the two functions disagree — defensive, not expected to fire.
+        return codedError("not_index_file", `"${path}" doesn't look like an XX.00 index file.`);
+      }
+
+      if (dry_run) return ok({ dry_run: true, new_content: plan.newContent, preserved: plan.preserved });
+
+      await source.modify(path, plan.newContent);
+      return ok({ dry_run: false, preserved: plan.preserved, filesChanged: 1, files: [path] });
     }
   );
 }

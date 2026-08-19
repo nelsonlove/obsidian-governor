@@ -1311,6 +1311,19 @@ const JD_SCAFFOLD_MANIFEST: ModuleManifest = {
         options: [{ name: "path", what: "vault path of the note to promote" }],
         caveats: ["Refuses (not_id_note / already_cover_note / folder_exists) rather than guessing."],
       },
+      {
+        name: "obsidian_jd_reindex_category",
+        purpose:
+          "Rebuild an XX.00 index file's `## Contents` section from vault truth (not jd-index.yaml), at whichever " +
+          "of the three tiers its own prefix dispatches to (ordinary per-category / area-management / system).",
+        readOnly: false,
+        options: [{ name: "path", what: "vault path of the XX.00 index file to reindex" }],
+        caveats: [
+          "Descriptions written as `[[link]] *(note)*` are preserved across every regen, at every tier.",
+          "Area-management and system tiers read every sibling XX.00 file's current content to consolidate them; " +
+            "the ordinary tier reads only the target's own content.",
+        ],
+      },
     ],
   },
 };
