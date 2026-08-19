@@ -149,13 +149,14 @@ describe("mountModules: the two built-in modules register through the registry",
     // skills (#82), provenance (the obsidian-provenance fold), health (the
     // obsidian-vault-health fold), fileclass (#188, the fileclass CLI fold),
     // governance (#83), crosssession (#232, the cross-session channel
-    // module) and triage (#221 phase 2, the inbox-triage module) all ship
-    // DISABLED (opt-in surfaces a human turns on), so
-    // they contribute nothing here — scheme + vocab + bases (#243, the
-    // read-only default-enabled Bases surface) are the live trio.
-    assert.deepEqual(described.map((d) => d.id), ["scheme", "vocab", "skills", "provenance", "health", "fileclass", "governance", "crosssession", "bases", "triage"]);
+    // module), jd-scaffold (Stage A of the jd-dashboard fold) and triage
+    // (#221 phase 2, the inbox-triage module) all ship DISABLED (opt-in
+    // surfaces a human turns on), so they contribute nothing here — scheme +
+    // vocab + bases (#243, the read-only default-enabled Bases surface) are
+    // the live trio.
+    assert.deepEqual(described.map((d) => d.id), ["scheme", "vocab", "skills", "provenance", "health", "fileclass", "governance", "crosssession", "bases", "jd-scaffold", "triage"]);
     for (const d of described) {
-      if (["skills", "provenance", "health", "fileclass", "governance", "crosssession", "triage"].includes(d.id)) {
+      if (["skills", "provenance", "health", "fileclass", "governance", "crosssession", "jd-scaffold", "triage"].includes(d.id)) {
         assert.equal(d.enabled, false);
         assert.deepEqual(d.tools, []);
       } else {
@@ -275,7 +276,7 @@ describe("mount gate 2: the host ctx handed to modules is minimal", () => {
     assert.deepEqual(host.visible(["Projects/a.md", "Archive/b.md"]), ["Projects/a.md"]);
   });
 
-  test("builtinModules declares the ten capability modules (skills + provenance + fileclass + crosssession + triage mutating; health/governance/bases NOT)", () => {
+  test("builtinModules declares the eleven capability modules (skills + provenance + fileclass + crosssession + jd-scaffold + triage mutating; health/governance/bases NOT)", () => {
     const mods = builtinModules(deps());
     assert.deepEqual(mods.map((m) => [m.id, m.posture]), [
       ["scheme", "capability"],
@@ -298,13 +299,18 @@ describe("mount gate 2: the host ctx handed to modules is minimal", () => {
       // the hidden-leaf capture) — no `mutating` flag, both tools
       // readOnlyHint:true, and DEFAULT ENABLED (the scheme/vocab precedent).
       ["bases", "capability"],
+      // jd-scaffold (Stage A of the jd-dashboard fold) is a MUTATING capability
+      // module (standard_zeros / ensure_category_indexes / promote_to_folder
+      // create/rename real vault notes and folders).
+      ["jd-scaffold", "capability"],
       // triage (#221 phase 2) is a MUTATING capability module (dispose moves /
       // retypes / trashes inbox notes through the shared guarded primitives).
       ["triage", "capability"],
     ]);
-    // skills, provenance, fileclass, crosssession and triage are the modules that declare
-    // they may contribute mutating tools; health and governance are NOT mutating.
-    assert.deepEqual(mods.filter((m) => m.mutating).map((m) => m.id), ["skills", "provenance", "fileclass", "crosssession", "triage"]);
+    // skills, provenance, fileclass, crosssession, jd-scaffold and triage are the
+    // modules that declare they may contribute mutating tools; health and
+    // governance are NOT mutating.
+    assert.deepEqual(mods.filter((m) => m.mutating).map((m) => m.id), ["skills", "provenance", "fileclass", "crosssession", "jd-scaffold", "triage"]);
   });
 });
 
@@ -366,7 +372,7 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
   test("drift check: every ToolDoc names a tool the module ACTUALLY contributed on registerAll, and vice versa", () => {
     // Enable every default-off module so all modules contribute — the drift check
     // needs a contributed tool list to compare each manifest against.
-    const { registry } = mount({ settings: { modules: { skills: { enabled: true }, provenance: { enabled: true }, health: { enabled: true }, fileclass: { enabled: true }, governance: { enabled: true }, crosssession: { enabled: true }, triage: { enabled: true } } } });
+    const { registry } = mount({ settings: { modules: { skills: { enabled: true }, provenance: { enabled: true }, health: { enabled: true }, fileclass: { enabled: true }, governance: { enabled: true }, crosssession: { enabled: true }, "jd-scaffold": { enabled: true }, triage: { enabled: true } } } });
     const described = registry.describe();
     for (const d of described) {
       const mod = builtinModules(deps()).find((m) => m.id === d.id);
@@ -376,7 +382,7 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
   });
 
   test("readOnly drift: every ToolDoc's readOnly matches the tool's real registered annotation", () => {
-    const { server } = mount({ settings: { modules: { skills: { enabled: true }, provenance: { enabled: true }, health: { enabled: true }, fileclass: { enabled: true }, governance: { enabled: true }, crosssession: { enabled: true }, triage: { enabled: true } } } });
+    const { server } = mount({ settings: { modules: { skills: { enabled: true }, provenance: { enabled: true }, health: { enabled: true }, fileclass: { enabled: true }, governance: { enabled: true }, crosssession: { enabled: true }, "jd-scaffold": { enabled: true }, triage: { enabled: true } } } });
     const mods = builtinModules(deps());
     const annotationsByName = Object.fromEntries([...server.tools].map(([name, { def }]) => [name, def.annotations]));
     for (const mod of mods) {
@@ -447,7 +453,7 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
     const settings = { schemes: [{ id: "jd", provider: "johnny-decimal", config: { contentDecimalFloor: 20 } }], modules: {} };
     const mods = builtinModules(deps({ settings }));
     const hosted = collect(mods, settings.modules, settings);
-    assert.deepEqual(hosted.map((h) => h.id), ["scheme", "vocab", "skills", "provenance", "health", "fileclass", "governance", "crosssession", "bases", "triage"]);
+    assert.deepEqual(hosted.map((h) => h.id), ["scheme", "vocab", "skills", "provenance", "health", "fileclass", "governance", "crosssession", "bases", "jd-scaffold", "triage"]);
     const scheme = hosted.find((h) => h.id === "scheme");
     assert.equal(scheme.fields.find((f) => f.key === "contentDecimalFloor").value, 20);
     const vocab = hosted.find((h) => h.id === "vocab");
