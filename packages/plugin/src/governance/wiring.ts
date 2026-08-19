@@ -745,7 +745,9 @@ function logRefusalOnce(plugin: Plugin, path: string, key: string, policy: AutoA
   console.warn(`vault-mcp governance: auto-accept (policy: ${policy}) declined for ${path}: ${reason}`);
 }
 // Sweep the (agent-attributed) pending queue for auto-accept-eligible changes. Driven by the
-// journal-growth poll (an interval timer, NOT agent-reachable).
+// journal-growth poll — the interval timer plus, since #261, the kernel's post-append nudge
+// (nudgeGovernanceQueue below; still not agent-reachable as a callable — an agent can only
+// influence WHEN it runs by writing, which the interval already allowed).
 async function sweepAutoAccept(plugin: Plugin): Promise<number> {
   let n = 0;
   for (const item of getCachedPending(plugin)) {
@@ -835,6 +837,26 @@ async function pollJournal(plugin: Plugin): Promise<void> {
   } finally {
     state.inFlight = false;
   }
+}
+
+/**
+ * #261 — the EVENT-DRIVEN drive for the queue refresh + auto-accept sweep. LIVE-DIAGNOSED:
+ * Chromium/Electron background throttling suspends renderer timers while the Obsidian window
+ * is occluded or unfocused, so the 2.5s poll interval above simply DOES NOT TICK during
+ * unattended sessions — which is exactly when agents write. (Observed live: interval armed,
+ * journal grown, zero ticks and zero refreshes for minutes with the window in the
+ * background.) The journal only grows through this plugin's own kernel, so main.ts nudges
+ * here right after every journal append — request handling is not throttled, so the sweep
+ * runs even with the window buried. The interval stays as the foreground catch-up.
+ *
+ * Reachability: this changes WHEN the poll runs, never what it may accept — the decision
+ * remains the eligibility engine over objective bytes (agents could already schedule the
+ * poll indirectly, by writing; the journal-growth signature gate is unchanged). Not a
+ * command, not a tool, not an instance method; a no-op unless governance is mounted.
+ */
+export function nudgeGovernanceQueue(plugin: Plugin): void {
+  if (!mountedPlugins.has(plugin)) return;
+  pollJournal(plugin).catch((e) => console.error("vault-mcp governance: journal-nudged poll failed", e));
 }
 
 // ── view activation ──────────────────────────────────────────────────────────

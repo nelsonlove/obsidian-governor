@@ -687,3 +687,42 @@ describe("governance settings-tab surface: the accept path stays module-private 
     assert.match(wiring, /ADOPT_BASELINE_DESC/, "the settings tab must reference the shared ADOPT_BASELINE_DESC");
   });
 });
+
+// ---------------------------------------------------------------------------
+// #261 — the event-driven sweep drive + the published pending index.
+// Live-diagnosed: Chromium throttles/suspends renderer timers while the
+// Obsidian window is occluded, so the 2.5s poll interval does not tick during
+// unattended sessions — exactly when agents write. The journal-append nudge is
+// the throttling-immune drive; these pins keep it (and the index publisher)
+// from silently regressing back to timer-only.
+// ---------------------------------------------------------------------------
+describe("governance module: #261 — journal nudge + pending-index publisher", () => {
+  test("wiring.ts exports nudgeGovernanceQueue, gated on the mounted set (no-op unmounted)", () => {
+    const wiring = code("governance/wiring.ts");
+    assert.match(wiring, /export function nudgeGovernanceQueue\s*\(/, "the nudge must be exported for main.ts");
+    const body = wiring.slice(wiring.indexOf("export function nudgeGovernanceQueue"));
+    assert.match(body.slice(0, 300), /mountedPlugins\.has\(plugin\)/, "the nudge must check the live-mount set first");
+  });
+
+  test("main.ts nudges the governance queue after every journal append", () => {
+    const main = code("main.ts");
+    assert.match(main, /nudgeGovernanceQueue/, "main.ts must import and call the nudge");
+    assert.match(main, /journal\.append\s*=/, "the kernel journal's append must be wrapped with the nudge");
+  });
+
+  test("refresh() publishes the pending index at the plugin-dir governance path", () => {
+    const wiring = code("governance/wiring.ts");
+    assert.match(wiring, /serializePendingIndex\(pending/, "refresh must serialize the freshly computed queue");
+    assert.match(wiring, /pendingIndexPath: `\$\{govDir\}\/pending-index\.json`/, "the index lives beside the acceptance log");
+  });
+
+  test("unmount retracts the published index (absent index ⇒ the tool's explicit not-published state)", () => {
+    const wiring = code("governance/wiring.ts");
+    assert.match(wiring, /adapter\.remove\(paths\(plugin\)\.pendingIndexPath\)/, "teardown must remove the published index");
+  });
+
+  test("the poll interval callback contains the rejection guard (no unhandled rejection into the interval)", () => {
+    const wiring = code("governance/wiring.ts");
+    assert.match(wiring, /pollJournal\(plugin\)\.catch\(/, "poll rejections must die in a console.error, never escape");
+  });
+});
