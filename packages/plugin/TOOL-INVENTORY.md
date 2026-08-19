@@ -378,37 +378,49 @@ lock-claim precedent).
 
 ### `tools-triage.ts` — `registerTriageTools` via the `triage` module (2 tools)
 
-The inbox-triage surface (#221 phase 2): the disposition substrate's second
-instance, successor to the vault's retired `dispose-inbox-item` QuickAdd flow.
-Ten dispositions declared as data (`kernel/triage/descriptors.ts` — discard,
-route, establish-new-home, convert-to-action, develop-as-knowledge, register,
-curate-as-link, defer-to-someday, archive-as-record, escalate); **none confers
-standing**, so per the #221 authority axis all ten are `authority: "agent"` and
-the module has **no pane UI at all** (queue views for humans are native Bases
-over frontmatter; bespoke pane UI is reserved for gesture-gated authority
-dispositions, of which this instance has none). The single-source table drives
-the `triage_dispose` enum, its description, and the manifest directory.
+The inbox-triage surface (#221 phase 2, **phase-3 shape per #241**): the
+disposition substrate's second instance, successor to the vault's retired
+`dispose-inbox-item` QuickAdd flow. The built-in set is the three
+**primitives** (`kernel/triage/descriptors.ts` — trash, move, stamp; the
+frozen substrate instance, all `authority: "agent"`); everything richer is a
+**human-declared config row** (`declaredDispositions`: `{id, label?,
+description?, action: trash|move|stamp|choice, patch?, destination?,
+inPlace?, choice?}`), with **one default declared row — escalate**
+(stamp-in-place; its patch/tag configured via `escalateFrontmatter`,
+deletable like any row). The tool surface renders from the **merged**
+(built-in ∪ declared) table, single-sourced; id collisions are refused
+loudly. Built-in descriptions are human-overridable (`builtinDescriptions`)
+in the same description field declared rows carry. The module has **no pane
+UI at all** (queue views for humans are native Bases; nothing here confers
+standing).
 
-Inbox recognition, fallback destinations, and the frontmatter patches are all
-**per-vault config** (`modules.triage.config`) whose defaults mirror the legacy
-flow's live-vault behavior (`inboxMarkers: [" Inbox for "]`, action patch
-`tags+note/task, status open, priority normal`, someday patch `status:
-someday`, escalate patch `tags+attention/user`) — nothing vault-semantic is
-hardwired. Moves ride the **shared link-healing move primitive**
-(`tools-vault-write.ts`'s `moveOne` — `fileManager.renameFile`, parents
-created, never overwrites); discard is Obsidian's recoverable trash, never a
-hard delete; frontmatter transitions go through `processFrontMatter` with the
-shared accept-forbidden rule re-checked over every patch. `triage_dispose` is
-**dry-run by default** (the #214 report-first discipline) and its computed
-destination is allowlist-re-checked in the handler (it is not a call
-argument). With the scheme module enabled the dispose report carries a
-`scheme` advisory (the note's own address + expected folder); with scheme
-disabled the field is simply absent.
+A declared **`choice` row** binds a QuickAdd choice through the shared #225
+`executeChoice` seam (`quickadd-choice.ts`, the same path
+`obsidian_run_command`'s `variables` form rides): the agent-facing surface is
+the disposition id ONLY — the binding is human-only-mutable config, so the
+`quickadd:*`/`js-engine:*` opaque-execution denies are not weakened. Choice
+rows **cannot dry-run** (typed `choice_dry_run_unsupported` without an
+explicit `dry_run: false`) and report `effects_unknown` (script writes
+surface in the governance review queue via non-human attribution).
+
+Moves ride the **shared link-healing move primitive** (`moveOne`), never
+overwrite, and honor the configured **`moveWhitelist`/`moveBlacklist`**
+(path prefixes; enforced at plan AND re-checked at apply — `move_denied`).
+Trash is Obsidian's recoverable trash; frontmatter goes through
+`processFrontMatter` with the shared accept-forbidden rule re-checked over
+every patch. `triage_dispose` is **dry-run by default** and its computed
+destination is allowlist-re-checked in the handler. `triage_queue` serves the
+marker queue (default) or a **Base-backed queue** (`{base, view?}` or a
+config-named `{queue}` from `queues`) — evaluated rows via the bases module's
+shared `queryBaseRows` capture seam, allowlist discipline identical to
+`base_query`, typed `bases_unavailable` when the Bases API is absent or the
+bases module disabled. A phase-2 config stays sane (legacy keys ignored;
+`escalateFrontmatter` still feeds the default escalate row).
 
 | Tool name | R/W | Description |
 |---|---|---|
-| `triage_queue` | R | Inbox notes (any ancestor folder matching a configured marker; the inbox's own folder note excluded), allowlist-visible only, with path/inbox/created/modified/age/frontmatter type+status — oldest first, capped (`limit`, default 50) with `truncated` + the total |
-| `triage_dispose` | W | Apply ONE of the ten dispositions to an inbox note (`{path, disposition, target?, dry_run?}`); **dry-run by default**; `target` (a destination folder) required for route/establish-new-home/register/curate-as-link, an override for the config-backed movers, refused for discard/escalate; typed refusals (`not_inbox`, `target_required`, `target_unsupported`, `destination_unresolved`, `destination_occupied`, `out_of_allowlist`, `accept_forbidden`) |
+| `triage_queue` | R | Default: inbox notes (any ancestor folder matching a configured marker; the inbox's own folder note excluded), allowlist-visible only, with path/inbox/created/modified/age/frontmatter type+status — oldest first, capped (`limit`, default 50) with `truncated` + the total. With `base`/`view` or `queue`: the evaluated rows of that `.base` (engine order, `{path, properties}`), rows allowlist-filtered with boolean-only `some_rows_hidden`; typed refusals (`bases_unavailable`, `unknown_queue`, `invalid_arguments`, plus `base_query`'s own) |
+| `triage_dispose` | W | Apply ONE merged-table disposition to an inbox note (`{path, disposition, target?, dry_run?}`); **dry-run by default** (choice rows refuse without explicit `dry_run: false`); `target` required for the built-in move (and declared movers without a destination), an override for rows with one, refused for trash / in-place stamps / choice rows; typed refusals (`not_inbox`, `unknown_disposition`, `target_required`, `target_unsupported`, `invalid_target`, `patch_unresolved`, `move_denied`, `destination_occupied`, `out_of_allowlist`, `choice_dry_run_unsupported`, `accept_forbidden`) |
 
 ---
 
