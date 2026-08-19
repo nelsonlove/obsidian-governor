@@ -30,7 +30,20 @@ import { RW } from "./tools-vault-write.js";
 import type { GuardSettings } from "../guard.js";
 import { transformChoices, isCompilerOwnedId, deriveChoiceId } from "../kernel/quickadd/transform.js";
 import { EDITOR_COMMAND_TYPES } from "../kernel/quickadd/types.js";
-import type { ChoiceNoteInput, MacroStepResolved, QuickAddMacroChoice, QuickAddTemplateChoice, QuickAddCaptureChoice, EditorCommandType } from "../kernel/quickadd/types.js";
+import type {
+  ChoiceNoteInput,
+  MacroStepResolved,
+  QuickAddMacroChoice,
+  QuickAddTemplateChoice,
+  QuickAddCaptureChoice,
+  EditorCommandType,
+  TemplateChoiceNoteInput,
+  CaptureChoiceNoteInput,
+  TemplateFieldOk,
+  TemplateFieldFailed,
+  CaptureTargetOk,
+  CaptureTargetFailed,
+} from "../kernel/quickadd/types.js";
 
 /** 0 fresh choices AND this many about-to-be-deleted ones reads as a cold
  *  metadata cache, not a real change — see the mass-removal guard below. */
@@ -183,6 +196,66 @@ function resolveChoiceStep(app: App, notePath: string, step: any): MacroStepReso
   };
 }
 
+/** Resolves a `quickadd-type: template` note's frontmatter into a
+ *  TemplateChoiceNoteInput. `template:` is required and must be a
+ *  [[wikilink]] resolving to a markdown note — unlike `choice:` steps,
+ *  there is no `quickadd-type` check on the target: a template is an
+ *  ordinary vault note, not another compiler-managed choice. */
+function resolveTemplateChoice(app: App, notePath: string, name: string, frontmatter: Record<string, unknown>): TemplateChoiceNoteInput {
+  const raw = String(frontmatter?.["template"] ?? "");
+  const target = linkTarget(raw);
+  let template: TemplateFieldOk | TemplateFieldFailed;
+  if (target === null) {
+    template = { ok: false, error: `template: "${raw}" is not a [[wikilink]].` };
+  } else {
+    const dest = app.metadataCache.getFirstLinkpathDest(target, notePath);
+    if (!dest) {
+      template = { ok: false, error: `template: could not resolve "${raw}".` };
+    } else if (dest.extension !== "md") {
+      template = { ok: false, error: `template: "${raw}" resolves to a non-markdown file (${dest.path}).` };
+    } else {
+      template = { ok: true, templatePath: dest.path };
+    }
+  }
+  const folder = typeof frontmatter?.["folder"] === "string" && frontmatter["folder"].trim() !== "" ? frontmatter["folder"] : undefined;
+  const fileNameFormat = typeof frontmatter?.["file_name_format"] === "string" && frontmatter["file_name_format"].trim() !== "" ? frontmatter["file_name_format"] : undefined;
+  const openFile = frontmatter?.["open_file"] === true;
+  return { quickaddType: "template", notePath, name, template, folder, fileNameFormat, openFile };
+}
+
+/** Resolves a `quickadd-type: capture` note's frontmatter into a
+ *  CaptureChoiceNoteInput. `target:` is required. If it's [[wikilink]]-
+ *  shaped, it resolves like `template:` above (must be markdown). If it's
+ *  NOT wikilink-shaped, the raw string is used verbatim as `captureTo` —
+ *  QuickAdd's own dynamic-path format syntax, never interpreted here. */
+function resolveCaptureChoice(app: App, notePath: string, name: string, frontmatter: Record<string, unknown>): CaptureChoiceNoteInput {
+  const raw = frontmatter?.["target"];
+  let target: CaptureTargetOk | CaptureTargetFailed;
+  if (typeof raw !== "string" || raw.trim() === "") {
+    target = { ok: false, error: `target: is required and must be a [[wikilink]] or a literal path string.` };
+  } else {
+    const linkedTarget = linkTarget(raw);
+    if (linkedTarget === null) {
+      // Not wikilink-shaped — a literal dynamic-path string, used as-is.
+      target = { ok: true, captureTo: raw };
+    } else {
+      const dest = app.metadataCache.getFirstLinkpathDest(linkedTarget, notePath);
+      if (!dest) {
+        target = { ok: false, error: `target: could not resolve "${raw}".` };
+      } else if (dest.extension !== "md") {
+        target = { ok: false, error: `target: "${raw}" resolves to a non-markdown file (${dest.path}).` };
+      } else {
+        target = { ok: true, captureTo: dest.path };
+      }
+    }
+  }
+  const prepend = frontmatter?.["prepend"] === true;
+  const task = frontmatter?.["task"] === true;
+  const insertAfterHeading = typeof frontmatter?.["insert_after_heading"] === "string" && frontmatter["insert_after_heading"].trim() !== "" ? frontmatter["insert_after_heading"] : undefined;
+  const createIfMissing = frontmatter?.["create_if_missing"] === true;
+  return { quickaddType: "capture", notePath, name, target, prepend, task, insertAfterHeading, createIfMissing };
+}
+
 function resolveWaitStep(_app: App, _notePath: string, step: any): MacroStepResolved {
   const raw = step.time;
   // `time:` with no value parses to null in YAML (and `time: ""` to an empty
@@ -243,23 +316,31 @@ function resolveStep(app: App, notePath: string, step: any): MacroStepResolved {
   }
 }
 
-/** Reads every markdown note whose frontmatter declares `quickadd-type:
- *  macro` and builds its (unresolved-wikilink-aware) ChoiceNoteInput. Notes
- *  with no quickadd-type, or a quickadd-type other than "macro" (Stage B+
- *  territory — template/capture/multi), are silently skipped: they are
- *  simply out of Stage A's scope, not an error. */
+/** Reads every markdown note whose frontmatter declares a recognized
+ *  `quickadd-type` (`macro`, `template`, `capture`) and builds its
+ *  (unresolved-wikilink-aware) ChoiceNoteInput. Notes with no quickadd-type,
+ *  or a quickadd-type this compiler doesn't yet recognize (`multi` — Stage D
+ *  territory), are silently skipped: they are simply out of scope here, not
+ *  an error. */
 function collectChoiceNotes(app: App): ChoiceNoteInput[] {
   const inputs: ChoiceNoteInput[] = [];
   for (const file of app.vault.getMarkdownFiles()) {
     const frontmatter = app.metadataCache.getFileCache(file)?.frontmatter;
-    if (!frontmatter || frontmatter["quickadd-type"] !== "macro") continue;
+    if (!frontmatter) continue;
+    const quickaddType = frontmatter["quickadd-type"];
+    if (quickaddType !== "macro" && quickaddType !== "template" && quickaddType !== "capture") continue;
 
     const name = displayNameOf(frontmatter, file.path);
 
-    const rawSteps = Array.isArray(frontmatter.steps) ? frontmatter.steps : [];
-    const steps = rawSteps.map((s) => resolveStep(app, file.path, s));
-
-    inputs.push({ quickaddType: "macro", notePath: file.path, name, steps });
+    if (quickaddType === "macro") {
+      const rawSteps = Array.isArray(frontmatter.steps) ? frontmatter.steps : [];
+      const steps = rawSteps.map((s) => resolveStep(app, file.path, s));
+      inputs.push({ quickaddType: "macro", notePath: file.path, name, steps });
+    } else if (quickaddType === "template") {
+      inputs.push(resolveTemplateChoice(app, file.path, name, frontmatter));
+    } else {
+      inputs.push(resolveCaptureChoice(app, file.path, name, frontmatter));
+    }
   }
   return inputs;
 }
@@ -287,12 +368,13 @@ export function registerQuickAddTools(server: McpServer, app: App, ctx: ServerCt
     {
       title: "Compile QuickAdd choice notes",
       description:
-        "Compiles every Macro/UserScript choice note (frontmatter quickadd-type: macro) into QuickAdd's live " +
-        "config. `dry_run: true` reports the would-be diff (`added`/`changed`/`removed` compiler-owned choices) " +
-        "and any per-note errors without touching anything; `dry_run: false` applies it via QuickAdd's own " +
-        "saveSettings() and (re)registers each choice's Obsidian command via QuickAdd's own " +
-        "addCommandForChoice/removeCommandForChoice — `commandsRegistered: false` in the response means the " +
-        "config was written but that API was unavailable, so the commands are stale until QuickAdd reloads. " +
+        "Compiles every Macro/UserScript, Template, and Capture choice note (frontmatter quickadd-type: macro, " +
+        "template, or capture) into QuickAdd's live config. `dry_run: true` reports the would-be diff " +
+        "(`added`/`changed`/`removed` compiler-owned choices) and any per-note errors without touching anything; " +
+        "`dry_run: false` applies it via QuickAdd's own saveSettings() and (re)registers each choice's Obsidian " +
+        "command via QuickAdd's own addCommandForChoice/removeCommandForChoice — `commandsRegistered: false` in " +
+        "the response means the config was written but that API was unavailable, so the commands are stale " +
+        "until QuickAdd reloads. " +
         "The write is a SCOPED MERGE — only choices this tool itself generated (a stable id derived from the " +
         "note's path) are added/updated/removed; every other choice in QuickAdd's config is left completely " +
         "untouched, whatever manages it. One malformed note fails only that note (reported in `errors`, and the " +
@@ -303,9 +385,15 @@ export function registerQuickAddTools(server: McpServer, app: App, ctx: ServerCt
         "choice step must point at another quickadd-type: macro note, and choice steps that form a reference " +
         "cycle (A → B → A, or a self-reference) fail every note in the cycle — QuickAdd has no cycle guard, so " +
         "such a chain would loop forever at run time. " +
-        "nested-choice and ai-assistant steps are not yet supported (per-choice error). A note with a different " +
-        "quickadd-type is simply out of scope here — silently skipped. Refuses outright while a path allowlist " +
-        "is active.",
+        "nested-choice and ai-assistant steps are not yet supported (per-choice error). " +
+        "Template choices require `template:` as a [[wikilink]] to a markdown note; `folder:`, " +
+        "`file_name_format:`, and `open_file:` are optionally threaded through. Capture choices require " +
+        "`target:` — either a [[wikilink]] to a markdown note or a literal path string (QuickAdd's own " +
+        "dynamic-path format syntax, passed through verbatim, never interpreted); `prepend:`, `task:`, " +
+        "`insert_after_heading:`, and `create_if_missing:` are optionally threaded through. Every other native " +
+        "Template/Capture field not listed here compiles to QuickAdd's own default, matching a freshly-created " +
+        "choice. A note with an unrecognized quickadd-type (e.g. multi) is simply out of scope here — silently " +
+        "skipped. Refuses outright while a path allowlist is active.",
       inputSchema: {
         dry_run: z.boolean().describe("If true, report the would-be diff and errors without writing anything."),
       },

@@ -78,6 +78,126 @@ function macroNoteWithSteps(path, name, steps) {
   return { path, frontmatter: { "quickadd-type": "macro", name, steps } };
 }
 
+function templateNote(path, name, extra = {}) {
+  return { path, frontmatter: { "quickadd-type": "template", name, ...extra } };
+}
+
+function captureNote(path, name, extra = {}) {
+  return { path, frontmatter: { "quickadd-type": "capture", name, ...extra } };
+}
+
+describe("obsidian_quickadd_compile — Template discovery", () => {
+  test("compiles a Template note with a resolved template: wikilink", async () => {
+    const { handler } = build({
+      notes: [templateNote("Choices/Daily.md", "Daily", { template: "[[Daily Template]]" })],
+      links: { "Daily Template": "Templates/Daily.md" },
+    });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.errors.length, 0);
+    const compiled = res.structuredContent.choices.find((c) => c.name === "Daily");
+    assert.equal(compiled.type, "Template");
+    assert.equal(compiled.templatePath, "Templates/Daily.md");
+  });
+
+  test("a template: wikilink that fails to resolve fails only that note", async () => {
+    const { handler } = build({
+      notes: [templateNote("Choices/Broken.md", "Broken", { template: "[[Missing]]" })],
+      links: {},
+    });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.errors.length, 1);
+    assert.equal(res.structuredContent.choices.length, 0);
+  });
+
+  test("a missing template: field fails with a clear error", async () => {
+    const { handler } = build({ notes: [templateNote("Choices/NoTemplate.md", "NoTemplate")] });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.errors.length, 1);
+    assert.match(res.structuredContent.errors[0].message, /template/i);
+  });
+
+  test("folder/file_name_format/open_file frontmatter fields are threaded through", async () => {
+    const { handler } = build({
+      notes: [templateNote("Choices/Daily.md", "Daily", {
+        template: "[[Daily Template]]", folder: "Journal/Daily", file_name_format: "{{DATE}}", open_file: true,
+      })],
+      links: { "Daily Template": "Templates/Daily.md" },
+    });
+    const res = await handler({ dry_run: true });
+    const compiled = res.structuredContent.choices.find((c) => c.name === "Daily");
+    assert.deepEqual(compiled.folder.folders, ["Journal/Daily"]);
+    assert.equal(compiled.openFile, true);
+  });
+});
+
+describe("obsidian_quickadd_compile — Capture discovery", () => {
+  test("compiles a Capture note with a resolved target: wikilink", async () => {
+    const { handler } = build({
+      notes: [captureNote("Choices/Log.md", "Log", { target: "[[Journal Log]]" })],
+      links: { "Journal Log": "Journal/Log.md" },
+    });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.errors.length, 0);
+    const compiled = res.structuredContent.choices.find((c) => c.name === "Log");
+    assert.equal(compiled.type, "Capture");
+    assert.equal(compiled.captureTo, "Journal/Log.md");
+  });
+
+  test("a non-wikilink target: string is used verbatim (dynamic path)", async () => {
+    const { handler } = build({ notes: [captureNote("Choices/Log.md", "Log", { target: "Journal/{{DATE}}.md" })] });
+    const res = await handler({ dry_run: true });
+    const compiled = res.structuredContent.choices.find((c) => c.name === "Log");
+    assert.equal(compiled.captureTo, "Journal/{{DATE}}.md");
+  });
+
+  test("a target: wikilink that fails to resolve fails only that note", async () => {
+    const { handler } = build({ notes: [captureNote("Choices/Broken.md", "Broken", { target: "[[Missing]]" })] });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.errors.length, 1);
+  });
+
+  test("a missing target: field fails with a clear error", async () => {
+    const { handler } = build({ notes: [captureNote("Choices/NoTarget.md", "NoTarget")] });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.errors.length, 1);
+  });
+
+  test("prepend/task/insert_after_heading/create_if_missing frontmatter fields are threaded through", async () => {
+    const { handler } = build({
+      notes: [captureNote("Choices/Log.md", "Log", {
+        target: "[[Journal Log]]", prepend: true, task: true,
+        insert_after_heading: "## Inbox", create_if_missing: true,
+      })],
+      links: { "Journal Log": "Journal/Log.md" },
+    });
+    const res = await handler({ dry_run: true });
+    const compiled = res.structuredContent.choices.find((c) => c.name === "Log");
+    assert.equal(compiled.prepend, true);
+    assert.equal(compiled.task, true);
+    assert.equal(compiled.insertAfter.after, "## Inbox");
+    assert.equal(compiled.createFileIfItDoesntExist.enabled, true);
+  });
+});
+
+describe("obsidian_quickadd_compile — mixed choice types in one compile", () => {
+  test("Macro, Template, and Capture notes all compile together", async () => {
+    const { handler } = build({
+      notes: [
+        macroNote("Choices/M.md", "M", "stamp-title"),
+        templateNote("Choices/T.md", "T", { template: "[[Tmpl]]" }),
+        captureNote("Choices/C.md", "C", { target: "[[Cap]]" }),
+      ],
+      links: { "stamp-title": "Scripts/stamp-title.md", "Tmpl": "Templates/Tmpl.md", "Cap": "Capture/Cap.md" },
+    });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.errors.length, 0);
+    assert.equal(res.structuredContent.choices.length, 3);
+    assert.ok(res.structuredContent.choices.some((c) => c.type === "Macro"));
+    assert.ok(res.structuredContent.choices.some((c) => c.type === "Template"));
+    assert.ok(res.structuredContent.choices.some((c) => c.type === "Capture"));
+  });
+});
+
 describe("obsidian_quickadd_compile: dry_run", () => {
   test("dry_run: true reports the compiled result and writes nothing", async () => {
     const { handler, quickadd, saveSettingsCalls } = build({
@@ -155,10 +275,10 @@ describe("obsidian_quickadd_compile: per-choice error isolation", () => {
     assert.equal(res.structuredContent.errors[0].notePath, "Choices/Bad.md");
   });
 
-  test("a note with quickadd-type other than macro is ignored (Stage B+ territory), not an error", async () => {
+  test("a note with an unrecognized quickadd-type (e.g. multi, Stage D territory) is ignored, not an error", async () => {
     const { handler } = build({
       notes: [
-        { path: "Choices/T.md", frontmatter: { "quickadd-type": "template", name: "T" } },
+        { path: "Choices/M.md", frontmatter: { "quickadd-type": "multi", name: "M" } },
         macroNote("Choices/Good.md", "Good", "stamp-title"),
       ],
       links: { "stamp-title": "Scripts/stamp-title.md" },
