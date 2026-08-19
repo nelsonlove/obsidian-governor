@@ -3,6 +3,10 @@ import type {
   ChoiceError,
   QuickAddMacroChoice,
   QuickAddUserScriptCommand,
+  QuickAddChoiceCommand,
+  QuickAddWaitCommand,
+  QuickAddObsidianCommand,
+  QuickAddEditorCommand,
   TransformResult,
 } from "./types.js";
 
@@ -55,16 +59,18 @@ function transformOne(input: ChoiceNoteInput): OneResult {
     return { ok: false, message: `Macro "${input.name}" (${input.notePath}) has no steps.` };
   }
 
-  const commands: QuickAddUserScriptCommand[] = [];
+  type Command = QuickAddUserScriptCommand | QuickAddChoiceCommand | QuickAddWaitCommand | QuickAddObsidianCommand | QuickAddEditorCommand;
+  const commands: Command[] = [];
   for (let i = 0; i < input.steps.length; i++) {
     const step = input.steps[i];
+    const id = deriveStepId(input.notePath, i);
 
     if (step.kind === "unsupported") {
       return {
         ok: false,
         message:
           `Macro "${input.name}" (${input.notePath}) step ${i + 1} has unsupported step kind ` +
-          `"${step.declaredKind}" (only "userscript" is implemented).`,
+          `"${step.declaredKind}" (only "userscript", "choice", "wait", "obsidian-command", "editor-command" are implemented).`,
       };
     }
 
@@ -75,13 +81,23 @@ function transformOne(input: ChoiceNoteInput): OneResult {
       };
     }
 
-    commands.push({
-      id: deriveStepId(input.notePath, i),
-      name: step.scriptPath,
-      type: "UserScript",
-      path: step.scriptPath,
-      settings: step.settings,
-    });
+    switch (step.kind) {
+      case "userscript":
+        commands.push({ id, name: step.scriptPath, type: "UserScript", path: step.scriptPath, settings: step.settings });
+        break;
+      case "choice":
+        commands.push({ id, name: "Choice", type: "Choice", choiceId: step.choiceId });
+        break;
+      case "wait":
+        commands.push({ id, name: "Wait", type: "Wait", time: step.timeMs });
+        break;
+      case "obsidian-command":
+        commands.push({ id, name: step.displayName, type: "Obsidian", commandId: step.commandId });
+        break;
+      case "editor-command":
+        commands.push({ id, name: step.editorCommandType, type: "EditorCommand", editorCommandType: step.editorCommandType });
+        break;
+    }
   }
 
   return {
