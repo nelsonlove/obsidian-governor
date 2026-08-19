@@ -45,16 +45,26 @@ export interface VocabInstanceSettings {
 }
 
 export const DEFAULT_VOCABULARIES: VocabInstanceSettings[] = [
-  {
-    id: "registry",
-    provider: "blueprint",
-    // The post-consolidation registries slot (2026-08-09). Settings-overridable;
-    // never gen3 — that tree was emptied by the move.
-    root: "00-09 System/00 System management/00.05 Registries for the system",
-  },
+  // The live tag model (read from the vault 2026-08-19, #251): Meta/Tag
+  // registry notes + per-scope `allowedTags` chain-union, served by the
+  // scope-tags provider over the whole vault. This REPLACES the gen-old
+  // "registry" blueprint instance: its shipped root ("00-09 System/00 System
+  // management/00.05 Registries for the system") no longer exists — the slot
+  // moved under 00.01-00.09 Operations and holds only its folder note — and
+  // its `.tag.md` / `.property.md` / `.fileclass` grammar (tag-macros.blueprint
+  // / drift_audit.py, both dead) has no live surface. The blueprint provider
+  // itself remains available via settings for vaults still on that grammar.
+  { id: "scope-tags", provider: "scope-tags", root: "" },
   // termsRoot is read by the TOOL layer (it decides which bodies to read for
   // `## Terms` sections); the provider itself parses whatever bodies arrive.
-  { id: "glossary", provider: "glossary", root: "", config: { termsRoot: "Assent" } },
+  // The Assent chapters live under 00.89 since the vault-root `Assent/` tree
+  // was refiled (stale shipped default corrected 2026-08-19).
+  {
+    id: "glossary",
+    provider: "glossary",
+    root: "",
+    config: { termsRoot: "00-09 System/00 System management/00.89 Assent" },
+  },
 ];
 
 export interface VocabInstance {
