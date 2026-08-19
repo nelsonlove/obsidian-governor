@@ -142,16 +142,29 @@ NEW findings' full detail, so the pane's data path is:
    `unaddressed`, `name_colon`, `name_trailing_space` — everything `findings.ts`
    already computes) and render.
 
-This is more design work than the other pieces — it's the one place this fold
-touches the conformance engine's live-vault story, which today is CLI/disk-snapshot
-oriented (`buildSnapshot` reads from disk via `--root`). Whether the pane runs the
-engine against a fresh in-memory snapshot built from `app.vault` directly, or
-shells out to the same CLI path headlessly, is an open implementation question for
-the plan stage — flagged here, not resolved.
+This was more design work than the other pieces — it's the one place this fold
+touches the conformance engine's live-vault story, which is CLI/disk-snapshot
+oriented (`buildSnapshot` reads from disk via `--root`). **Resolved at Stage C**:
+neither in-memory-snapshot-from-`app.vault` nor shell-out-to-CLI — the answer
+is a THIRD option, already precedented and already shipped: call
+`runConformance` (`conformance/cli.ts`) directly, in-process, no subprocess,
+reading the vault's on-disk root via `FileSystemAdapter.basePath` — exactly
+what `mcp/obsidian-debt-source.ts` already does for the shipped
+`obsidian_conformance_debt` MCP tool. Stage C's `mcp/obsidian-drift-source.ts`
+reuses that same pattern (root/baseline/excludedRoots resolution, `legacyPacks:
+true` to keep the ratchet comparison honest against the real baseline), keeping
+(not discarding) the ratchet result and narrowing it to the scheme pack's NEW
+findings via the new pure `conformance/drift-view.ts`.
 
-One-click "fix" buttons (the original's per-row wrench icon) route through
-`obsidian_refile_address`/`obsidian_renumber_address` — already-built tools, no new
-mutation logic needed, just wiring a button to a call.
+One-click "fix" buttons (the original's per-row wrench icon) were SCOPED OUT of
+Stage C, not silently dropped: the original writes directly via
+`app.vault.process`/`app.vault.create`, bypassing this plugin's guard/journal/
+queue discipline entirely (which the original has no equivalent of at all).
+Routing a human-gesture button click through `Kernel.runMutation` correctly —
+matching what `obsidian_refile_address`/`obsidian_renumber_address` already do
+for an MCP call — is real design work of its own and deserves its own pass,
+not a rushed addition to the read-path PR. Named follow-up, not a silent drop
+(see the drift pane's own header comment).
 
 ### Scaffolding tools (category-index, standard-zeros, promote-to-folder, template creation)
 
