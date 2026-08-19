@@ -86,6 +86,10 @@ function captureNote(path, name, extra = {}) {
   return { path, frontmatter: { "quickadd-type": "capture", name, ...extra } };
 }
 
+function multiNote(path, name, extra = {}) {
+  return { path, frontmatter: { "quickadd-type": "multi", name, ...extra } };
+}
+
 describe("obsidian_quickadd_compile — Template discovery", () => {
   test("compiles a Template note with a resolved template: wikilink", async () => {
     const { handler } = build({
@@ -343,6 +347,105 @@ describe("obsidian_quickadd_compile — Capture discovery", () => {
   });
 });
 
+describe("obsidian_quickadd_compile — Multi discovery", () => {
+  test("a sibling capture/template/macro note directly in a Multi's folder nests, not top-level", async () => {
+    const { handler } = build({
+      notes: [
+        multiNote("Choices/My Multi/My Multi.md", "My Multi"),
+        captureNote("Choices/My Multi/A Capture.md", "A Capture", { target: "some/path.md" }),
+      ],
+    });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.errors.length, 0);
+    // ONE top-level choice — the Multi. The Capture note does NOT ALSO
+    // appear top-level.
+    assert.equal(res.structuredContent.choices.length, 1);
+    const multi = res.structuredContent.choices[0];
+    assert.equal(multi.type, "Multi");
+    assert.equal(multi.choices.length, 1);
+    assert.equal(multi.choices[0].name, "A Capture");
+  });
+
+  test("multiple siblings nest in alphabetical order by path", async () => {
+    const { handler } = build({
+      notes: [
+        multiNote("Choices/My Multi/My Multi.md", "My Multi"),
+        captureNote("Choices/My Multi/Zebra.md", "Zebra", { target: "z.md" }),
+        captureNote("Choices/My Multi/Apple.md", "Apple", { target: "a.md" }),
+      ],
+    });
+    const res = await handler({ dry_run: true });
+    const multi = res.structuredContent.choices[0];
+    assert.deepEqual(multi.choices.map((c) => c.name), ["Apple", "Zebra"]);
+  });
+
+  test("Multi-in-Multi: a subfolder anchored by its own multi-note nests as a nested Multi", async () => {
+    const { handler } = build({
+      notes: [
+        multiNote("Choices/Outer/Outer.md", "Outer"),
+        multiNote("Choices/Outer/Inner/Inner.md", "Inner"),
+        captureNote("Choices/Outer/Inner/Leaf.md", "Leaf", { target: "leaf.md" }),
+      ],
+    });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.errors.length, 0);
+    assert.equal(res.structuredContent.choices.length, 1);
+    const outer = res.structuredContent.choices[0];
+    assert.equal(outer.choices.length, 1);
+    const inner = outer.choices[0];
+    assert.equal(inner.type, "Multi");
+    assert.equal(inner.choices.length, 1);
+    assert.equal(inner.choices[0].name, "Leaf");
+  });
+
+  test("a note in a folder with NO multi-note stays top-level (regression check)", async () => {
+    const { handler } = build({
+      notes: [captureNote("Choices/Plain/A Capture.md", "A Capture", { target: "x.md" })],
+    });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.choices.length, 1);
+    assert.equal(res.structuredContent.choices[0].type, "Capture");
+  });
+
+  test("an ambiguous folder (2 multi-notes claiming the same folder) fails BOTH notes; siblings stay top-level", async () => {
+    const { handler } = build({
+      notes: [
+        multiNote("Choices/Ambiguous/First.md", "First"),
+        multiNote("Choices/Ambiguous/Second.md", "Second"),
+        captureNote("Choices/Ambiguous/Sibling.md", "Sibling", { target: "s.md" }),
+      ],
+    });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.errors.length, 2);
+    assert.ok(res.structuredContent.errors.every((e) => /ambiguous/i.test(e.message)));
+    // The sibling capture note is unaffected — it's neither an ambiguous
+    // multi-note nor claimed by one (an ambiguous folder is treated as
+    // UNCLAIMED for membership purposes), so it stays top-level.
+    assert.equal(res.structuredContent.choices.length, 1);
+    assert.equal(res.structuredContent.choices[0].name, "Sibling");
+  });
+
+  test("a Macro choice: step CANNOT target a Multi choice — still a dangling-reference error", async () => {
+    const { handler } = build({
+      notes: [
+        multiNote("Choices/My Multi/My Multi.md", "My Multi"),
+        macroNoteWithSteps("Choices/Referrer.md", "Referrer", [{ kind: "choice", choice: "[[My Multi]]" }]),
+      ],
+      links: { "My Multi": "Choices/My Multi/My Multi.md" },
+    });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.errors.length, 1);
+    assert.match(res.structuredContent.errors[0].message, /does not declare a quickadd-type this compiler compiles/);
+  });
+
+  test("an empty Multi folder (no members) compiles a Multi with an empty choices array", async () => {
+    const { handler } = build({ notes: [multiNote("Choices/Empty/Empty.md", "Empty")] });
+    const res = await handler({ dry_run: true });
+    assert.equal(res.structuredContent.errors.length, 0);
+    assert.deepEqual(res.structuredContent.choices[0].choices, []);
+  });
+});
+
 describe("obsidian_quickadd_compile — mixed choice types in one compile", () => {
   test("Macro, Template, and Capture notes all compile together", async () => {
     const { handler } = build({
@@ -488,10 +591,14 @@ describe("obsidian_quickadd_compile: per-choice error isolation", () => {
     assert.equal(res.structuredContent.errors[0].notePath, "Choices/Bad.md");
   });
 
-  test("a note with an unrecognized quickadd-type (e.g. multi, Stage D territory) is ignored, not an error", async () => {
+  // `multi` used to be this test's example of an "unrecognized" type before
+  // Stage D made it discoverable — it no longer fits here (see the "Multi
+  // discovery" describe block above for its own coverage, including
+  // folder-anchoring). This test now uses a genuinely unrecognized type.
+  test("a note with an unrecognized quickadd-type is ignored, not an error", async () => {
     const { handler } = build({
       notes: [
-        { path: "Choices/M.md", frontmatter: { "quickadd-type": "multi", name: "M" } },
+        { path: "Choices/M.md", frontmatter: { "quickadd-type": "unknown-type", name: "M" } },
         macroNote("Choices/Good.md", "Good", "stamp-title"),
       ],
       links: { "stamp-title": "Scripts/stamp-title.md" },
@@ -973,7 +1080,12 @@ describe("obsidian_quickadd_compile: choice step", () => {
     assert.equal(outer.macro.commands[0].name, "Log");
   });
 
-  test("a choice: link to a quickadd-type: multi note is still rejected (not compiled yet)", async () => {
+  // Stage D: quickadd-type: multi notes are now discovered and compiled (a
+  // Multi choice, here an empty one — see the "Multi discovery" describe
+  // block above), so the Multi note itself DOES appear in `choices`. What's
+  // still rejected is using it as a choice: step TARGET (native QuickAdd's
+  // own restriction — a Multi is opened, not invoked from a Macro step).
+  test("a choice: link to a quickadd-type: multi note is rejected as a choice: step target", async () => {
     const { handler } = build({
       notes: [
         macroNoteWithSteps("Choices/Bad.md", "Bad", [{ kind: "choice", choice: "[[Folder]]" }]),
@@ -982,7 +1094,10 @@ describe("obsidian_quickadd_compile: choice step", () => {
       links: { "Folder": "Choices/Folder.md" },
     });
     const res = await handler({ dry_run: true });
-    assert.equal(res.structuredContent.choices.length, 0);
+    // ONE compiled choice — the empty "Folder" Multi. "Bad" fails outright
+    // (its only step is the invalid reference), so it never compiles.
+    assert.equal(res.structuredContent.choices.length, 1);
+    assert.equal(res.structuredContent.choices[0].type, "Multi");
     assert.equal(res.structuredContent.errors.length, 1);
     assert.match(res.structuredContent.errors[0].message, /quickadd-type this compiler compiles/);
     assert.match(res.structuredContent.errors[0].message, /macro, template, capture/);

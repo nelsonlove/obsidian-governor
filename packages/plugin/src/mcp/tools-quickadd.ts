@@ -106,14 +106,23 @@ function displayNameOf(frontmatter: any, path: string): string {
  *  the type and the check cannot drift. Never re-list the strings here. */
 const EDITOR_COMMAND_TYPE_SET: ReadonlySet<string> = new Set(EDITOR_COMMAND_TYPES);
 
-/** The `quickadd-type` values this compiler actually compiles into a choice.
- *  The ONE list, shared by `collectChoiceNotes` (what gets discovered) and
- *  `resolveChoiceStep` (what a `choice:` step may reference), because the two
- *  answer the same question: does this compile produce a choice for that
- *  note? `multi` is deliberately absent — Stage D territory, so a reference
- *  to one is still permanently dangling. */
-const COMPILED_QUICKADD_TYPES = ["macro", "template", "capture"] as const;
-const COMPILED_QUICKADD_TYPE_SET: ReadonlySet<unknown> = new Set(COMPILED_QUICKADD_TYPES);
+/** Every `quickadd-type` this compiler discovers and compiles into a
+ *  choice — used by `collectChoiceNotes`'s discovery gate. Widened in
+ *  Stage D to include `multi`. */
+const DISCOVERABLE_QUICKADD_TYPES = ["macro", "template", "capture", "multi"] as const;
+const DISCOVERABLE_QUICKADD_TYPE_SET: ReadonlySet<unknown> = new Set(DISCOVERABLE_QUICKADD_TYPES);
+
+/** The `quickadd-type` values a Macro `choice:` step may reference —
+ *  DELIBERATELY NARROWER than `DISCOVERABLE_QUICKADD_TYPES` as of Stage D.
+ *  `multi` is discoverable/compilable but is NOT a valid choice-step target:
+ *  verified against QuickAdd's own source, its macro-builder UI's Choice-
+ *  step picker excludes Multi choices entirely (you open a Multi, you don't
+ *  invoke it from a Macro step), and its runtime refuses to run a Multi
+ *  choice non-interactively. Do not widen this to match
+ *  DISCOVERABLE_QUICKADD_TYPES without re-verifying that restriction — the
+ *  two constants answering DIFFERENT questions is the point, not a gap. */
+const CHOICE_STEP_TARGET_TYPES = ["macro", "template", "capture"] as const;
+const CHOICE_STEP_TARGET_TYPE_SET: ReadonlySet<unknown> = new Set(CHOICE_STEP_TARGET_TYPES);
 
 function resolveUserScriptStep(app: App, notePath: string, step: any): MacroStepResolved {
   if (step?.kind !== "userscript") {
@@ -189,13 +198,13 @@ function resolveChoiceStep(app: App, notePath: string, step: any): MacroStepReso
   // run time. Symmetric with the non-md check above, which already catches the
   // equivalent problem for a non-markdown target.
   const destFrontmatter = app.metadataCache.getFileCache(dest)?.frontmatter;
-  if (!COMPILED_QUICKADD_TYPE_SET.has(destFrontmatter?.["quickadd-type"])) {
+  if (!CHOICE_STEP_TARGET_TYPE_SET.has(destFrontmatter?.["quickadd-type"])) {
     return {
       kind: "choice",
       ok: false,
       error:
         `"${raw}" resolves to "${dest.path}", whose frontmatter does not declare a quickadd-type this compiler ` +
-        `compiles (${COMPILED_QUICKADD_TYPES.join(", ")}). A choice step must reference a note this same compile ` +
+        `compiles (${CHOICE_STEP_TARGET_TYPES.join(", ")}). A choice step must reference a note this same compile ` +
         `turns into a choice; a note with no quickadd-type, an unrecognized one, or one not compiled yet (multi) ` +
         `leaves a dangling reference that fails only at run time.`,
     };
@@ -420,33 +429,140 @@ function resolveStep(app: App, notePath: string, step: any): MacroStepResolved {
   }
 }
 
+/** The folder a note lives directly inside — vault-root notes (no `/` in
+ *  their path) return `""`. Pure path math; no `obsidian` folder API is
+ *  needed anywhere in this file, because "does folder F have an anchored
+ *  subfolder" reduces to "is some anchored folder's OWN parent === F",
+ *  computable entirely from the flat markdown-file listing this function
+ *  already has. */
+function parentFolder(path: string): string {
+  const i = path.lastIndexOf("/");
+  return i === -1 ? "" : path.slice(0, i);
+}
+
 /** Reads every markdown note whose frontmatter declares a recognized
- *  `quickadd-type` (`macro`, `template`, `capture`) and builds its
+ *  `quickadd-type` (`macro`, `template`, `capture`, `multi`) and builds its
  *  (unresolved-wikilink-aware) ChoiceNoteInput. Notes with no quickadd-type,
- *  or a quickadd-type this compiler doesn't yet recognize (`multi` — Stage D
- *  territory), are silently skipped: they are simply out of scope here, not
- *  an error. */
+ *  or one this compiler doesn't recognize, are silently skipped: simply out
+ *  of scope, not an error.
+ *
+ *  As of Stage D this is no longer a flat, independent per-note walk. A
+ *  `quickadd-type: multi` note ANCHORS its own parent folder — every OTHER
+ *  recognized note directly inside that same folder, and every direct
+ *  SUBFOLDER that is itself anchored by its own multi-note, becomes a
+ *  MEMBER of that Multi (compiled nested inside it) rather than a top-level
+ *  entry. This function returns only the TOP-LEVEL inputs; membership is
+ *  resolved recursively via `buildInput` below and lives inside each
+ *  Multi's own `folder.members`. */
 function collectChoiceNotes(app: App): ChoiceNoteInput[] {
-  const inputs: ChoiceNoteInput[] = [];
+  type Typed = { path: string; frontmatter: Record<string, unknown>; quickaddType: string };
+  const typed: Typed[] = [];
+  const multiNotesByFolder = new Map<string, string[]>();
+
   for (const file of app.vault.getMarkdownFiles()) {
     const frontmatter = app.metadataCache.getFileCache(file)?.frontmatter;
     if (!frontmatter) continue;
     const quickaddType = frontmatter["quickadd-type"];
-    if (!COMPILED_QUICKADD_TYPE_SET.has(quickaddType)) continue;
-
-    const name = displayNameOf(frontmatter, file.path);
-
-    if (quickaddType === "macro") {
-      const rawSteps = Array.isArray(frontmatter.steps) ? frontmatter.steps : [];
-      const steps = rawSteps.map((s) => resolveStep(app, file.path, s));
-      inputs.push({ quickaddType: "macro", notePath: file.path, name, steps });
-    } else if (quickaddType === "template") {
-      inputs.push(resolveTemplateChoice(app, file.path, name, frontmatter));
-    } else {
-      inputs.push(resolveCaptureChoice(app, file.path, name, frontmatter));
+    if (!DISCOVERABLE_QUICKADD_TYPE_SET.has(quickaddType)) continue;
+    typed.push({ path: file.path, frontmatter, quickaddType: quickaddType as string });
+    if (quickaddType === "multi") {
+      const folder = parentFolder(file.path);
+      const list = multiNotesByFolder.get(folder) ?? [];
+      list.push(file.path);
+      multiNotesByFolder.set(folder, list);
     }
   }
-  return inputs;
+
+  // A folder with exactly one multi-note is cleanly anchored. A folder with
+  // 2+ is ambiguous — neither compiles, but this does NOT remove the folder
+  // from consideration for its OTHER (non-multi) siblings, which stay
+  // top-level (an authoring mistake in one note must not disappear unrelated
+  // notes).
+  const anchoredFolders = new Map<string, string>();
+  const ambiguousFolders = new Map<string, string[]>();
+  for (const [folder, notes] of multiNotesByFolder) {
+    if (notes.length === 1) anchoredFolders.set(folder, notes[0]);
+    else ambiguousFolders.set(folder, notes);
+  }
+
+  // `claimedBy` maps a CLAIMED note's path to the folder that claims it —
+  // not just a Set, because the "claiming folder" is NOT always the note's
+  // own parent (see below), and `buildInput` needs to filter "which notes
+  // does THIS SPECIFIC anchored folder own" without re-deriving that
+  // relationship from scratch.
+  //
+  // A plain note (macro/template/capture) is claimed by its own parent
+  // folder, when that folder is anchored — straightforward.
+  //
+  // A MULTI-note is different: it anchors its OWN parent folder (call it
+  // F), so `anchoredFolders.get(F)` is trivially itself — checking F for
+  // anchoring would never determine whether the multi-note is ALSO nested
+  // under some ANCESTOR Multi. The right question is one level further out:
+  // is F's own parent (F's grandparent relative to the note) anchored by a
+  // DIFFERENT multi-note? If so, F itself is a subfolder-member of that
+  // outer anchor, and the note that anchors F (this multi-note) is what
+  // ends up nested inside the outer Multi's `choices` — compiled recursively
+  // via its own `folder.members`, which is unaffected by any of this.
+  const claimedBy = new Map<string, string>();
+  for (const t of typed) {
+    if (t.quickaddType === "multi") {
+      const ownFolder = parentFolder(t.path);
+      const grandparent = parentFolder(ownFolder);
+      if (anchoredFolders.has(grandparent)) claimedBy.set(t.path, grandparent);
+    } else {
+      const folder = parentFolder(t.path);
+      if (anchoredFolders.has(folder)) claimedBy.set(t.path, folder);
+    }
+  }
+
+  const byPath = new Map(typed.map((t) => [t.path, t]));
+
+  function buildInput(path: string): ChoiceNoteInput {
+    const t = byPath.get(path)!;
+    const name = displayNameOf(t.frontmatter, path);
+    if (t.quickaddType === "macro") {
+      const rawSteps = Array.isArray(t.frontmatter.steps) ? t.frontmatter.steps : [];
+      const steps = rawSteps.map((s) => resolveStep(app, path, s));
+      return { quickaddType: "macro", notePath: path, name, steps };
+    }
+    if (t.quickaddType === "template") return resolveTemplateChoice(app, path, name, t.frontmatter);
+    if (t.quickaddType === "capture") return resolveCaptureChoice(app, path, name, t.frontmatter);
+
+    // multi
+    const folder = parentFolder(path); // == the folder this note anchors
+    const ambiguous = ambiguousFolders.get(folder);
+    if (ambiguous) {
+      return {
+        quickaddType: "multi",
+        notePath: path,
+        name,
+        folder: {
+          ok: false,
+          error:
+            `${ambiguous.length} quickadd-type: multi notes claim the same folder "${folder}" (${ambiguous.join(", ")}) ` +
+            "— ambiguous, so none of them compiled. Move one to a different folder or remove the duplicate marking.",
+        },
+      };
+    }
+    // A member of THIS folder is exactly a note claimedBy THIS folder — not
+    // `parentFolder(p) === folder`, which is only true for plain-note
+    // members. A nested multi-note's own path lives one level DEEPER than
+    // `folder` (inside the subfolder it itself anchors), so its claim was
+    // recorded against `folder` (its grandparent-relative anchor) above,
+    // not against its own immediate parent — `claimedBy` is exactly the
+    // lookup that already encodes which is which.
+    const memberPaths = [...byPath.keys()]
+      .filter((p) => p !== path && claimedBy.get(p) === folder)
+      .sort();
+    return {
+      quickaddType: "multi",
+      notePath: path,
+      name,
+      folder: { ok: true, members: memberPaths.map((p) => buildInput(p)) },
+    };
+  }
+
+  return typed.filter((t) => !claimedBy.has(t.path)).map((t) => buildInput(t.path));
 }
 
 /** The compiler-owned id of a live QuickAdd choice, or null if this entry is
@@ -500,8 +616,14 @@ export function registerQuickAddTools(server: McpServer, app: App, ctx: ServerCt
         "string-valued fields (`folder:`, `file_name_format:`, `insert_after_heading:`) are trimmed, and a " +
         "non-string value in one of them is a per-note error rather than a silently ignored field. Every other native " +
         "Template/Capture field not listed here compiles to QuickAdd's own default, matching a freshly-created " +
-        "choice. A note with an unrecognized quickadd-type (e.g. multi) is simply out of scope here — silently " +
-        "skipped. Refuses outright while a path allowlist is active.",
+        "choice. Multi choice notes (quickadd-type: multi) are also compiled — a Multi note anchors its own " +
+        "parent folder, and every other recognized choice note (or anchored subfolder, itself a nested Multi) " +
+        "directly inside that same folder becomes a member, compiled NESTED inside the Multi rather than as a " +
+        "separate top-level entry; two or more multi-notes claiming the same folder is a per-note error for each " +
+        "of them (their unrelated siblings are unaffected); a Multi choice is discoverable and compilable but is " +
+        "NOT a valid choice: step target (matching native QuickAdd's own restriction — a Multi is opened, not " +
+        "invoked from a Macro step). A note with an unrecognized quickadd-type is simply out of scope here — " +
+        "silently skipped. Refuses outright while a path allowlist is active.",
       inputSchema: {
         dry_run: z.boolean().describe("If true, report the would-be diff and errors without writing anything."),
       },
