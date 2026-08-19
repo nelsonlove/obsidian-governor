@@ -96,14 +96,14 @@ export async function loadInstallId(
       if (parsed && typeof parsed.install === "string" && parsed.install) {
         return { install: parsed.install, persisted: true };
       }
-      console.error(`[vault-mcp] ${file} is unreadable; minting a new install id`);
+      console.error(`[governor] ${file} is unreadable; minting a new install id`);
     }
     const install = mint();
     if (!(await adapter.exists(dir))) await adapter.mkdir(dir);
     await adapter.write(file, JSON.stringify({ install, createdAt: new Date().toISOString() }, null, 2) + "\n");
     return { install, persisted: true };
   } catch (e) {
-    console.error("[vault-mcp] install id could not be persisted; using an ephemeral one", e);
+    console.error("[governor] install id could not be persisted; using an ephemeral one", e);
     return { install: mint(), persisted: false };
   }
 }

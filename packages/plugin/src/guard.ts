@@ -145,7 +145,7 @@ export function guardCall(opts: {
 }): { code: string; message: string } | null {
   const { isMutating, args, settings } = opts;
   if (settings.readOnly && isMutating) {
-    return { code: "read_only", message: "vault-mcp is in read-only mode; mutating tools are blocked. Turn it off in the plugin settings." };
+    return { code: "read_only", message: "governor is in read-only mode; mutating tools are blocked. Turn it off in the plugin settings." };
   }
   if (settings.allowlist.length) {
     const norm = settings.allowlist.map((p) => p.replace(/\/+$/, "")).filter(Boolean);
@@ -156,7 +156,7 @@ export function guardCall(opts: {
       const p = posix.normalize(raw);
       const allowed =
         !p.startsWith("..") && norm.some((prefix) => p === prefix || p.startsWith(prefix + "/"));
-      if (!allowed) return { code: "out_of_allowlist", message: `path '${raw}' is outside the vault-mcp allowlist` };
+      if (!allowed) return { code: "out_of_allowlist", message: `path '${raw}' is outside the governor allowlist` };
     }
   }
   return null;

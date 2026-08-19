@@ -48,6 +48,27 @@ const RULES = [
     pattern: /security property, not tidiness/,
     allowIf: null, // reversed by the module-consolidation ruling (see #114)
   },
+  {
+    id: "retired-name: Assent as the framework outside annotated legacy context",
+    pattern: /\bAssent\b/,
+    // Legit mentions: the legacy/former-name annotation itself, the vault's
+    // `00.89 Assent` folder (a real path that keeps its historical name), and
+    // the ASSENT_* legacy env-var aliases.
+    allowIf: /legacy|former|formerly|historical|00\.89 Assent|ASSENT_/,
+  },
+  {
+    id: "retired-key: modules.governance settings key outside migration context",
+    pattern: /modules\.governance\b/,
+    // The key was migrated to modules.acceptance in 0.12.0; only shim /
+    // historical discussion may name it.
+    allowIf: /legacy|historical|before 0\.12|0\.12\.0|shim|migrat/,
+  },
+  {
+    id: "retired-path: ~/.claude/vault-mcp asserted as the canonical state dir",
+    pattern: /~\/\.claude\/vault-mcp/,
+    // Only grace-period / compat / legacy discussion may name the old dir.
+    allowIf: /legacy|grace|compat|historical|old |pre-0\.12/,
+  },
 ];
 
 function mdFiles(dir) {
@@ -89,6 +110,12 @@ test("every rule detects its own violation class (self-check)", () => {
     "retired-name: Stewardship outside annotated legacy context": "Stewardship is the review surface.",
     "stale-branch: assent/kernel-v0 cited in docs": "lives on `assent/kernel-v0` as a draft",
     "superseded-claim: plugin separation as a security property": "as a security property, not tidiness",
+    "retired-name: Assent as the framework outside annotated legacy context":
+      "Assent names the broader framework the plugin realizes.",
+    "retired-key: modules.governance settings key outside migration context":
+      "the pane reads its config from `modules.governance.config`",
+    "retired-path: ~/.claude/vault-mcp asserted as the canonical state dir":
+      "the plugin listens on a per-vault socket in `~/.claude/vault-mcp/`",
   };
   for (const rule of RULES) {
     const fixture = fixtures[rule.id];
@@ -106,12 +133,40 @@ test("annotated legacy contexts stay allowed (no over-blocking)", () => {
     "ships as a separate Obsidian plugin (repo `obsidian-stewardship`)",
     "index at `<config-dir>/plugins/stewardship/pending-index.json` (legacy id)",
   ];
-  const rule = RULES.find((r) => r.id.startsWith("retired-name"));
+  const rule = RULES.find((r) => r.id.startsWith("retired-name: Stewardship"));
   for (const line of legit) {
     assert.ok(
       !rule.pattern.test(line) || rule.allowIf.test(line),
       `legit legacy mention would be flagged: ${line}`
     );
+  }
+});
+
+test("annotated legacy contexts stay allowed for the 0.12.0 rename rules (no over-blocking)", () => {
+  const cases = [
+    ["retired-name: Assent as the framework outside annotated legacy context", [
+      "(*Assent*, the framework's former name, is legacy vocabulary)",
+      "`README.md` is symlinked into the Obsidian vault (`00.89 Assent/Build/vault-mcp README.md`)",
+      "overridable via `GOVERNOR_VAULT_CONVENTIONS` (legacy alias `ASSENT_VAULT_CONVENTIONS`)",
+    ]],
+    ["retired-key: modules.governance settings key outside migration context", [
+      "a legacy `modules.governance` row is adopted once by the settings shim",
+      "migrated from `modules.governance` in 0.12.0",
+    ]],
+    ["retired-path: ~/.claude/vault-mcp asserted as the canonical state dir", [
+      "a grace-period compat surface at the old `~/.claude/vault-mcp/` state dir",
+      "writes a legacy discovery copy into `~/.claude/vault-mcp/`",
+    ]],
+  ];
+  for (const [id, lines] of cases) {
+    const rule = RULES.find((r) => r.id === id);
+    assert.ok(rule, `rule "${id}" exists`);
+    for (const line of lines) {
+      assert.ok(
+        !rule.pattern.test(line) || rule.allowIf.test(line),
+        `legit legacy mention would be flagged by "${id}": ${line}`
+      );
+    }
   }
 });
 

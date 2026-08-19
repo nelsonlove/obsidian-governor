@@ -17,6 +17,7 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { VocabRegistry, DEFAULT_VOCABULARIES, type VocabInstanceSettings } from "../kernel/vocab/registry.js";
 import { makeRegistry, DEFAULT_SCHEMES, type SchemeInstanceConfig } from "../kernel/scheme/registry.js";
 import { buildSnapshot } from "./snapshot.js";
+import { envAliased } from "../env-alias.js";
 import { intendedRealPath, sameFile, isInside } from "./path-identity.js";
 import { runEngine, ENGINE_ID } from "./engine.js";
 import { vocabPack, schemePack, structurePack, portPack, stePack, driftPack } from "./packs/index.js";
@@ -83,7 +84,7 @@ export interface RunResult {
 
 export async function runConformance(opts: RunOpts): Promise<RunResult> {
   // boundary: opts.root — cli.ts already resolves `root` explicitly (--root=,
-  // ASSENT_CONTENT_ROOT, or the .obsidian-ancestor walk), so it IS this run's
+  // GOVERNOR_CONTENT_ROOT, or the .obsidian-ancestor walk), so it IS this run's
   // declared boundary; buildSnapshot's own guard (#157) still refuses
   // unconditionally into ~/obsidian-old / 80-89 / a hold regardless of this.
   const snapshot = await buildSnapshot({ root: opts.root, excludedRoots: opts.excludedRoots, boundary: opts.root });
@@ -154,7 +155,7 @@ export async function runConformance(opts: RunOpts): Promise<RunResult> {
  * So the default is EMPTY (govern everything, the safe default for an unknown
  * vault), and exclusions arrive from the invocation:
  *   --exclude=<root>            repeatable
- *   ASSENT_EXCLUDED_ROOTS       comma-separated
+ *   GOVERNOR_EXCLUDED_ROOTS       comma-separated
  * A vault that wants an archive excluded says so where its own configuration
  * lives, which is also what makes the exclusion auditable per-run rather than
  * invisible in a binary.
@@ -168,7 +169,7 @@ export function excludedRootsFrom(argv: string[], env: Record<string, string | u
     .map((a) => a.slice("--exclude=".length).trim())
     .filter(Boolean);
   if (flags.length) return flags;
-  return (env.ASSENT_EXCLUDED_ROOTS ?? "")
+  return (envAliased(env, "EXCLUDED_ROOTS") ?? "")
     .split(",")
     .map((r) => r.trim())
     .filter(Boolean);
@@ -177,7 +178,7 @@ export function excludedRootsFrom(argv: string[], env: Record<string, string | u
 /**
  * The identity stamped as `acceptedBy` on keys newly entering the baseline at
  * `--rebaseline` (issue #211). `--accepted-by=<name>`, else
- * `ASSENT_ACCEPTED_BY`, else the literal "human". Never an agent identity — the
+ * `GOVERNOR_ACCEPTED_BY`, else the literal "human". Never an agent identity — the
  * sidecar write only happens at the human-run rebaseline, and this only names
  * WHICH human. Blank/whitespace falls through to the default.
  */
@@ -185,19 +186,19 @@ export const DEFAULT_ACCEPTED_BY = "human";
 export function acceptedByFrom(argv: string[], env: Record<string, string | undefined>): string {
   const flag = argv.find((a) => a.startsWith("--accepted-by="))?.slice("--accepted-by=".length).trim();
   if (flag) return flag;
-  const e = (env.ASSENT_ACCEPTED_BY ?? "").trim();
+  const e = (envAliased(env, "ACCEPTED_BY") ?? "").trim();
   return e || DEFAULT_ACCEPTED_BY;
 }
 
 /**
  * The debt budget for this invocation (issue #211): `--debt-budget=<n>`, else
- * `ASSENT_DEBT_BUDGET`, else null (off). A non-numeric or negative value is
+ * `GOVERNOR_DEBT_BUDGET`, else null (off). A non-numeric or negative value is
  * ignored (off) rather than throwing — the budget is a soft guardrail.
  */
 export function debtBudgetFrom(argv: string[], env: Record<string, string | undefined>): number | null {
   const raw =
     argv.find((a) => a.startsWith("--debt-budget="))?.slice("--debt-budget=".length).trim() ??
-    (env.ASSENT_DEBT_BUDGET ?? "").trim();
+    (envAliased(env, "DEBT_BUDGET") ?? "").trim();
   if (!raw) return null;
   const n = Number(raw);
   return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
@@ -211,14 +212,14 @@ export function isoDate(now: Date): string {
 
 /**
  * The staleness threshold (days) for a register render (issue #211, Part B):
- * `--stale-after=<n>`, else `ASSENT_STALE_AFTER_DAYS`, else the shared default
+ * `--stale-after=<n>`, else `GOVERNOR_STALE_AFTER_DAYS`, else the shared default
  * (90). `0` disables the check; a non-numeric or negative value falls back to
  * the default — a soft display knob, never a refusal.
  */
 export function staleAfterFrom(argv: string[], env: Record<string, string | undefined>): number {
   const raw =
     argv.find((a) => a.startsWith("--stale-after="))?.slice("--stale-after=".length).trim() ??
-    (env.ASSENT_STALE_AFTER_DAYS ?? "").trim();
+    (envAliased(env, "STALE_AFTER_DAYS") ?? "").trim();
   if (!raw) return DEFAULT_STALE_AFTER_DAYS;
   const n = Number(raw);
   return Number.isFinite(n) && n >= 0 ? Math.floor(n) : DEFAULT_STALE_AFTER_DAYS;
@@ -226,14 +227,14 @@ export function staleAfterFrom(argv: string[], env: Record<string, string | unde
 
 /**
  * An explicit register directory for this invocation (issue #211, Part B):
- * `--register-dir=<path>`, else `ASSENT_REGISTER_DIR`, else null — the caller
+ * `--register-dir=<path>`, else `GOVERNOR_REGISTER_DIR`, else null — the caller
  * then defaults to the baseline's own folder, where the sidecar and trend log
  * already live. Relative values are root-relative (resolved by the caller).
  */
 export function registerDirFrom(argv: string[], env: Record<string, string | undefined>): string | null {
   const flag = argv.find((a) => a.startsWith("--register-dir="))?.slice("--register-dir=".length).trim();
   if (flag) return flag;
-  const e = (env.ASSENT_REGISTER_DIR ?? "").trim();
+  const e = (envAliased(env, "REGISTER_DIR") ?? "").trim();
   return e || null;
 }
 
@@ -362,7 +363,7 @@ export function coverageRefusal(
  *
  * Replaces `isLiveBaseline` (#144), which decided over `join(resolve(root),
  * BASELINE_REL)` — and `root` is caller-controlled (`--root` / the
- * `ASSENT_CONTENT_ROOT` env var). Pointing `--root` somewhere harmless and
+ * `GOVERNOR_CONTENT_ROOT` env var). Pointing `--root` somewhere harmless and
  * `--baseline=` at the real acceptance record made the live record read as "not
  * live", and it was rewritten at exit 0. The first fix removed *argv shape* as
  * the proxy for "which file this writes" and substituted `root`, which is
@@ -535,7 +536,7 @@ function renderReport(
  *
  * A CONVENTION, not a law of the plugin: it is where this fleet's vault keeps
  * its baseline, and any other vault will keep it somewhere else. Overridable
- * without a release via `ASSENT_BASELINE_REL` (vault-relative) or `--baseline=`
+ * without a release via `GOVERNOR_BASELINE_REL` (vault-relative) or `--baseline=`
  * (absolute), so the default is a starting point rather than a hardcoded
  * assumption about somebody's folder layout.
  */
@@ -543,7 +544,7 @@ export const DEFAULT_BASELINE_REL = "Assent/Build/conformance/Conformance baseli
 
 /** The baseline's vault-relative path for this invocation. */
 export function baselineRelFrom(env: Record<string, string | undefined>): string {
-  const v = (env.ASSENT_BASELINE_REL ?? "").trim();
+  const v = (envAliased(env, "BASELINE_REL") ?? "").trim();
   return v || DEFAULT_BASELINE_REL;
 }
 const FENCE = "```ratchet-baseline";
@@ -554,7 +555,9 @@ const FENCE = "```ratchet-baseline";
  * decides whether `discoverRoot`'s walk may run at all; the walk itself has
  * no fallback of its own once that gate has passed.
  */
-export const ALLOW_ROOT_DISCOVERY_ENV = "ASSENT_ALLOW_ROOT_DISCOVERY";
+export const ALLOW_ROOT_DISCOVERY_ENV = "GOVERNOR_ALLOW_ROOT_DISCOVERY";
+/** Pre-0.12.0 spelling, still honored as a fallback alias (env-alias.ts). */
+export const LEGACY_ALLOW_ROOT_DISCOVERY_ENV = "ASSENT_ALLOW_ROOT_DISCOVERY";
 
 /** The same opt-in, spelled as an argv flag for one-off interactive use
  * without exporting an env var. Either form is sufficient. */
@@ -568,7 +571,7 @@ function truthyEnv(v: string | undefined): boolean {
 
 /**
  * The reason `runCli` may not fall back to `discoverRoot`'s upward filesystem
- * walk, or null when it may proceed — either because `ASSENT_CONTENT_ROOT` is
+ * walk, or null when it may proceed — either because `GOVERNOR_CONTENT_ROOT` is
  * set (`discoverRoot` will use it directly and never walk), or because the
  * walk itself has been explicitly opted into.
  *
@@ -586,8 +589,8 @@ function truthyEnv(v: string | undefined): boolean {
  * doesn't have to spell out `--root=`) and was NOT the vector that caused the
  * #157 breach — that was a standalone script, not this CLI. So it is kept,
  * not deleted, but demoted from silent default to an explicit opt-in:
- * `--discover-root` or `ASSENT_ALLOW_ROOT_DISCOVERY=1`. Absent both, and
- * absent `ASSENT_CONTENT_ROOT`, this refuses — naming every way to proceed
+ * `--discover-root` or `GOVERNOR_ALLOW_ROOT_DISCOVERY=1`. Absent both, and
+ * absent `GOVERNOR_CONTENT_ROOT`, this refuses — naming every way to proceed
  * rather than guessing one.
  *
  * A discovered root (opt-in path) is not a bypass of #168's guard: `runCli`
@@ -597,24 +600,27 @@ function truthyEnv(v: string | undefined): boolean {
  * gates whether the walk may run at all, never what it is allowed to find.
  */
 export function rootDiscoveryRefusal(argv: string[], env: Record<string, string | undefined>): string | null {
-  if (env.ASSENT_CONTENT_ROOT) return null;
-  if (argv.includes(DISCOVER_ROOT_FLAG) || truthyEnv(env[ALLOW_ROOT_DISCOVERY_ENV])) return null;
+  if (envAliased(env, "CONTENT_ROOT")) return null;
+  if (argv.includes(DISCOVER_ROOT_FLAG) || truthyEnv(envAliased(env, "ALLOW_ROOT_DISCOVERY"))) return null;
   return (
-    `refusing to run: no content root declared. Set ASSENT_CONTENT_ROOT=<path>, or pass --root=<path>, naming ` +
+    `refusing to run: no content root declared. Set GOVERNOR_CONTENT_ROOT=<path> (legacy alias ` +
+    `ASSENT_CONTENT_ROOT), or pass --root=<path>, naming ` +
     `the vault to run against. There is no default to $HOME, the current working directory, or any hardcoded ` +
-    `path. (Interactive dev convenience only: ${DISCOVER_ROOT_FLAG} or ${ALLOW_ROOT_DISCOVERY_ENV}=1 opts back ` +
+    `path. (Interactive dev convenience only: ${DISCOVER_ROOT_FLAG} or ${ALLOW_ROOT_DISCOVERY_ENV}=1 (legacy ` +
+    `${LEGACY_ALLOW_ROOT_DISCOVERY_ENV}=1) opts back ` +
     `into walking upward from the current directory for a \`.obsidian\` ancestor — a root found this way is ` +
     `still subject to the same deny-list and boundary checks as any other.)`
   );
 }
 
-/** ASSENT_CONTENT_ROOT wins, else walk up from `start` to the `.obsidian`
+/** GOVERNOR_CONTENT_ROOT (legacy alias ASSENT_CONTENT_ROOT) wins, else walk up
+ * from `start` to the `.obsidian`
  * ancestor (the same discovery the Python scripts use), else `start`. Only
  * ever called after `rootDiscoveryRefusal` has returned null for the current
  * argv/env — see that function for why the walk is no longer reached by
  * default. */
 function discoverRoot(start: string): string {
-  const env = process.env.ASSENT_CONTENT_ROOT;
+  const env = envAliased(process.env, "CONTENT_ROOT");
   if (env) return resolve(env);
   let dir = resolve(start);
   for (;;) {
@@ -679,7 +685,7 @@ export async function runCli(argv: string[]): Promise<void> {
   if (rootArg) {
     root = resolve(rootArg);
   } else {
-    // No --root=: either ASSENT_CONTENT_ROOT is set (discoverRoot uses it
+    // No --root=: either GOVERNOR_CONTENT_ROOT is set (discoverRoot uses it
     // directly, no walk) or the caller opted into the upward walk. Absent
     // both, refuse rather than let discoverRoot manufacture a boundary by
     // guessing — see rootDiscoveryRefusal.
@@ -749,7 +755,7 @@ export async function runCli(argv: string[]): Promise<void> {
 
   // ── the human-facing register (issue #211, Part B) ─────────────────────────
   // `--render-register` writes `Conformance debt.md` (default: beside the
-  // baseline; `--register-dir=`/`ASSENT_REGISTER_DIR` overrides). At
+  // baseline; `--register-dir=`/`GOVERNOR_REGISTER_DIR` overrides). At
   // `--rebaseline` an EXISTING register is refreshed automatically — the debt
   // set just changed under it — but one is never created unasked. DERIVED
   // output only: it never touches the baseline or the sidecar.

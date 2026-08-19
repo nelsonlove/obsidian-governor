@@ -41,8 +41,8 @@ Known-overstated section instead — see its header for the format.
 
 - Governor is an Obsidian plugin that connects AI agents (Claude Code, or anything that speaks MCP) to your vault the *governed* way: agents see your vault the way Obsidian does, every change they make is recorded and attributed, and one rule is enforced at the shared write primitive: **an agent cannot mark its own work as accepted through it.
 - **A paper trail for everything.** Every mutating operation through the plugin's guarded path lands in an append-only journal: what happened, to which note, by which agent, in which session — and, when the agent says so, *why*. (The optional headless FS-fallback mode is a documented exception — see [Honest limits](#honest-limits).) "What did it do while I was out" becomes a file you can read.
-- Reviewing and accepting is meant to happen only in a human-only review pane (the companion **Acceptance** plugin) — never through the API on the surfaces the guard covers today; the surfaces it doesn't cover yet are named, tracked gaps, not silent ones (see [Honest limits](#honest-limits)).
-- Open the journal (or the Acceptance pane, if installed): every change is there, attributed, diffable, waiting for your verdict.
+- Reviewing and accepting is meant to happen only in the plugin's human-only review pane (the **acceptance module**) — never through the API on the surfaces the guard covers today; the surfaces it doesn't cover yet are named, tracked gaps, not silent ones (see [Honest limits](#honest-limits)).
+- Open the journal (or the review pane, if the acceptance module is enabled): every change is there, attributed, diffable, waiting for your verdict.
 - **Acceptance is a human gesture, and it goes in no API.** There is no accept tool, no accept argument, and no way to smuggle acceptance in as data **through the shared write primitive**: it rejects any write that would introduce `acceptance-status: accepted` (or `accepted-by` / `accepted-on`), on every write surface that routes through it — including the CLI proxy — while leaving your own existing accepted values untouched.
 - The guarantee is narrower and real: nothing arriving through a surface the guard covers can forge acceptance, every write on the plugin's guarded path is journaled, and out-of-band changes surface as drift.
 - Every claim above about journaling is scoped to the plugin's guarded path, not this fallback.
@@ -53,7 +53,7 @@ Known-overstated section instead — see its header for the format.
 
 - | **[acceptance-model.md](acceptance-model.md)** | **The heart of the design.** Acceptance is human-only — "the accept verb goes in no API." The accept-forbidden guard at the shared write primitive, on every write surface that routes through it (including the CLI proxy), and its documented residuals (tracked publicly; not yet all closed). |
 - **Agents can stamp identity** (a created-seeded UUIDv7 `uid`, `created`/`modified`, canonical frontmatter order) and **attach an advisory `intent`** ("why I'm making this change") that rides the journal record — but stamping itself **never writes acceptance** (it defaults and preserves `acceptance-status`, never mints or elevates it); the guard against acceptance arriving by other routes is the shared write primitive, and its known gaps are tracked (see the top-level [README's Honest limits](../README.md#honest-limits)).
-- **The human keeps the sole accept veto — by design, and by enforcement on the surfaces the guard covers.** Acceptance is a gesture made in the **[Acceptance review surface](#the-acceptance-review-surface)** — never through a tool, agent, or CLI call the guard sees.
+- **The human keeps the sole accept veto — by design, and by enforcement on the surfaces the guard covers.** Acceptance is a gesture made in the **[acceptance module](#the-acceptance-module)** — never through a tool, agent, or CLI call the guard sees.
 - The acceptance model's guarantees below are stated for the **plugin's guarded write surfaces**; these issues are the honest boundary of that claim until closed.
 - "Every write is journaled" is true of the **plugin's kernel-guarded path** only, never of this fallback.
 
@@ -108,7 +108,7 @@ Known-overstated section instead — see its header for the format.
   data.json, mutable by any local process outside the plugin's transports — the same
   residual the class allowlist documents (a tampered list can only extend the perimeter;
   the floor is hardcoded).
-- The governance module's `honoredValueFromBlessed` reads the accepted **baseline** — never the raw frontmatter — so a value sneaked in through a side door (another plugin, a script, Sync) is **inert** until blessed.
+- The acceptance module's `honoredValueFromBlessed` reads the accepted **baseline** — never the raw frontmatter — so a value sneaked in through a side door (another plugin, a script, Sync) is **inert** until blessed.
   substantiated 2026-08-18 (#224/#135): honoredValueFromBlessed takes the blessed CONTENT
   (wiring reads it off the BaselineStore) and has no raw-note read path; baselines advance
   only via Accept / attributed human edit / adopt / auto-accept, each blessed by
@@ -162,10 +162,10 @@ Known-overstated section instead — see its header for the format.
 
 ## docs/kernel-v0.md
 
-- Every mutating operation appends **one JSONL line** to `.obsidian/plugins/vault-mcp/journal/YYYY-MM.jsonl` (rolled monthly, inside the plugin's own folder, not the note tree).
+- Every mutating operation appends **one JSONL line** to `.obsidian/plugins/governor/journal/YYYY-MM.jsonl` (rolled monthly, inside the plugin's own folder, not the note tree).
 - A failed journal write is logged to console and dropped; it never fails the vault operation.
 - Claiming and releasing are treated as **mutating** (journaled with `target.ref = scope:<prefix>` / `lock:<id>`), so **read-only mode blocks claiming and releasing** — there is nothing for a claim to disclose in a session that cannot write.
-- Every journal record's `actor.server` carries a persistent **install id** — minted once and kept beside the journal in `.obsidian/plugins/vault-mcp/install-id.json` (`packages/plugin/src/kernel/install-id.js`) — plus the **vault name** and plugin **version**.
+- Every journal record's `actor.server` carries a persistent **install id** — minted once and kept beside the journal in `.obsidian/plugins/governor/install-id.json` (`packages/plugin/src/kernel/install-id.js`) — plus the **vault name** and plugin **version**.
 - They are declared generically on **every mutating registration** (`withKernelArgs` in `packages/plugin/src/mcp/guarded.ts`) and consumed generically (stripped from args and passed to `Kernel.runMutation`).
 
 ## docs/modules.md
@@ -177,10 +177,10 @@ Known-overstated section instead — see its header for the format.
 
 ## docs/reference.md
 
-- Every mutating operation also appends **one JSONL line** to `.obsidian/plugins/vault-mcp/journal/YYYY-MM.jsonl` (rolled monthly, inside the plugin's own folder rather than the note tree):
+- Every mutating operation also appends **one JSONL line** to `.obsidian/plugins/governor/journal/YYYY-MM.jsonl` (rolled monthly, inside the plugin's own folder rather than the note tree):
 - If a journal write fails it is logged to the console and dropped; it never fails the vault operation.
-- Safety guards that apply: read-only mode always applies (mutating external tools are blocked when read-only is on); the path allowlist scopes arguments under recognized path keys (path, from, to, paths, and a few others) — when an allowlist is active, mutating external tools whose args carry no recognized path key are blocked outright, since vault-mcp cannot scope the call.
-- `readOnly: true` on a published tool is an assertion by a third-party plugin about code vault-mcp cannot inspect — and believing it exempts that tool from the write queue, the journal, the path allowlist, the kernel arguments, and read-only mode, all at once.
+- Safety guards that apply: read-only mode always applies (mutating external tools are blocked when read-only is on); the path allowlist scopes arguments under recognized path keys (path, from, to, paths, and a few others) — when an allowlist is active, mutating external tools whose args carry no recognized path key are blocked outright, since Governor cannot scope the call.
+- `readOnly: true` on a published tool is an assertion by a third-party plugin about code Governor cannot inspect — and believing it exempts that tool from the write queue, the journal, the path allowlist, the kernel arguments, and read-only mode, all at once.
 
 ## docs/reference.md (#264 record immutability)
 

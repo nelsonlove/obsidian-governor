@@ -23,6 +23,7 @@
 
 import { sep } from "node:path";
 import { intendedRealPath, isInside } from "../../conformance/path-identity.js";
+import { envAliased } from "../../env-alias.js";
 
 // Dotfile/dot-directory segments only — matches walk()'s own ignore rule, so
 // a mirror root can't resolve through something the walk would then silently
@@ -49,7 +50,9 @@ function deniedTerritory(realPath: string): string | null {
  *  invented for this module. NO fallback: absence is a refusal, decided by
  *  the caller, not a default guessed here. */
 function declaredBoundary(): string | null {
-  return process.env.ASSENT_CONTENT_ROOT ?? process.env.ASSENT_VAULT_ROOT ?? null;
+  return (
+    envAliased(process.env, "CONTENT_ROOT") ?? envAliased(process.env, "VAULT_ROOT") ?? null
+  );
 }
 
 export type BoundaryRefusal =
@@ -92,7 +95,7 @@ export function boundaryRefusalMessage(r: BoundaryRefusal): string {
     case "denied_territory":
       return `"${r.path}" resolves through a denied path segment ("${r.territory}").`;
     case "no_boundary_declared":
-      return "no content-root boundary declared — set ASSENT_CONTENT_ROOT (or ASSENT_VAULT_ROOT).";
+      return "no content-root boundary declared — set GOVERNOR_CONTENT_ROOT (or GOVERNOR_VAULT_ROOT; legacy ASSENT_* spellings accepted).";
     case "boundary_unresolvable":
       return `the declared boundary "${r.boundary}" could not be resolved.`;
     case "outside_boundary":

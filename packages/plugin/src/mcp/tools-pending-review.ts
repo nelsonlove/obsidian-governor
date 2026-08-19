@@ -44,13 +44,14 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { App } from "obsidian";
 import { ok } from "./helpers.js";
+import { PLUGIN_ID } from "../id-migration.js";
 import { isVisible, type GuardSettings } from "../guard.js";
 
 const RO = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 
 /**
  * Where the governance module publishes its review-queue index, relative to the vault-mcp
- * PLUGIN dir (`<config dir>/plugins/vault-mcp` unless Obsidian reports otherwise) — built
+ * PLUGIN dir (`<config dir>/plugins/governor` unless Obsidian reports otherwise) — built
  * from `app.vault.configDir` (not a hardwired `.obsidian`), so a vault with a renamed config
  * dir still resolves, matching how the journal and install-id build their own plugin-dir
  * paths. Must agree with `pendingIndexPath` in src/governance/wiring.ts.
@@ -70,12 +71,12 @@ export interface PendingReviewSource {
 /**
  * The live adapter: reads `<plugin dir>/governance/pending-index.json` through Obsidian's
  * vault adapter. `pluginDir` comes from the host (manifest.dir); absent, the default
- * `<config dir>/plugins/vault-mcp` is used. Absent file ⇒ `null`; ANY read error is
+ * `<config dir>/plugins/<PLUGIN_ID>` is used. Absent file ⇒ `null`; ANY read error is
  * swallowed to `null` too — the TOOL then reports the explicit not-published state, so a
  * broken read degrades to a visible "not published", never a throw and never a silent empty.
  */
 export function obsidianPendingReviewSource(app: App, pluginDir?: string): PendingReviewSource {
-  const dir = pluginDir ?? `${app.vault.configDir}/plugins/vault-mcp`;
+  const dir = pluginDir ?? `${app.vault.configDir}/plugins/${PLUGIN_ID}`;
   const path = `${dir}/${PENDING_INDEX_REL}`;
   return {
     async read() {

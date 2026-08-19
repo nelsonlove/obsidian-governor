@@ -22,7 +22,7 @@ write is agent-expressible through the guarded path.
 
 Phase 1 (#101/#228) proved the shape on the live acceptance instance; phase 2
 extracted the generic descriptor shape into `kernel/triage/dispositions.ts` —
-the **disposition substrate**, still shared verbatim with the governance
+the **disposition substrate**, still shared verbatim with the acceptance
 instance (`kernel/governance/dispositions.ts`, untouched by phase 3). The
 triage instance's **frozen code-level table** is now the three built-ins
 (`kernel/triage/descriptors.ts`), all `authority: "agent"`. Declared rows are
@@ -119,7 +119,7 @@ code path `obsidian_run_command`'s `variables` form rides), receiving
   binding id) in its args digest; the row→choice mapping is auditable config.
   The script's own writes are not itemized by this tool (`effects_unknown:
   true`, no `filesChanged` claim) — but script writes are not
-  human-attributed, so they **surface in the governance review queue via
+  human-attributed, so they **surface in the acceptance review queue via
   non-human attribution**: the existing reconciler audit net, defense in
   depth consistent with the fallible-not-adversarial model.
 - QuickAdd absent/binding unresolved ⇒ typed refusals

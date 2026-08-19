@@ -29,10 +29,12 @@ interface VaultModule {
 
 - **`capability`** — faces agents; contributes tools.
 - **`governance`** — faces the human; a deliberately one-way, read-only surface (the shape of
-  [Acceptance](README.md#the-acceptance-review-surface), the review plugin). **The v1 host
-  refuses governance modules outright** at construction — folding the governance module in
-  (#83) is gated on a fresh accept-reachability review of the merged topology. The posture
-  exists in the type now so the contract already models the asymmetry.
+  the [acceptance module](README.md#the-acceptance-module)'s review pane). **The v1 host
+  refuses governance-postured modules outright** at construction. The fold (#83) landed by
+  clearing that gate rather than lifting it: the acceptance module (module id `acceptance`;
+  the posture name `governance` is unrelated to the retired module id of the same spelling)
+  declares posture `capability` and contributes ZERO MCP tools — its whole surface is the
+  in-Obsidian pane. The posture exists in the type so the contract models the asymmetry.
 
 ## Registration goes *through* the registry — the key property
 
@@ -114,7 +116,7 @@ type ModuleSettings = Record<string, { enabled?: boolean; config?: Record<string
 ```
 
 - **`modules.<id>.enabled`** overrides the module's default. The **Modules** section of the
-  vault-mcp settings tab (`connection-ui.ts`) renders a toggle per module ("Scope provider
+  plugin settings tab (`connection-ui.ts`) renders a toggle per module ("Scope provider
   module", "Vocabulary provider module") writing this flag.
 - **`modules.<id>.config`** is merged over the module's `settingsSchema.defaults` (shallow).
 - **When it takes effect.** Config the *handlers* read (allowlist, scheme rows, vocabularies) is
@@ -124,13 +126,13 @@ type ModuleSettings = Record<string, { enabled?: boolean; config?: Record<string
   tool count from 56 to 51 on the next connect (the 5 scheme tools gone, vocab intact), and
   re-enabling restored it — while `jd:` addressing kept resolving at the kernel level even with
   the module off.
-  - **Exception — the governance module's Obsidian surface mounts LIVE.** Governance contributes
+  - **Exception — the acceptance module's Obsidian surface mounts LIVE.** Acceptance contributes
     zero MCP tools; its `enabled` flag gates an in-Obsidian *review pane + gavel ribbon*, not a
     tool surface. That pane now **mounts/unmounts the moment the toggle flips, with no plugin
     reload** (`main.ts setGovernanceMounted` → `wireGovernance` returns a child `Component` the
     plugin `removeChild`s on disable). Its badge-display config is still read live per refresh.
     The always-on read-only `obsidian_pending_review` MCP view is unaffected by the toggle either
-    way. This live behavior is scoped to governance; every other module stays next-connect.
+    way. This live behavior is scoped to that one module; every other module stays next-connect.
 
 ## The two built-in modules
 

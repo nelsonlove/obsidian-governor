@@ -16,26 +16,38 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 const verbose = process.argv.includes("--verbose");
-const DIR = path.join(os.homedir(), ".claude", "vault-mcp");
+// 0.12.0 id migration: the canonical state dir is ~/.claude/governor/; the old
+// ~/.claude/vault-mcp/ is still read so a pre-migration plugin is seen too.
+// Entries marked `legacy: true` in the old dir are the new plugin's own compat
+// copies of files already present in the new dir — skipped, or one vault would
+// count twice.
+const DIR = path.join(os.homedir(), ".claude", "governor");
+const LEGACY_DIR = path.join(os.homedir(), ".claude", "vault-mcp");
 const FIX =
-  "open Obsidian and enable the 'Vault MCP' plugin (Settings → Community plugins), then run /mcp and reconnect vault-mcp";
+  "open Obsidian and enable the 'Governor' plugin (Settings → Community plugins), then run /mcp and reconnect (server name 'governor'; pre-0.12.0 registrations were named 'vault-mcp')";
 
-function readDiscoveries() {
+function readDiscoveryDir(dir, skipLegacy) {
   let files = [];
   try {
-    files = fs.readdirSync(DIR).filter((f) => f.endsWith(".json"));
+    files = fs.readdirSync(dir).filter((f) => f.endsWith(".json"));
   } catch {
     return [];
   }
   const out = [];
   for (const f of files) {
     try {
-      out.push(JSON.parse(fs.readFileSync(path.join(DIR, f), "utf8")));
+      const d = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8"));
+      if (skipLegacy && d.legacy === true) continue;
+      out.push(d);
     } catch {
       /* skip malformed discovery */
     }
   }
   return out;
+}
+
+function readDiscoveries() {
+  return [...readDiscoveryDir(DIR, false), ...readDiscoveryDir(LEGACY_DIR, true)];
 }
 
 // A socket file on disk isn't proof of life — probe it for a real connection.
@@ -78,7 +90,7 @@ async function main() {
     // Never installed / plugin has never run — not our place to nag a session.
     return report({
       ok: false,
-      plain: `vault-mcp: no vault discovery found in ${DIR} — the Obsidian 'Vault MCP' plugin hasn't run yet.`,
+      plain: `vault-mcp: no vault discovery found in ${DIR} (or the legacy ${LEGACY_DIR}) — the Obsidian 'Governor' plugin hasn't run yet.`,
       context: null,
     });
   }
@@ -92,7 +104,7 @@ async function main() {
   if (live.length > 0) {
     return report({
       ok: true,
-      plain: `vault-mcp: live ✓  vault(s): ${live.join(", ")} — mcp__vault-mcp__* tools are available.`,
+      plain: `vault-mcp: live ✓  vault(s): ${live.join(", ")} — tools are available (mcp__governor__*, or mcp__vault-mcp__* on a pre-0.12.0 registration).`,
       context: null, // healthy → stay silent in the session
     });
   }
@@ -102,7 +114,7 @@ async function main() {
   return report({
     ok: false,
     plain: `vault-mcp: DOWN — discovery exists (${dead.join(", ") || "unknown"}) but no socket is accepting. Fix: ${FIX}.`,
-    context: `vault-mcp is not serving a socket right now (Obsidian closed or the 'Vault MCP' plugin disabled), so every mcp__vault-mcp__* tool call will fail this session. To use them, ${FIX}. Stale discovery: ${dead.join(", ") || "none"}.`,
+    context: `vault-mcp is not serving a socket right now (Obsidian closed or the 'Governor' plugin disabled), so every mcp__governor__* (or legacy mcp__vault-mcp__*) tool call will fail this session. To use them, ${FIX}. Stale discovery: ${dead.join(", ") || "none"}.`,
   });
 }
 
