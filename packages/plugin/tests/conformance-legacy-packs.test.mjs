@@ -16,6 +16,8 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { structurePack, portPack, stePack, DEFAULT_BLUEPRINT_ROOT } from "../src/conformance/packs/index.ts";
+import { proseLines, steHits } from "../src/conformance/packs/ste.ts";
+import { portHits } from "../src/conformance/packs/port.ts";
 
 function snapshot({ sources = [], blueprints = [] } = {}) {
   return { notes: [], paths: sources.map((s) => s.path), sources, blueprints };
@@ -214,5 +216,154 @@ describe("stePack (ste_lint)", () => {
   test("Assent and _staging roots are out of scope", () => {
     assert.deepEqual(run1("bad; text\n", "Assent/x.md"), []);
     assert.deepEqual(run1("bad; text\n", "_hold/y.md"), []);
+  });
+});
+
+// ── #227: ste frontmatter recognition binds to the shared core recognizer ─────
+
+describe("stePack (#227) — BOM'd frontmatter is exempt via the shared recognizer", () => {
+  const run1 = (text, path = "Notes/prose.md") =>
+    stePack().run(snapshot({ sources: [{ path, text }] }));
+
+  test("a BOM'd note's frontmatter is exempt (was linted as prose)", () => {
+    // Pre-fix, `lines[0] === "---"` failed on a BOM-prefixed "---", so `desc:` was
+    // scanned as prose and flagged. The shared recognizer looks past the BOM.
+    const bommed = "\uFEFF---\ndesc: it should be fine; really\n---\nPlain prose here.\n";
+    assert.deepEqual(run1(bommed), []);
+  });
+
+  test("a BOM'd note's body hits keep original-text line numbers", () => {
+    const bommed = "\uFEFF---\na: 1\nb: 2\n---\nWe should go.\n";
+    const hits = steHits(bommed);
+    assert.equal(hits.length, 1);
+    assert.equal(hits[0].name, "modal");
+    assert.equal(hits[0].token, "should");
+    assert.equal(hits[0].line, 5, "body line numbers are 1-based positions in the ORIGINAL text");
+  });
+
+  test("byte-stability: an ordinary exact-`---` fence yields the identical scan (keys unmoved)", () => {
+    // The exact shape the Python scan recognized — the recognizer must agree
+    // with it line-for-line so BOM-less finding keys do not shift (#209).
+    const text = "---\ndesc: should is exempt\n---\nWe should go; it's time.\n";
+    assert.deepEqual(proseLines(text), [
+      { line: 4, text: "We should go; it's time." },
+      { line: 5, text: "" }, // the trailing empty line, exactly as the Python scan yielded it
+    ]);
+    const kinds = run1(text).map((f) => f.kind).sort();
+    assert.deepEqual(kinds, ["contraction 'it's'", "modal 'should'", "semicolon ';'"]);
+  });
+
+  test("byte-stability: no frontmatter, and an UNTERMINATED fence, scan the whole text (as the Python did)", () => {
+    assert.deepEqual(proseLines("plain line\n"), [
+      { line: 1, text: "plain line" },
+      { line: 2, text: "" },
+    ]);
+    // Opener with no closer: the Python scanned everything from line 1; the
+    // recognizer finds no block and does the same.
+    const unterminated = "---\nkey: should\n";
+    assert.deepEqual(proseLines(unterminated), [
+      { line: 1, text: "---" },
+      { line: 2, text: "key: should" },
+      { line: 3, text: "" },
+    ]);
+  });
+});
+
+// ── #112a (pinned): ASCII word boundaries are the rail's own semantics ────────
+
+describe("ASCII word boundaries are the rail's own semantics (#112a, pinned)", () => {
+  test("ste: a modal glued to a non-ASCII letter still matches (JS ASCII \\b; Python Unicode \\w did not)", () => {
+    const hits = steHits("wordé shouldé x.\n");
+    assert.equal(hits.length, 1);
+    assert.equal(hits[0].name, "modal");
+    assert.equal(hits[0].token, "should");
+  });
+
+  test("port: a banned token glued to a non-ASCII letter still matches", () => {
+    const hits = portHits("uses Templaterö here\n");
+    assert.equal(hits.length, 1);
+    assert.equal(hits[0].name, "retired tooling");
+    assert.equal(hits[0].token, "Templater");
+  });
+});
+
+// ── #112b (pinned): blueprint basename-collision arbitration is deterministic ─
+
+describe("structurePack (#112b, pinned) — basename collision resolves last-in-sorted-order", () => {
+  const ROOT = DEFAULT_BLUEPRINT_ROOT;
+  const collide = [
+    { path: `${ROOT}/A/Tag.blueprint`, text: "---\n---\n## One\n" },
+    { path: `${ROOT}/Z/Tag.blueprint`, text: "---\n---\n## Two\n" },
+  ];
+
+  test("the sorted-last blueprint wins the basename lookup", () => {
+    const snap = snapshot({
+      blueprints: collide,
+      sources: [{ path: "Notes/two.md", text: '---\nblueprint: "[[Tag.blueprint]]"\n---\n## Two\n' }],
+    });
+    assert.deepEqual(structurePack().run(snap), []); // checked against Z (## Two), not A
+  });
+
+  test("…so a note matching only the sorted-FIRST blueprint is DROPPED", () => {
+    const snap = snapshot({
+      blueprints: collide,
+      sources: [{ path: "Notes/one.md", text: '---\nblueprint: "[[Tag.blueprint]]"\n---\n## One\n' }],
+    });
+    const f = structurePack().run(snap).find((x) => x.check === "DROPPED");
+    assert.ok(f, "expected DROPPED: the arbitration chose Z, whose emitted set lacks ## One");
+    assert.equal(f.kind, "Tag.blueprint");
+  });
+});
+
+// ── #112c: an unresolvable {% include %} is a finding, never a silent zero ────
+
+describe("structurePack (#112c) — UNRESOLVED-INCLUDE", () => {
+  const ROOT = DEFAULT_BLUEPRINT_ROOT;
+
+  test("a governed blueprint including a missing target is a finding (target = bp path, kind = include target)", () => {
+    const bp = {
+      path: `${ROOT}/Scope/ScopeNoteHeader.blueprint`,
+      text: '---\n---\n{% include "…/Default/header.blueprint" %}\n## Body\n',
+    };
+    const f = structurePack()
+      .run(snapshot({ blueprints: [bp] }))
+      .find((x) => x.check === "UNRESOLVED-INCLUDE");
+    assert.ok(f, "expected an UNRESOLVED-INCLUDE finding");
+    assert.equal(f.script, "conformance_check");
+    assert.equal(f.target, `${ROOT}/Scope/ScopeNoteHeader.blueprint`);
+    assert.equal(f.kind, "…/Default/header.blueprint");
+  });
+
+  test("a RESOLVED include is not a finding; identical unresolved sites collapse to one", () => {
+    const header = { path: `${ROOT}/Default/header.blueprint`, text: "## Header\n" };
+    const bp = {
+      path: `${ROOT}/Reg/Reg.blueprint`,
+      text:
+        `---\n---\n{% include "${ROOT}/Default/header.blueprint" %}\n` +
+        '{% include "gone.blueprint" %}\n{% include "gone.blueprint" %}\n',
+    };
+    const found = structurePack()
+      .run(snapshot({ blueprints: [header, bp] }))
+      .filter((x) => x.check === "UNRESOLVED-INCLUDE");
+    assert.equal(found.length, 1);
+    assert.equal(found[0].kind, "gone.blueprint");
+  });
+
+  test("includes inside {# comments #} and ___REST___ sections do not affect emission and are not findings", () => {
+    const bp = {
+      path: `${ROOT}/Quiet/Quiet.blueprint`,
+      text:
+        '---\n---\n{# {% include "commented.blueprint" %} #}\n' +
+        '{% section "___REST___" %}\n{% include "rested.blueprint" %}\n{% endsection %}\n## Body\n',
+    };
+    assert.deepEqual(structurePack().run(snapshot({ blueprints: [bp] })), []);
+  });
+
+  test("ungoverned and underscore-root blueprints are out of scope", () => {
+    const mk = (p) => ({ path: p, text: '---\n---\n{% include "gone.blueprint" %}\n' });
+    const snap = snapshot({
+      blueprints: [mk("Vault archaeology/_maybe/blueprints/gen2/old.blueprint"), mk("_hold/x.blueprint"), mk("Assent/y.blueprint")],
+    });
+    assert.deepEqual(structurePack().run(snap), []);
   });
 });
