@@ -67,7 +67,7 @@ function store(over = {}) {
 describe("observation store — content addressing", () => {
   test("a payload is stored under its own digest", async () => {
     const { store: s, blobs } = store();
-    const ref = await s.put({ body: "hello" });
+    const ref = await s.put({ body: "hello" }, { sources: ["A.md"] });
     assert.equal(ref, payloadDigest({ body: "hello" }));
     assert.ok(await blobs.has(ref));
   });
@@ -77,15 +77,15 @@ describe("observation store — content addressing", () => {
     // duplication go away, and it is also why a payload cannot be silently
     // replaced: a different payload gets a different address.
     const { store: s, blobs } = store();
-    const a = await s.put({ body: "same" });
-    const b = await s.put({ body: "same" });
+    const a = await s.put({ body: "same" }, { sources: ["A.md"] });
+    const b = await s.put({ body: "same" }, { sources: ["A.md"] });
     assert.equal(a, b);
     assert.equal((await blobs.keys()).length, 1);
   });
 
   test("different payloads never share an address", async () => {
     const { store: s } = store();
-    assert.notEqual(await s.put({ body: "a" }), await s.put({ body: "b" }));
+    assert.notEqual(await s.put({ body: "a" }, { sources: ["A.md"] }), await s.put({ body: "b" }, { sources: ["A.md"] }));
   });
 });
 
@@ -96,7 +96,7 @@ describe("observation store — playback is historical, never a fresh read", () 
     // The whole point. A reviewer asking "what was this agent shown?" must get
     // what it was shown, not what the note says now.
     const { store: s } = store();
-    const ref = await s.put({ body: "as it was" });
+    const ref = await s.put({ body: "as it was" }, { sources: ["A.md"] });
     // The vault moves on. The store neither knows nor cares.
     const played = await s.playback(ref, { reader: "human-1" });
     assert.deepEqual(played.payload, { body: "as it was" });
@@ -117,7 +117,7 @@ describe("observation store — playback is historical, never a fresh read", () 
 describe("observation store — integrity", () => {
   test("a corrupted payload is refused, not returned", async () => {
     const { store: s, blobs } = store();
-    const ref = await s.put({ body: "original" });
+    const ref = await s.put({ body: "original" }, { sources: ["A.md"] });
     await blobs.put(ref, JSON.stringify({ body: "tampered" }));
     await assert.rejects(() => s.playback(ref, { reader: "human-1" }), PayloadCorruptError);
   });
@@ -135,7 +135,7 @@ describe("observation store — integrity", () => {
 describe("observation store — playback authorization is current, not historical", () => {
   test("a reader who may not see the sources is refused", async () => {
     const { store: s } = store({ canRead: () => false });
-    const ref = await s.put({ body: "secret" });
+    const ref = await s.put({ body: "secret" }, { sources: ["A.md"] });
     await assert.rejects(() => s.playback(ref, { reader: "human-2" }), PlaybackUnauthorizedError);
   });
 
@@ -153,12 +153,12 @@ describe("observation store — playback authorization is current, not historica
     await s.playback(ref, { reader: "human-2" });
     assert.equal(asked.length, 1);
     assert.equal(asked[0].reader, "human-2");
-    assert.deepEqual(asked[0].sources, ["Secrets/a.md"]);
+    assert.equal(asked[0].source, "Secrets/a.md");
   });
 
   test("a refused playback does not leak the payload through the error", async () => {
     const { store: s } = store({ canRead: () => false });
-    const ref = await s.put({ body: "SENSITIVE" });
+    const ref = await s.put({ body: "SENSITIVE" }, { sources: ["A.md"] });
     await s.playback(ref, { reader: "x" }).catch((e) => {
       assert.ok(!String(e.message).includes("SENSITIVE"));
     });
@@ -172,7 +172,7 @@ describe("observation store — retention and deletion", () => {
     // Pruning evidence does not rewrite an authority claim; it makes the claim
     // locally unverifiable, and the user is told which.
     const { store: s } = store();
-    const ref = await s.put({ body: "x" });
+    const ref = await s.put({ body: "x" }, { sources: ["A.md"] });
     const report = await s.prune([ref]);
     assert.deepEqual(report.removed, [ref]);
     assert.equal(report.stillReferenced.length, 0);
@@ -180,7 +180,7 @@ describe("observation store — retention and deletion", () => {
 
   test("a payload a live claim depends on is NOT pruned", async () => {
     const { store: s } = store({ dependents: (ref) => (ref.endsWith("keep") ? ["proposal-7"] : []) });
-    const ref = await s.put({ body: "x" });
+    const ref = await s.put({ body: "x" }, { sources: ["A.md"] });
     const report = await s.prune([ref, "sha256:keep"]);
     assert.deepEqual(report.removed, [ref]);
     assert.deepEqual(report.stillReferenced, [{ ref: "sha256:keep", dependents: ["proposal-7"] }]);
@@ -199,7 +199,7 @@ describe("observation store — retention and deletion", () => {
 describe("observation store — export carries its own integrity", () => {
   test("an export includes the digest so a consumer can verify it independently", async () => {
     const { store: s } = store();
-    const ref = await s.put({ body: "x" });
+    const ref = await s.put({ body: "x" }, { sources: ["A.md"] });
     const exported = await s.export([ref], { reader: "human-1" });
     assert.equal(exported.length, 1);
     assert.equal(exported[0].ref, ref);
@@ -208,7 +208,55 @@ describe("observation store — export carries its own integrity", () => {
 
   test("export is authorized like playback, because it is playback that leaves the machine", async () => {
     const { store: s } = store({ canRead: () => false });
-    const ref = await s.put({ body: "x" });
+    const ref = await s.put({ body: "x" }, { sources: ["A.md"] });
     await assert.rejects(() => s.export([ref], { reader: "human-2" }), PlaybackUnauthorizedError);
+  });
+});
+
+// ── the sharp edge of content addressing ─────────────────────────────────────
+
+describe("observation store — a shared payload carries every source's provenance", () => {
+  test("two DIFFERENT notes with identical content do not lose the second's source", async () => {
+    // Not exotic here: "standard zeros" creates ten notes from one template.
+    // The first draft made the second put a no-op, so a payload captured from
+    // Secrets/b.md was authorized as if it had come from Public/a.md.
+    const asked = [];
+    const { store: s } = store({
+      canRead: (ctx) => {
+        asked.push(ctx.source);
+        return true;
+      },
+    });
+    const a = await s.put({ body: "# Template\n" }, { sources: ["Public/a.md"] });
+    const b = await s.put({ body: "# Template\n" }, { sources: ["Secrets/b.md"] });
+    assert.equal(a, b, "identical content still shares one object");
+    await s.playback(b, { reader: "x" });
+    assert.deepEqual(asked.sort(), ["Public/a.md", "Secrets/b.md"], "both notes' provenance is carried");
+  });
+
+  test("a reader entitled to ONE source is not thereby entitled to the payload", async () => {
+    // Fail-closed by design. If a payload is shared by a public note and a
+    // private one, replaying it requires authority over both — over-restrictive
+    // rather than over-permissive, which is the only safe direction when the
+    // honest answer to "whose content is this?" is "more than one note's".
+    const { store: s } = store({ canRead: (ctx) => ctx.source.startsWith("Public/") });
+    await s.put({ body: "shared" }, { sources: ["Public/a.md"] });
+    const ref = await s.put({ body: "shared" }, { sources: ["Secrets/b.md"] });
+    await assert.rejects(() => s.playback(ref, { reader: "x" }), PlaybackUnauthorizedError);
+  });
+
+  test("a payload with NO recorded source is refused, not waved through", async () => {
+    // "We do not know where this came from" is not a reason to disclose it.
+    const { store: s } = store();
+    const ref = await s.put({ body: "orphan" });
+    await assert.rejects(() => s.playback(ref, { reader: "x" }), PlaybackUnauthorizedError);
+  });
+
+  test("re-putting with an already-known source does not rewrite the object", async () => {
+    const { store: s, blobs } = store();
+    const ref = await s.put({ body: "x" }, { sources: ["A.md"] });
+    const before = await blobs.get(ref);
+    await s.put({ body: "x" }, { sources: ["A.md"] });
+    assert.equal(await blobs.get(ref), before, "an unchanged source set is not a write");
   });
 });
