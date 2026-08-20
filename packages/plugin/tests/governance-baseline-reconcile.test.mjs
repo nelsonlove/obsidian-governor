@@ -1,0 +1,329 @@
+/**
+ * governance-baseline-reconcile.test.mjs — baselines follow their note.
+ *
+ * The defect: a baseline is keyed by `contentHash(path)`, and a path is a LOCATION, not
+ * an identity. Rename or move a note and its acceptance is silently orphaned — the note
+ * reads as never-accepted with no error anywhere. Measured on the real vault: 158 of 273
+ * baselines had drifted.
+ *
+ * Two halves, both pinned here: `BaselineStore.rekey` (the primitive, exercised against a
+ * fake BlobFs) and `planBaselineReconcile` (the pure decision, which is where every edge
+ * case lives). The Obsidian wiring — the `vault.on("rename")` registration and the
+ * startup pass — is verified by build + reasoning, the same split governance-live-mount
+ * makes.
+ *
+ * The invariant that matters most, and the reason repointing is legitimate at all: a
+ * rekey is a RE-ADDRESSING, never an acceptance. `content`, `hash`, `acceptedAt` and
+ * `acceptedBy` must survive it byte-for-byte — if they didn't, this machinery would be
+ * forging acceptances nobody gave.
+ */
+
+import { test, describe } from "node:test";
+import assert from "node:assert/strict";
+import { BaselineStore } from "../src/kernel/governance/baseline-store.ts";
+import {
+  planBaselineReconcile,
+  uidOfContent,
+  summarizePlan,
+} from "../src/kernel/governance/baseline-reconcile.ts";
+import { contentHash } from "../src/kernel/governance/hash.ts";
+import { baselineRekeyRecord } from "../src/kernel/governance/accept.ts";
+
+/** In-memory BlobFs. */
+function fakeFs(seed = {}) {
+  const files = new Map(Object.entries(seed));
+  return {
+    files,
+    async read(p) { if (!files.has(p)) throw new Error("ENOENT " + p); return files.get(p); },
+    async write(p, d) { files.set(p, d); },
+    async exists(p) { return files.has(p) || p === "base"; },
+    async mkdir() {},
+    async list(dir) { return [...files.keys()].filter((k) => k.startsWith(dir + "/")); },
+    async remove(p) { files.delete(p); },
+  };
+}
+const noteWithUid = (uid, extra = "") => `---\nuid: ${uid}\n${extra}---\n\n# note\n`;
+
+async function storeWith(baselines) {
+  const seed = {};
+  for (const b of baselines) seed[`base/${contentHash(b.path)}.json`] = JSON.stringify(b);
+  const fs = fakeFs(seed);
+  const store = new BaselineStore(fs, "base");
+  await store.load();
+  return { store, fs };
+}
+
+describe("BaselineStore.rekey — re-addressing, not acceptance", () => {
+  const b = {
+    path: "Old/place.md", content: noteWithUid("uid-1"), hash: "h1",
+    acceptedAt: "2026-08-01T00:00:00.000Z", acceptedBy: "local-human",
+  };
+
+  test("moves the baseline to the new path", async () => {
+    const { store } = await storeWith([b]);
+    assert.equal(await store.rekey("Old/place.md", "New/place.md"), "moved");
+    assert.equal(store.has("Old/place.md"), false);
+    assert.equal(store.get("New/place.md").path, "New/place.md");
+  });
+
+  test("preserves the acceptance VERBATIM — the load-bearing invariant", async () => {
+    const { store } = await storeWith([b]);
+    await store.rekey("Old/place.md", "New/place.md");
+    const moved = store.get("New/place.md");
+    assert.equal(moved.content, b.content, "content must not change");
+    assert.equal(moved.hash, b.hash, "content hash must not be recomputed");
+    assert.equal(moved.acceptedAt, b.acceptedAt, "a rekey must never restamp the time");
+    assert.equal(moved.acceptedBy, b.acceptedBy, "a rekey must never restamp the actor");
+  });
+
+  test("writes the blob under the NEW path hash and drops the old file", async () => {
+    const { store, fs } = await storeWith([b]);
+    await store.rekey("Old/place.md", "New/place.md");
+    assert.ok(fs.files.has(`base/${contentHash("New/place.md")}.json`), "new blob written");
+    assert.equal(fs.files.has(`base/${contentHash("Old/place.md")}.json`), false, "old blob removed");
+  });
+
+  test("refuses when the destination already has a baseline — a live acceptance outranks a stale one", async () => {
+    const other = { ...b, path: "New/place.md", acceptedAt: "2026-08-19T00:00:00.000Z", hash: "h2" };
+    const { store } = await storeWith([b, other]);
+    assert.equal(await store.rekey("Old/place.md", "New/place.md"), "target-exists");
+    assert.equal(store.get("New/place.md").hash, "h2", "the newer baseline survives untouched");
+    assert.equal(store.has("Old/place.md"), true, "and the orphan is left for a human");
+  });
+
+  test("no baseline at the source is a quiet no-op", async () => {
+    const { store } = await storeWith([]);
+    assert.equal(await store.rekey("Nope.md", "Also nope.md"), "no-baseline");
+  });
+
+  test("a failing remove still leaves the move applied", async () => {
+    const { store, fs } = await storeWith([b]);
+    fs.remove = async () => { throw new Error("adapter refused"); };
+    assert.equal(await store.rekey("Old/place.md", "New/place.md"), "moved");
+    assert.equal(store.get("New/place.md").path, "New/place.md");
+  });
+});
+
+describe("uidOfContent", () => {
+  test("reads the uid out of stored frontmatter", () => {
+    assert.equal(uidOfContent(noteWithUid("01a0-abc")), "01a0-abc");
+  });
+  test("tolerates quotes", () => {
+    assert.equal(uidOfContent('---\nuid: "01a0-abc"\n---\n'), "01a0-abc");
+  });
+  test("no frontmatter, no uid, empty uid → null", () => {
+    assert.equal(uidOfContent("# just a body\n"), null);
+    assert.equal(uidOfContent("---\nname: x\n---\n"), null);
+    assert.equal(uidOfContent("---\nuid:\n---\n"), null);
+  });
+  test("does not read a uid out of the BODY", () => {
+    assert.equal(uidOfContent("---\nname: x\n---\n\nuid: not-frontmatter\n"), null);
+  });
+});
+
+describe("planBaselineReconcile", () => {
+  const base = (path, uid, acceptedAt = "2026-08-01T00:00:00.000Z") => ({
+    path, content: noteWithUid(uid), hash: "h", acceptedAt, acceptedBy: "local-human",
+  });
+  /**
+   * `live` maps uid -> [paths]. A note exists at P iff some uid lists P, and the uid AT P
+   * is that uid — so the fixture models identity, which is what the planner now decides on.
+   */
+  const plan = (baselines, live, existing = []) => {
+    const uidAt = (p) => {
+      for (const [uid, paths] of Object.entries(live)) if (paths.includes(p)) return uid;
+      return null;
+    };
+    return planBaselineReconcile({
+      baselines,
+      noteExists: (p) => uidAt(p) !== null,
+      uidAtPath: uidAt,
+      pathsForUid: (uid) => live[uid] ?? [],
+      hasBaseline: (p) => existing.includes(p),
+    });
+  };
+
+  test("a moved note is repointed by uid", () => {
+    const p = plan([base("Old/a.md", "u1")], { u1: ["New/a.md"] });
+    assert.equal(p.repoint.length, 1);
+    assert.deepEqual(
+      { from: p.repoint[0].from, to: p.repoint[0].to, uid: p.repoint[0].uid },
+      { from: "Old/a.md", to: "New/a.md", uid: "u1" }
+    );
+  });
+
+  test("a RENAMED note is repointed — the case basename matching cannot follow", () => {
+    // The real one: "10 10 experience.md" became "TRMNL.md". No shared basename at all.
+    const p = plan([base("Links/10 10 experience.md", "u1")], { u1: ["Links/TRMNL.md"] });
+    assert.equal(p.repoint[0].to, "Links/TRMNL.md");
+  });
+
+  test("a baseline whose note is still in place is untouched", () => {
+    const p = plan([base("Here/a.md", "u1")], { u1: ["Here/a.md"] });
+    assert.deepEqual(p, { repoint: [], unresolved: [] });
+  });
+
+  test("no uid in the stored content → left alone, reason recorded", () => {
+    const b = { path: "Old/a.md", content: "# no frontmatter\n", hash: "h", acceptedAt: "", acceptedBy: "x" };
+    const p = plan([b], {});
+    assert.deepEqual(p.unresolved, [{ path: "Old/a.md", reason: "no-uid" }]);
+    assert.equal(p.repoint.length, 0);
+  });
+
+  test("uid matches nothing live → left alone, never deleted", () => {
+    const p = plan([base("Gone/a.md", "u1")], {});
+    assert.deepEqual(p.unresolved, [{ path: "Gone/a.md", reason: "uid-not-found" }]);
+  });
+
+  test("duplicated uid → ambiguous, never a guess", () => {
+    const p = plan([base("Old/a.md", "u1")], { u1: ["A.md", "B.md"] });
+    assert.equal(p.unresolved[0].reason, "uid-ambiguous");
+    assert.equal(p.repoint.length, 0);
+  });
+
+  test("destination already has a baseline → refused, target reported", () => {
+    const p = plan([base("Old/a.md", "u1")], { u1: ["New/a.md"] }, ["New/a.md"]);
+    assert.deepEqual(p.unresolved, [{ path: "Old/a.md", reason: "target-has-baseline", target: "New/a.md" }]);
+  });
+
+  test("two drifted baselines onto one note: newest acceptance wins, loser reported", () => {
+    // Real case: three old notes had collapsed into 00.12 Scripts.md.
+    const older = base("Old/a.md", "u1", "2026-08-01T00:00:00.000Z");
+    const newer = base("Old/b.md", "u1", "2026-08-18T00:00:00.000Z");
+    const p = plan([older, newer], { u1: ["Merged.md"] });
+    assert.equal(p.repoint.length, 1);
+    assert.equal(p.repoint[0].from, "Old/b.md", "the more recent acceptance is the one kept");
+    assert.deepEqual(p.unresolved, [{ path: "Old/a.md", reason: "superseded", target: "Merged.md" }]);
+  });
+
+  test("SWAP: a baseline whose path is now occupied by a DIFFERENT note still drifts", () => {
+    // The offline renumber: X moves to Y's address while Y moves on. Y's baseline sits at
+    // an OCCUPIED path, so a vacancy test would never reconsider it and the baseline would
+    // stay bound to a foreign note — a silently wrong diff base, and revert would write
+    // that foreign content over it.
+    const yBaseline = base("Slots/02.md", "uid-Y");
+    const p = plan([yBaseline], { "uid-X": ["Slots/02.md"], "uid-Y": ["Slots/03.md"] });
+    assert.equal(p.repoint.length, 1, "the occupied path must not hide the drift");
+    assert.equal(p.repoint[0].to, "Slots/03.md", "it follows its own uid, not its old address");
+  });
+
+  test("an occupant with NO uid is not treated as a stranger", () => {
+    // Can't prove it is a different note, so leave the baseline alone rather than repoint
+    // on a guess.
+    const b = base("Here/a.md", "u1");
+    const p = planBaselineReconcile({
+      baselines: [b],
+      noteExists: () => true,
+      uidAtPath: () => null,
+      pathsForUid: () => ["Elsewhere/a.md"],
+      hasBaseline: () => false,
+    });
+    assert.deepEqual(p, { repoint: [], unresolved: [] });
+  });
+
+  test("a baseline with no uid whose path is occupied is left alone, not reported", () => {
+    const b = { path: "Here/a.md", content: "# no frontmatter\n", hash: "h", acceptedAt: "", acceptedBy: "x" };
+    const p = planBaselineReconcile({
+      baselines: [b],
+      noteExists: () => true,
+      uidAtPath: () => "someone-else",
+      pathsForUid: () => [],
+      hasBaseline: () => false,
+    });
+    assert.deepEqual(p, { repoint: [], unresolved: [] }, "no uid to compare on — silence beats a guess");
+  });
+
+  test("the plan is deterministic for the same store", () => {
+    const bs = [base("Old/z.md", "u2"), base("Old/a.md", "u1")];
+    const live = { u1: ["New/a.md"], u2: ["New/z.md"] };
+    assert.deepEqual(plan(bs, live).repoint.map((r) => r.to), plan([...bs].reverse(), live).repoint.map((r) => r.to));
+  });
+
+  test("NOTHING is ever planned for deletion — repair is additive", () => {
+    const p = plan(
+      [base("Gone/a.md", "u1"), base("Old/b.md", "u2")],
+      { u2: ["New/b.md"] }
+    );
+    assert.equal(Object.keys(p).sort().join(","), "repoint,unresolved", "no delete/prune channel exists");
+    assert.ok(p.unresolved.some((u) => u.reason === "uid-not-found"), "a vanished note is REPORTED, not pruned");
+  });
+
+  test("summary is legible for the console", () => {
+    const p = plan([base("Old/a.md", "u1"), base("Gone/b.md", "u9")], { u1: ["New/a.md"] });
+    assert.match(summarizePlan(p), /1 repointed/);
+    assert.match(summarizePlan(p), /uid-not-found: 1/);
+  });
+});
+
+describe("the rekey audit record — a repair that hides itself is indistinguishable from tampering", () => {
+  // The manual repair that motivated this module rewrote 158 baselines and left NO trace
+  // in acceptance-log.jsonl. governor-lead caught it: an auditor reading that log would
+  // conclude nothing happened, in precisely the store where that distinction is the product.
+  const rec = baselineRekeyRecord({
+    ts: "2026-08-20T05:00:00.000Z",
+    from: "Old/a.md", to: "New/a.md", uid: "u1", hash: "h1", reason: "reconcile",
+  });
+
+  test("carries from, to, uid and the UNCHANGED hash", () => {
+    assert.deepEqual(rec, {
+      event: "baseline-rekey",
+      ts: "2026-08-20T05:00:00.000Z",
+      path: "New/a.md",
+      from: "Old/a.md",
+      to: "New/a.md",
+      uid: "u1",
+      hash: "h1",
+      reason: "reconcile",
+    });
+  });
+
+  test("`path` is the NEW path, so `path` means the same thing in every log record", () => {
+    assert.equal(rec.path, rec.to);
+  });
+
+  test("the hash is recorded so a reader can VERIFY it did not change", () => {
+    // Not decoration: the record's whole claim is "this moved and advanced nothing".
+    assert.equal(rec.hash, "h1");
+  });
+
+  test("the rename path records uid: null rather than overstating what was checked", () => {
+    const r = baselineRekeyRecord({
+      ts: "t", from: "a.md", to: "b.md", uid: null, hash: "h", reason: "rename",
+    });
+    assert.equal(r.uid, null, "no identity matching happened — do not claim one");
+    assert.equal(r.reason, "rename");
+  });
+
+  test("it is not an acceptance record — no `action`, no `by`", () => {
+    // Anything scanning for human dispositions must not pick this up as one.
+    assert.equal("action" in rec, false);
+    assert.equal("by" in rec, false);
+  });
+});
+
+describe("reconcile MOVES a baseline, never MINTS one", () => {
+  // The one failure this module exists to prevent: a note that was never accepted must
+  // not acquire a baseline at startup, which would silently mark unreviewed content as
+  // accepted. Pinned two ways.
+  test("the plan only ever names baselines that already exist", () => {
+    const b = { path: "Old/a.md", content: noteWithUid("u1"), hash: "h", acceptedAt: "t", acceptedBy: "x" };
+    const p = planBaselineReconcile({
+      baselines: [b],
+      noteExists: (x) => x === "New/a.md",
+      uidAtPath: (x) => (x === "New/a.md" ? "u1" : null),
+      pathsForUid: () => ["New/a.md"],
+      hasBaseline: () => false,
+    });
+    assert.equal(p.repoint.length, 1);
+    for (const r of p.repoint) {
+      assert.equal(r.baseline, b, "every repoint carries an EXISTING baseline, not a new one");
+    }
+  });
+
+  test("rekey on a path with no baseline creates nothing", async () => {
+    const { store, fs } = await storeWith([]);
+    assert.equal(await store.rekey("Never/accepted.md", "Somewhere/else.md"), "no-baseline");
+    assert.equal(store.has("Somewhere/else.md"), false, "no baseline minted");
+    assert.equal(fs.files.size, 0, "and nothing written to disk");
+  });
+});

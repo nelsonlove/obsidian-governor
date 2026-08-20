@@ -95,7 +95,32 @@ export interface RevisionDispositionRecord {
   by: string;
 }
 
-export type LogRecord = StewardshipLogRecord | SilentAdvanceRecord | RevisionDispositionRecord;
+// #284/#306 — a baseline RE-KEY: the note moved, so its acceptance was re-addressed to
+// follow it. This advances nothing — `content`, `hash`, `acceptedAt`, `acceptedBy` cross
+// verbatim — but the acceptance perimeter's own evidence store is being rewritten, and a
+// repair that hides itself is indistinguishable from tampering. `hash` is recorded
+// precisely so a reader can confirm it did NOT change.
+export interface BaselineRekeyRecord {
+  event: "baseline-rekey";
+  ts: string;
+  /** The path the baseline is keyed at now (so `path` means the same thing in every record). */
+  path: string;
+  from: string;
+  to: string;
+  /** The note identity the move was resolved on; null for the rename-event path, which
+   * follows Obsidian's own move rather than matching on uid. */
+  uid: string | null;
+  /** Unchanged by the move, by construction. Present so an auditor can verify that. */
+  hash: string;
+  /** Which half moved it: the observed rename, or the startup repair of drift nobody saw. */
+  reason: "rename" | "reconcile";
+}
+
+export type LogRecord =
+  | StewardshipLogRecord
+  | SilentAdvanceRecord
+  | RevisionDispositionRecord
+  | BaselineRekeyRecord;
 
 // Pure builder for the silent-advance audit record (kept pure so it is headless-testable
 // and reused verbatim by wiring.ts's reconcile path).
@@ -113,6 +138,28 @@ export function silentAdvanceRecord(args: {
     reason: args.reason,
     fromHash: args.fromHash,
     toHash: args.toHash,
+  };
+}
+
+/** Pure builder for the baseline-rekey audit record. Kept pure for the same reason
+ * `silentAdvanceRecord` is: the shape is the audit contract, and it is asserted headlessly. */
+export function baselineRekeyRecord(args: {
+  ts: string;
+  from: string;
+  to: string;
+  uid: string | null;
+  hash: string;
+  reason: BaselineRekeyRecord["reason"];
+}): BaselineRekeyRecord {
+  return {
+    event: "baseline-rekey",
+    ts: args.ts,
+    path: args.to,
+    from: args.from,
+    to: args.to,
+    uid: args.uid,
+    hash: args.hash,
+    reason: args.reason,
   };
 }
 
