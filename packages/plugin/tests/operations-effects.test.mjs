@@ -18,8 +18,9 @@ import assert from "node:assert/strict";
 import { buildEffect, summarizeEffects, EFFECT_KINDS, SETTLEMENT } from "../src/kernel/effects/effect.ts";
 
 const target = (path, over = {}) => ({ kind: "note-content", path, ...over });
+let seq = 0;
 const rec = (settlement, targets, over = {}) =>
-  buildEffect({ operationId: "op-1", settlement, at: over.at ?? 1, targets, ...over });
+  buildEffect({ id: over.id ?? `e-${++seq}`, operationId: "op-1", settlement, at: over.at ?? 1, targets, ...over });
 
 describe("effects — the record", () => {
   test("the kinds and settlements are the documented sets", () => {
@@ -40,7 +41,7 @@ describe("effects — the record", () => {
   test("a correction must name what it supersedes", () => {
     // A correction with no antecedent is just another claim.
     assert.throws(() => rec("corrected", [target("A.md")]), /supersedes/);
-    assert.ok(rec("corrected", [target("A.md")], { corrects: 1 }));
+    assert.ok(rec("corrected", [target("A.md")], { corrects: "e-1" }));
   });
 
   test("an uncertain effect must say why", () => {
@@ -85,10 +86,8 @@ describe("effects — what a receipt may claim", () => {
 
   test("a correction supersedes the uncertainty it names", () => {
     // The late-settlement path: abandoned at the deadline, then settled.
-    const s = summarizeEffects([
-      rec("uncertain", [], { at: 2, reason: "write_timeout" }),
-      rec("corrected", [target("A.md")], { at: 3, corrects: 2 }),
-    ]);
+    const u = rec("uncertain", [], { id: "u-1", reason: "write_timeout" });
+    const s = summarizeEffects([u, rec("corrected", [target("A.md")], { corrects: "u-1" })]);
     assert.equal(s.basis, "observed");
     assert.deepEqual(s.effects.map((e) => e.path), ["A.md"]);
   });
@@ -102,6 +101,41 @@ describe("effects — what a receipt may claim", () => {
   test("an intended effect alone claims nothing — a plan is not an outcome", () => {
     const s = summarizeEffects([rec("intended", [target("A.md")])]);
     assert.equal(s.basis, "none");
+    assert.deepEqual(s.effects, []);
+  });
+});
+
+describe("effects — a correction that says NOTHING changed is still a correction", () => {
+  test("an empty-target correction supersedes, rather than falling through to a stale attempt", () => {
+    // The late-error path: an operation abandoned at its deadline that turns
+    // out to have changed nothing. Testing `targets.length > 0` treated that
+    // identically to "no observation exists" and reported the superseded
+    // `attempted` claim as if the correction had never happened.
+    const attempted = rec("attempted", [target("A.md")], { id: "a-1" });
+    const uncertain = rec("uncertain", [], { id: "u-1", reason: "write_timeout" });
+    const correction = rec("corrected", [], { id: "c-1", corrects: "u-1" });
+    const s = summarizeEffects([attempted, uncertain, correction]);
+    assert.equal(s.basis, "observed", "the correction is the authoritative statement");
+    assert.deepEqual(s.effects, [], "and what it says is: nothing changed");
+  });
+
+  test("correction identity is a stable id, not a timestamp", () => {
+    // Two records written in the same millisecond share an `at`. Keying
+    // corrections on that would let one correction silently exclude an
+    // unrelated record's evidence.
+    const a = rec("observed", [target("A.md")], { id: "x", at: 5 });
+    const b = rec("attempted", [target("B.md")], { id: "y", at: 5 });
+    const c = rec("corrected", [target("C.md")], { id: "z", at: 5, corrects: "y" });
+    const s = summarizeEffects([a, b, c]);
+    assert.deepEqual(s.effects.map((e) => e.path).sort(), ["A.md", "C.md"], "only 'y' is superseded, despite the shared timestamp");
+  });
+
+  test("a superseded handler claim is still shown as something the code said", () => {
+    // Deliberately unfiltered: the audit trail of what a tool ever CLAIMED
+    // should not depend on how the story ended. It never enters `effects`.
+    const reported = rec("reported", [target("A.md")], { id: "r-1" });
+    const s = summarizeEffects([reported, rec("corrected", [], { corrects: "r-1" })]);
+    assert.equal(s.handlerClaimed.length, 1);
     assert.deepEqual(s.effects, []);
   });
 });

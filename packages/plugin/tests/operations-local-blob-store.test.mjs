@@ -116,14 +116,17 @@ describe("local blob store — a partial write never lands at a real digest", ()
     assert.equal(base.files.size, 0, "the temp file is cleaned up rather than accumulating silently");
   });
 
-  test("re-putting an existing payload is a no-op, not a rewrite", async () => {
-    const base = fakeFs();
-    let writes = 0;
-    const counting = { ...base, async writeFile(p, d) { writes++; return base.writeFile(p, d); } };
-    const { store: s } = store(counting);
-    await s.put(A, "x");
-    await s.put(A, "x");
-    assert.equal(writes, 1);
+  test("the SAME key with DIFFERENT data overwrites — the key is not the whole record", async () => {
+    // The bug this replaces a test for. The key is digest(payload); the stored
+    // data is {payload, sources}. `store.ts` re-puts an existing digest exactly
+    // to union in a second note's provenance, so an "already exists, skip"
+    // optimization would freeze the blob at the first capture's sources and
+    // hand one note's content the other note's permissions.
+    const { store: s } = store();
+    await s.put(A, JSON.stringify({ payload: { b: 1 }, sources: ["Public/a.md"] }));
+    await s.put(A, JSON.stringify({ payload: { b: 1 }, sources: ["Public/a.md", "Secrets/b.md"] }));
+    const stored = JSON.parse(await s.get(A));
+    assert.deepEqual(stored.sources, ["Public/a.md", "Secrets/b.md"], "the provenance update must land");
   });
 });
 
