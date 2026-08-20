@@ -64,6 +64,7 @@
 import type { AcceptOpts } from "../kernel/governance/accept.js";
 import { Component, TFile, TFolder, MarkdownView, Notice, type WorkspaceLeaf, type Plugin, type DataAdapter } from "obsidian";
 import { BaselineStore, type BlobFs } from "../kernel/governance/baseline-store.js";
+import { planBaselineReconcile, summarizePlan } from "../kernel/governance/baseline-reconcile.js";
 import { parseJournal, recentAgentWrite, agentWritesSince, type JournalRecord } from "../kernel/governance/journal-reader.js";
 import { computeQueue, type PendingItem, type NoteSnapshot } from "../kernel/governance/queue.js";
 import { deleteInvalidatesQueue } from "./queue-invalidation.js";
@@ -817,6 +818,46 @@ class AdapterBlobFs implements BlobFs {
     const listing = await this.adapter.list(dir);
     return listing.files;
   }
+  async remove(path: string): Promise<void> { await this.adapter.remove(path); }
+}
+
+// ── baseline reconcile (identity repair; advances no baseline) ──
+//
+// Obsidian-side adapter over the pure planner. The uid map is built from the metadata
+// cache exactly as listProposed/listRevising build their listings — no file reads, and
+// no coupling to the kernel's uid index (governance owns its own read of the vault).
+async function reconcileBaselines(plugin: Plugin): Promise<void> {
+  const store = baselineStores.get(plugin);
+  if (!store) return;
+  try {
+    const byUid = new Map<string, string[]>();
+    for (const file of plugin.app.vault.getMarkdownFiles()) {
+      const uid = (plugin.app.metadataCache.getFileCache(file)?.frontmatter as Record<string, unknown> | undefined)?.uid;
+      if (typeof uid !== "string" || !uid.trim()) continue;
+      const key = uid.trim();
+      const list = byUid.get(key) ?? [];
+      list.push(file.path);
+      byUid.set(key, list);
+    }
+    const plan = planBaselineReconcile({
+      baselines: store.all(),
+      noteExists: (p) => plugin.app.vault.getAbstractFileByPath(p) instanceof TFile,
+      pathsForUid: (uid) => byUid.get(uid) ?? [],
+      hasBaseline: (p) => store.has(p),
+    });
+    if (!plan.repoint.length && !plan.unresolved.length) return;
+    for (const move of plan.repoint) {
+      const outcome = await store.rekey(move.from, move.to);
+      if (outcome !== "moved") {
+        console.warn("governor governance: baseline reconcile skipped", move.from, "->", move.to, outcome);
+      }
+    }
+    console.info("governor governance: baseline reconcile —", summarizePlan(plan));
+  } catch (e) {
+    // A failed repair must never block the mount: the queue still works, the drifted
+    // notes just keep reading as never-accepted until the next start.
+    console.error("governor governance: baseline reconcile failed", e);
+  }
 }
 
 // ── queue / badge refresh (read-only: recomputes the queue; advances no baseline) ──
@@ -1171,7 +1212,18 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
   // CONFIRMED-rename capture — the link-heal detector's oracle. Records are plain data in a
   // module-private WeakMap; this confers no accept capability.
   component.registerEvent(plugin.app.vault.on("rename", (file, oldPath) => {
-    if (file instanceof TFile) recordRename(plugin, file.path, oldPath);
+    if (!(file instanceof TFile)) return;
+    recordRename(plugin, file.path, oldPath);
+    // Follow the note with its baseline. A baseline is keyed by path hash, so without
+    // this a rename silently orphans the acceptance and the note reads as
+    // never-accepted — no error, no signal. Re-addressing only: setBaseline is NOT
+    // used here, because it would stamp a fresh acceptedAt/acceptedBy and forge an
+    // acceptance nobody gave (see BaselineStore.rekey).
+    const store = baselineStores.get(plugin);
+    if (!store) return;
+    void store.rekey(oldPath, file.path).catch((e) =>
+      console.error("governor governance: baseline rekey failed", oldPath, "->", file.path, e)
+    );
   }));
 
   // DELETE → recompute the queue. The live-refresh poll only fires when the write JOURNAL grows,
@@ -1351,6 +1403,14 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
   // cleanup hook flips — the exact guard `wireUidIndex` uses. If disposed, do nothing (no refresh,
   // no interval).
   plugin.app.workspace.onLayoutReady(async () => {
+    if (disposed) return;
+    // Repair baselines whose note moved while this plugin was NOT running — Obsidian
+    // closed, Sync landing a peer's move, a bulk script. The rename handler above can
+    // only see renames it witnesses; this is the residue, matched on the one identity
+    // that survives a move (the uid inside the baseline's own stored content).
+    // Runs BEFORE the first refresh so the queue's first paint already reflects it.
+    // Non-destructive by construction: the plan only repoints, never deletes.
+    await reconcileBaselines(plugin);
     if (disposed) return;
     await refresh(plugin);
     try { pollState(plugin).lastSig = await journalSignature(plugin); } catch { /* first poll will refresh */ }

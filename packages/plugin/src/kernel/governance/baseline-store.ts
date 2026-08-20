@@ -24,6 +24,9 @@ export interface BlobFs {
   exists(path: string): Promise<boolean>;
   mkdir(path: string): Promise<void>;
   list(dir: string): Promise<string[]>; // full paths of files directly under dir
+  /** Delete a blob. Only ever called on a baseline file this store itself wrote, and
+   *  only after its replacement has been written — see `rekey`. */
+  remove(path: string): Promise<void>;
 }
 
 export interface Baseline {
@@ -96,6 +99,40 @@ export class BaselineStore {
     await this.fs.write(fileFor(this.baseDir, path), JSON.stringify(baseline, null, 2));
     this.cache.set(path, baseline);
     return baseline;
+  }
+
+  /**
+   * Move a baseline to a new note path, preserving the acceptance verbatim.
+   *
+   * This is a RE-ADDRESSING, not an acceptance: `content`, `hash`, `acceptedAt` and
+   * `acceptedBy` are carried across untouched, so the human decision the baseline
+   * records is the same decision afterwards — only the note's location changed.
+   * It is deliberately NOT routed through `setBaseline`, which would stamp a fresh
+   * `acceptedAt`/`acceptedBy` and thereby forge an acceptance nobody gave.
+   *
+   * Refuses rather than overwrites when the destination already has a baseline: that
+   * baseline is a live acceptance of the note now at that path, and it must outrank a
+   * stale record of some other path. Write-then-delete order means a crash mid-way
+   * leaves a duplicate (harmless: `load` keys by the record's own `path`), never a gap.
+   */
+  async rekey(oldPath: string, newPath: string): Promise<"moved" | "no-baseline" | "target-exists"> {
+    if (oldPath === newPath) return "no-baseline";
+    const existing = this.cache.get(oldPath);
+    if (!existing) return "no-baseline";
+    if (this.cache.has(newPath)) return "target-exists";
+    await this.ensureDir();
+    const moved: Baseline = { ...existing, path: newPath };
+    await this.fs.write(fileFor(this.baseDir, newPath), JSON.stringify(moved, null, 2));
+    this.cache.set(newPath, moved);
+    this.cache.delete(oldPath);
+    try {
+      await this.fs.remove(fileFor(this.baseDir, oldPath));
+    } catch {
+      // The move already landed; a failed cleanup leaves a stale file that `load`
+      // ignores (it keys by the record's path, which now belongs to newPath's file).
+      // Never fail a rekey over it.
+    }
+    return "moved";
   }
 
   isLoaded(): boolean { return this.loaded; }
