@@ -74,6 +74,7 @@ export function wireSkills(plugin: Plugin, deps: SkillsWireDeps): void {
         pluginName: cfg.pluginName,
         fields: fieldsOf(cfg),
         assetsRoot: expandTilde(cfg.assetsRoot),
+        preloadCap: cfg.preloadCap,
       });
       exportSources = new Set(summary.sources);
 
@@ -105,7 +106,7 @@ export function wireSkills(plugin: Plugin, deps: SkillsWireDeps): void {
   const controller: SkillsPreviewController = {
     compile: (): Promise<PreviewResult> => {
       const cfg = config();
-      return previewVault(backend, { outputDir: expandTilde(cfg.outputDir), pluginName: cfg.pluginName, fields: fieldsOf(cfg) });
+      return previewVault(backend, { outputDir: expandTilde(cfg.outputDir), pluginName: cfg.pluginName, fields: fieldsOf(cfg), preloadCap: cfg.preloadCap });
     },
     fields: () => fieldsOf(config()),
   };
