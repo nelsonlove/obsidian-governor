@@ -690,3 +690,268 @@ export function nonMcpBindings(): SurfaceBinding[] {
   }));
   return [...commands, ...automation, ...authority];
 }
+
+// ── bridge, settings, and internal surfaces ──────────────────────────────────
+//
+// The last of WP0's inverse inventory. What counts as a SURFACE here, and what
+// does not, matters — an inventory padded with every internal helper is as
+// useless as one that omits a door.
+//
+// A surface is something a caller can invoke, something that runs by itself, or
+// something that writes outside the vault. A function invoked only as the
+// implementation of an already-declared action is NOT a surface; it is that
+// action's body. `stampAcceptedFrontmatter`, `buildAcceptDeps`, `appendLog`,
+// `saveAllowlist` and the baseline-store writers are all in that category —
+// they are how `governance.accept` and its siblings do their work, and
+// declaring them again would double-count one door.
+//
+// Two things in this section are easy to miss and worth stating plainly:
+//
+//   • `writeBridge()` and `autoRegister()` run on EVERY plugin load,
+//     unconditionally — not gated on `settings.enabled`. Both write outside the
+//     vault (`~/.claude/governor/`), and `autoRegister` spawns the `claude`
+//     binary. A user who disables the socket still gets both.
+//   • enabling the `acceptance` module from the settings tab mounts governance,
+//     and mounting arms a one-shot `metadataCache "resolved"` handler that runs
+//     `reconcileBaselines` — a declared authority action. A settings toggle is
+//     therefore an authority-adjacent control, which is not obvious from
+//     looking at the toggle.
+
+export interface PlainSurfaceRow {
+  id: string;
+  kind: Extract<SurfaceKind, "ui" | "automation" | "internal">;
+  file: string;
+  title: string;
+  postcondition: string;
+  owner: string;
+  distribution: Distribution;
+  readOnly: boolean;
+  /** Writes outside the vault, which is a privacy and disclosure fact. */
+  outsideVault?: boolean;
+  /** Runs on every plugin load regardless of settings. */
+  unconditional?: boolean;
+  /** Reaches a declared authority action, however indirectly. */
+  reachesAuthority?: string;
+  note?: string;
+}
+
+export const BRIDGE_SURFACES: PlainSurfaceRow[] = [
+  {
+    id: "bridge.write-bridge",
+    kind: "automation",
+    file: "src/main.ts",
+    title: "Write the bundled bridge",
+    postcondition: "Write bridge.mjs to ~/.claude/governor/ and the legacy directory on every plugin load.",
+    owner: "core",
+    distribution: "public-default",
+    readOnly: false,
+    outsideVault: true,
+    unconditional: true,
+    note: "runs even when the socket is disabled",
+  },
+  {
+    id: "bridge.write-discovery",
+    kind: "automation",
+    file: "src/main.ts",
+    title: "Publish connection discovery",
+    postcondition: "Write this vault's discovery JSON so a client can find its socket.",
+    owner: "core",
+    distribution: "public-default",
+    readOnly: false,
+    outsideVault: true,
+    note: "gated on settings.enabled",
+  },
+  {
+    id: "bridge.remove-discovery",
+    kind: "automation",
+    file: "src/main.ts",
+    title: "Remove connection discovery",
+    postcondition: "Delete this vault's discovery JSON at unload.",
+    owner: "core",
+    distribution: "public-default",
+    readOnly: false,
+    outsideVault: true,
+  },
+  {
+    id: "bridge.claude-register",
+    kind: "internal",
+    file: "src/main.ts",
+    title: "Register with the Claude Code CLI",
+    postcondition: "Spawn the `claude` binary to add or remove this vault's MCP registration.",
+    owner: "core",
+    distribution: "public-default",
+    readOnly: false,
+    outsideVault: true,
+    unconditional: true,
+    note: "autoRegister() runs on every load, outside the settings.enabled gate; never writes ~/.claude.json directly",
+  },
+];
+
+export const SETTINGS_SURFACES: PlainSurfaceRow[] = [
+  {
+    id: "settings.connect-claude-code",
+    kind: "ui",
+    file: "src/connection-ui.ts",
+    title: "Connect to Claude Code",
+    postcondition: "Force a CLI registration for this vault.",
+    owner: "core",
+    distribution: "public-default",
+    readOnly: false,
+    outsideVault: true,
+  },
+  {
+    id: "settings.disconnect",
+    kind: "ui",
+    file: "src/connection-ui.ts",
+    title: "Disconnect",
+    postcondition: "Remove this vault's CLI registration.",
+    owner: "core",
+    distribution: "public-default",
+    readOnly: false,
+    outsideVault: true,
+  },
+  {
+    id: "settings.toggle-socket",
+    kind: "ui",
+    file: "src/connection-ui.ts",
+    title: "Enable or disable the socket",
+    postcondition: "Flip settings.enabled; takes effect on reload.",
+    owner: "core",
+    distribution: "public-default",
+    readOnly: false,
+  },
+  {
+    id: "settings.module-enabled",
+    kind: "ui",
+    file: "src/connection-ui.ts",
+    title: "Enable or disable a module",
+    postcondition: "Mount or unmount a module's panes live, without a plugin reload.",
+    owner: "core",
+    distribution: "public-default",
+    readOnly: false,
+    // Enabling `acceptance` mounts governance, and mounting arms the one-shot
+    // metadataCache "resolved" handler that runs reconcileBaselines. A toggle
+    // that looks like a preference can therefore start an authority act.
+    reachesAuthority: "governance.rekey-baseline",
+    note: "acceptance -> setGovernanceMounted -> wireGovernance -> arms reconcileBaselines",
+  },
+  {
+    id: "settings.copy-command",
+    kind: "ui",
+    file: "src/connection-ui.ts",
+    title: "Copy the setup command",
+    postcondition: "Copy the registration command to the clipboard.",
+    owner: "core",
+    distribution: "public-default",
+    readOnly: true,
+  },
+  {
+    id: "settings.vocab-add-instance",
+    kind: "ui",
+    file: "src/connection-ui.ts",
+    title: "Add a vocabulary instance",
+    postcondition: "Append a vocabulary source to settings and repaint.",
+    owner: "vocab",
+    distribution: "public-optional",
+    readOnly: false,
+  },
+  {
+    id: "settings.vocab-remove-instance",
+    kind: "ui",
+    file: "src/connection-ui.ts",
+    title: "Remove a vocabulary instance",
+    postcondition: "Remove a vocabulary source from settings and repaint.",
+    owner: "vocab",
+    distribution: "public-optional",
+    readOnly: false,
+  },
+];
+
+export const INTERNAL_SURFACES: PlainSurfaceRow[] = [
+  {
+    id: "internal.governance.publish-pending-index",
+    kind: "internal",
+    file: "src/governance/wiring.ts",
+    title: "Publish the pending-review index",
+    postcondition:
+      "Write the review queue to pending-index.json so obsidian_pending_review can report it — or report it unavailable.",
+    owner: "acceptance",
+    distribution: "public-default",
+    readOnly: false,
+    note: "the producer behind the agent-visible read surface; absence must read as unavailable, never as an empty queue",
+  },
+  {
+    id: "internal.core.save-settings",
+    kind: "internal",
+    file: "src/main.ts",
+    title: "Persist settings",
+    postcondition: "Write the plugin's settings to data.json.",
+    owner: "core",
+    distribution: "public-default",
+    readOnly: false,
+  },
+  {
+    id: "internal.core.install-id",
+    kind: "internal",
+    file: "src/main.ts",
+    title: "Load or mint the install id",
+    postcondition:
+      "Read the persistent install id beside the journal, minting one if absent and degrading to an ephemeral id if the directory is unwritable.",
+    owner: "core",
+    distribution: "public-default",
+    readOnly: false,
+  },
+  {
+    id: "internal.core.folder-migration",
+    kind: "internal",
+    file: "src/main.ts",
+    title: "Migrate the plugin folder id",
+    postcondition: "Reconcile a plugin directory still named for the pre-0.12.0 id with the current manifest id.",
+    owner: "core",
+    distribution: "public-default",
+    readOnly: false,
+  },
+];
+
+/** Every plain (non-authority, non-command, non-automation-family) surface. */
+export const PLAIN_SURFACES: PlainSurfaceRow[] = [...BRIDGE_SURFACES, ...SETTINGS_SURFACES, ...INTERNAL_SURFACES];
+
+/**
+ * Functions that are the BODY of an already-declared action rather than doors
+ * of their own. Listed so "why isn't this in the inventory?" has an answer that
+ * is written down instead of remembered.
+ */
+export const NOT_SURFACES = [
+  { name: "stampAcceptedFrontmatter", partOf: "governance.accept" },
+  { name: "buildAcceptDeps", partOf: "governance.accept" },
+  { name: "appendLog", partOf: "every audited authority action" },
+  { name: "saveAllowlist", partOf: "governance.set-auto-accept-class" },
+  { name: "governedMarkdownFiles", partOf: "governance.adopt-baseline" },
+  { name: "scheduleReconcile", partOf: "governance.reconcile-observed-human-edit" },
+  { name: "quarantineWrite", partOf: "governance.accept" },
+  { name: "persistRenameRecords", partOf: "governance.rekey-baseline" },
+] as const;
+
+export function plainActions(): ActionDefinition[] {
+  return PLAIN_SURFACES.map((row) =>
+    compatibilityAction({
+      surface: row.id,
+      postcondition: row.postcondition,
+      owner: row.owner,
+      distribution: row.distribution,
+      readOnly: row.readOnly,
+      reason: `pre-registry ${row.kind} surface${row.outsideVault ? "; writes outside the vault" : ""}${row.unconditional ? "; runs on every plugin load regardless of settings" : ""}`,
+    })
+  );
+}
+
+export function plainBindings(): SurfaceBinding[] {
+  return PLAIN_SURFACES.map((row) => ({
+    kind: row.kind,
+    id: row.id,
+    action: `compat.${row.id}`,
+    actionVersion: 1,
+    source: row.file,
+    ...(row.note ? { note: row.note } : {}),
+  }));
+}
