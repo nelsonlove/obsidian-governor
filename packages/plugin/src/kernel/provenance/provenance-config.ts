@@ -23,6 +23,19 @@ export const AUDIT_GENERATOR = "obsidian-plugin-audit";
  *  regen write an `accepted`-family field. */
 export const AUDIT_DERIVATION_MODE = "snapshot";
 
+/**
+ * The audit note's own `derived-from` entries, for a given notes dir — the ONE
+ * definition of what the audit is derived from.
+ *
+ * `renderAudit` emits this list into the note's frontmatter and `regenerateAudit`
+ * resolves the SAME list to count the sources it stamps as
+ * `derived-source-count`, so the witness can never describe a different set from
+ * the one `provenance_check` will later resolve.
+ */
+export function auditDerivedFrom(notesDir: string = DEFAULT_NOTES_DIR): string[] {
+  return [`${notesDir}/*.md`, ".obsidian/plugins/*/manifest.json", ".obsidian/community-plugins.json"];
+}
+
 /** The provenance module's config, stored under `modules.provenance.config` and
  *  merged over the manifest defaults. */
 export interface ProvenanceConfig {

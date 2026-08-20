@@ -3,7 +3,13 @@
 // `render.py`. Pure string manipulation, no source access.
 
 import type { Reconciliation } from "./plugins.js";
-import { AUDIT_GENERATOR, AUDIT_DERIVATION_MODE, DEFAULT_NOTES_DIR } from "./provenance-config.js";
+import { SOURCE_COUNT_FIELD } from "./freshness.js";
+import {
+  AUDIT_GENERATOR,
+  AUDIT_DERIVATION_MODE,
+  DEFAULT_NOTES_DIR,
+  auditDerivedFrom,
+} from "./provenance-config.js";
 
 // The Python pattern, verbatim in JS: `re.DOTALL` → `[\s\S]`, `(?P<name>…)` →
 // capture group 1, `(?P<body>…)` → group 2. A section name is `[\w-]+`.
@@ -29,19 +35,28 @@ export function reinsertSections(rendered: string, preserved: Record<string, str
 
 /** Render the full plugin-audit note text (frontmatter + body) from a
  *  reconciliation. The frontmatter stamps DERIVATION metadata only
- *  (`derived-from` / `generated` / `generator` / `derivation-mode`) — never an
- *  acceptance field. */
+ *  (`derived-from` / `generated` / `generator` / `derivation-mode`, plus the
+ *  `derived-source-count` witness when the caller supplies one) — never an
+ *  acceptance field.
+ *
+ *  `sourceCount` is the number of files the `derived-from` set resolved to at
+ *  generation time; stamping it lets `provenance_check` later detect sources
+ *  DELETED out of the globbed set, which no mtime comparison can see. Omitted
+ *  (or not a non-negative integer) ⇒ the field is not emitted and the note
+ *  checks exactly as it did before the witness existed. */
 export function renderAudit(
   recon: Reconciliation,
   generated: string,
   notesDir: string = DEFAULT_NOTES_DIR,
+  sourceCount?: number,
 ): string {
   const lines: string[] = [
     "---",
     "derived-from:",
-    `  - "${notesDir}/*.md"`,
-    '  - ".obsidian/plugins/*/manifest.json"',
-    '  - ".obsidian/community-plugins.json"',
+    ...auditDerivedFrom(notesDir).map((e) => `  - "${e}"`),
+    ...(Number.isInteger(sourceCount) && (sourceCount as number) >= 0
+      ? [`${SOURCE_COUNT_FIELD}: ${sourceCount}`]
+      : []),
     `generated: ${generated}`,
     `generator: ${AUDIT_GENERATOR}`,
     `derivation-mode: ${AUDIT_DERIVATION_MODE}`,
