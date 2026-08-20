@@ -462,3 +462,52 @@ export async function scanAutomationSites() {
   }
   return found;
 }
+
+/**
+ * Which of the named module-scope functions reach a given callee.
+ *
+ * Used to VERIFY, rather than trust, the inventory's claim about which
+ * authority acts leave a durable audit record. The earlier draft asserted
+ * "the acceptance log records these" in a comment and applied it to all of
+ * them; two were wrong. A claim about existing behaviour belongs in a scan.
+ *
+ * Bodies are delimited by this file's own style — a module-scope
+ * `function name(` through the next `}` at column 0 — which holds throughout
+ * `governance/wiring.ts`. A function whose body cannot be delimited is
+ * reported as `null` rather than silently treated as not calling anything.
+ *
+ * `delegates` names indirect routes: `performAccept` does not call `appendLog`
+ * itself, it calls `acceptNote`, which appends through its injected deps. Each
+ * delegate is listed explicitly rather than followed automatically, because a
+ * scanner that chases call graphs would quietly start guessing.
+ */
+export async function scanFunctionReaches(relPath, fnNames, callees) {
+  const text = await readFile(resolvePath(PLUGIN_SRC, relPath), "utf8");
+  const out = new Map();
+  for (const fn of fnNames) {
+    const start = text.search(new RegExp(`^(?:export\\s+)?(?:async\\s+)?function\\s+${fn}\\s*\\(`, "m"));
+    if (start < 0) {
+      out.set(fn, null);
+      continue;
+    }
+    const rest = text.slice(start);
+    const endRel = rest.search(/\n\}/);
+    if (endRel < 0) {
+      out.set(fn, null);
+      continue;
+    }
+    const body = rest.slice(0, endRel);
+    out.set(fn, new Set(callees.filter((c) => new RegExp(`\\b${c}\\s*\\(`).test(body))));
+  }
+  return out;
+}
+
+/** Every `export` from one file, so a NEW export is a visible decision. */
+export async function scanExports(relPath) {
+  const text = await readFile(resolvePath(PLUGIN_SRC, relPath), "utf8");
+  const names = new Set();
+  const re = /^export\s+(?:async\s+)?(?:function|const|let|class|interface|type)\s+([A-Za-z_$][\w$]*)/gm;
+  let m;
+  while ((m = re.exec(text))) names.add(m[1]);
+  return names;
+}

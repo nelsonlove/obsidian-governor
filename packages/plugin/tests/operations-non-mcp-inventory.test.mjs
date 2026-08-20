@@ -34,12 +34,21 @@ import assert from "node:assert/strict";
 import { rm, writeFile } from "node:fs/promises";
 import { resolve as resolvePath } from "node:path";
 
-import { scanCommands, scanGovernanceCommands, scanModuleScopeOnly, scanAutomationSites, PLUGIN_SRC } from "./surface-scan.mjs";
+import {
+  scanCommands,
+  scanGovernanceCommands,
+  scanModuleScopeOnly,
+  scanAutomationSites,
+  scanFunctionReaches,
+  scanExports,
+  PLUGIN_SRC,
+} from "./surface-scan.mjs";
 import {
   COMMAND_SURFACES,
   AUTHORITY_SURFACES,
   AUTOMATION_SURFACES,
   ACCEPT_PERIMETER_FUNCTIONS,
+  WIRING_EXPORTS,
   nonMcpActions,
   nonMcpBindings,
 } from "../src/kernel/operations/inventory-non-mcp.ts";
@@ -97,7 +106,7 @@ describe("non-MCP inventory — governance contributes no command", () => {
 // ── the accept perimeter is unreachable by construction ──────────────────────
 
 describe("non-MCP inventory — the accept perimeter stays module-scope", () => {
-  test("the seven authority functions are all present in wiring.ts", async () => {
+  test("every authority function named in the perimeter is present in wiring.ts", async () => {
     const { present } = await scanModuleScopeOnly("governance/wiring.ts", ACCEPT_PERIMETER_FUNCTIONS);
     assert.deepEqual(
       [...present].sort(),
@@ -115,6 +124,68 @@ describe("non-MCP inventory — the accept perimeter stays module-scope", () => 
         "instance, or any object an agent-facing path can obtain:\n" + [...exported].join(", ")
     );
   });
+  test("the export set of wiring.ts is exactly the pinned list", async () => {
+    // Checking the ten perimeter names closes ten instances. Pinning the whole
+    // export set closes the CLASS: a new export — including one that captures
+    // an accept-capable closure without being named after it — becomes a
+    // visible decision rather than something a reviewer must happen to notice.
+    const actual = await scanExports("governance/wiring.ts");
+    assert.deepEqual(
+      [...actual].sort(),
+      [...WIRING_EXPORTS].sort(),
+      "governance/wiring.ts's exports changed; confirm the new one carries no accept-capable closure, then update WIRING_EXPORTS"
+    );
+  });
+
+  test("each action's `audited` claim matches whether its implementation reaches appendLog", async () => {
+    // The previous draft asserted "the acceptance log records these" in a
+    // comment and applied `retention: durable` to every authority action. Two
+    // were wrong. A claim about existing behaviour belongs in a scan.
+    //
+    // `performAccept` and `performRevert` append through their delegates
+    // (`acceptNote` / `revertNote`, which call an injected `appendLog`), so
+    // those two names count as reaching the log. Each delegate is listed
+    // explicitly rather than followed automatically.
+    const reaches = await scanFunctionReaches(
+      "governance/wiring.ts",
+      ACCEPT_PERIMETER_FUNCTIONS,
+      ["appendLog", "acceptNote", "revertNote"]
+    );
+    const registry = createActionRegistry();
+    for (const action of nonMcpActions()) registry.register(action);
+    for (const b of nonMcpBindings()) registry.bind(b);
+
+    const wrong = [];
+    for (const row of AUTHORITY_SURFACES) {
+      const found = reaches.get(row.implementation);
+      assert.ok(found !== null && found !== undefined, `could not delimit ${row.implementation} in wiring.ts`);
+      const logs = found.size > 0;
+      const action = registry.get(row.action, 1);
+      const claimsDurable = action.retention.operation === "durable";
+      if (logs !== claimsDurable) {
+        wrong.push(
+          `  ${row.action} (via ${row.implementation}): declares retention=${action.retention.operation}, ` +
+            `but it ${logs ? "DOES" : "does NOT"} reach the acceptance log`
+        );
+      }
+    }
+    assert.deepEqual(wrong, [], "an audit claim that does not match the code is worse than no claim:\n" + wrong.join("\n"));
+  });
+
+  test("the two unaudited authority acts are named, so the gap cannot be forgotten", async () => {
+    // This is a real product gap, not an inventory quirk: `performAdopt` is
+    // the mass-silence capability and it writes no operation record at all,
+    // and `setClassEnabled` changes what may be admitted without review with
+    // no record of who changed it. Pinning the set means fixing either one
+    // fails this test and forces the inventory to be updated with it.
+    const registry = createActionRegistry();
+    for (const action of nonMcpActions()) registry.register(action);
+    for (const b of nonMcpBindings()) registry.bind(b);
+    const unaudited = [...new Set(AUTHORITY_SURFACES.map((r) => r.action))]
+      .filter((id) => registry.get(id, 1)?.retention.operation !== "durable")
+      .sort();
+    assert.deepEqual(unaudited, ["governance.adopt-baseline", "governance.set-auto-accept-class"]);
+  });
 });
 
 // ── automation ───────────────────────────────────────────────────────────────
@@ -129,6 +200,34 @@ describe("non-MCP inventory — automation entry points", () => {
         byFile.has(row.file),
         `automation row '${row.id}' names ${row.file}, which contains no automation entry point at all`
       );
+    }
+  });
+
+  test("`touchesAuthority` is enforced, not decoration", async () => {
+    // The field was dead data in the first draft: declared, set, and read by
+    // nothing. A flag that records "this automation can change authority
+    // state" and then changes nothing is worse than no flag, because it reads
+    // as a control.
+    const authorityAutomationFiles = new Set(
+      nonMcpBindings()
+        .filter((b) => b.kind === "automation" && b.source)
+        .filter((b) => AUTHORITY_SURFACES.some((r) => r.action === b.action))
+        .map((b) => b.source)
+    );
+    for (const row of AUTOMATION_SURFACES) {
+      if (row.touchesAuthority) {
+        assert.ok(
+          authorityAutomationFiles.has(row.file),
+          `automation row '${row.id}' claims touchesAuthority but no authority action is bound to an automation ` +
+            `surface in ${row.file} — the claim is not backed by a fenced action`
+        );
+      } else {
+        assert.ok(
+          !authorityAutomationFiles.has(row.file),
+          `automation row '${row.id}' does NOT claim touchesAuthority, but an authority action is bound to an ` +
+            `automation surface in ${row.file}`
+        );
+      }
     }
   });
 
@@ -178,10 +277,15 @@ describe("non-MCP inventory — builds a valid action registry", () => {
     }
   });
 
-  test("no authority action id appears in the MCP inventory", () => {
+  test("no authority ACTION id appears in the MCP inventory", () => {
+    // `row.action`, not `row.id`. Checking the surface id would be vacuous:
+    // surface ids are dotted (`governance.pane.accept`) and MCP tool names are
+    // snake_case, so they cannot collide by construction and the assertion
+    // would pass no matter what. The action id is the thing that could
+    // plausibly be exposed as a tool, which is the mistake worth catching.
     const mcpTools = new Set(MCP_SURFACE_INVENTORY.map((r) => r.tool));
     for (const row of AUTHORITY_SURFACES) {
-      assert.ok(!mcpTools.has(row.id), `authority surface '${row.id}' also appears as an MCP tool`);
+      assert.ok(!mcpTools.has(row.action), `authority action '${row.action}' also appears as an MCP tool`);
     }
   });
 });
