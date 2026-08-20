@@ -839,9 +839,16 @@ async function reconcileBaselines(plugin: Plugin): Promise<void> {
       list.push(file.path);
       byUid.set(key, list);
     }
+    const uidAt = (p: string): string | null => {
+      const f = plugin.app.vault.getAbstractFileByPath(p);
+      if (!(f instanceof TFile)) return null;
+      const uid = (plugin.app.metadataCache.getFileCache(f)?.frontmatter as Record<string, unknown> | undefined)?.uid;
+      return typeof uid === "string" && uid.trim() ? uid.trim() : null;
+    };
     const plan = planBaselineReconcile({
       baselines: store.all(),
       noteExists: (p) => plugin.app.vault.getAbstractFileByPath(p) instanceof TFile,
+      uidAtPath: uidAt,
       pathsForUid: (uid) => byUid.get(uid) ?? [],
       hasBaseline: (p) => store.has(p),
     });
@@ -853,6 +860,12 @@ async function reconcileBaselines(plugin: Plugin): Promise<void> {
       }
     }
     console.info("governor governance: baseline reconcile —", summarizePlan(plan));
+    // Name what was left alone. A count alone is not a report: these are acceptances
+    // that stay detached until a human looks, so they must be findable in the console.
+    for (const u of plan.unresolved.slice(0, 50)) {
+      console.info(`  · ${u.reason}${u.target ? ` -> ${u.target}` : ""}: ${u.path}`);
+    }
+    if (plan.unresolved.length > 50) console.info(`  · …and ${plan.unresolved.length - 50} more`);
   } catch (e) {
     // A failed repair must never block the mount: the queue still works, the drifted
     // notes just keep reading as never-accepted until the next start.
@@ -1404,14 +1417,6 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
   // no interval).
   plugin.app.workspace.onLayoutReady(async () => {
     if (disposed) return;
-    // Repair baselines whose note moved while this plugin was NOT running — Obsidian
-    // closed, Sync landing a peer's move, a bulk script. The rename handler above can
-    // only see renames it witnesses; this is the residue, matched on the one identity
-    // that survives a move (the uid inside the baseline's own stored content).
-    // Runs BEFORE the first refresh so the queue's first paint already reflects it.
-    // Non-destructive by construction: the plan only repoints, never deletes.
-    await reconcileBaselines(plugin);
-    if (disposed) return;
     await refresh(plugin);
     try { pollState(plugin).lastSig = await journalSignature(plugin); } catch { /* first poll will refresh */ }
     if (disposed) return; // an unmount/unload may have landed during the awaited refresh above
@@ -1422,6 +1427,28 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
       pollJournal(plugin).catch((e) => console.error("governor acceptance: journal poll failed", e));
     }, JOURNAL_POLL_MS));
   });
+
+  // Repair baselines whose note moved while this plugin was NOT running — Obsidian
+  // closed, Sync landing a peer's move, a bulk script. The rename handler above only
+  // sees renames it witnesses; this is the residue, matched on the uid inside the
+  // baseline's own stored content.
+  //
+  // Gated on metadataCache "resolved", NOT onLayoutReady, because the uid map is read
+  // from that cache and a cold or PARTIAL cache is the one input that can do harm: with
+  // half the vault parsed, a uid carried by two notes looks like a confident single
+  // match, and repointing onto the wrong note can leave a byte-identical copy reading as
+  // accepted when nobody accepted it. "resolved" is the event that says the cache is
+  // done. One-shot (offref on first fire), disposed-gated, and followed by a refresh so
+  // the queue reflects the repair.
+  const onResolved = plugin.app.metadataCache.on("resolved", () => {
+    plugin.app.metadataCache.offref(onResolved);
+    if (disposed) return;
+    void (async () => {
+      await reconcileBaselines(plugin);
+      if (!disposed) await refresh(plugin);
+    })().catch((e) => console.error("governor governance: post-resolve reconcile failed", e));
+  });
+  component.registerEvent(onResolved);
 
   // Mark the mount live LAST — every await and registration above has succeeded, so the flag is
   // true only for a fully-wired mount (the settings-tab render can now show its controls). The

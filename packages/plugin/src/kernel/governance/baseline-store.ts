@@ -120,17 +120,36 @@ export class BaselineStore {
     const existing = this.cache.get(oldPath);
     if (!existing) return "no-baseline";
     if (this.cache.has(newPath)) return "target-exists";
-    await this.ensureDir();
+    // Claim the destination SYNCHRONOUSLY, before any await: the guard above and the
+    // write below straddle two awaits, so two concurrent rekeys onto one destination
+    // would otherwise both pass it and the loser's acceptance would be destroyed.
     const moved: Baseline = { ...existing, path: newPath };
-    await this.fs.write(fileFor(this.baseDir, newPath), JSON.stringify(moved, null, 2));
     this.cache.set(newPath, moved);
     this.cache.delete(oldPath);
     try {
+      await this.ensureDir();
+      await this.fs.write(fileFor(this.baseDir, newPath), JSON.stringify(moved, null, 2));
+    } catch (e) {
+      this.cache.delete(newPath);          // roll the claim back; nothing was written
+      this.cache.set(oldPath, existing);
+      throw e;
+    }
+    try {
       await this.fs.remove(fileFor(this.baseDir, oldPath));
-    } catch {
-      // The move already landed; a failed cleanup leaves a stale file that `load`
-      // ignores (it keys by the record's path, which now belongs to newPath's file).
-      // Never fail a rekey over it.
+    } catch (e) {
+      // The move landed, so never fail the rekey over cleanup — but do NOT pretend this
+      // is harmless: the stale blob still carries `path: oldPath`, so the next load()
+      // re-inserts the OLD baseline at the old path. That means a permanent
+      // "target-has-baseline" refusal on later reconciles, and a stale acceptance
+      // waiting for any note later created at that path. Say so.
+      console.warn(
+        "governor: baseline rekey left a stale blob at",
+        fileFor(this.baseDir, oldPath),
+        "— it will re-appear as a baseline for",
+        oldPath,
+        "on next load; remove it by hand.",
+        e
+      );
     }
     return "moved";
   }

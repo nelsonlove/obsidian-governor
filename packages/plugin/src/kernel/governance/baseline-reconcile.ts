@@ -60,6 +60,8 @@ export interface ReconcileInputs {
   baselines: Baseline[];
   /** Does a note exist at this path right now? */
   noteExists(path: string): boolean;
+  /** The uid of the note CURRENTLY at this path, or null (no note / no uid). */
+  uidAtPath(path: string): string | null;
   /** Live notes carrying this uid, in any order. */
   pathsForUid(uid: string): string[];
   /** Does this path already have its own baseline? */
@@ -98,14 +100,27 @@ export function uidOfContent(content: string): string | null {
  * someone may want to look at.
  */
 export function planBaselineReconcile(inputs: ReconcileInputs): ReconcilePlan {
-  const { baselines, noteExists, pathsForUid, hasBaseline } = inputs;
+  const { baselines, noteExists, uidAtPath, pathsForUid, hasBaseline } = inputs;
   const unresolved: Unresolved[] = [];
   const byTarget = new Map<string, { uid: string; baseline: Baseline }[]>();
 
   for (const baseline of baselines) {
-    if (noteExists(baseline.path)) continue; // still where it says it is
-
     const uid = uidOfContent(baseline.content);
+
+    // Drift is decided by IDENTITY, not by vacancy. Testing only "is the path empty?"
+    // misses the swap: an offline renumber that moves X→Y and Y→Z leaves Y's baseline
+    // attached to a DIFFERENT note, its path occupied, so it would never be
+    // reconsidered — a silently wrong diff base, and revertNote would write a foreign
+    // note's content over it. If the note now at this path carries a different uid,
+    // this baseline has drifted even though something lives there.
+    if (noteExists(baseline.path)) {
+      if (!uid) continue;                            // nothing to compare on; leave it
+      const occupantUid = uidAtPath(baseline.path);
+      if (occupantUid === null) continue;            // occupant has no uid — can't tell; leave it
+      if (occupantUid === uid) continue;             // same note, still in place
+      // else: someone else is standing here — fall through and repoint by uid.
+    }
+
     if (!uid) { unresolved.push({ path: baseline.path, reason: "no-uid" }); continue; }
 
     const live = pathsForUid(uid);

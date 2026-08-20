@@ -20,7 +20,8 @@ export async function makeTmpFs() {
     async write(p, data) { await fs.mkdir(path.dirname(p), { recursive: true }); await fs.writeFile(p, data); },
     async exists(p) { try { await fs.stat(p); return true; } catch { return false; } },
     async mkdir(p) { await fs.mkdir(p, { recursive: true }); },
-    async list(dir) {
+    async remove(p) { await fs.rm(p, { force: true }); },
+  async list(dir) {
       let entries;
       try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { return []; }
       return entries.filter((e) => e.isFile()).map((e) => path.join(dir, e.name));

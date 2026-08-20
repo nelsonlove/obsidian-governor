@@ -124,13 +124,23 @@ describe("planBaselineReconcile", () => {
   const base = (path, uid, acceptedAt = "2026-08-01T00:00:00.000Z") => ({
     path, content: noteWithUid(uid), hash: "h", acceptedAt, acceptedBy: "local-human",
   });
-  const plan = (baselines, live, existing = []) =>
-    planBaselineReconcile({
+  /**
+   * `live` maps uid -> [paths]. A note exists at P iff some uid lists P, and the uid AT P
+   * is that uid — so the fixture models identity, which is what the planner now decides on.
+   */
+  const plan = (baselines, live, existing = []) => {
+    const uidAt = (p) => {
+      for (const [uid, paths] of Object.entries(live)) if (paths.includes(p)) return uid;
+      return null;
+    };
+    return planBaselineReconcile({
       baselines,
-      noteExists: (p) => Object.values(live).flat().includes(p) && !baselines.some((b) => b.path === p && !Object.values(live).flat().includes(p)),
+      noteExists: (p) => uidAt(p) !== null,
+      uidAtPath: uidAt,
       pathsForUid: (uid) => live[uid] ?? [],
       hasBaseline: (p) => existing.includes(p),
     });
+  };
 
   test("a moved note is repointed by uid", () => {
     const p = plan([base("Old/a.md", "u1")], { u1: ["New/a.md"] });
@@ -183,6 +193,43 @@ describe("planBaselineReconcile", () => {
     assert.equal(p.repoint.length, 1);
     assert.equal(p.repoint[0].from, "Old/b.md", "the more recent acceptance is the one kept");
     assert.deepEqual(p.unresolved, [{ path: "Old/a.md", reason: "superseded", target: "Merged.md" }]);
+  });
+
+  test("SWAP: a baseline whose path is now occupied by a DIFFERENT note still drifts", () => {
+    // The offline renumber: X moves to Y's address while Y moves on. Y's baseline sits at
+    // an OCCUPIED path, so a vacancy test would never reconsider it and the baseline would
+    // stay bound to a foreign note — a silently wrong diff base, and revert would write
+    // that foreign content over it.
+    const yBaseline = base("Slots/02.md", "uid-Y");
+    const p = plan([yBaseline], { "uid-X": ["Slots/02.md"], "uid-Y": ["Slots/03.md"] });
+    assert.equal(p.repoint.length, 1, "the occupied path must not hide the drift");
+    assert.equal(p.repoint[0].to, "Slots/03.md", "it follows its own uid, not its old address");
+  });
+
+  test("an occupant with NO uid is not treated as a stranger", () => {
+    // Can't prove it is a different note, so leave the baseline alone rather than repoint
+    // on a guess.
+    const b = base("Here/a.md", "u1");
+    const p = planBaselineReconcile({
+      baselines: [b],
+      noteExists: () => true,
+      uidAtPath: () => null,
+      pathsForUid: () => ["Elsewhere/a.md"],
+      hasBaseline: () => false,
+    });
+    assert.deepEqual(p, { repoint: [], unresolved: [] });
+  });
+
+  test("a baseline with no uid whose path is occupied is left alone, not reported", () => {
+    const b = { path: "Here/a.md", content: "# no frontmatter\n", hash: "h", acceptedAt: "", acceptedBy: "x" };
+    const p = planBaselineReconcile({
+      baselines: [b],
+      noteExists: () => true,
+      uidAtPath: () => "someone-else",
+      pathsForUid: () => [],
+      hasBaseline: () => false,
+    });
+    assert.deepEqual(p, { repoint: [], unresolved: [] }, "no uid to compare on — silence beats a guess");
   });
 
   test("the plan is deterministic for the same store", () => {
