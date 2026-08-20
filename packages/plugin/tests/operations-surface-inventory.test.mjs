@@ -29,7 +29,7 @@
 
 import { test, describe, after } from "node:test";
 import assert from "node:assert/strict";
-import { rm, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { resolve as resolvePath } from "node:path";
 
 import {
@@ -37,6 +37,7 @@ import {
   scanUnknownRegistrationCallees,
   REGISTRATION_CALLEES,
   KNOWN_PASSTHROUGH_SITES,
+  KNOWN_NOT_REGISTRATION,
   PLUGIN_SRC,
 } from "./surface-scan.mjs";
 import {
@@ -69,34 +70,48 @@ describe("surface scan — the scanner resolves every registration it finds", ()
 
   test("no registration hides behind an unknown callee", async () => {
     const found = await scanUnknownRegistrationCallees();
-    // `refuse("base_parse_error", …)` and `refuse("base_timeout", …)` in
-    // tools-bases.ts are typed ERROR CODES that happen to match the tool-name
-    // shape. They are refusals, not registrations. Listed explicitly so a
-    // genuinely new registration callee still fails this test.
-    const KNOWN_FALSE_POSITIVES = [
-      { callee: "refuse", name: "base_parse_error" },
-      { callee: "refuse", name: "base_timeout" },
-    ];
-    const unexplained = found.filter(
-      (f) => !KNOWN_FALSE_POSITIVES.some((k) => k.callee === f.callee && k.name === f.name)
-    );
     assert.deepEqual(
-      unexplained,
+      found,
       [],
-      "a tool-name-shaped literal is passed to an identifier the scan does not know about, so a registration there " +
-        "would be invisible to this inventory:\n" +
-        unexplained.map((f) => `  ${f.callee}("${f.name}") in ${f.file}`).join("\n")
+      "a snake_case string literal is passed to an identifier that is neither a known registrar nor a known " +
+        "non-registration, so a registration there would be invisible to this inventory. Classify it in " +
+        "REGISTRATION_CALLEES or KNOWN_NOT_REGISTRATION:\n" +
+        found.map((f) => `  ${f.callee}("${f.name}") in ${f.file}`).join("\n")
     );
+  });
+
+  test("every non-registration callee is classified with a reason", () => {
+    assert.deepEqual([...KNOWN_NOT_REGISTRATION].map((k) => k.callee).sort(), ["codedError", "refuse"]);
+    for (const k of KNOWN_NOT_REGISTRATION) {
+      assert.ok(k.reason?.length > 20, `${k.callee} needs a stated reason it is not a registration`);
+    }
   });
 
   test("the known registration callees are the documented five", () => {
     assert.deepEqual([...REGISTRATION_CALLEES].sort(), ["capture", "origRegister", "reg", "register", "registerTool"]);
   });
 
-  test("the pass-through sites are the documented four", () => {
+  test("the pass-through sites are the documented four, and each really contains one", async () => {
     assert.equal(KNOWN_PASSTHROUGH_SITES.length, 4);
+    // Checking only that the strings are non-empty would let the file pointer
+    // be wrong without anything noticing — which is exactly what happened on
+    // the first draft of this list (it named `module.ts`, a types-only file,
+    // instead of `module-registry.ts` where the forwarding call lives). So
+    // each named file must EXIST and must actually contain a registration call
+    // whose first argument is a variable rather than a literal.
+    const repoRoot = resolvePath(PLUGIN_SRC, "../../..");
     for (const site of KNOWN_PASSTHROUGH_SITES) {
-      assert.ok(site.file && site.reason, `${site.file} needs a stated reason it cannot name a tool itself`);
+      assert.ok(site.reason?.length > 20, `${site.file} needs a stated reason it cannot name a tool itself`);
+      const abs = site.file.startsWith("packages/")
+        ? resolvePath(repoRoot, site.file)
+        : resolvePath(PLUGIN_SRC, "..", site.file);
+      const text = await readFile(abs, "utf8").catch(() => null);
+      assert.ok(text !== null, `${site.file} does not exist — the pass-through list points at nothing`);
+      assert.match(
+        text,
+        /\b(?:registerTool|origRegister|register|reg|capture)\(\s*[a-zA-Z_$][\w$.]*\s*,/,
+        `${site.file} contains no variable-named registration call, so it is not a pass-through site`
+      );
     }
   });
 });
@@ -127,6 +142,35 @@ describe("surface scan — proven against a planted registration", () => {
     );
     assert.equal(rescan.tools.get("obsidian_planted_violation").readOnly, false);
     assert.ok(!declared.has("obsidian_planted_violation"), "the planted tool is correctly absent from the declared inventory");
+  });
+
+  test("a registration through an UNKNOWN callee, under an unknown name prefix, is still reported", async () => {
+    // The class-closing half needs its own proof, and it needs the hard case:
+    // a callee nobody has seen before AND a name prefix this product does not
+    // currently publish. An earlier draft matched on a whitelist of known
+    // prefixes, so `skills_planted_thing` through a new registrar was
+    // invisible — the exact defect PR #170's review rejected. Deny-by-default
+    // is only worth claiming if it is demonstrated.
+    await writeFile(
+      planted,
+      [
+        "// [test artifact — safe to delete] planted by operations-surface-inventory.test.mjs",
+        // Declared locally so the planted file is VALID TypeScript. An
+        // interrupted run leaves this file on disk, and `npm test` runs
+        // `tsc --noEmit` before the suite — so a fixture referencing an
+        // undefined identifier would break the NEXT run rather than its own.
+        "const myBrandNewRegistrar: (n: string, d: unknown, h: unknown) => void = () => {};",
+        "export function registerPlanted() {",
+        '  myBrandNewRegistrar("skills_planted_thing", { annotations: { readOnlyHint: false } }, async () => ({}));',
+        "}",
+        "",
+      ].join("\n"),
+      "utf8"
+    );
+    const found = await scanUnknownRegistrationCallees();
+    const hit = found.find((f) => f.name === "skills_planted_thing");
+    assert.ok(hit, "an unknown callee with an unknown name prefix escaped the class-closing scan");
+    assert.equal(hit.callee, "myBrandNewRegistrar");
   });
 });
 

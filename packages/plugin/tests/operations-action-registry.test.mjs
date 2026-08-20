@@ -128,8 +128,24 @@ describe("action registry — bidirectional coverage", () => {
   });
 
   test("a binding naming a registered action at an unregistered VERSION is refused", () => {
+    // BOTH problems must fire. A stale binding left pointing at a version that
+    // no longer exists is not a door: the action it names still has none, and
+    // saying only "wrong version" would let an action with no working surface
+    // validate clean on the forward direction.
     const problems = problemsOf([readAction()], [binding({ actionVersion: 7 })]);
-    assert.deepEqual(problems, ["binding_unknown_action_version"]);
+    assert.deepEqual(problems.sort(), ["action_unbound", "binding_unknown_action_version"]);
+  });
+
+  test("a resolving binding at another version DOES give the id a door", () => {
+    // The counterpart to the case above, and the reason `action_unbound` is
+    // keyed on id rather than id+version: an older contract version stays
+    // registered so its fixtures remain checkable while doors move to the
+    // newer one. That is legitimate; a binding that fails to resolve is not.
+    const problems = problemsOf(
+      [readAction(), readAction({ version: 2 })],
+      [binding({ actionVersion: 2, id: "obsidian_read_note_v2" })]
+    );
+    assert.deepEqual(problems, []);
   });
 
   test("an action with no binding at all is refused (forward direction)", () => {

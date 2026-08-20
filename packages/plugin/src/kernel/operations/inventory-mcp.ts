@@ -15,6 +15,25 @@
 // field in this table (it is what the guard, the queue and the journal all key
 // on), which is exactly why it gets two authors.
 //
+// WHICH COLUMNS ARE CROSS-CHECKED, precisely — because "the inventory is
+// verified against source" would overstate it:
+//
+//   tool          cross-checked, both directions
+//   readOnly      cross-checked against the registration's own annotations
+//   everything else — module, distribution, postcondition, paths, gate,
+//                 discovered, refusesUnderScope — is SELF-REPORT: reviewed by
+//                 a human, not yet verified by a machine.
+//
+// That gap is not theoretical. Three rows in the first draft of this table
+// were wrong in exactly those unverified columns, and an independent review
+// caught them rather than a test: the three scheme-write tools claimed
+// `discovered: "none"` while moving notes through the link-healing rename
+// path; `obsidian_plugin_install`/`_uninstall` refuse outright under a scope
+// and were unmarked; and `obsidian_conformance_debt_render` was marked as
+// refusing outright when its refusal is per-path. Teaching the scanner to
+// verify `refusesUnderScope` and `discovered` is WP1 work — recorded here
+// rather than papered over.
+//
 // `distribution` is a JUDGMENT, applied from D07's profile, and it is the one
 // column a reader should argue with. The rules used, in order:
 //
@@ -181,8 +200,11 @@ const CLI: McpSurfaceRow[] = [
   { tool: "obsidian_note_history", readOnly: true, module: "core", distribution: "public-default", paths: ["path"], postcondition: "List a note's File Recovery version history.", gate: "the CLI binary resolves" },
   { tool: "obsidian_note_diff", readOnly: true, module: "core", distribution: "public-default", paths: ["path"], postcondition: "Diff two File Recovery or Sync versions of a note.", gate: "the CLI binary resolves" },
   { tool: "obsidian_base_create", readOnly: false, module: "core", distribution: "public-optional", paths: ["path"], discovered: "none", refusesUnderScope: true, postcondition: "Create a new item inside a Bases file.", gate: "the CLI binary resolves" },
-  { tool: "obsidian_plugin_install", readOnly: false, module: "core", distribution: "private", postcondition: "Install a community plugin by id.", gate: "the CLI binary resolves + settings.allowDangerousCli === true" },
-  { tool: "obsidian_plugin_uninstall", readOnly: false, module: "core", distribution: "private", postcondition: "Uninstall a community plugin by id; refuses on Governor itself.", gate: "the CLI binary resolves + settings.allowDangerousCli === true" },
+  // Both refuse OUTRIGHT under any active allowlist, the same unconditional
+  // shape as obsidian_cli and obsidian_base_create beside them — a plugin id
+  // is not a path, so the operation cannot be bounded by one.
+  { tool: "obsidian_plugin_install", readOnly: false, module: "core", distribution: "private", refusesUnderScope: true, postcondition: "Install a community plugin by id.", gate: "the CLI binary resolves + settings.allowDangerousCli === true" },
+  { tool: "obsidian_plugin_uninstall", readOnly: false, module: "core", distribution: "private", refusesUnderScope: true, postcondition: "Uninstall a community plugin by id; refuses on Governor itself.", gate: "the CLI binary resolves + settings.allowDangerousCli === true" },
 ];
 
 // ── CSS snippets — the considered `.obsidian` exception ──────────────────────
@@ -218,9 +240,18 @@ const SCHEME: McpSurfaceRow[] = [
   { tool: "obsidian_expected_location", readOnly: true, module: "scheme", distribution: "public-optional", paths: ["path"], postcondition: "Report whether a note or address is filed where its scheme expects." },
   // Owned by `scheme`, hand-registered in server.ts: the module host refuses a
   // registration whose readOnlyHint is not true.
-  { tool: "obsidian_assign_address", readOnly: false, module: "scheme", distribution: "public-optional", paths: ["path"], discovered: "none", postcondition: "Move a note to the next free address in a scope; never overwrites, because it always targets a free slot." },
-  { tool: "obsidian_refile_address", readOnly: false, module: "scheme", distribution: "public-optional", paths: ["path"], discovered: "none", postcondition: "Move a note to the folder its own address expects, or report it already correct." },
-  { tool: "obsidian_renumber_address", readOnly: false, module: "scheme", distribution: "public-optional", paths: ["path"], discovered: "none", postcondition: "Move a note to a specific address, optionally displacing the occupant first." },
+  //
+  // All three MOVE a note through `moveOne` -> `app.fileManager.renameFile`,
+  // Obsidian's link-aware rename, which rewrites OTHER notes' bodies to heal
+  // their links. So their blast radius is not in their arguments and they take
+  // the `unbounded` default, exactly like `obsidian_move_note(s)`. Marking them
+  // `none` would repeat the `obsidian_repoint_link` defect this table's own
+  // header cites as the reason the optimistic default is wrong. (Their result
+  // envelopes report `filesChanged: 1`, counting only the moved note — a
+  // separate under-count, noted here rather than fixed in this PR.)
+  { tool: "obsidian_assign_address", readOnly: false, module: "scheme", distribution: "public-optional", paths: ["path"], postcondition: "Move a note to the next free address in a scope; never overwrites, because it always targets a free slot." },
+  { tool: "obsidian_refile_address", readOnly: false, module: "scheme", distribution: "public-optional", paths: ["path"], postcondition: "Move a note to the folder its own address expects, or report it already correct." },
+  { tool: "obsidian_renumber_address", readOnly: false, module: "scheme", distribution: "public-optional", paths: ["path"], postcondition: "Move a note to a specific address, optionally displacing the occupant first." },
 ];
 
 // ── module: vocab ────────────────────────────────────────────────────────────
@@ -250,7 +281,12 @@ const HEALTH: McpSurfaceRow[] = [
 
 const CONFORMANCE: McpSurfaceRow[] = [
   { tool: "obsidian_conformance_debt", readOnly: true, module: "conformance-debt", distribution: "public-optional", paths: ["folder"], postcondition: "Report carried conformance debt against the accepted baseline: burn-down, staleness, budget." },
-  { tool: "obsidian_conformance_debt_render", readOnly: false, module: "conformance-debt", distribution: "public-optional", discovered: "none", refusesUnderScope: true, postcondition: "Materialize the debt report as a generated register note beside the baseline." },
+  // NOT refusesUnderScope. Its refusal is CONDITIONAL — it checks whether the
+  // computed register path is visible (`isVisible(notePath, settings)`) and
+  // succeeds when the allowlist happens to cover that folder. `refusesUnderScope`
+  // means "refuses outright whenever any scope is active", which is a stronger
+  // and different claim.
+  { tool: "obsidian_conformance_debt_render", readOnly: false, module: "conformance-debt", distribution: "public-optional", discovered: "none", postcondition: "Materialize the debt report as a generated register note beside the baseline, refusing when its computed path is outside the allowlist." },
 ];
 
 // ── module: provenance ───────────────────────────────────────────────────────

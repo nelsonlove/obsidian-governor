@@ -254,7 +254,6 @@ export function createActionRegistry(): ActionRegistry {
         });
         continue;
       }
-      boundActionIds.add(binding.action);
 
       const action = actions.get(actionKey(binding.action, binding.actionVersion));
       if (!action) {
@@ -268,6 +267,15 @@ export function createActionRegistry(): ActionRegistry {
         });
         continue;
       }
+
+      // Only a binding that RESOLVES counts as giving its action a door.
+      //
+      // Crediting the id before the version check would let a stale binding —
+      // one left pointing at a version that no longer exists after a bump —
+      // suppress `action_unbound` for an action that genuinely has no working
+      // door. That is precisely the "action with no door" defect this registry
+      // exists to catch, so the two problems must be able to fire together.
+      boundActionIds.add(binding.action);
 
       // The acceptance fence, stated as a build rule. `governorOnly` covers
       // more than admission — anything Governor reserves to itself — so this
