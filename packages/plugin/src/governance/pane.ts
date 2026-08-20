@@ -216,7 +216,7 @@ class GateModal extends Modal {
  * Returns the result, or null when nothing was accepted (open / cancel).
  * Any non-gate error rethrows to the caller's existing handler.
  */
-async function acceptThroughGate(
+export async function acceptThroughGate(
   app: App,
   deps: ReviewController,
   path: string,
