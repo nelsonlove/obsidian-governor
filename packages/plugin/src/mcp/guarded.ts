@@ -465,79 +465,77 @@ export function makeGuarded(opts: GuardedOpts) {
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function runGuarded(opts: GuardedOpts, def: any, handler: any, name: string | undefined, args: any, extra: any, mark: (phase: "queued" | "attempted") => void) {
-  {
-    const isMutating = def?.annotations?.readOnlyHint === false;
-    // Steps 1/1b/3 (uid resolution, scheme resolution, read-only+allowlist)
-    // live in resolveAndGuard so obsidian_write_notes can share the IDENTICAL
-    // resolution and refusal via resolveGuardedPath — one implementation, not two.
-    const resolved = resolveAndGuard(args ?? {}, isMutating, opts);
-    if ("blocked" in resolved) return codedError(resolved.blocked.code, resolved.blocked.message);
-    const callArgs = resolved.args;
-    // Kernel arguments are always PEELED OFF, kernel or not, so no handler ever
-    // sees one. What differs without a kernel is whether they can be honored:
-    //
-    //   • `if_rev` is FAIL-CLOSED. Without a kernel there is no probe and no
-    //     dequeue check, so the precondition cannot be evaluated at all — and
-    //     its whole purpose is to stop a write that would clobber someone
-    //     else's. Ignoring it would write unconditionally while the caller
-    //     believes it was guarded, which is the exact lost update the argument
-    //     exists to prevent. Refuse instead.
-    //   • `idempotency_key` degrades quietly to no collapsing, because its
-    //     failure mode is at-least-once (the pre-kernel status quo), not a
-    //     destructive one: the operation still does what the caller asked, a
-    //     retry just isn't deduplicated.
-    const { toolArgs, ifRev, idempotencyKey, intent } = splitKernelArgs(callArgs);
-    if (isMutating && !opts.kernel && ifRev !== undefined) {
-      return codedError(
-        "precondition_unsupported",
-        `'${name ?? def?.title ?? "this tool"}' cannot enforce if_rev: no kernel is active in this build, so the ` +
-          `target's revision cannot be checked. Nothing was written — retry without if_rev to write unconditionally.`
-      );
-    }
-    if (!isMutating || !opts.kernel) return handler(toolArgs, extra);
-    // The operation reaches the write queue here. Marked rather than assumed:
-    // every refusal above this line — read-only mode, the allowlist, an
-    // unresolved uid or address, an unenforceable if_rev — returns without ever
-    // queueing, and an envelope claiming otherwise would describe work nobody
-    // did.
-    mark("queued");
-    // Audit-of-intent (#91): the address forms the caller actually used,
-    // paired with what they resolved to at THIS interception — `target`
-    // records what was touched; this records what was asked for, so a stale
-    // or wrong index is visible in the record rather than silently absorbed.
-    const addressedAs = [
-      ...resolved.uidResolved.map(({ uid, path }) => ({ ref: `${UID_PREFIX}${uid}`, path })),
-      ...resolved.schemeResolved,
-    ];
-    try {
-      return await opts.kernel.runMutation(
-        {
-          op: name ?? def?.title ?? "unknown",
-          args: toolArgs,
-          actor: opts.actor(),
-          ref: refOf(toolArgs),
-          effectsOf: (result) => reportedEffects(toolArgs, result),
-          ...(ifRev !== undefined ? { ifRev } : {}),
-          ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
-          ...(intent !== undefined ? { intent } : {}),
-          ...(addressedAs.length > 0 ? { addressedAs } : {}),
-        },
-        () => {
-          // Inside the queued closure: this runs at DEQUEUE, after the kernel's
-          // own revision, record and lock checks have passed. Anything that
-          // refuses before this point never attempted an effect.
-          mark("attempted");
-          return handler(toolArgs, extra);
-        }
-      );
-    } catch (e) {
-      // Kernel-level failures are typed tool errors; anything else the handler
-      // threw keeps propagating to the SDK exactly as before.
-      if (e instanceof WriteTimeoutError) return codedError(e.code, e.message);
-      if (e instanceof RevConflictError) return codedError(e.code, e.message);
-      if (e instanceof RecordImmutableError) return codedError(e.code, e.message);
-      if (e instanceof IdempotencyMismatchError) return codedError(e.code, e.message);
-      throw e;
-    }
+  const isMutating = def?.annotations?.readOnlyHint === false;
+  // Steps 1/1b/3 (uid resolution, scheme resolution, read-only+allowlist)
+  // live in resolveAndGuard so obsidian_write_notes can share the IDENTICAL
+  // resolution and refusal via resolveGuardedPath — one implementation, not two.
+  const resolved = resolveAndGuard(args ?? {}, isMutating, opts);
+  if ("blocked" in resolved) return codedError(resolved.blocked.code, resolved.blocked.message);
+  const callArgs = resolved.args;
+  // Kernel arguments are always PEELED OFF, kernel or not, so no handler ever
+  // sees one. What differs without a kernel is whether they can be honored:
+  //
+  //   • `if_rev` is FAIL-CLOSED. Without a kernel there is no probe and no
+  //     dequeue check, so the precondition cannot be evaluated at all — and
+  //     its whole purpose is to stop a write that would clobber someone
+  //     else's. Ignoring it would write unconditionally while the caller
+  //     believes it was guarded, which is the exact lost update the argument
+  //     exists to prevent. Refuse instead.
+  //   • `idempotency_key` degrades quietly to no collapsing, because its
+  //     failure mode is at-least-once (the pre-kernel status quo), not a
+  //     destructive one: the operation still does what the caller asked, a
+  //     retry just isn't deduplicated.
+  const { toolArgs, ifRev, idempotencyKey, intent } = splitKernelArgs(callArgs);
+  if (isMutating && !opts.kernel && ifRev !== undefined) {
+    return codedError(
+      "precondition_unsupported",
+      `'${name ?? def?.title ?? "this tool"}' cannot enforce if_rev: no kernel is active in this build, so the ` +
+        `target's revision cannot be checked. Nothing was written — retry without if_rev to write unconditionally.`
+    );
+  }
+  if (!isMutating || !opts.kernel) return handler(toolArgs, extra);
+  // The operation reaches the write queue here. Marked rather than assumed:
+  // every refusal above this line — read-only mode, the allowlist, an
+  // unresolved uid or address, an unenforceable if_rev — returns without ever
+  // queueing, and an envelope claiming otherwise would describe work nobody
+  // did.
+  mark("queued");
+  // Audit-of-intent (#91): the address forms the caller actually used,
+  // paired with what they resolved to at THIS interception — `target`
+  // records what was touched; this records what was asked for, so a stale
+  // or wrong index is visible in the record rather than silently absorbed.
+  const addressedAs = [
+    ...resolved.uidResolved.map(({ uid, path }) => ({ ref: `${UID_PREFIX}${uid}`, path })),
+    ...resolved.schemeResolved,
+  ];
+  try {
+    return await opts.kernel.runMutation(
+      {
+        op: name ?? def?.title ?? "unknown",
+        args: toolArgs,
+        actor: opts.actor(),
+        ref: refOf(toolArgs),
+        effectsOf: (result) => reportedEffects(toolArgs, result),
+        ...(ifRev !== undefined ? { ifRev } : {}),
+        ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
+        ...(intent !== undefined ? { intent } : {}),
+        ...(addressedAs.length > 0 ? { addressedAs } : {}),
+      },
+      () => {
+        // Inside the queued closure: this runs at DEQUEUE, after the kernel's
+        // own revision, record and lock checks have passed. Anything that
+        // refuses before this point never attempted an effect.
+        mark("attempted");
+        return handler(toolArgs, extra);
+      }
+    );
+  } catch (e) {
+    // Kernel-level failures are typed tool errors; anything else the handler
+    // threw keeps propagating to the SDK exactly as before.
+    if (e instanceof WriteTimeoutError) return codedError(e.code, e.message);
+    if (e instanceof RevConflictError) return codedError(e.code, e.message);
+    if (e instanceof RecordImmutableError) return codedError(e.code, e.message);
+    if (e instanceof IdempotencyMismatchError) return codedError(e.code, e.message);
+    throw e;
   }
 }
