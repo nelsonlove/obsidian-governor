@@ -1,6 +1,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { transformAll, SKILL_PASSTHROUGH_FIELDS, type EmittedKind, type Generated, type NoteInput, type PolicyPlacement, type TreeNode } from "./transform.js";
+import {
+  transformAll, SKILL_PASSTHROUGH_FIELDS, NO_SKILLS_FIELD, PRELOAD_FIELD,
+  type Attachment, type EmittedKind, type Generated, type NoteInput, type PolicyPlacement,
+  type PreloadPlacement, type TreeNode,
+} from "./transform.js";
 import { resolveTransclusions, stripFrontmatter } from "./transclude.js";
 import type { SkillsSource } from "./skills-source.js";
 import { STATIC_FILES } from "./static-skills.js";
@@ -86,6 +90,8 @@ export interface ExportOptions {
   /** When set, write this version into the output's .claude-plugin/plugin.json
    *  (creating or updating it) — used by the release export. */
   version?: string;
+  /** How many preloaded skills on one agent trip the warning (see TransformOptions). */
+  preloadCap?: number;
   /** Test hook: overrides for iCloud materialization (downloader, poll, timeout). */
   assetOptions?: CollectAssetsOptions;
 }
@@ -122,7 +128,7 @@ function resolveParents(src: SkillsSource, sourcePath: string, v: unknown): stri
 // The vault-skills fields the transform reads (parent is handled separately, resolved to
 // paths), plus the SKILL.md passthrough fields — all namespaced the same way.
 const VS_FIELDS = [...new Set(["type", "root", "name", "id", "label", "description", "version", "tools", "model",
-  "crosscutting", "slot", "severity", ...SKILL_PASSTHROUGH_FIELDS])];
+  "crosscutting", "slot", "severity", PRELOAD_FIELD, NO_SKILLS_FIELD, ...SKILL_PASSTHROUGH_FIELDS])];
 
 /** Extract a bare view of the vault-skills fields (+ the raw parent value) per the field mode,
  *  so the pure transform stays namespace-agnostic. */
@@ -174,7 +180,7 @@ export async function collectNotes(src: SkillsSource, fields: DetectConfig = DEF
 }
 
 export async function runExport(src: SkillsSource, opts: ExportOptions): Promise<ExportSummary> {
-  const { generated, warnings, errors, vaultPath } = await collectAndTransform(src, opts.fields ?? DEFAULT_FIELDS, opts.pluginName);
+  const { generated, warnings, errors, vaultPath } = await collectAndTransform(src, opts.fields ?? DEFAULT_FIELDS, opts.pluginName, opts.preloadCap);
 
   ensurePluginManifest(opts.outputDir, opts.pluginName, opts.pluginDescription, opts.version);
 
@@ -263,6 +269,12 @@ export interface Analysis {
   errors: string[];
   warnings: string[];
   counts: { skills: number; agents: number; policies: number; commands: number };
+  /** Notes naming more than one parent: primary edge + recorded attachments. */
+  attachments: Attachment[];
+  /** What each agent's compiled `skills:` (preload) list carries, and the cap it was
+   *  checked against — context provisioning, not a permission boundary. */
+  preloads: PreloadPlacement[];
+  preloadCap: number;
 }
 
 /** Collected notes + transform result: the shared prologue for export, analyze, and preview,
@@ -273,6 +285,9 @@ interface Compiled {
   generated: Generated[];
   tree: TreeNode[];
   policies: PolicyPlacement[];
+  attachments: Attachment[];
+  preloads: PreloadPlacement[];
+  preloadCap: number;
   warnings: string[];
   errors: string[];
 }
@@ -291,11 +306,11 @@ function outputFileSet(generated: Generated[]): OutputFile[] {
   ];
 }
 
-async function collectAndTransform(src: SkillsSource, fields: DetectConfig, pluginName: string): Promise<Compiled> {
+async function collectAndTransform(src: SkillsSource, fields: DetectConfig, pluginName: string, preloadCap?: number): Promise<Compiled> {
   const collectWarnings: string[] = [];
   const notes = await collectNotes(src, fields, collectWarnings);
   const vaultPath = src.basePath() ?? undefined;
-  const result = transformAll(notes, { pluginName, synthesizeRoot: true, vaultPath });
+  const result = transformAll(notes, { pluginName, synthesizeRoot: true, vaultPath, preloadCap });
   result.warnings.unshift(...collectWarnings);
   return { notes, vaultPath, ...result };
 }
@@ -314,9 +329,12 @@ function readManifestFiles(outputDir: string): string[] {
 }
 
 /** Shared read-only core for `validate` and `tree`: collect + transform, no write. */
-export async function analyzeVault(src: SkillsSource, fields: DetectConfig = DEFAULT_FIELDS, pluginName = "vault-skills"): Promise<Analysis> {
-  const c = await collectAndTransform(src, fields, pluginName);
-  return { tree: c.tree, errors: c.errors, warnings: c.warnings, counts: countsOf(c.tree, c.notes) };
+export async function analyzeVault(src: SkillsSource, fields: DetectConfig = DEFAULT_FIELDS, pluginName = "vault-skills", preloadCap?: number): Promise<Analysis> {
+  const c = await collectAndTransform(src, fields, pluginName, preloadCap);
+  return {
+    tree: c.tree, errors: c.errors, warnings: c.warnings, counts: countsOf(c.tree, c.notes),
+    attachments: c.attachments, preloads: c.preloads, preloadCap: c.preloadCap,
+  };
 }
 
 export type PreviewStatus = "added" | "modified" | "unchanged";
@@ -344,6 +362,11 @@ export interface PreviewResult {
   removed: string[];
   diff: { added: number; modified: number; unchanged: number; removed: number };
   policies: PolicyPlacement[];
+  /** Notes naming more than one parent: primary edge + recorded attachments. */
+  attachments: Attachment[];
+  /** What each agent's compiled `skills:` (preload) list carries, and the cap. */
+  preloads: PreloadPlacement[];
+  preloadCap: number;
   errors: string[];
   warnings: string[];
   counts: Analysis["counts"];
@@ -362,9 +385,10 @@ const isAssetPath = (p: string): boolean => p.startsWith("skills/") && !/^skills
  *  Never writes; never collects assets. */
 export async function previewVault(
   src: SkillsSource,
-  opts: { outputDir: string; pluginName: string; fields?: DetectConfig },
+  opts: { outputDir: string; pluginName: string; fields?: DetectConfig; preloadCap?: number },
 ): Promise<PreviewResult> {
-  const { notes, generated, tree, warnings, errors, policies } = await collectAndTransform(src, opts.fields ?? DEFAULT_FIELDS, opts.pluginName);
+  const { notes, generated, tree, warnings, errors, policies, attachments, preloads, preloadCap } =
+    await collectAndTransform(src, opts.fields ?? DEFAULT_FIELDS, opts.pluginName, opts.preloadCap);
 
   const files = outputFileSet(generated);
 
@@ -395,7 +419,7 @@ export async function previewVault(
       unchanged: entries.filter((e) => e.status === "unchanged").length,
       removed: removed.length,
     },
-    policies, errors, warnings,
+    policies, attachments, preloads, preloadCap, errors, warnings,
     counts: countsOf(tree, notes),
     outputDir: opts.outputDir,
     assetsNote: "bundled skill assets are not previewed",

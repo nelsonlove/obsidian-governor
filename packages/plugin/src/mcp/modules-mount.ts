@@ -407,6 +407,7 @@ const SKILLS_CONFIG_FIELDS: ConfigField[] = [
   { key: "assetsRoot", label: "Supporting-files tree", type: "text", help: "Root of a parallel filesystem tree of skills' supporting files. Blank ⇒ none. ~ is expanded." },
   { key: "releaseDir", label: "Release repo directory", type: "text", help: "A git checkout vault_skills_release targets. Blank ⇒ release disabled. ~ is expanded." },
   { key: "exportOnSave", label: "Export on save (GUI)", type: "toggle", help: "When on, the in-Obsidian skills GUI re-exports automatically (debounced) whenever a skill/agent/policy/command note changes. Off ⇒ export only when you run it. Ignored by the MCP tool surface." },
+  { key: "preloadCap", label: "Preload cap (warn above)", type: "number", help: "How many `preload: true` skills may be compiled into one agent's `skills:` list before the compile warns. A warning, not a refusal — preloading is context provisioning, and a large set spends the fresh context window a subagent is delegated for." },
 ];
 
 const SKILLS_MANIFEST: ModuleManifest = {
@@ -422,8 +423,16 @@ const SKILLS_MANIFEST: ModuleManifest = {
   },
   directory: {
     tools: [
-      { name: "vault_skills_validate", purpose: "Collect skill/agent/policy/command notes and run the transform without writing; report errors, warnings, and counts.", readOnly: true },
-      { name: "vault_skills_tree", purpose: "Return the current agent/skill hierarchy (name, kind, parent, level, owned skills, children).", readOnly: true },
+      {
+        name: "vault_skills_validate",
+        purpose: "Collect skill/agent/policy/command notes and run the transform without writing; report errors, warnings, counts, multi-parent attachments, and each agent's preload set.",
+        readOnly: true,
+        caveats: [
+          "A note may name several parents: the first is primary (tree edge, breadcrumb, level), the rest are recorded attachments. Every named parent is validated — it must resolve and be an agent.",
+          "The compiled `skills:` list is PRELOAD (context provisioning), not an allowlist: skills a subagent isn't given stay invokable through the Skill tool. Past the configured cap the compile warns.",
+        ],
+      },
+      { name: "vault_skills_tree", purpose: "Return the current agent/skill hierarchy (name, kind, primary parent, level, owned skills, children, extra-parent attachments, preload flags).", readOnly: true },
       {
         name: "vault_skills_preview",
         purpose: "Run the transform without writing and diff it against the current export.",
