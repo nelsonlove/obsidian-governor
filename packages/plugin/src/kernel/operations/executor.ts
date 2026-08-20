@@ -95,7 +95,20 @@ export class AuthoritySurfaceError extends OperationRefusedError {
 export interface OperationRequest {
   action: string;
   actionVersion: number;
-  surface: { kind: SurfaceKind; id: string };
+  /**
+   * The surface invoking this action.
+   *
+   * `kind` is a CLAIM, and is used only to describe an invocation whose surface
+   * does not resolve — where there is no binding to ask. Whenever a binding
+   * does resolve, the REGISTRY's kind wins and the claim is discarded.
+   *
+   * That distinction is load-bearing rather than pedantic: the authority fence
+   * is defined over surface kind, so honouring a caller's claim would let one
+   * present `kind: "internal"` for an agent-reachable surface and walk straight
+   * through it. Same principle as the actor binding — Governor derives what
+   * decides authority; the caller's label is descriptive.
+   */
+  surface: { kind?: SurfaceKind; id: string };
   inputs: unknown;
   /** Present once sessions exist (WP5); null until then. */
   sessionId?: string | null;
@@ -260,7 +273,11 @@ export function createOperationExecutor(opts: OperationExecutorOpts): OperationE
         schema: "governor.operation/v1",
         id: newId(),
         action: { id: request.action, version: request.actionVersion },
-        surface: { ...request.surface },
+        // The caller's claim, used only until a binding resolves and replaces
+        // it. `mcp` is the conservative default for an unresolved surface: it
+        // is agent-reachable, so a refusal record never under-states what was
+        // attempted.
+        surface: { kind: request.surface.kind ?? "mcp", id: request.surface.id },
         // Derived, never taken from inputs. A caller that sends `actor` or
         // `signer` is ignored here and refused at the registry.
         actor: opts.actor(),
@@ -298,12 +315,22 @@ export function createOperationExecutor(opts: OperationExecutorOpts): OperationE
         refuse(new UnboundSurfaceError(request.surface.id, `${request.action}@${request.actionVersion}`));
       }
 
-      // The runtime half of the acceptance fence. Checked against the surface
-      // the CALLER presented, not the one the inventory declared — the two can
-      // differ for a runtime-named surface, and that gap is the whole reason
-      // this check exists in addition to the build-time one.
-      if (action!.authority.governorOnly && isAgentReachable(request.surface.kind)) {
-        refuse(new AuthoritySurfaceError(request.surface.id, request.surface.kind, action!.id));
+      // From here the REGISTRY's kind is the truth, and the caller's claim is
+      // discarded. The envelope is corrected too, so a record never carries a
+      // kind the registry disagrees with.
+      operation.surface = { kind: binding!.kind, id: binding!.id };
+
+      // The runtime half of the acceptance fence, decided over what the
+      // registry says this surface IS — never over what the caller said it is.
+      // Deciding it from the request would make the fence opt-out: a caller
+      // presenting `kind: "internal"` for an MCP tool would pass.
+      //
+      // This is still worth having alongside the build-time check, for the
+      // reason that check cannot cover: a third-party publisher's bindings are
+      // created at connection time from names that are not in this repository,
+      // so no source scan ever sees them.
+      if (action!.authority.governorOnly && isAgentReachable(binding!.kind)) {
+        refuse(new AuthoritySurfaceError(binding!.id, binding!.kind, action!.id));
       }
 
       mark(operation, "resolved");

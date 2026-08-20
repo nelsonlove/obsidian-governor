@@ -40,16 +40,17 @@ export interface ExternalToolSnapshot {
 /**
  * Build the registry a single connection executes against.
  *
- * Validation is deliberately NOT run here. `validate()` seals the registry, and
- * a sealed registry cannot accept a late binding — but more importantly, a
- * validation problem at connection time is not a reason to refuse the
- * connection: the declared inventory's correctness is a BUILD property, proven
- * by `operations-surface-inventory.test.mjs`. Re-deciding it per connection
- * would turn a build failure into a runtime outage.
+ * Validation IS run, and it SEALS this registry — no binding can be added after
+ * construction. That is correct for a per-connection registry, which is built
+ * once from a snapshot and never extended; it also means a caller cannot slip a
+ * late binding past the checks.
  *
- * Problems are returned so the caller can report them the way the module host
- * already reports its own: loudly, to the console, without costing the
- * connection.
+ * What validation deliberately does NOT do here is refuse the connection. A
+ * validation problem is a BUILD defect — the declared inventory's correctness
+ * is proven by `operations-surface-inventory.test.mjs` — and turning one into a
+ * runtime outage would punish the user for a maintainer's mistake. Problems are
+ * returned so the caller reports them the way the module host already reports
+ * its own: loudly, to the console, without costing the connection.
  */
 export function buildMcpActionRegistry(external: ExternalToolSnapshot[] = []): {
   registry: ActionRegistry;

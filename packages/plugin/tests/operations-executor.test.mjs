@@ -550,3 +550,70 @@ describe("operation executor — input normalization", () => {
     assert.notEqual(a.operation.normalizedInputDigest, b.operation.normalizedInputDigest);
   });
 });
+
+// ── the fence decides over the registry, not over the caller ─────────────────
+
+describe("operation executor — a caller cannot talk its way past the fence", () => {
+  test("claiming `kind: internal` for an agent-reachable surface does not bypass it", async () => {
+    // The fence is defined over surface kind. If it honoured the caller's
+    // claim it would be opt-out: present `internal` and walk through. Same
+    // principle as the actor binding — Governor derives what decides
+    // authority, and the caller's label is descriptive only.
+    const registry = createActionRegistry();
+    registry.register(admitAction());
+    registry.bind({ kind: "mcp", id: "obsidian_admit", action: "authority.admit", actionVersion: 1 });
+    const executor = fixtureExecutor(registry);
+    let ran = false;
+    await assert.rejects(
+      () =>
+        executor.run(
+          {
+            action: "authority.admit",
+            actionVersion: 1,
+            // The lie.
+            surface: { kind: "internal", id: "obsidian_admit" },
+            inputs: {},
+          },
+          async () => {
+            ran = true;
+          }
+        ),
+      AuthoritySurfaceError
+    );
+    assert.equal(ran, false, "the registry says this surface is mcp; the claim must not override it");
+  });
+
+  test("the recorded surface kind is the registry's, not the caller's", async () => {
+    const closed = [];
+    const executor = fixtureExecutor(fixtureRegistry(), { onClose: (op) => closed.push(op) });
+    await executor.run(
+      { action: "note.read", actionVersion: 1, surface: { kind: "internal", id: "obsidian_read_note" }, inputs: {} },
+      async () => "x"
+    );
+    assert.equal(closed[0].surface.kind, "mcp", "a record must not carry a kind the registry disagrees with");
+  });
+
+  test("a claim is still recorded when no binding resolves, because there is nothing else to say", async () => {
+    const closed = [];
+    const executor = fixtureExecutor(fixtureRegistry(), { onClose: (op) => closed.push(op) });
+    await assert.rejects(
+      () =>
+        executor.run(
+          { action: "note.mystery", actionVersion: 1, surface: { kind: "automation", id: "nowhere" }, inputs: {} },
+          async () => "x"
+        ),
+      UnregisteredActionError
+    );
+    assert.equal(closed[0].surface.kind, "automation");
+  });
+
+  test("an omitted kind defaults to the agent-reachable one, so a refusal never under-states", async () => {
+    const closed = [];
+    const executor = fixtureExecutor(fixtureRegistry(), { onClose: (op) => closed.push(op) });
+    await assert.rejects(
+      () => executor.run({ action: "note.mystery", actionVersion: 1, surface: { id: "nowhere" }, inputs: {} }, async () => "x"),
+      UnregisteredActionError
+    );
+    assert.equal(closed[0].surface.kind, "mcp");
+  });
+});
