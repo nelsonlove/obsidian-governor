@@ -192,13 +192,17 @@ guard-patched interception point as hand-registered tools. See [modules.md](modu
   allowlist: it comes from an opt-in `preload: true` per skill, capped with a warning
   (`preloadCap`, default 5). The tools-level lockout `no-skills: true` compiles
   `disallowedTools: [Skill]`.
-- **`provenance`** (default off, mutating) — the obsidian-provenance CLI fold:
-  `provenance_check` (derived-note freshness against its `derived-from:` sources),
-  `provenance_reconcile` (installed vs enabled vs noted plugins), and the dry-run-by-default
-  `provenance_regen` (regenerates the plugin-audit note, preserving `<!-- human:start -->`
-  sections). It stamps derivation metadata (`derived-from` / `generated` / `generator` /
-  `derivation-mode`) — orthogonal to acceptance, with regen's write routed through the
-  accept-forbidden rule.
+- **`provenance`** (default off, mutating) — the obsidian-provenance CLI fold
+  ([provenance.md](provenance.md)): `provenance_check` (derived-note freshness against its
+  `derived-from:` sources), `provenance_reconcile` (installed vs enabled vs noted plugins),
+  and the dry-run-by-default `provenance_regen` (regenerates the plugin-audit note,
+  preserving `<!-- human:start -->` sections). It stamps derivation metadata
+  (`derived-from` / `generated` / `generator` / `derivation-mode`) — orthogonal to
+  acceptance, with regen's write routed through the accept-forbidden rule. Freshness is
+  mtime-based and now sees DELETED sources too: a non-glob entry resolving to nothing is
+  always reported (`missing`), and deletions inside a glob are caught when the note stamps
+  the opt-in `derived-source-count:` witness (`sourcesRemoved`) — without it the verdict
+  carries `globDeletionsUndetectable: true` rather than implying a clean check.
 - **`health`** (default off, read-only) — the obsidian-vault-health fold: `obsidian_health`
   (whole-vault scan, findings tiered by fix risk) and `obsidian_lint` (the same scan scoped
   to a folder or note). Report-only; deliberately not allowlist-scoped (a partial report

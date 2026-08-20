@@ -482,8 +482,9 @@ const SKILLS_MANIFEST: ModuleManifest = {
 // (check / reconcile) and one mutating (regen).
 //
 // DERIVATION ≠ ACCEPTANCE: the module stamps `derived-from` / `generated` /
-// `generator` / `derivation-mode` on the audit note it regenerates — provenance
-// metadata, orthogonal to acceptance. `provenance_regen`'s write routes through
+// `generator` / `derivation-mode` — plus the `derived-source-count` witness that
+// lets a later freshness check see DELETED sources — on the audit note it
+// regenerates: provenance metadata, orthogonal to acceptance. `provenance_regen`'s write routes through
 // the accept-forbidden guard like every write; it contributes no accept verb.
 const PROVENANCE_CONFIG_FIELDS: ConfigField[] = [
   {
@@ -501,7 +502,7 @@ const PROVENANCE_MANIFEST: ModuleManifest = {
     "Derived-content provenance, ported from the obsidian-provenance CLI: check whether a note's `derived-from` " +
     "sources changed after it was `generated` (freshness), audit installed vs enabled vs noted Obsidian plugins, and " +
     "regenerate the plugin-audit note. Stamps DERIVATION metadata only (derived-from / generated / generator / " +
-    "derivation-mode) — orthogonal to acceptance; regen's write can never set an acceptance field, routing through " +
+    "derivation-mode / derived-source-count) — orthogonal to acceptance; regen's write can never set an acceptance field, routing through " +
     "the accept-forbidden guard like every write.",
   config: {
     fields: PROVENANCE_CONFIG_FIELDS,
@@ -515,7 +516,12 @@ const PROVENANCE_MANIFEST: ModuleManifest = {
         purpose: "Report whether a derived note is FRESH or STALE against its own `derived-from:` sources.",
         readOnly: true,
         options: [{ name: "path", what: "vault-relative path of the derived note to check" }],
-        caveats: ["A source file modified after the note's `generated:` timestamp marks it stale; a missing `derived-from` is an error."],
+        caveats: [
+          "A source file modified after the note's `generated:` timestamp marks it stale; a missing `derived-from` is an error.",
+          "Deletions: a NON-GLOB entry that no longer resolves is always reported (`missing`); deletions inside a GLOB " +
+            "entry are seen only when the note stamps the optional `derived-source-count:` witness (a lower count now ⇒ " +
+            "`sourcesRemoved`). Without it the result carries `globDeletionsUndetectable: true` rather than implying a clean check.",
+        ],
       },
       {
         name: "provenance_reconcile",

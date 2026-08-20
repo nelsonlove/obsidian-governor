@@ -29,6 +29,46 @@ export async function resolveSource(source: ProvenanceSource, entry: string): Pr
   return st?.type === "file" ? [entry] : [];
 }
 
+/** The resolution of a whole `derived-from` list — what `checkFreshness` needs
+ *  in order to speak about DELETED sources, and what a Governor generator needs
+ *  in order to stamp the source-count witness over the same set. */
+export interface ResolvedEntries {
+  /** Every resolved file, in entry order. Duplicates are KEPT when two entries
+   *  name the same file: this is the list `FreshnessVerdict.sources` reports and
+   *  the number the `derived-source-count` witness counts, so the witness and
+   *  the check are the same arithmetic by construction. */
+  files: string[];
+  /** NON-GLOB entries that resolved to nothing — a missing / moved / deleted
+   *  source, unambiguously (a plain path names exactly one file). Glob entries
+   *  are never listed here: a glob matching nothing may be perfectly legitimate
+   *  (an empty folder is not an error), so an empty glob is reported only
+   *  through the count witness, never as a "missing" entry. */
+  missing: string[];
+  /** True when at least one entry is a glob — i.e. when this note has a source
+   *  class whose deletions the resolution alone cannot see. */
+  hasGlob: boolean;
+}
+
+/** Resolve a whole `derived-from` list at once, recording which non-glob entries
+ *  named nothing. One pass over the entries; `resolveSource` per entry, so glob
+ *  and literal semantics are unchanged. */
+export async function resolveEntries(
+  source: ProvenanceSource,
+  entries: string[],
+): Promise<ResolvedEntries> {
+  const files: string[] = [];
+  const missing: string[] = [];
+  let hasGlob = false;
+  for (const entry of entries) {
+    const glob = isGlob(entry);
+    hasGlob ||= glob;
+    const resolved = await resolveSource(source, entry);
+    if (resolved.length === 0 && !glob) missing.push(entry);
+    files.push(...resolved);
+  }
+  return { files, missing, hasGlob };
+}
+
 /** The newest mtime (epoch ms) among the given paths, or 0 when the list is
  *  empty — the port of Python `latest_mtime`. A path whose stat is missing
  *  contributes 0 (Python would have raised; here an absent source file simply
