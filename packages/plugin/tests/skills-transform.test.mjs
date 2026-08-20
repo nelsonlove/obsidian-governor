@@ -192,12 +192,17 @@ describe("multi-parent: the first parent is primary, the rest are attachments", 
     assert.deepEqual(r.errors, ["Shared.md: parent Other.md is not an agent"]);
   });
 
-  test("a note naming itself as a parent is an error", () => {
-    const r = compile([
+  test("a note naming itself as a parent is an error, in any position of the list", () => {
+    const asExtra = compile([
       agent("Root.md", { root: true }),
       agent("Alpha.md", {}, ["Root.md", "Alpha.md"]),
     ]);
-    assert.deepEqual(r.errors, ["Alpha.md: names itself as a parent"]);
+    assert.deepEqual(asExtra.errors, ["Alpha.md: names itself as a parent"]);
+    const asPrimary = compile([
+      agent("Root.md", { root: true }),
+      agent("Alpha.md", {}, ["Alpha.md"]),
+    ]);
+    assert.deepEqual(asPrimary.errors, ["Alpha.md: names itself as a parent"]);
   });
 
   test("the same parent listed twice warns and attaches once", () => {
@@ -296,6 +301,25 @@ describe("preload compilation is opt-in and follows attachment", () => {
     assert.match(frontmatterOf(fileFor(r, "agents/alpha.md")), /^tools: \[Read, Skill\]$/m);
   });
 
+  test("a `disable-model-invocation` skill is dropped from the preload set with a warning", () => {
+    // Platform constraint: "You can't preload skills that set `disable-model-invocation:
+    // true`, since preloading draws from the same set of skills Claude can invoke" — a listed
+    // one is skipped and logged, so the compiled `skills:` must not claim it.
+    const r = compile([
+      agent("Root.md", { root: true }),
+      agent("Alpha.md", {}, ["Root.md"]),
+      skill("Manual.md", { preload: true, "disable-model-invocation": true }, ["Alpha.md"]),
+    ]);
+    assert.deepEqual(r.errors, []);
+    assert.ok(r.warnings.some((w) => /can't be preloaded/.test(w)), JSON.stringify(r.warnings));
+    assert.ok(!/^skills:/m.test(frontmatterOf(fileFor(r, "agents/alpha.md"))));
+    assert.deepEqual(r.preloads, []);
+    assert.equal(r.tree.find((n) => n.name === "manual").preload, undefined);
+    // It is still attached, and still emitted as a skill.
+    assert.match(fileFor(r, "agents/alpha.md"), /not preloaded[^\n]*`vault-skills:manual`/);
+    assert.match(fileFor(r, "skills/manual/SKILL.md"), /disable-model-invocation: true/);
+  });
+
   test("`preload` on an agent (or `no-skills` on a skill) is a no-op and says so", () => {
     const r = compile([
       agent("Root.md", { root: true }),
@@ -335,12 +359,27 @@ describe("preload compilation is opt-in and follows attachment", () => {
       assert.equal(r.preloads.find((p) => p.agent === "alpha").overCap, false);
     });
 
-    test("the cap is configurable", () => {
+    test("the cap is configurable, and a nonsense value degrades to the default (as the config does)", () => {
       const strict = compile(many(3), { preloadCap: 2 });
       assert.ok(strict.warnings.some((w) => /exceeds the preload cap of 2/.test(w)));
       const loose = compile(many(3), { preloadCap: 10 });
       assert.deepEqual(loose.warnings, []);
       assert.equal(loose.preloadCap, 10);
+      // 0 is a legal cap (warn on any preload); a negative is not a cap at all.
+      assert.equal(compile(many(1), { preloadCap: 0 }).preloadCap, 0);
+      assert.ok(compile(many(1), { preloadCap: 0 }).warnings.some((w) => /cap of 0/.test(w)));
+      assert.equal(compile(many(1), { preloadCap: -3 }).preloadCap, DEFAULT_PRELOAD_CAP);
+      assert.equal(compile(many(1), { preloadCap: Number.NaN }).preloadCap, DEFAULT_PRELOAD_CAP);
+    });
+
+    test("the reported preload path uses the readable label for the synthesized root", () => {
+      const r = transformAll(
+        [skill("S.md", { preload: true })],
+        { pluginName: "vault-skills", synthesizeRoot: true },
+      );
+      assert.deepEqual(r.preloads, [
+        { agent: "vault", path: "(synthesized root)", skills: ["vault-skills:s"], overCap: false },
+      ]);
     });
 
     test("the cap counts per AGENT, not per vault", () => {
