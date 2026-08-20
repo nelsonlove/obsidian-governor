@@ -1,7 +1,7 @@
 {
   "id": "governor",
   "name": "Governor",
-  "version": "0.15.1",
+  "version": "0.15.2",
   "minAppVersion": "1.6.6",
   "description": "Governed agent access to your vault: an embedded MCP server, a write journal, and a human-only acceptance perimeter.",
   "author": "Nelson Love",
