@@ -26,6 +26,7 @@ surface, the socket/bridge architecture, the path allowlist). These docs go deep
 | [modules.md](modules.md) | The module system: the `ModuleRegistry` + mount, settings-toggleable capability modules, the read-only mount gate, and the accept/baseline tripwire. |
 | [scope-provider.md](scope-provider.md) | The scope provider module: Johnny Decimal `jd:` addressing and read-only allocation (compute, not reserve). |
 | [vocabulary.md](vocabulary.md) | The vocabulary provider module: read-only validation of tags, properties, types, and glossary terms. |
+| [skills.md](skills.md) | The skills module: compiling vault notes into a Claude Code plugin — the flat output, multi-valued `parent:` (first primary, rest attachments), opt-in `preload:` (context provisioning, not access control) with its cap, and the `no-skills:` tools-level lockout. |
 | [crosssession.md](crosssession.md) | The cross-session channel module: coordination-log discovery by frontmatter, delta reads, read-receipt attestation, and posting refused while stale (`stale_read`). |
 | [triage.md](triage.md) | The inbox-triage module: the disposition substrate (#221) and its second instance (#241 phase-3 shape) — three built-in primitives plus human-declared disposition rows over inbox notes, Base-backed queues, one dry-run-by-default guarded tool, no pane. |
 | [bases.md](bases.md) | The Bases module: `base_list` / `base_query`, the detached-leaf capture design (public API only, no expression re-implementation), timeout/serialization/allowlist behavior, caps, and the triage named-queues consumer. |

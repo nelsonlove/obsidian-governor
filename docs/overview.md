@@ -183,9 +183,15 @@ guard-patched interception point as hand-registered tools. See [modules.md](modu
   `obsidian_vocabularies`, `obsidian_resolve_term`, `obsidian_validate_terms`,
   `obsidian_list_vocabulary`.
 - **`skills`** (default off, mutating) — compiles the vault's skill/agent/policy/command
-  notes into a Claude Code plugin: three read tools (`vault_skills_validate` / `_tree` /
-  `_preview`) and three mutating (`_export`, `_release`, `_mark`); `vault_skills_mark`
-  routes through the accept-forbidden write rule like the other frontmatter writers.
+  notes into a Claude Code plugin ([skills.md](skills.md)): three read tools
+  (`vault_skills_validate` / `_tree` / `_preview`) and three mutating (`_export`,
+  `_release`, `_mark`); `vault_skills_mark` routes through the accept-forbidden write rule
+  like the other frontmatter writers. The compiled output is flat, so `parent:` is an
+  organizational edge, multi-valued — first primary (breadcrumb/level/ownership), the rest
+  recorded attachments — and an agent's compiled `skills:` list is a PRELOAD set, not an
+  allowlist: it comes from an opt-in `preload: true` per skill, capped with a warning
+  (`preloadCap`, default 5). The tools-level lockout `no-skills: true` compiles
+  `disallowedTools: [Skill]`.
 - **`provenance`** (default off, mutating) — the obsidian-provenance CLI fold:
   `provenance_check` (derived-note freshness against its `derived-from:` sources),
   `provenance_reconcile` (installed vs enabled vs noted plugins), and the dry-run-by-default
