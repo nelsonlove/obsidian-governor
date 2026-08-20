@@ -15,8 +15,62 @@
 //     retention and access rules that govern them, which is what lets a
 //     payload be pruned without destroying the evidence that it existed.
 
-import { nonAuthoritativeDigest, normalizeInputs } from "../operations/operation.js";
+import { createHash } from "node:crypto";
 import type { CaptureLevel } from "./capture-policy.js";
+
+/**
+ * Stable serialization for a payload digest — WITHOUT truncation.
+ *
+ * Deliberately not `normalizeInputs`. That one collapses long strings to
+ * `<N chars>`, which is right for an OPERATION identity digest (it keeps note
+ * bodies out of a metadata record and only has to distinguish invocations) but
+ * catastrophic here: two entirely different 500-character note bodies would
+ * produce the same evidence digest, and distinguishing what was returned is
+ * most of what an evidence-level observation is FOR.
+ *
+ * Measured before fixing, not assumed: `{body: "A".repeat(500)}` and
+ * `{body: "B".repeat(500)}` digested identically under the truncating
+ * normalizer.
+ */
+function stableSerialize(value: unknown): string {
+  const path = new Set<object>();
+  const walk = (v: unknown): unknown => {
+    if (v === null || v === undefined) return null;
+    if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") return v;
+    if (typeof v === "bigint") return `${v}n`;
+    if (Array.isArray(v)) return v.map(walk);
+    if (typeof v === "object") {
+      if (path.has(v as object)) return "<circular>";
+      path.add(v as object);
+      try {
+        if (v instanceof Date) return `<date:${Number.isNaN(v.getTime()) ? "invalid" : v.toISOString()}>`;
+        const out: Record<string, unknown> = {};
+        for (const k of Object.keys(v as Record<string, unknown>).sort()) out[k] = walk((v as Record<string, unknown>)[k]);
+        return out;
+      } finally {
+        path.delete(v as object);
+      }
+    }
+    return String(v);
+  };
+  return JSON.stringify(walk(value));
+}
+
+/**
+ * SHA-256 over the exact serialized payload.
+ *
+ * Cryptographic here, unlike the operation-identity digest, because this one
+ * has an adversary. An agent that could produce two payloads with the same
+ * observation digest could make a proposal cite evidence of having read
+ * something other than what it read. FNV-64 is a fine cache key and a poor
+ * answer to that.
+ *
+ * `node:crypto` is available: the plugin is `isDesktopOnly` and already uses
+ * Node's `net` and `fs` from the renderer.
+ */
+export function payloadDigest(payload: unknown): string {
+  return `sha256:${createHash("sha256").update(stableSerialize(payload), "utf8").digest("hex")}`;
+}
 
 export interface ObservationSource {
   identity: string;
@@ -106,9 +160,9 @@ export function buildObservation(input: BuildObservationInput): ObservationV1 | 
     effectiveScopeDigest: input.effectiveScopeDigest,
     sourceState: input.sourceState.map((s) => ({ ...s })),
     result: {
-      // A digest of the payload, never the payload. Same discipline the write
-      // journal already follows for arguments.
-      digest: nonAuthoritativeDigest(normalizeInputs(input.payload)),
+      // A digest of the payload, never the payload — over the FULL content, so
+      // two different results can never look like the same one.
+      digest: payloadDigest(input.payload),
       payloadObject: input.level === "replayable" ? input.payloadObject! : null,
       orderMaterial: input.orderMaterial ?? false,
       truncated: input.truncated ?? false,
