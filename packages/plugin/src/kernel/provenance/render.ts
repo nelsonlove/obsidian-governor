@@ -3,11 +3,11 @@
 // `render.py`. Pure string manipulation, no source access.
 
 import type { Reconciliation } from "./plugins.js";
-import { SOURCE_COUNT_FIELD } from "./freshness.js";
 import {
   AUDIT_GENERATOR,
   AUDIT_DERIVATION_MODE,
   DEFAULT_NOTES_DIR,
+  SOURCE_COUNT_FIELD,
   auditDerivedFrom,
 } from "./provenance-config.js";
 

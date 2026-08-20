@@ -106,6 +106,18 @@ describe("checkFreshness: fresh vs stale (port of test_freshness.py)", () => {
     assert.equal(v.fresh, true);
   });
 
+  test("REGRESSION: an untouched note still reads FRESH — the new rules add no false positive", async () => {
+    const src = fakeBackend({
+      notes: { "audit.md": { "derived-from": ["a.md", "b.md"], generated: GEN_2035 } },
+      stats: { "a.md": { type: "file", mtime: MS_2001 }, "b.md": { type: "file", mtime: MS_2001 } },
+    });
+    const v = await checkFreshness(src, "audit.md");
+    assert.equal(v.fresh, true);
+    assert.deepEqual(v.changed, []);
+    assert.deepEqual(v.missing, []);
+    assert.equal(v.sourcesRemoved, undefined);
+  });
+
   test("REGRESSION: the pre-existing fields keep their names and meaning", async () => {
     const src = fakeBackend({
       notes: { "audit.md": { "derived-from": ["a.md", "b.md"], generated: GEN_2020 } },
@@ -301,6 +313,17 @@ describe("resolveSource: glob defers to source.glob; literal keeps only a file",
     assert.equal(r.hasGlob, true);
   });
 
+  test("resolveEntries KEEPS duplicates when two entries name the same file", async () => {
+    // Load-bearing: the witness counts the length of THIS list, so de-duplicating
+    // here would silently under-count overlapping entries and read stale forever.
+    const src = fakeBackend({
+      stats: { "a.md": { type: "file", mtime: 1 } },
+      globs: { "*.md": ["a.md"] },
+    });
+    const r = await resolveEntries(src, ["a.md", "*.md"]);
+    assert.deepEqual(r.files, ["a.md", "a.md"]);
+  });
+
   test("resolveEntries over plain paths only reports hasGlob false", async () => {
     const src = fakeBackend({ stats: { "note.md": { type: "file", mtime: 1 } } });
     const r = await resolveEntries(src, ["note.md"]);
@@ -467,6 +490,25 @@ describe("regenerateAudit: reports unnoted and preserves the human section", () 
     assert.equal(after.fresh, false, "a deleted source must make the audit STALE");
     assert.deepEqual(after.sourcesRemoved, { expected: 4, actual: 3 });
     assert.deepEqual(after.changed, [], "nothing was modified — this is the blind spot the witness closes");
+  });
+
+  test("the witness is correct under a non-default notesDir — trailing slash included", async () => {
+    for (const notesDir of ["Meta/Plugins", "Meta/Plugins/"]) {
+      const src = fakeBackend({
+        globs: {
+          ".obsidian/plugins/*/manifest.json": [],
+          "Meta/Plugins/*.md": ["Meta/Plugins/A.md", "Meta/Plugins/Plugins.md"], // audit note present
+        },
+        stats: { ".obsidian/community-plugins.json": { type: "file", mtime: 1 } },
+        files: { ".obsidian/community-plugins.json": JSON.stringify([]) },
+      });
+      const out = await regenerateAudit(src, "2036-01-01T00:00:00", notesDir);
+      // 2 notes (one is the audit itself) + community-plugins.json = 3; the audit
+      // already resolves, so nothing is added for it.
+      assert.match(out, /^derived-source-count: 3$/m, `notesDir ${JSON.stringify(notesDir)}`);
+      assert.equal(auditPath(notesDir), "Meta/Plugins/Plugins.md");
+      assert.deepEqual(auditDerivedFrom(notesDir)[0], "Meta/Plugins/*.md");
+    }
   });
 
   test("auditPath derives the note name from the notes-dir basename", () => {

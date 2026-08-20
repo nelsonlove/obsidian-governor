@@ -15,7 +15,7 @@ export type {
   ProvenanceBackend,
   FileStat,
 } from "./provenance-source.js";
-export { checkFreshness, SOURCE_COUNT_FIELD, type FreshnessVerdict } from "./freshness.js";
+export { checkFreshness, type FreshnessVerdict } from "./freshness.js";
 export { resolveSource, resolveEntries, latestMtime, isGlob, type ResolvedEntries } from "./sources.js";
 export { reconcile, type Reconciliation, type PluginManifest } from "./plugins.js";
 export { renderAudit, extractSections, reinsertSections } from "./render.js";
@@ -24,6 +24,7 @@ export {
   DEFAULT_NOTES_DIR,
   AUDIT_GENERATOR,
   AUDIT_DERIVATION_MODE,
+  SOURCE_COUNT_FIELD,
   DEFAULT_PROVENANCE_CONFIG,
   auditDerivedFrom,
   provenanceConfigOf,
