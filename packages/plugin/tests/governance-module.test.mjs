@@ -547,7 +547,12 @@ describe("#101 dispositions-as-data: THE TRIPWIRE — the wrap adds no reachable
       if (!onClick.test(lines[i])) continue;
       onClickCount++;
       const body = lines.slice(i, i + 4).join("\n");
-      assert.match(body, /isRealGesture/, "menu item onClick must still gate on isRealGesture (defense in depth)");
+      // Deliberately NOT asserting isRealGesture on the menu callback. #299 added it as defence
+      // in depth; a live smoke test on 0.15.0 (file explorer, left sidebar) then showed Obsidian
+      // renders this as a NATIVE Electron menu whose onClick receives no DOM Event, so the check
+      // rejected every real click and the item was inert. Asserting it here would pin the feature
+      // broken. The invariant that matters is unchanged and enforced below: a menu callback may
+      // hand off to the modal flow and may NOT reach an accept-capable call.
       assert.match(body, /runMenuAccept/, "menu item onClick must only hand off to the confirm-modal flow");
       // The accept-capable calls must NOT be reachable from the menu callback itself.
       assert.ok(!/acceptThroughGate|acceptViaMenu|\bdeps\.accept\b/.test(body),
