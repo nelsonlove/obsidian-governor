@@ -64,8 +64,11 @@ witness below, and is invisible without one.
 
 A generator may stamp how many source files the **whole** `derived-from` set
 resolved to at generation time — the length of the same list `provenance_check`
-reports as `sources`, so the witness and the check are the same arithmetic. When
-the current count is **lower**, sources were removed:
+reports as `sources` — **including duplicates**, when two entries name the same
+file — so the witness and the check are the same arithmetic. A generator that
+counts a de-duplicated set over overlapping entries under-counts, and its note
+reads permanently stale. When the current count is **lower**, sources were
+removed:
 
 ```json
 "sourcesRemoved": { "expected": 48, "actual": 47 }
@@ -103,6 +106,7 @@ non-numeric) is treated exactly like an absent one.
 | --- | --- |
 | Detection is **mtime-based** | `touch`ing a source with no content change ⇒ **false stale**. Edit-and-revert ⇒ still stale (the mtime moved). There is no content digest. |
 | **Plain-path** deletions | Always caught. |
+| A plain-path entry that is **optional**, names a **folder**, or never existed | Indistinguishable from a deletion — the check sees "this entry names no file" and nothing more. It lands in `missing` and the note stays STALE permanently, through any number of regenerations, until the entry is removed from `derived-from`. Declare only sources you require. |
 | **Glob** deletions | Caught **only** with a `derived-source-count` witness; otherwise invisible, and flagged as such. |
 | **Additions** | Caught by mtime, for globs and plain paths alike. No witness needed. |
 | Delete + move-in with a **preserved mtime** | Undetectable. A `mv` within a filesystem keeps the file's mtime, so both the count and the newest mtime can be unchanged after a real substitution. |
@@ -118,7 +122,7 @@ rendered frontmatter list also comes from) and stamps
 `derived-source-count: <n>`. Delete a plugin note afterwards and
 `provenance_check` reports `sourcesRemoved`, with no mtime anywhere having moved.
 
-Two details of that note in particular:
+Three details of that note in particular:
 
 - **The audit is a source of itself.** It lives at `{notesDir}/<basename>.md`,
   which its own `{notesDir}/*.md` glob matches. So the count is stamped for the
@@ -131,6 +135,14 @@ Two details of that note in particular:
   in `changed` and reads STALE immediately after a regen. That is a wart of
   that particular `derived-from` list — a glob cannot say "everything here except
   me" — not of the deletion detection above.
+
+- **The audit declares one source that is really optional.**
+  `.obsidian/community-plugins.json` is a plain-path entry, but `reconcile` treats
+  it as optional (absent ⇒ nothing enabled). In a vault where it does not exist —
+  no community plugin has yet been enabled — the audit reports
+  `missing: [".obsidian/community-plugins.json"]` and reads STALE about a file
+  that was absent from the start. The same class as the third row of the limits table
+  above; narrow in practice, since Obsidian writes that file on the first enable.
 
 Two other Governor generators were considered and deliberately **not** stamped:
 
@@ -147,11 +159,15 @@ not touched: the field is simply **readable** if they choose to stamp it.
 
 ## The verdict shape
 
-`provenance_check` returns, additively over the original shape (`fresh`,
-`changed`, `sources`, `generated` keep their names and meaning):
+`provenance_check` returns, additively over the original shape. `changed`,
+`sources` and `generated` keep their names **and** their meaning. `fresh` keeps
+its name but is deliberately **stricter** than before — an empty `missing` and no
+`sourcesRemoved` are new conditions on it, which is exactly the change this
+detection makes: a note whose plain-path source was deleted used to read fresh.
 
 | Key | Always present? | Meaning |
 | --- | --- | --- |
+| `path` | yes | the note that was checked (echoed back) |
 | `fresh` | yes | no `changed`, no `missing`, no `sourcesRemoved` |
 | `changed` | yes | resolved source files with mtime > `generated` |
 | `sources` | yes | every file the `derived-from` set resolved to |

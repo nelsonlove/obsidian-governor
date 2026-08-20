@@ -257,8 +257,11 @@ export function registerProvenanceTools(
     async ({ path }) => {
       try {
         const v = await checkFreshness(source as ProvenanceSource, path);
-        // Additive: `fresh` / `changed` / `sources` / `generated` keep their
-        // meaning and names; the deleted-source fields are new keys beside them.
+        // Additive in SHAPE: `changed` / `sources` / `generated` keep their names
+        // and meaning, and the deleted-source fields are new keys beside them.
+        // `fresh` keeps its name but is deliberately STRICTER — `missing` empty
+        // and no `sourcesRemoved` are new conditions, which is the whole point:
+        // a note whose plain-path source was deleted used to read fresh.
         return ok({
           path,
           fresh: v.fresh,

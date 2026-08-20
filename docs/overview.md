@@ -197,7 +197,8 @@ guard-patched interception point as hand-registered tools. See [modules.md](modu
   `derived-from:` sources), `provenance_reconcile` (installed vs enabled vs noted plugins),
   and the dry-run-by-default `provenance_regen` (regenerates the plugin-audit note,
   preserving `<!-- human:start -->` sections). It stamps derivation metadata
-  (`derived-from` / `generated` / `generator` / `derivation-mode`) — orthogonal to
+  (`derived-from` / `generated` / `generator` / `derivation-mode` /
+  `derived-source-count`) — orthogonal to
   acceptance, with regen's write routed through the accept-forbidden rule. Freshness is
   mtime-based and now sees DELETED sources too: a non-glob entry resolving to nothing is
   always reported (`missing`), and deletions inside a glob are caught when the note stamps

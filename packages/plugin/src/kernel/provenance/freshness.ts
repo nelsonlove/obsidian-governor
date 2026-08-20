@@ -48,11 +48,7 @@
 
 import type { ProvenanceSource } from "./provenance-source.js";
 import { resolveEntries } from "./sources.js";
-
-/** The optional frontmatter field a derived note may carry to witness how many
- *  source files its `derived-from` set resolved to at generation time. Opt-in:
- *  absent ⇒ the glob half of the check degrades to pre-witness behavior. */
-export const SOURCE_COUNT_FIELD = "derived-source-count";
+import { SOURCE_COUNT_FIELD } from "./provenance-config.js";
 
 export interface FreshnessVerdict {
   fresh: boolean;
@@ -81,12 +77,16 @@ export interface FreshnessVerdict {
   globDeletionsUndetectable: boolean;
 }
 
-/** Read the `derived-source-count` witness. Accepts a number (Obsidian types a
- *  numeric property as one) or a numeric string; anything else — a negative, a
- *  fraction, a non-numeric string, an absent field — reads as NO witness, which
- *  degrades to pre-witness behavior rather than inventing a comparison. */
+/** Read the `derived-source-count` witness. Accepts a non-negative integer
+ *  number (Obsidian types a numeric property as one) or a digits-only string;
+ *  anything else — a negative, a fraction, any other string, an absent field —
+ *  reads as NO witness, which degrades to pre-witness behavior rather than
+ *  inventing a comparison. */
 function sourceCountWitness(v: unknown): number | undefined {
-  const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
+  // The string branch is DIGITS ONLY, not bare `Number()`: `"0x30"` would
+  // otherwise read as 48 and `"1e3"` as 1000, neither of which is what anyone
+  // typed into frontmatter. A value we cannot read plainly is no witness.
+  const n = typeof v === "number" ? v : typeof v === "string" && /^\d+$/.test(v.trim()) ? Number(v.trim()) : NaN;
   return Number.isInteger(n) && n >= 0 ? n : undefined;
 }
 

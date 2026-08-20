@@ -17,8 +17,14 @@ import { DEFAULT_NOTES_DIR, auditDerivedFrom } from "./provenance-config.js";
  * folder rather than mis-named after the default).
  */
 export function auditPath(notesDir: string = DEFAULT_NOTES_DIR): string {
-  const base = notesDir.replace(/\/+$/, "").split("/").pop() || notesDir;
-  return `${notesDir}/${base}.md`;
+  // Trailing slashes are stripped from the DIRECTORY too, not just when deriving
+  // the basename: `provenanceConfigOf` normalizes what reaches the tool, but this
+  // is an exported kernel function with a defaulted argument, and a
+  // `Meta/Plugins//Plugins.md` here would disagree with `auditDerivedFrom`'s
+  // single-slash glob — enough to make the audit's own source count off by one.
+  const dir = notesDir.replace(/\/+$/, "") || notesDir;
+  const base = dir.split("/").pop() || dir;
+  return `${dir}/${base}.md`;
 }
 
 /**
@@ -39,6 +45,11 @@ export async function regenerateAudit(
   notesDir: string = DEFAULT_NOTES_DIR,
 ): Promise<string> {
   const recon = await reconcile(source, notesDir);
+  // This deliberately re-walks two globs `reconcile` just walked. The point is
+  // that the witness is resolved by the SAME function `checkFreshness` will use,
+  // over the SAME entry list the frontmatter declares — reusing reconcile's
+  // internals would tie the count to what the audit happens to parse (a
+  // malformed manifest it skips is still a source file) and let the two drift.
   const { files } = await resolveEntries(source, auditDerivedFrom(notesDir));
   // The audit note lives INSIDE its own `{notesDir}/*.md` source glob — it is a
   // source of itself. Count the set as it will be AFTER this regen lands, so a
