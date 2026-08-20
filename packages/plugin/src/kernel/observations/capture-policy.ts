@@ -92,8 +92,17 @@ export function decideCapture(input: CaptureDecisionInput): CaptureDecision {
     floor = "replayable";
     reason = "substantive vault content read inside a governed session";
   } else if (substantive) {
-    floor = "evidence";
-    reason = "substantive read outside a governed session: identities and state are retained, the payload is not";
+    // `strongestOf`, not a hardcoded "evidence". The default table says a
+    // substantive ad hoc read is evidence "unless policy enables replayable" —
+    // and the action's own declared default IS that policy. Hardcoding the
+    // floor silently downgraded an action explicitly marked `replayable`
+    // (something verification-adjacent, say) the moment it was read outside a
+    // governed session, with no signal that anything had been overruled.
+    floor = strongestOf("evidence", action.observations.defaultCapture);
+    reason =
+      floor === "evidence"
+        ? "substantive read outside a governed session: identities and state are retained, the payload is not"
+        : `substantive read outside a governed session, raised to '${floor}' by the action's own declared default`;
   } else {
     floor = action.observations.defaultCapture;
     reason = `non-substantive read; the action's declared default (${action.observations.defaultCapture}) applies`;
