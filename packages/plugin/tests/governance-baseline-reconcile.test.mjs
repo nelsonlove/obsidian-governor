@@ -27,6 +27,7 @@ import {
   summarizePlan,
 } from "../src/kernel/governance/baseline-reconcile.ts";
 import { contentHash } from "../src/kernel/governance/hash.ts";
+import { baselineRekeyRecord } from "../src/kernel/governance/accept.ts";
 
 /** In-memory BlobFs. */
 function fakeFs(seed = {}) {
@@ -251,5 +252,78 @@ describe("planBaselineReconcile", () => {
     const p = plan([base("Old/a.md", "u1"), base("Gone/b.md", "u9")], { u1: ["New/a.md"] });
     assert.match(summarizePlan(p), /1 repointed/);
     assert.match(summarizePlan(p), /uid-not-found: 1/);
+  });
+});
+
+describe("the rekey audit record — a repair that hides itself is indistinguishable from tampering", () => {
+  // The manual repair that motivated this module rewrote 158 baselines and left NO trace
+  // in acceptance-log.jsonl. governor-lead caught it: an auditor reading that log would
+  // conclude nothing happened, in precisely the store where that distinction is the product.
+  const rec = baselineRekeyRecord({
+    ts: "2026-08-20T05:00:00.000Z",
+    from: "Old/a.md", to: "New/a.md", uid: "u1", hash: "h1", reason: "reconcile",
+  });
+
+  test("carries from, to, uid and the UNCHANGED hash", () => {
+    assert.deepEqual(rec, {
+      event: "baseline-rekey",
+      ts: "2026-08-20T05:00:00.000Z",
+      path: "New/a.md",
+      from: "Old/a.md",
+      to: "New/a.md",
+      uid: "u1",
+      hash: "h1",
+      reason: "reconcile",
+    });
+  });
+
+  test("`path` is the NEW path, so `path` means the same thing in every log record", () => {
+    assert.equal(rec.path, rec.to);
+  });
+
+  test("the hash is recorded so a reader can VERIFY it did not change", () => {
+    // Not decoration: the record's whole claim is "this moved and advanced nothing".
+    assert.equal(rec.hash, "h1");
+  });
+
+  test("the rename path records uid: null rather than overstating what was checked", () => {
+    const r = baselineRekeyRecord({
+      ts: "t", from: "a.md", to: "b.md", uid: null, hash: "h", reason: "rename",
+    });
+    assert.equal(r.uid, null, "no identity matching happened — do not claim one");
+    assert.equal(r.reason, "rename");
+  });
+
+  test("it is not an acceptance record — no `action`, no `by`", () => {
+    // Anything scanning for human dispositions must not pick this up as one.
+    assert.equal("action" in rec, false);
+    assert.equal("by" in rec, false);
+  });
+});
+
+describe("reconcile MOVES a baseline, never MINTS one", () => {
+  // The one failure this module exists to prevent: a note that was never accepted must
+  // not acquire a baseline at startup, which would silently mark unreviewed content as
+  // accepted. Pinned two ways.
+  test("the plan only ever names baselines that already exist", () => {
+    const b = { path: "Old/a.md", content: noteWithUid("u1"), hash: "h", acceptedAt: "t", acceptedBy: "x" };
+    const p = planBaselineReconcile({
+      baselines: [b],
+      noteExists: (x) => x === "New/a.md",
+      uidAtPath: (x) => (x === "New/a.md" ? "u1" : null),
+      pathsForUid: () => ["New/a.md"],
+      hasBaseline: () => false,
+    });
+    assert.equal(p.repoint.length, 1);
+    for (const r of p.repoint) {
+      assert.equal(r.baseline, b, "every repoint carries an EXISTING baseline, not a new one");
+    }
+  });
+
+  test("rekey on a path with no baseline creates nothing", async () => {
+    const { store, fs } = await storeWith([]);
+    assert.equal(await store.rekey("Never/accepted.md", "Somewhere/else.md"), "no-baseline");
+    assert.equal(store.has("Somewhere/else.md"), false, "no baseline minted");
+    assert.equal(fs.files.size, 0, "and nothing written to disk");
   });
 });

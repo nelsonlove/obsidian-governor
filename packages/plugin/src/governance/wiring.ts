@@ -73,6 +73,7 @@ import {
   acceptNote,
   revertNote,
   silentAdvanceRecord,
+  baselineRekeyRecord,
   formatLocalMinutes,
   type AcceptDeps,
   type AcceptResult,
@@ -845,6 +846,11 @@ async function reconcileBaselines(plugin: Plugin): Promise<void> {
       const uid = (plugin.app.metadataCache.getFileCache(f)?.frontmatter as Record<string, unknown> | undefined)?.uid;
       return typeof uid === "string" && uid.trim() ? uid.trim() : null;
     };
+    // An EMPTY uid map means the read produced nothing — a cache that is not really
+    // ready, or a vault with no uids at all. Either way every baseline would resolve to
+    // "uid-not-found" and the run would report a vault-wide loss that is an artifact of
+    // the read. Nothing to repair from no data: no-op rather than sweep.
+    if (byUid.size === 0) return;
     const plan = planBaselineReconcile({
       baselines: store.all(),
       noteExists: (p) => plugin.app.vault.getAbstractFileByPath(p) instanceof TFile,
@@ -857,7 +863,20 @@ async function reconcileBaselines(plugin: Plugin): Promise<void> {
       const outcome = await store.rekey(move.from, move.to);
       if (outcome !== "moved") {
         console.warn("governor governance: baseline reconcile skipped", move.from, "->", move.to, outcome);
+        continue;
       }
+      // Audit EVERY move. The manual repair that motivated this module rewrote 158
+      // baselines and left no trace in acceptance-log.jsonl — an auditor reading that log
+      // would have concluded nothing happened. The perimeter's own evidence store must
+      // not be rewritten silently, even losslessly.
+      await appendLog(plugin, baselineRekeyRecord({
+        ts: new Date().toISOString(),
+        from: move.from,
+        to: move.to,
+        uid: move.uid,
+        hash: move.baseline.hash,
+        reason: "reconcile",
+      })).catch((e) => console.error("governor governance: rekey audit append failed", move.to, e));
     }
     console.info("governor governance: baseline reconcile —", summarizePlan(plan));
     // Name what was left alone. A count alone is not a report: these are acceptances
@@ -1234,7 +1253,21 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
     // acceptance nobody gave (see BaselineStore.rekey).
     const store = baselineStores.get(plugin);
     if (!store) return;
-    void store.rekey(oldPath, file.path).catch((e) =>
+    const moving = store.get(oldPath);
+    void store.rekey(oldPath, file.path).then(async (outcome) => {
+      if (outcome !== "moved" || !moving) return;
+      // Same audit obligation as the reconcile path: the store moved, so the log says so.
+      // `uid` is null here — this move follows Obsidian's own rename event, so no identity
+      // matching was involved and claiming one would overstate what was checked.
+      await appendLog(plugin, baselineRekeyRecord({
+        ts: new Date().toISOString(),
+        from: oldPath,
+        to: file.path,
+        uid: null,
+        hash: moving.hash,
+        reason: "rename",
+      }));
+    }).catch((e) =>
       console.error("governor governance: baseline rekey failed", oldPath, "->", file.path, e)
     );
   }));
