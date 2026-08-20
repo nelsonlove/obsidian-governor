@@ -40,6 +40,7 @@ export type HistoryKind =
   | "withdraw-request"
   | "silent-advance"
   | "auto-accept"
+  | "baseline-rekey"
   | "unknown";
 
 export interface HistoryEntry {
@@ -107,6 +108,20 @@ export function toHistoryEntry(r: Record<string, unknown>): HistoryEntry {
       toHash: str(r.toHash) || undefined,
     };
   }
+  if (r.event === "baseline-rekey") {
+    // A re-addressing, not an advance: one hash, shown on both sides so the history
+    // reads as "unchanged" at a glance.
+    const hash = str(r.hash) || undefined;
+    const from = str(r.from);
+    return {
+      kind: "baseline-rekey",
+      ts,
+      path: str(r.path),
+      detail: from ? `from ${from}${str(r.reason) ? ` (${str(r.reason)})` : ""}` : str(r.reason),
+      fromHash: hash,
+      toHash: hash,
+    };
+  }
   if (r.event === "auto-accept") {
     // Today's records carry `classes` (the class allowlist path). A future auto-accept variant
     // with a different `reason` still surfaces — the reason lands in the detail text.
@@ -150,6 +165,7 @@ const KIND_LABEL: Record<HistoryKind, string> = {
   revert: "reverted",
   "request-changes": "changes requested",
   "withdraw-request": "request withdrawn",
+  "baseline-rekey": "baseline re-keyed",
   "silent-advance": "silent advance",
   "auto-accept": "auto-accepted",
   unknown: "record",

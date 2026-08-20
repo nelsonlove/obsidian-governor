@@ -24,6 +24,9 @@ export interface BlobFs {
   exists(path: string): Promise<boolean>;
   mkdir(path: string): Promise<void>;
   list(dir: string): Promise<string[]>; // full paths of files directly under dir
+  /** Delete a blob. Only ever called on a baseline file this store itself wrote, and
+   *  only after its replacement has been written — see `rekey`. */
+  remove(path: string): Promise<void>;
 }
 
 export interface Baseline {
@@ -77,8 +80,10 @@ export class BaselineStore {
   get size(): number { return this.cache.size; }
 
   // Advance (or create) the baseline for a note to `content`, attributed to `acceptedBy`.
-  // This is the ONLY mutation of a baseline; both Accept and the silent human-edit path
-  // funnel through here.
+  // This is the only thing that ADVANCES a baseline — the only place `acceptedAt`/`acceptedBy`
+  // are ever stamped; both Accept and the silent human-edit path funnel through here. (`rekey`
+  // also writes baseline files, but it only RE-ADDRESSES an existing one and stamps nothing,
+  // which is exactly why it does not route through this method.)
   async setBaseline(
     path: string,
     content: string,
@@ -96,6 +101,59 @@ export class BaselineStore {
     await this.fs.write(fileFor(this.baseDir, path), JSON.stringify(baseline, null, 2));
     this.cache.set(path, baseline);
     return baseline;
+  }
+
+  /**
+   * Move a baseline to a new note path, preserving the acceptance verbatim.
+   *
+   * This is a RE-ADDRESSING, not an acceptance: `content`, `hash`, `acceptedAt` and
+   * `acceptedBy` are carried across untouched, so the human decision the baseline
+   * records is the same decision afterwards — only the note's location changed.
+   * It is deliberately NOT routed through `setBaseline`, which would stamp a fresh
+   * `acceptedAt`/`acceptedBy` and thereby forge an acceptance nobody gave.
+   *
+   * Refuses rather than overwrites when the destination already has a baseline: that
+   * baseline is a live acceptance of the note now at that path, and it must outrank a
+   * stale record of some other path. Write-then-delete order means a crash mid-way
+   * leaves a duplicate (harmless: `load` keys by the record's own `path`), never a gap.
+   */
+  async rekey(oldPath: string, newPath: string): Promise<"moved" | "no-baseline" | "target-exists"> {
+    if (oldPath === newPath) return "no-baseline";
+    const existing = this.cache.get(oldPath);
+    if (!existing) return "no-baseline";
+    if (this.cache.has(newPath)) return "target-exists";
+    // Claim the destination SYNCHRONOUSLY, before any await: the guard above and the
+    // write below straddle two awaits, so two concurrent rekeys onto one destination
+    // would otherwise both pass it and the loser's acceptance would be destroyed.
+    const moved: Baseline = { ...existing, path: newPath };
+    this.cache.set(newPath, moved);
+    this.cache.delete(oldPath);
+    try {
+      await this.ensureDir();
+      await this.fs.write(fileFor(this.baseDir, newPath), JSON.stringify(moved, null, 2));
+    } catch (e) {
+      this.cache.delete(newPath);          // roll the claim back; nothing was written
+      this.cache.set(oldPath, existing);
+      throw e;
+    }
+    try {
+      await this.fs.remove(fileFor(this.baseDir, oldPath));
+    } catch (e) {
+      // The move landed, so never fail the rekey over cleanup — but do NOT pretend this
+      // is harmless: the stale blob still carries `path: oldPath`, so the next load()
+      // re-inserts the OLD baseline at the old path. That means a permanent
+      // "target-has-baseline" refusal on later reconciles, and a stale acceptance
+      // waiting for any note later created at that path. Say so.
+      console.warn(
+        "governor: baseline rekey left a stale blob at",
+        fileFor(this.baseDir, oldPath),
+        "— it will re-appear as a baseline for",
+        oldPath,
+        "on next load; remove it by hand.",
+        e
+      );
+    }
+    return "moved";
   }
 
   isLoaded(): boolean { return this.loaded; }

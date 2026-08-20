@@ -64,6 +64,7 @@
 import type { AcceptOpts } from "../kernel/governance/accept.js";
 import { Component, TFile, TFolder, MarkdownView, Notice, type WorkspaceLeaf, type Plugin, type DataAdapter } from "obsidian";
 import { BaselineStore, type BlobFs } from "../kernel/governance/baseline-store.js";
+import { planBaselineReconcile, summarizePlan } from "../kernel/governance/baseline-reconcile.js";
 import { parseJournal, recentAgentWrite, agentWritesSince, type JournalRecord } from "../kernel/governance/journal-reader.js";
 import { computeQueue, type PendingItem, type NoteSnapshot } from "../kernel/governance/queue.js";
 import { deleteInvalidatesQueue } from "./queue-invalidation.js";
@@ -72,6 +73,7 @@ import {
   acceptNote,
   revertNote,
   silentAdvanceRecord,
+  baselineRekeyRecord,
   formatLocalMinutes,
   type AcceptDeps,
   type AcceptResult,
@@ -817,6 +819,77 @@ class AdapterBlobFs implements BlobFs {
     const listing = await this.adapter.list(dir);
     return listing.files;
   }
+  async remove(path: string): Promise<void> { await this.adapter.remove(path); }
+}
+
+// ── baseline reconcile (identity repair; advances no baseline) ──
+//
+// Obsidian-side adapter over the pure planner. The uid map is built from the metadata
+// cache exactly as listProposed/listRevising build their listings — no file reads, and
+// no coupling to the kernel's uid index (governance owns its own read of the vault).
+async function reconcileBaselines(plugin: Plugin): Promise<void> {
+  const store = baselineStores.get(plugin);
+  if (!store) return;
+  try {
+    const byUid = new Map<string, string[]>();
+    for (const file of plugin.app.vault.getMarkdownFiles()) {
+      const uid = (plugin.app.metadataCache.getFileCache(file)?.frontmatter as Record<string, unknown> | undefined)?.uid;
+      if (typeof uid !== "string" || !uid.trim()) continue;
+      const key = uid.trim();
+      const list = byUid.get(key) ?? [];
+      list.push(file.path);
+      byUid.set(key, list);
+    }
+    const uidAt = (p: string): string | null => {
+      const f = plugin.app.vault.getAbstractFileByPath(p);
+      if (!(f instanceof TFile)) return null;
+      const uid = (plugin.app.metadataCache.getFileCache(f)?.frontmatter as Record<string, unknown> | undefined)?.uid;
+      return typeof uid === "string" && uid.trim() ? uid.trim() : null;
+    };
+    // An EMPTY uid map means the read produced nothing — a cache that is not really
+    // ready, or a vault with no uids at all. Either way every baseline would resolve to
+    // "uid-not-found" and the run would report a vault-wide loss that is an artifact of
+    // the read. Nothing to repair from no data: no-op rather than sweep.
+    if (byUid.size === 0) return;
+    const plan = planBaselineReconcile({
+      baselines: store.all(),
+      noteExists: (p) => plugin.app.vault.getAbstractFileByPath(p) instanceof TFile,
+      uidAtPath: uidAt,
+      pathsForUid: (uid) => byUid.get(uid) ?? [],
+      hasBaseline: (p) => store.has(p),
+    });
+    if (!plan.repoint.length && !plan.unresolved.length) return;
+    for (const move of plan.repoint) {
+      const outcome = await store.rekey(move.from, move.to);
+      if (outcome !== "moved") {
+        console.warn("governor governance: baseline reconcile skipped", move.from, "->", move.to, outcome);
+        continue;
+      }
+      // Audit EVERY move. The manual repair that motivated this module rewrote 158
+      // baselines and left no trace in acceptance-log.jsonl — an auditor reading that log
+      // would have concluded nothing happened. The perimeter's own evidence store must
+      // not be rewritten silently, even losslessly.
+      await appendLog(plugin, baselineRekeyRecord({
+        ts: new Date().toISOString(),
+        from: move.from,
+        to: move.to,
+        uid: move.uid,
+        hash: move.baseline.hash,
+        reason: "reconcile",
+      })).catch((e) => console.error("governor governance: rekey audit append failed", move.to, e));
+    }
+    console.info("governor governance: baseline reconcile —", summarizePlan(plan));
+    // Name what was left alone. A count alone is not a report: these are acceptances
+    // that stay detached until a human looks, so they must be findable in the console.
+    for (const u of plan.unresolved.slice(0, 50)) {
+      console.info(`  · ${u.reason}${u.target ? ` -> ${u.target}` : ""}: ${u.path}`);
+    }
+    if (plan.unresolved.length > 50) console.info(`  · …and ${plan.unresolved.length - 50} more`);
+  } catch (e) {
+    // A failed repair must never block the mount: the queue still works, the drifted
+    // notes just keep reading as never-accepted until the next start.
+    console.error("governor governance: baseline reconcile failed", e);
+  }
 }
 
 // ── queue / badge refresh (read-only: recomputes the queue; advances no baseline) ──
@@ -1171,7 +1244,32 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
   // CONFIRMED-rename capture — the link-heal detector's oracle. Records are plain data in a
   // module-private WeakMap; this confers no accept capability.
   component.registerEvent(plugin.app.vault.on("rename", (file, oldPath) => {
-    if (file instanceof TFile) recordRename(plugin, file.path, oldPath);
+    if (!(file instanceof TFile)) return;
+    recordRename(plugin, file.path, oldPath);
+    // Follow the note with its baseline. A baseline is keyed by path hash, so without
+    // this a rename silently orphans the acceptance and the note reads as
+    // never-accepted — no error, no signal. Re-addressing only: setBaseline is NOT
+    // used here, because it would stamp a fresh acceptedAt/acceptedBy and forge an
+    // acceptance nobody gave (see BaselineStore.rekey).
+    const store = baselineStores.get(plugin);
+    if (!store) return;
+    const moving = store.get(oldPath);
+    void store.rekey(oldPath, file.path).then(async (outcome) => {
+      if (outcome !== "moved" || !moving) return;
+      // Same audit obligation as the reconcile path: the store moved, so the log says so.
+      // `uid` is null here — this move follows Obsidian's own rename event, so no identity
+      // matching was involved and claiming one would overstate what was checked.
+      await appendLog(plugin, baselineRekeyRecord({
+        ts: new Date().toISOString(),
+        from: oldPath,
+        to: file.path,
+        uid: null,
+        hash: moving.hash,
+        reason: "rename",
+      }));
+    }).catch((e) =>
+      console.error("governor governance: baseline rekey failed", oldPath, "->", file.path, e)
+    );
   }));
 
   // DELETE → recompute the queue. The live-refresh poll only fires when the write JOURNAL grows,
@@ -1362,6 +1460,28 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
       pollJournal(plugin).catch((e) => console.error("governor acceptance: journal poll failed", e));
     }, JOURNAL_POLL_MS));
   });
+
+  // Repair baselines whose note moved while this plugin was NOT running — Obsidian
+  // closed, Sync landing a peer's move, a bulk script. The rename handler above only
+  // sees renames it witnesses; this is the residue, matched on the uid inside the
+  // baseline's own stored content.
+  //
+  // Gated on metadataCache "resolved", NOT onLayoutReady, because the uid map is read
+  // from that cache and a cold or PARTIAL cache is the one input that can do harm: with
+  // half the vault parsed, a uid carried by two notes looks like a confident single
+  // match, and repointing onto the wrong note can leave a byte-identical copy reading as
+  // accepted when nobody accepted it. "resolved" is the event that says the cache is
+  // done. One-shot (offref on first fire), disposed-gated, and followed by a refresh so
+  // the queue reflects the repair.
+  const onResolved = plugin.app.metadataCache.on("resolved", () => {
+    plugin.app.metadataCache.offref(onResolved);
+    if (disposed) return;
+    void (async () => {
+      await reconcileBaselines(plugin);
+      if (!disposed) await refresh(plugin);
+    })().catch((e) => console.error("governor governance: post-resolve reconcile failed", e));
+  });
+  component.registerEvent(onResolved);
 
   // Mark the mount live LAST — every await and registration above has succeeded, so the flag is
   // true only for a fully-wired mount (the settings-tab render can now show its controls). The
