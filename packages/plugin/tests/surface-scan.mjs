@@ -68,7 +68,10 @@ export const KNOWN_PASSTHROUGH_SITES = [
     reason: "the registerTool monkeypatch and the codeMode capture/origRegister switch — forwards whatever a registrar names",
   },
   {
-    file: "src/kernel/modules/module.ts",
+    // NOT module.ts — that file is types only and contains no executable code.
+    // The forwarding call is `reg(name, def, handler)` inside
+    // ModuleRegistry.registerAll's `scoped` wrapper.
+    file: "src/kernel/modules/module-registry.ts",
     reason: "the module host's registrar adapter — forwards each module's own registerTool calls",
   },
   {
@@ -104,7 +107,14 @@ function presetsIn(text) {
   const presets = new Map();
   const aliases = new Map();
 
-  const declared = /\bconst\s+([A-Z][A-Z0-9_]*)\s*=\s*\{([^}]*)\}/g;
+  // `[^{}]*` — the body may contain NO braces, so a CONTAINER of presets
+  // (core's `SHARED_ANNOTATIONS = { RO: { … }, RW: { … } }`) does not match
+  // here and get a value guessed from whichever nested object happened to come
+  // first. Containers are handled by the `nested` pass below, which reads each
+  // inner preset on its own terms. Guessing a flat value for a nested object
+  // would contradict this file's own rule that an unresolvable shape is
+  // reported, never defaulted.
+  const declared = /\bconst\s+([A-Z][A-Z0-9_]*)\s*=\s*\{([^{}]*)\}/g;
   let m;
   while ((m = declared.exec(text))) {
     const ro = /readOnlyHint\s*:\s*(true|false)/.exec(m[2]);
@@ -290,35 +300,58 @@ export async function scanMcpSurfaces() {
 }
 
 /**
- * Find identifiers OTHER than the known callees that are called with a
- * tool-name-shaped string literal as their first argument, inside the MCP
- * source tree.
+ * Callees that take a snake_case string literal first argument but are NOT
+ * registrations. Deny-by-default demands that everything be classified, so
+ * these are named with the reason they are not a door.
+ */
+export const KNOWN_NOT_REGISTRATION = [
+  { callee: "codedError", reason: "emits a typed `Error [code]: message` refusal envelope; the literal is an error code, not a tool name" },
+  { callee: "refuse", reason: "the bases module's local refusal helper; the literal is an error code" },
+];
+
+/**
+ * Classify EVERY call in the MCP source tree whose first argument is a
+ * snake_case string literal, and report any whose callee is neither a known
+ * registrar nor a known non-registration.
  *
- * This is what closes the class. A future refactor that introduces
- * `myRegistrar("obsidian_new_thing", …)` would be invisible to the scan above;
- * this reports it so the drift test fails rather than silently under-counting.
+ * This is what closes the class, and it is deliberately DENY-BY-DEFAULT.
+ *
+ * The first draft of this function did the opposite: it looked for literals
+ * matching a whitelist of name prefixes this product happens to publish today.
+ * That is the exact defect PR #170's review rejected — "a genuinely new entry
+ * point cannot match a regex enumerating only the names we already handle, so
+ * it never enters `registrationish` and can never be reported as unaccounted
+ * ... what should not ship is the current pairing: a test that closes five
+ * instances under a comment saying it closes the class." A tool registered as
+ * `skills_new_thing` through a new registrar would have been invisible.
+ *
+ * The resolution mirrors what that PR actually shipped in
+ * `seal-registration.ts`: every member is classified, and anything
+ * unclassified fails the build. Here the classified set is the CALLEE
+ * identifier, of which the whole tree currently has five — three registrars
+ * and two refusal helpers — so the burden of keeping it current is one line
+ * per genuinely new call shape.
+ *
+ * A "snake_case string literal" means at least one underscore, so ordinary
+ * arguments like "utf8" or "path" are not mistaken for tool names.
  *
  * Restricted to `src/mcp/` and `packages/core/src/`, where tool registration
- * lives; elsewhere in the tree a call with a lowercase string first argument is
- * ordinary code, not a registration.
+ * lives.
  */
 export async function scanUnknownRegistrationCallees() {
   const files = [
     ...(await tsFiles(PLUGIN_SRC)).filter((f) => f.rel.startsWith("mcp/")).map((f) => ({ ...f, rel: `src/${f.rel}` })),
     ...(await tsFiles(CORE_SRC)).map((f) => ({ ...f, rel: `packages/core/src/${f.rel}` })),
   ];
-  const known = new Set(REGISTRATION_CALLEES);
+  const classified = new Set([...REGISTRATION_CALLEES, ...KNOWN_NOT_REGISTRATION.map((k) => k.callee)]);
   const found = [];
-  // A tool-name-shaped literal is namespaced: it has at least one underscore
-  // and starts with one of the prefixes this product actually publishes. A
-  // bare lowercase word ("path", "utf8") is ordinary code and must not be
-  // mistaken for a registration.
-  const re = /(?:[A-Za-z_$][\w$]*\.)?\b([A-Za-z_$][\w$]*)\(\s*"((?:obsidian|vault|fileclass|provenance|triage|crosssession|base|governance)_[a-z0-9_]+)"\s*,/g;
+  const re = /(?:[A-Za-z_$][\w$]*\.)?\b([A-Za-z_$][\w$]*)\(\s*"([a-z][a-z0-9]*(?:_[a-z0-9]+)+)"\s*,/g;
   for (const f of files) {
+
     const text = await readFile(f.abs, "utf8");
     let m;
     while ((m = re.exec(text))) {
-      if (known.has(m[1])) continue;
+      if (classified.has(m[1])) continue;
       found.push({ callee: m[1], name: m[2], file: f.rel });
     }
   }
