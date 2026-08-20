@@ -1238,10 +1238,10 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
   // reachable property of any element) and isRealGesture-gated (Layer 2). Worst case for a
   // forged/replayed menu trigger is therefore "a dialog appeared", never a write.
   //
-  // The isRealGesture check on the menu callback itself is kept as defense in depth. It is not
-  // load-bearing (the modal carries the real gate) and it is the one branch that could make the
-  // item look dead if Obsidian rendered this menu as a NATIVE Electron menu whose click event is
-  // not a DOM Event — so it warns rather than failing silently.
+  // #299 also kept an isRealGesture check on the menu callback itself as defence in depth,
+  // noting it was the one branch that could make the item look dead if Obsidian rendered this
+  // menu natively. It does, and it did — see the note directly above the registrations below,
+  // where that check was removed and why. The modal is and always was the real gate.
   const menuController = buildController(plugin);
   const menuEligibilityCtx = (): AcceptEligibilityCtx => ({
     pendingPaths: new Set(getCachedPending(plugin).map((p) => p.path)),
