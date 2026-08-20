@@ -26,6 +26,7 @@ import {
   PlaybackUnauthorizedError,
 } from "../src/kernel/observations/store.ts";
 import { payloadDigest } from "../src/kernel/observations/observation.ts";
+import { createLocalBlobStore } from "../src/governance/observations/local-store.ts";
 
 /** An in-memory content-addressed backing store. */
 function fakeBlobs() {
@@ -329,5 +330,53 @@ describe("observation store — pruning says what stops being verifiable", () =>
     const ref = await s.put({ body: "x" }, { sources: ["A.md"] });
     const report = await s.prune([ref]);
     assert.deepEqual(report.nowUnverifiable, []);
+  });
+});
+
+// ── the two layers, together ─────────────────────────────────────────────────
+
+describe("observation store — over the REAL local adapter", () => {
+  // The gap that let a critical bug land: every test above uses an in-memory
+  // blob map, and every local-adapter test uses a fake payload. Neither
+  // exercises the call pattern that actually matters — the same digest re-put
+  // with different data, which is how a second note's provenance reaches disk.
+  function localFs() {
+    const files = new Map();
+    const enoent = () => Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    return {
+      files,
+      async mkdir() {},
+      async writeFile(p, d) { files.set(p, d); },
+      async readFile(p) { if (!files.has(p)) throw enoent(); return files.get(p); },
+      async access(p) { if (!files.has(p)) throw enoent(); },
+      async unlink(p) { if (!files.has(p)) throw enoent(); files.delete(p); },
+      async readdir() { return [...files.keys()]; },
+      async rename(a, b) { files.set(b, files.get(a)); files.delete(a); },
+    };
+  }
+
+  test("a second note's provenance reaches DISK, not just the in-memory layer", async () => {
+    const s = createObservationStore({
+      blobs: createLocalBlobStore({ vaultSlug: "v", fsImpl: localFs() }),
+      canReplay: () => true,
+      canRead: (ctx) => ctx.source.startsWith("Public/"),
+    });
+    await s.put({ body: "# Template\n" }, { sources: ["Public/a.md"] });
+    const ref = await s.put({ body: "# Template\n" }, { sources: ["Secrets/b.md"] });
+    // If the adapter had short-circuited on "the file already exists", the
+    // second source would never have reached disk and this would REPLAY — a
+    // reader entitled only to Public/ reading content captured from Secrets/.
+    await assert.rejects(() => s.playback(ref, { reader: "x" }), PlaybackUnauthorizedError);
+  });
+
+  test("a round trip through the real adapter replays what was stored", async () => {
+    const s = createObservationStore({
+      blobs: createLocalBlobStore({ vaultSlug: "v", fsImpl: localFs() }),
+      canReplay: () => true,
+      canRead: () => true,
+    });
+    const ref = await s.put({ body: "as it was" }, { sources: ["A.md"] });
+    const played = await s.playback(ref, { reader: "human-1" });
+    assert.deepEqual(played.payload, { body: "as it was" });
   });
 });

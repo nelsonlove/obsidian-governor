@@ -106,14 +106,24 @@ export function createLocalBlobStore(opts: LocalBlobStoreOpts): BlobStore {
     async put(key, data) {
       await ensureDir();
       const target = fileFor(dir, key);
-      // Content-addressed: if it is already there, its contents are already
-      // this payload. Rewriting would be pure churn.
-      try {
-        await io.access(target);
-        return;
-      } catch {
-        // Not present — fall through and write it.
-      }
+      // NO "already exists, skip" short-circuit — and the reason is worth
+      // stating, because the optimization is the obvious thing to write and it
+      // is wrong here.
+      //
+      // The key is `digest(payload)`. The DATA is `{payload, sources}`. Same
+      // key does NOT mean same data: `store.ts` re-puts an existing digest
+      // precisely to union in a new note's provenance when two different notes
+      // share content. An existence check would silently drop that update and
+      // freeze the blob at whatever sources the FIRST capture recorded —
+      // reintroducing, one layer down, the exact authorization bug `store.ts`'s
+      // header documents as already found and fixed once: a payload captured
+      // from `Secrets/b.md` replayable by a reader entitled only to
+      // `Public/a.md`.
+      //
+      // The caller already avoids pointless writes (it skips the re-put when
+      // the union is unchanged), so the adapter's job is to write what it is
+      // handed. Deciding whether a write is needed is not the storage layer's
+      // business, and guessing at it is how the guarantee above got lost.
       // `<hex>.json.tmp-<pid>-<random>` — deliberately a SUFFIX of the final
       // name, so `keys()`'s exact `<hex>.json` match excludes it by
       // construction rather than by a second exclusion rule that could drift.
