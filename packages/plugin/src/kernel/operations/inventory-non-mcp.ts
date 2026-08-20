@@ -30,9 +30,11 @@
 //     agent-invocable through `obsidian_run_command`'s `executeCommandById`,
 //     so an accept command would be a self-approval primitive one
 //     prompt-injection away.
-//   • none of the seven accept-perimeter functions is exported. Export is what
-//     would make one reachable from a plugin instance, a view instance, or any
-//     other object an agent-facing path can obtain.
+//   • none of the ten accept-perimeter functions is exported, and the file's
+//     export set is pinned. Export is what would make one reachable from a
+//     plugin instance, a view instance, or any other object an agent-facing
+//     path can obtain — and pinning the whole set closes the class rather than
+//     the ten instances.
 
 import type { ActionDefinition, Distribution, SurfaceKind } from "./action.js";
 import { compatibilityAction } from "./compatibility.js";
@@ -45,6 +47,27 @@ import type { SurfaceBinding } from "./surface-binding.js";
  * authority state. Named here so the test can assert they still exist and are
  * still unexported — an inventory that describes deleted code is worse than
  * none, and an exported one is a hole.
+ *
+ * `wiring.ts`'s own header gives the membership test: "A capability that
+ * advances a baseline, accepts a change, adopts a baseline, or flips an
+ * auto-accept class is accept-equivalent: it silences the review queue."
+ * Applied literally, that is every writer of `setBaseline`, `rekey` or the
+ * auto-accept allowlist. There are ten.
+ *
+ * The first draft of this list had seven, and the three it missed are the
+ * three with NO gesture anywhere:
+ *
+ *   maybeAutoAccept     advances a baseline for an allowlisted mechanical
+ *                       class, driven by a 2.5s poll — no click, no
+ *                       isRealGesture, nothing
+ *   sweepAutoAccept     its driver, over the cached pending queue
+ *   reconcileBaselines  re-addresses baselines whose notes moved while the
+ *                       plugin was off
+ *
+ * Missing them is instructive rather than embarrassing: the gesture-gated
+ * capabilities are easy to find because a human clicks them, and the ones that
+ * run by themselves are exactly the ones an inventory built by reading the UI
+ * will overlook.
  */
 export const ACCEPT_PERIMETER_FUNCTIONS = [
   "performAccept",
@@ -54,6 +77,29 @@ export const ACCEPT_PERIMETER_FUNCTIONS = [
   "performRequestChanges",
   "performWithdraw",
   "reconcile",
+  "maybeAutoAccept",
+  "sweepAutoAccept",
+  "reconcileBaselines",
+] as const;
+
+/**
+ * The exports of `governance/wiring.ts`, pinned.
+ *
+ * Checking that the ten perimeter functions are unexported closes those ten
+ * instances. Pinning the whole export set closes the CLASS: a new export is a
+ * visible decision rather than something a reviewer has to notice.
+ *
+ * `nudgeGovernanceQueue` is exported deliberately and does reach the
+ * auto-accept chain — but only by changing WHEN the poll runs, never what it
+ * may accept. Eligibility is decided inside `maybeAutoAccept` by the
+ * objective-bytes, allowlist and rail checks, which no caller can influence.
+ */
+export const WIRING_EXPORTS = [
+  "GovernanceWireDeps",
+  "isGovernanceMounted",
+  "nudgeGovernanceQueue",
+  "wireGovernance",
+  "renderGovernanceSettings",
 ] as const;
 
 export interface AuthorityRow {
@@ -184,16 +230,78 @@ export const AUTHORITY_SURFACES: AuthorityRow[] = [
     paths: ["path"],
     reachability: "vault 'modify' event, debounced; gated on recentGenuineHumanInput rather than on any gesture",
   },
+  {
+    // No gesture anywhere. Driven by the 2.5s journal poll and by
+    // `nudgeGovernanceQueue` after every journal append.
+    id: "governance.automation.auto-accept-sweep",
+    kind: "automation",
+    action: "governance.auto-accept",
+    title: "Auto-accept sweep",
+    postcondition:
+      "Advance the baseline of every pending note whose diff is confined to an enabled mechanical change class.",
+    // `maybeAutoAccept`, not `sweepAutoAccept`: the sweep is only the driver
+    // that walks the pending queue, and the act — the baseline advance and its
+    // audit record — happens one level down. Attributing the row to the driver
+    // made the audit claim come out wrong, which is how the distinction
+    // surfaced.
+    implementation: "maybeAutoAccept",
+    reachability:
+      "sweepAutoAccept over the cached pending queue, driven by the journal poll and the post-append nudge; safety comes from the objective-bytes comparison, the mechanical-class allowlist and the rail check inside maybeAutoAccept, NOT from a gesture",
+  },
+  {
+    id: "governance.automation.rekey-on-rename",
+    kind: "automation",
+    action: "governance.rekey-baseline",
+    title: "Follow a renamed note",
+    postcondition: "Re-address a baseline when Governor witnesses the rename.",
+    // The call is an inline closure inside the vault 'rename' handler rather
+    // than a named function, so the perimeter entry it is attributed to is
+    // `reconcileBaselines`, which owns the same rekey contract.
+    implementation: "reconcileBaselines",
+    paths: ["from", "to"],
+    reachability: "vault 'rename' event; rekey carries acceptance across verbatim and never routes through setBaseline",
+  },
+  {
+    id: "governance.automation.reconcile-baselines",
+    kind: "automation",
+    action: "governance.rekey-baseline",
+    title: "Repair baselines orphaned while the plugin was off",
+    postcondition:
+      "Re-address baselines whose notes moved unwitnessed, matching on the uid inside the stored baseline content.",
+    implementation: "reconcileBaselines",
+    reachability: "one-shot metadataCache 'resolved' event at mount",
+  },
 ];
 
+interface AuthoritySpec {
+  id: string;
+  title: string;
+  postcondition: string;
+  paths: string[];
+  alsoChanges?: Array<"content" | "structural">;
+  /**
+   * Whether this act reaches `appendLog` and therefore leaves a durable
+   * operation record. VERIFIED against source by the test, not asserted here —
+   * the previous draft claimed all seven were logged and two were not.
+   */
+  audited: boolean;
+  /**
+   * Targets found at runtime rather than received as arguments. `none` is only
+   * correct for an act on one named note.
+   */
+  discovered: "none" | "bounded" | "unbounded";
+}
+
 /** One native authority action per distinct `action` id above. */
-function authorityAction(
-  id: string,
-  title: string,
-  postcondition: string,
-  paths: string[],
-  alsoChanges: Array<"content" | "structural"> = []
-): ActionDefinition {
+function authorityAction({
+  id,
+  title,
+  postcondition,
+  paths,
+  alsoChanges = [],
+  audited,
+  discovered,
+}: AuthoritySpec): ActionDefinition {
   return {
     id,
     version: 1,
@@ -213,7 +321,7 @@ function authorityAction(
     // assert a guarantee no code provides. Raised in WP2, when there is
     // something to raise it to.
     observations: { defaultCapture: "ephemeral", supportsProposal: false },
-    effects: { direct: ["standing", "accepted-frontmatter", "baseline"], discovered: "none" },
+    effects: { direct: ["standing", "accepted-frontmatter", "baseline"], discovered },
     authority: { governorOnly: true, automaticAdmission: "never" },
     scope: {
       argumentKeys: paths,
@@ -221,8 +329,11 @@ function authorityAction(
       enumeration: paths.length > 0 ? "not-applicable" : "filter-before-read",
       whenScoped: "available",
     },
-    // The acceptance log records these; that is observable today.
-    retention: { operation: "durable" },
+    // `durable` ONLY where the act actually reaches `appendLog`. Two do not,
+    // and saying otherwise would claim an audit trail that does not exist —
+    // see the AUTHORITY_ACTIONS entries and the test that verifies each
+    // `audited` flag against source.
+    retention: { operation: audited ? "durable" : "ephemeral" },
     inputs: paths,
     // Authored against this registry rather than derived from a registration —
     // there IS no registration metadata to derive from, because the accept
@@ -236,51 +347,111 @@ function authorityAction(
 }
 
 const AUTHORITY_ACTIONS: ActionDefinition[] = [
-  authorityAction(
-    "governance.accept",
-    "Accept a proposal",
-    "Stamp the accepted family on one note and advance its baseline to the exact reviewed content.",
-    ["path"]
-  ),
-  authorityAction(
-    "governance.revert",
-    "Revert to the admitted baseline",
-    "Restore one note's prior admitted content, creating new history rather than erasing the admission.",
-    ["path"],
-    ["content"]
-  ),
-  authorityAction(
-    "governance.adopt-baseline",
-    "Adopt current content as the baseline",
-    "Advance every pending note's baseline to its current content in one act.",
-    []
-  ),
-  authorityAction(
-    "governance.set-auto-accept-class",
-    "Set an auto-accept class",
-    "Change which mechanical change classes Governor may admit without a further gesture.",
-    []
-  ),
-  authorityAction(
-    "governance.request-changes",
-    "Request changes on a proposal",
-    "Move a proposal to revising and record the human's feedback, conferring no standing.",
-    ["path"],
-    ["content"]
-  ),
-  authorityAction(
-    "governance.withdraw",
-    "Withdraw a proposal",
-    "Remove a proposal from review without accepting it.",
-    ["path"],
-    ["content"]
-  ),
-  authorityAction(
-    "governance.reconcile-observed-human-edit",
-    "Reconcile an observed human edit",
-    "Advance a note's baseline silently when the edit is attributable to recent genuine human input in the editor.",
-    ["path"]
-  ),
+  authorityAction({
+    id: "governance.accept",
+    title: "Accept a proposal",
+    postcondition: "Stamp the accepted family on one note and advance its baseline to the exact reviewed content.",
+    paths: ["path"],
+    audited: true, // reaches appendLog through acceptNote's injected deps
+    discovered: "none",
+  }),
+  authorityAction({
+    id: "governance.revert",
+    title: "Revert to the admitted baseline",
+    postcondition: "Restore one note's prior admitted content, creating new history rather than erasing the admission.",
+    paths: ["path"],
+    alsoChanges: ["content"],
+    audited: true, // through revertNote
+    discovered: "none",
+  }),
+  authorityAction({
+    id: "governance.adopt-baseline",
+    title: "Adopt current content as the baseline",
+    postcondition: "Advance every governed note's baseline to its current content in one act.",
+    paths: [],
+    // NOT audited. `performAdopt` loops over `governedMarkdownFiles(plugin)`
+    // calling `setBaseline` and never reaches `appendLog` — so the single most
+    // consequential capability in the product, the one its own source calls
+    // "mass-silence", leaves NO operation record. That is a real gap in the
+    // predecessor, surfaced by declaring it honestly rather than smoothed over
+    // by a blanket `durable`. WP8's cutover is where it gets fixed; recording
+    // it now is what makes it impossible to forget.
+    audited: false,
+    // It receives no path and discovers its entire target set at runtime —
+    // every governed markdown file in the vault. This is the same shape as
+    // `obsidian_repoint_link`, the case `action.ts` cites as the reason the
+    // field exists.
+    discovered: "unbounded",
+  }),
+  authorityAction({
+    id: "governance.set-auto-accept-class",
+    title: "Set an auto-accept class",
+    postcondition: "Change which mechanical change classes Governor may admit without a further gesture.",
+    paths: [],
+    // NOT audited either: `setClassEnabled` writes the allowlist through
+    // `saveAllowlist` and appends nothing. Changing what may be admitted
+    // without review is a policy change with no record of who changed it.
+    audited: false,
+    discovered: "none",
+  }),
+  authorityAction({
+    id: "governance.request-changes",
+    title: "Request changes on a proposal",
+    postcondition: "Move a proposal to revising and record the human's feedback, conferring no standing.",
+    paths: ["path"],
+    alsoChanges: ["content"],
+    audited: true,
+    discovered: "none",
+  }),
+  authorityAction({
+    id: "governance.withdraw",
+    title: "Withdraw a proposal",
+    postcondition: "Remove a proposal from review without accepting it.",
+    paths: ["path"],
+    alsoChanges: ["content"],
+    audited: true,
+    discovered: "none",
+  }),
+  authorityAction({
+    id: "governance.reconcile-observed-human-edit",
+    title: "Reconcile an observed human edit",
+    postcondition: "Advance a note's baseline silently when the edit is attributable to recent genuine human input in the editor.",
+    paths: ["path"],
+    audited: true,
+    discovered: "none",
+  }),
+  authorityAction({
+    // The eighth capability, and the one an inventory built by reading the UI
+    // will miss: it advances a baseline with NO gesture anywhere, driven by a
+    // 2.5s poll and by every journal append. Its safety comes from a different
+    // place than the pane's — the objective-bytes comparison, the mechanical-
+    // class allowlist and the rail check inside `maybeAutoAccept` — not from
+    // `isRealGesture`. Declaring it as its own authority action is what lets
+    // the registry fence it at all; folded into a generic automation row, it
+    // was classified as an ordinary non-authority mutation.
+    id: "governance.auto-accept",
+    title: "Auto-accept an allowlisted mechanical change",
+    postcondition:
+      "Advance a note's baseline without any gesture when its diff is confined to an enabled mechanical change class.",
+    paths: ["path"],
+    audited: true,
+    // The sweep iterates the cached pending queue rather than a named target.
+    discovered: "unbounded",
+  }),
+  authorityAction({
+    // Re-addressing, NOT acceptance: `rekey` carries content, hash, acceptedAt
+    // and acceptedBy across verbatim and deliberately does not route through
+    // `setBaseline`, which would stamp a fresh acceptance nobody gave. It is
+    // still an authority act, because it decides which note an existing
+    // acceptance now applies to.
+    id: "governance.rekey-baseline",
+    title: "Re-address a baseline to follow its note",
+    postcondition:
+      "Move an existing baseline to a renamed note's path, carrying its acceptance across without stamping a new one.",
+    paths: ["from", "to"],
+    audited: true,
+    discovered: "unbounded",
+  }),
 ];
 
 // ── Obsidian commands ────────────────────────────────────────────────────────
