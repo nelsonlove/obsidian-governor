@@ -468,6 +468,9 @@ export interface CommandRow {
    * agent-invocable through `obsidian_run_command`, so it may never bind an
    * authority action. */
   authority?: "governor-only";
+  /** Writes outside the vault. Part of the same disclosure set as the bridge
+   * rows — the footprint is a property of the PLUGIN, not of one row family. */
+  outsideVault?: boolean;
   note?: string;
 }
 
@@ -524,6 +527,7 @@ export const COMMAND_SURFACES: CommandRow[] = [
     owner: "skills",
     distribution: "private",
     readOnly: false,
+    outsideVault: true,
   },
   {
     id: "skills-validate",
@@ -556,6 +560,7 @@ export const COMMAND_SURFACES: CommandRow[] = [
     owner: "skills",
     distribution: "private",
     readOnly: false,
+    outsideVault: true,
   },
   {
     id: "skills-preview",
@@ -578,6 +583,8 @@ export interface AutomationRow {
   owner: string;
   /** True when this automation can change authority state with no gesture. */
   touchesAuthority: boolean;
+  /** Writes outside the vault. */
+  outsideVault?: boolean;
 }
 
 export const AUTOMATION_SURFACES: AutomationRow[] = [
@@ -624,6 +631,7 @@ export const AUTOMATION_SURFACES: AutomationRow[] = [
     postcondition: "Re-export the compiled corpus after a debounce when the opt-in setting is on.",
     owner: "skills",
     touchesAuthority: false,
+    outsideVault: true,
   },
 ];
 
@@ -728,6 +736,8 @@ export interface PlainSurfaceRow {
   readOnly: boolean;
   /** Writes outside the vault, which is a privacy and disclosure fact. */
   outsideVault?: boolean;
+  /** Reaches the network. Distribution review asks for this explicitly. */
+  network?: boolean;
   /** Runs on every plugin load regardless of settings. */
   unconditional?: boolean;
   /** Reaches a declared authority action, however indirectly. */
@@ -777,13 +787,48 @@ export const BRIDGE_SURFACES: PlainSurfaceRow[] = [
     kind: "internal",
     file: "src/main.ts",
     title: "Register with the Claude Code CLI",
-    postcondition: "Spawn the `claude` binary to add or remove this vault's MCP registration.",
+    postcondition: "Spawn the `claude` binary to add or remove this vault's MCP server registration.",
     owner: "core",
     distribution: "public-default",
     readOnly: false,
     outsideVault: true,
     unconditional: true,
     note: "autoRegister() runs on every load, outside the settings.enabled gate; never writes ~/.claude.json directly",
+  },
+  {
+    // Found by review, and the most consequential omission in the first draft.
+    //
+    // `autoRegister()` does not stop at registering this vault's MCP server.
+    // On success — and on "already registered" — it calls
+    // `claudeEnsureConnectPlugin`, which runs
+    //
+    //     claude plugin marketplace add nelsonlove/claude-code-plugins
+    //     claude plugin install vault-mcp-connect@... --scope user
+    //
+    // That adds a third-party MARKETPLACE SOURCE to the user's Claude Code
+    // configuration and installs a SECOND PLUGIN at user scope — persisted
+    // outside the vault, affecting every Claude Code session on the machine
+    // rather than this vault, and reaching the network to do it. It runs on
+    // every plugin load, unconditionally.
+    //
+    // It is check-first and idempotent, so in steady state it is two `list`
+    // calls and no change. That makes it cheap; it does not make it invisible,
+    // and a capability that provisions software at user scope is exactly what
+    // a distribution review has to be told about. Declared here with its real
+    // postcondition rather than folded into "registers this vault".
+    id: "bridge.ensure-connect-plugin",
+    kind: "internal",
+    file: "src/claude-cli.ts",
+    title: "Provision the companion Claude Code plugin",
+    postcondition:
+      "Add the companion marketplace source to the user's Claude Code configuration and install the vault-mcp-connect plugin at user scope, if either is absent.",
+    owner: "core",
+    distribution: "private",
+    readOnly: false,
+    outsideVault: true,
+    unconditional: true,
+    network: true,
+    note: "check-first and idempotent; reached from autoRegister(), which runs on every load outside the settings.enabled gate",
   },
 ];
 
@@ -917,6 +962,26 @@ export const INTERNAL_SURFACES: PlainSurfaceRow[] = [
 export const PLAIN_SURFACES: PlainSurfaceRow[] = [...BRIDGE_SURFACES, ...SETTINGS_SURFACES, ...INTERNAL_SURFACES];
 
 /**
+ * Every surface that writes outside the vault, ACROSS ALL FAMILIES.
+ *
+ * The first draft computed this over `PLAIN_SURFACES` alone while claiming it
+ * was "the plugin's whole footprint outside the vault." It was not: the skills
+ * export and release commands write to a directory outside the vault, and
+ * their export-on-save automation re-triggers the same write on a timer. A
+ * disclosure scoped to one row family is not a disclosure of the plugin.
+ *
+ * The footprint is a property of the PLUGIN, so it is computed over every
+ * family and pinned by one test.
+ */
+export function outsideVaultSurfaces(): Array<{ id: string; network: boolean }> {
+  return [
+    ...PLAIN_SURFACES.filter((r) => r.outsideVault).map((r) => ({ id: r.id, network: r.network === true })),
+    ...COMMAND_SURFACES.filter((r) => r.outsideVault).map((r) => ({ id: `command:${r.id}`, network: false })),
+    ...AUTOMATION_SURFACES.filter((r) => r.outsideVault).map((r) => ({ id: r.id, network: false })),
+  ].sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/**
  * Functions that are the BODY of an already-declared action rather than doors
  * of their own. Listed so "why isn't this in the inventory?" has an answer that
  * is written down instead of remembered.
@@ -926,7 +991,9 @@ export const NOT_SURFACES = [
   { name: "buildAcceptDeps", partOf: "governance.accept" },
   { name: "appendLog", partOf: "every audited authority action" },
   { name: "saveAllowlist", partOf: "governance.set-auto-accept-class" },
-  { name: "governedMarkdownFiles", partOf: "governance.adopt-baseline" },
+  // Shared infrastructure, not one action's helper: `performAdopt` uses it,
+  // and so do `refresh()` and `listRevising()`.
+  { name: "governedMarkdownFiles", partOf: "shared queue and listing infrastructure" },
   { name: "scheduleReconcile", partOf: "governance.reconcile-observed-human-edit" },
   { name: "quarantineWrite", partOf: "governance.accept" },
   { name: "persistRenameRecords", partOf: "governance.rekey-baseline" },
