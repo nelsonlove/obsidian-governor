@@ -19,6 +19,19 @@
 // Content addressing does the rest: a payload is stored under its own digest,
 // so identical payloads occupy one object and a different payload can never
 // silently replace one.
+//
+// That sharing has one sharp edge, and it is worth stating plainly because the
+// first draft got it wrong. Two DIFFERENT notes with identical content share an
+// address — which is not exotic here, where "standard zeros" creates ten notes
+// from one template. The first draft stored the first put's sources and made
+// the second put a no-op, so replaying a payload captured from `Secrets/b.md`
+// was authorized as if it had come from `Public/a.md`.
+//
+// Sources are therefore UNIONED across puts, and a reader must be authorized
+// for EVERY source in the union. Over-restrictive by design: if a payload is
+// shared by a public note and a private one, replaying it requires authority
+// over both. Fail-closed is the only safe direction when the question is
+// "whose content is this?" and the honest answer is "more than one note's".
 
 import { payloadDigest } from "./observation.js";
 
@@ -68,9 +81,12 @@ export interface PlaybackContext {
 export interface ReadAuthorizationInput {
   reader: string;
   ref: string;
-  /** The sources the payload covers, so authorization is asked about material
-   * rather than about an opaque id. */
-  sources: string[];
+  /** The one source being asked about. Authorization is asked about material
+   * rather than about an opaque id, one source at a time, so a policy never has
+   * to decide what an array of mixed-sensitivity paths means. */
+  source: string;
+  /** Every source this payload is known to have come from, for context. */
+  allSources: string[];
 }
 
 export interface ObservationStoreOpts {
@@ -82,6 +98,10 @@ export interface ObservationStoreOpts {
    * change: scope narrows, a mandate is revoked, a folder becomes private. The
    * historical effective scope is evidence about the past; it is not a
    * standing entitlement.
+   *
+   * Called ONCE PER SOURCE, and every call must return true. A payload shared
+   * by several notes carries all their provenance, and a reader entitled to
+   * one of them is not thereby entitled to the rest.
    */
   canRead: (input: ReadAuthorizationInput) => boolean;
   /** Claims that currently depend on a payload, so pruning can refuse to
@@ -141,18 +161,40 @@ export function createObservationStore(opts: ObservationStoreOpts): ObservationS
   }
 
   async function authorized(ref: string, stored: StoredPayload, ctx: PlaybackContext): Promise<void> {
-    if (!opts.canRead({ reader: ctx.reader, ref, sources: stored.sources })) {
-      throw new PlaybackUnauthorizedError(ref);
+    // EVERY source must be permitted. A payload shared by a public note and a
+    // private one requires authority over both — see the header.
+    //
+    // A payload with no recorded sources is refused rather than waved through:
+    // "we do not know where this came from" is not a reason to disclose it.
+    if (stored.sources.length === 0) throw new PlaybackUnauthorizedError(ref);
+    for (const source of stored.sources) {
+      if (!opts.canRead({ reader: ctx.reader, ref, source, allSources: stored.sources })) {
+        throw new PlaybackUnauthorizedError(ref);
+      }
     }
   }
 
   return {
     async put(payload, meta) {
       const ref = payloadDigest(payload);
-      // Idempotent by construction: the same payload maps to the same address,
-      // so a second put is a no-op rather than a duplicate.
-      if (!(await opts.blobs.has(ref))) {
-        await opts.blobs.put(ref, JSON.stringify({ payload, sources: meta?.sources ?? [] } satisfies StoredPayload));
+      const sources = meta?.sources ?? [];
+      const existing = await opts.blobs.get(ref);
+      if (existing === null) {
+        await opts.blobs.put(ref, JSON.stringify({ payload, sources } satisfies StoredPayload));
+        return ref;
+      }
+      // The payload is already stored — but its PROVENANCE may be new. A second
+      // note with identical content contributes its own source, and dropping it
+      // would authorize this payload against the wrong note's policy.
+      let prior: StoredPayload;
+      try {
+        prior = JSON.parse(existing) as StoredPayload;
+      } catch {
+        throw new PayloadCorruptError(ref);
+      }
+      const union = [...new Set([...prior.sources, ...sources])].sort();
+      if (union.length !== prior.sources.length) {
+        await opts.blobs.put(ref, JSON.stringify({ payload: prior.payload, sources: union } satisfies StoredPayload));
       }
       return ref;
     },
