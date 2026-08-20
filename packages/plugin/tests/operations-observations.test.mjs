@@ -133,7 +133,16 @@ describe("capture policy — a caller cannot weaken the level", () => {
 // ── the rule with teeth ──────────────────────────────────────────────────────
 
 describe("observation dependencies — ephemeral supports nothing", () => {
-  const evidenceObs = { id: "obs-1", level: "evidence", sessionId: "session-1", sourceState: [], result: { truncated: false, unavailable: [] } };
+  const evidenceObs = {
+    id: "obs-1",
+    level: "evidence",
+    sessionId: "session-1",
+    action: { id: "note.read", version: 1, supportsProposal: true },
+    effectiveScopeDigest: null,
+    mandateId: null,
+    sourceState: [],
+    result: { truncated: false, unavailable: [] },
+  };
   const replayObs = { ...evidenceObs, id: "obs-2", level: "replayable", result: { truncated: false, unavailable: [], payloadObject: "sha256:abc" } };
 
   test("a proposal may depend on evidence or replayable observations", () => {
@@ -306,5 +315,131 @@ describe("observations — the payload digest is content-sensitive", () => {
       effectiveScopeDigest: "y", sourceState: [], payload: { body: "SENSITIVE-TEXT" },
     });
     assert.ok(!JSON.stringify(obs).includes("SENSITIVE-TEXT"));
+  });
+});
+
+// ── the three revalidation checks the first draft could not make ─────────────
+
+describe("observation dependencies — the checks a half-implementation missed", () => {
+  const obs = (over = {}) => ({
+    id: "obs-1",
+    level: "replayable",
+    sessionId: "s1",
+    action: { id: "note.read", version: 1, supportsProposal: true },
+    effectiveScopeDigest: "scope-a",
+    mandateId: null,
+    sourceState: [{ identity: "uid-1", path: "A.md", revision: "7", contentDigest: "sha256:aaa" }],
+    result: { truncated: false, unavailable: [], excludedCount: 0, payloadObject: "sha256:p" },
+    ...over,
+  });
+
+  test("an action that does not permit its observations to support a claim is refused", () => {
+    // The declaration belongs to the ACTION, not to whatever later wants to
+    // cite it — and it is carried on the observation, so the answer is the one
+    // that applied at capture rather than whatever the registry says now.
+    const problems = validateDependencies({
+      observations: [obs({ action: { id: "nav.jump", version: 1, supportsProposal: false } })],
+      claim: "proposal",
+      sessionId: "s1",
+    });
+    assert.ok(problems.some((p) => p.code === "action_not_permitted"));
+  });
+
+  test("a source that changed since it was observed makes the claim stale", () => {
+    const problems = validateDependencies({
+      observations: [obs()],
+      claim: "proposal",
+      sessionId: "s1",
+      currentSources: { "uid-1": "sha256:CHANGED" },
+    });
+    assert.ok(problems.some((p) => p.code === "stale_dependency"));
+  });
+
+  test("an unchanged source passes", () => {
+    const problems = validateDependencies({
+      observations: [obs()],
+      claim: "proposal",
+      sessionId: "s1",
+      currentSources: { "uid-1": "sha256:aaa" },
+    });
+    assert.deepEqual(problems, []);
+  });
+
+  test("an ADMISSION with no current state to compare refuses, rather than proceeding quietly", () => {
+    // Fail-closed where it counts. Standing must never rest on evidence that
+    // might already be obsolete, and "we could not check" is not a reason to
+    // proceed.
+    const problems = validateDependencies({ observations: [obs()], claim: "admission", sessionId: "s1" });
+    assert.ok(problems.some((p) => p.code === "staleness_unchecked"));
+  });
+
+  test("a PROPOSAL with no current state does not refuse — it carries its own diff", () => {
+    const problems = validateDependencies({ observations: [obs()], claim: "proposal", sessionId: "s1" });
+    assert.deepEqual(problems, []);
+  });
+
+  test("an observation made under a different scope is refused", () => {
+    const problems = validateDependencies({
+      observations: [obs()],
+      claim: "proposal",
+      sessionId: "s1",
+      effectiveScopeDigest: "scope-b",
+    });
+    assert.ok(problems.some((p) => p.code === "scope_mismatch"));
+  });
+
+  test("an observation made under a different mandate is refused", () => {
+    const problems = validateDependencies({
+      observations: [obs({ mandateId: "m-1" })],
+      claim: "proposal",
+      sessionId: "s1",
+      mandateId: "m-2",
+    });
+    assert.ok(problems.some((p) => p.code === "mandate_mismatch"));
+  });
+
+  test("an observation that EXCLUDED results cannot support a whole-result claim", () => {
+    // Distinct from truncation: truncated was cut short, omitted had entries
+    // removed. Both mean the claim does not describe the whole of what was read.
+    const problems = validateDependencies({
+      observations: [obs({ result: { truncated: false, unavailable: [], excludedCount: 3, payloadObject: "sha256:p" } })],
+      claim: "verification",
+      sessionId: "s1",
+      currentSources: { "uid-1": "sha256:aaa" },
+    });
+    assert.ok(problems.some((p) => p.code === "omitted_dependency"));
+  });
+});
+
+// ── coverage the review named ────────────────────────────────────────────────
+
+describe("observations — redaction inside collections", () => {
+  test("a redact key inside an ARRAY of objects is found", () => {
+    const { payload, redactions } = redactForCapture(
+      { rows: [{ id: 1, token: "a" }, { id: 2, token: "b" }] },
+      { redactKeys: ["token"] }
+    );
+    assert.equal(payload.rows[0].token, "<redacted>");
+    assert.equal(payload.rows[1].token, "<redacted>");
+    assert.equal(payload.rows[1].id, 2, "unrelated fields survive");
+    assert.deepEqual(redactions, ["rows[0].token", "rows[1].token"]);
+  });
+
+  test("the caller's object is not mutated", () => {
+    const input = { meta: { apiKey: "SECRET" } };
+    redactForCapture(input, { redactKeys: ["apiKey"] });
+    assert.equal(input.meta.apiKey, "SECRET", "redaction builds a new object; the caller's is left alone");
+  });
+});
+
+describe("capture policy — an action's own declared default is a floor", () => {
+  test("a replayable-by-declaration action is NOT downgraded outside a governed session", () => {
+    // The default table says a substantive ad hoc read is evidence "unless
+    // policy enables replayable" — and the action's declared default IS that
+    // policy. An earlier draft hardcoded the floor and silently downgraded it.
+    const strict = action({ observations: { defaultCapture: "replayable", supportsProposal: true } });
+    const { level, reason } = decideCapture({ action: strict, session: ADHOC, substantive: true });
+    assert.equal(level, "replayable");
+    assert.match(reason, /declared default/);
   });
 });
