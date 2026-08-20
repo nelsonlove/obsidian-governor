@@ -275,14 +275,19 @@ describe("operation executor — the operation envelope", () => {
     assert.deepEqual(seen, canonical);
   });
 
-  test("a mutation activates the effect phases a read does not", async () => {
+  test("a mutation whose handler marks nothing claims no effect phases", async () => {
+    // This test previously asserted the OPPOSITE — that a mutation's envelope
+    // carries `attempted` simply because its action's mode says it may mutate.
+    // That is the defect an independent review caught: a declared mode says
+    // what an action MAY do, never what one invocation DID, and deriving the
+    // envelope from it made every pre-queue refusal claim work nobody did.
     const executor = fixtureExecutor();
     const { operation } = await executor.run(
       { action: "note.append", actionVersion: 1, surface: { kind: "mcp", id: "obsidian_append_note" }, inputs: {} },
       async () => "ok"
     );
     const seen = operation.phases.map((p) => p.phase);
-    assert.ok(seen.includes("attempted"), "a proposal mutation attempts an effect");
+    assert.ok(!seen.includes("attempted"), "nothing marked an attempt, so the envelope must not claim one");
   });
 });
 
@@ -357,5 +362,191 @@ describe("operation executor — WP1 claims only what it can prove", () => {
     assert.equal(operation.authority, null);
     assert.equal(operation.proposalSubject, null);
     assert.equal(operation.standingTransition, null);
+  });
+});
+
+// ── the two defects the first draft shipped, now pinned ──────────────────────
+
+describe("operation executor — phases record only what happened", () => {
+  test("a mutation REFUSED before the queue claims neither queued nor attempted", async () => {
+    // The common case once real refusals flow through: an allowlist refusal, an
+    // unresolved uid, a revision conflict, a record refusal, a lock cap. The
+    // first draft derived phases from the action's declared MODE and pushed all
+    // of them at close, so every one of these closed with an envelope claiming
+    // work that never happened.
+    const executor = fixtureExecutor();
+    const { operation } = await executor.run(
+      { action: "note.append", actionVersion: 1, surface: { kind: "mcp", id: "obsidian_append_note" }, inputs: {} },
+      async () => ({ isError: true, content: [{ type: "text", text: "Error [out_of_allowlist]: nope" }] })
+    );
+    const seen = operation.phases.map((p) => p.phase);
+    assert.ok(!seen.includes("queued"), "refused before the queue — the envelope must not say it queued");
+    assert.ok(!seen.includes("attempted"), "refused before the handler ran — nothing was attempted");
+    assert.equal(operation.outcome, "refused");
+  });
+
+  test("a mutation that DOES reach the queue records it, because the handler says so", async () => {
+    const executor = fixtureExecutor();
+    const { operation } = await executor.run(
+      { action: "note.append", actionVersion: 1, surface: { kind: "mcp", id: "obsidian_append_note" }, inputs: {} },
+      async (mark) => {
+        mark("queued");
+        mark("attempted");
+        return "ok";
+      }
+    );
+    const seen = operation.phases.map((p) => p.phase);
+    assert.ok(seen.includes("queued"));
+    assert.ok(seen.includes("attempted"));
+    // Still in canonical order despite being marked mid-flight.
+    const canonical = OPERATION_PHASES.filter((p) => seen.includes(p));
+    assert.deepEqual(seen, canonical);
+  });
+
+  test("marking the same phase twice does not duplicate it", async () => {
+    const executor = fixtureExecutor();
+    const { operation } = await executor.run(
+      { action: "note.append", actionVersion: 1, surface: { kind: "mcp", id: "obsidian_append_note" }, inputs: {} },
+      async (mark) => {
+        mark("queued");
+        mark("queued");
+        return "ok";
+      }
+    );
+    assert.equal(operation.phases.filter((p) => p.phase === "queued").length, 1);
+  });
+});
+
+describe("operation executor — a refusal leaves evidence", () => {
+  for (const [name, request] of [
+    ["unregistered action", { action: "note.mystery", actionVersion: 1, surface: { kind: "mcp", id: "obsidian_mystery" }, inputs: {} }],
+    ["unbound surface", { action: "note.read", actionVersion: 1, surface: { kind: "mcp", id: "obsidian_not_bound" }, inputs: {} }],
+  ]) {
+    test(`a ${name} refusal still reaches the sink`, async () => {
+      const closed = [];
+      const executor = fixtureExecutor(fixtureRegistry(), { onClose: (op) => closed.push(op) });
+      await assert.rejects(() => executor.run(request, async () => "x"));
+      assert.equal(closed.length, 1, "a refusal that leaves no record is invisible, which is worse than failed");
+      assert.equal(closed[0].outcome, "refused");
+      assert.equal(closed[0].phase, "closed");
+    });
+  }
+
+  test("an authority-fence refusal is recorded — the event most worth an audit trail", async () => {
+    const registry = createActionRegistry();
+    registry.register(admitAction());
+    registry.bind({ kind: "mcp", id: "obsidian_admit", action: "authority.admit", actionVersion: 1 });
+    const closed = [];
+    const executor = fixtureExecutor(registry, { onClose: (op) => closed.push(op) });
+    await assert.rejects(
+      () =>
+        executor.run(
+          { action: "authority.admit", actionVersion: 1, surface: { kind: "mcp", id: "obsidian_admit" }, inputs: {} },
+          async () => "x"
+        ),
+      AuthoritySurfaceError
+    );
+    assert.equal(closed.length, 1, "an agent surface attempting a Governor-only action must be recorded");
+    assert.equal(closed[0].outcome, "refused");
+    assert.equal(closed[0].action.id, "authority.admit");
+    assert.equal(closed[0].surface.id, "obsidian_admit");
+  });
+});
+
+describe("operation executor — coded outcomes are not flattened", () => {
+  test("a revision conflict is a conflict, not a generic refusal", async () => {
+    const executor = fixtureExecutor();
+    const { operation } = await executor.run(
+      { action: "note.append", actionVersion: 1, surface: { kind: "mcp", id: "obsidian_append_note" }, inputs: {} },
+      async () => ({ isError: true, content: [{ type: "text", text: "Error [rev_conflict]: stale" }] })
+    );
+    assert.equal(operation.outcome, "conflict");
+  });
+
+  test("a write timeout is UNCERTAIN, because the write may still land", async () => {
+    // The distinction that matters most: calling this `refused` would invite a
+    // retry that duplicates a write which actually succeeded.
+    const executor = fixtureExecutor();
+    const { operation } = await executor.run(
+      { action: "note.append", actionVersion: 1, surface: { kind: "mcp", id: "obsidian_append_note" }, inputs: {} },
+      async () => ({ isError: true, content: [{ type: "text", text: "Error [write_timeout]: abandoned" }] })
+    );
+    assert.equal(operation.outcome, "uncertain");
+  });
+
+  test("a THROWN typed kernel error is mapped by its code too", async () => {
+    const executor = fixtureExecutor();
+    class RevConflict extends Error {
+      code = "rev_conflict";
+    }
+    const closed = [];
+    const ex = fixtureExecutor(fixtureRegistry(), { onClose: (op) => closed.push(op) });
+    await assert.rejects(
+      () =>
+        ex.run({ action: "note.append", actionVersion: 1, surface: { kind: "mcp", id: "obsidian_append_note" }, inputs: {} }, async () => {
+          throw new RevConflict("stale");
+        }),
+      RevConflict
+    );
+    assert.equal(closed[0].outcome, "conflict");
+    void executor;
+  });
+
+  test("an uncoded thrown error stays `failed` — an unknown error is not a guard decision", async () => {
+    const closed = [];
+    const ex = fixtureExecutor(fixtureRegistry(), { onClose: (op) => closed.push(op) });
+    await assert.rejects(
+      () => ex.run({ action: "note.read", actionVersion: 1, surface: MCP, inputs: {} }, async () => {
+        throw new Error("kaboom");
+      }),
+      /kaboom/
+    );
+    assert.equal(closed[0].outcome, "failed");
+  });
+});
+
+describe("operation executor — input normalization", () => {
+  test("two keys sharing one object reference is aliasing, not a cycle", async () => {
+    // A visited-set that only grows reports `<circular>` for the second key,
+    // making the digest depend on object identity rather than value.
+    const executor = fixtureExecutor();
+    const shared = { k: "v" };
+    const aliased = await executor.run(
+      { action: "note.read", actionVersion: 1, surface: MCP, inputs: { a: shared, b: shared } },
+      async () => 1
+    );
+    const distinct = await executor.run(
+      { action: "note.read", actionVersion: 1, surface: MCP, inputs: { a: { k: "v" }, b: { k: "v" } } },
+      async () => 1
+    );
+    assert.equal(
+      aliased.operation.normalizedInputDigest,
+      distinct.operation.normalizedInputDigest,
+      "equal values must digest equally whether or not the caller reused a reference"
+    );
+  });
+
+  test("a genuine cycle is still handled without throwing", async () => {
+    const executor = fixtureExecutor();
+    const cyclic = { name: "x" };
+    cyclic.self = cyclic;
+    const { operation } = await executor.run(
+      { action: "note.read", actionVersion: 1, surface: MCP, inputs: { cyclic } },
+      async () => 1
+    );
+    assert.ok(operation.normalizedInputDigest.startsWith("fnv1a64:"));
+  });
+
+  test("distinct Dates do not collapse to one digest", async () => {
+    const executor = fixtureExecutor();
+    const a = await executor.run(
+      { action: "note.read", actionVersion: 1, surface: MCP, inputs: { at: new Date("2020-01-01T00:00:00Z") } },
+      async () => 1
+    );
+    const b = await executor.run(
+      { action: "note.read", actionVersion: 1, surface: MCP, inputs: { at: new Date("2021-01-01T00:00:00Z") } },
+      async () => 1
+    );
+    assert.notEqual(a.operation.normalizedInputDigest, b.operation.normalizedInputDigest);
   });
 });

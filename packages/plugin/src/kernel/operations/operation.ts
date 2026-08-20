@@ -150,20 +150,45 @@ const MAX_DIGESTED_VALUE = 200;
  * from it.
  */
 export function normalizeInputs(inputs: unknown): string {
-  const seen = new WeakSet<object>();
+  // Tracks the CURRENT PATH, not everything ever visited. A `WeakSet` that
+  // only ever grows reports `<circular>` for the second of two keys that share
+  // one object reference — `{a: x, b: x}` is aliasing, not a cycle — which
+  // would make the digest depend on object identity rather than value. Two
+  // callers passing equal-but-distinct objects would then digest differently
+  // from one caller reusing a reference.
+  const path = new Set<object>();
   const walk = (v: unknown): unknown => {
     if (v === null || v === undefined) return null;
     if (typeof v === "string") return v.length > MAX_DIGESTED_VALUE ? `<${v.length} chars>` : v;
     if (typeof v === "number" || typeof v === "boolean") return v;
+    if (typeof v === "bigint") return `${v}n`;
     if (Array.isArray(v)) return v.map(walk);
     if (typeof v === "object") {
-      if (seen.has(v as object)) return "<circular>";
-      seen.add(v as object);
-      const out: Record<string, unknown> = {};
-      for (const key of Object.keys(v as Record<string, unknown>).sort()) {
-        out[key] = walk((v as Record<string, unknown>)[key]);
+      if (path.has(v as object)) return "<circular>";
+      path.add(v as object);
+      try {
+        // Objects with no own enumerable string keys would otherwise all
+        // normalize to `{}` — every Date value collapsing to one digest, every
+        // Map indistinguishable from every Set. MCP arguments arrive
+        // JSON-parsed so this never bites there, but this executor is the seam
+        // for Obsidian commands, pane gestures and internal calls too, where a
+        // live object is perfectly plausible.
+        if (v instanceof Date) return `<date:${Number.isNaN(v.getTime()) ? "invalid" : v.toISOString()}>`;
+        if (v instanceof Map) return { "<map>": [...v.entries()].map(([k, val]) => [walk(k), walk(val)]) };
+        if (v instanceof Set) return { "<set>": [...v.values()].map(walk) };
+        const keys = Object.keys(v as Record<string, unknown>).sort();
+        const out: Record<string, unknown> = {};
+        for (const key of keys) out[key] = walk((v as Record<string, unknown>)[key]);
+        if (keys.length === 0) {
+          // A class instance with no own enumerable keys still has a shape
+          // worth distinguishing from a bare `{}`.
+          const name = (v as object).constructor?.name;
+          if (name && name !== "Object") return `<${name}>`;
+        }
+        return out;
+      } finally {
+        path.delete(v as object);
       }
-      return out;
     }
     return String(v);
   };
