@@ -45,7 +45,13 @@ export const DEFAULT_VAULT_CONVENTIONS: VaultConventions = {
   uidExemptPaths: [
     "00-09 System/00 System management/00.05 Registries for the system/Daily notes/Daily note.template.md",
   ],
-  ungovernedRoots: ["Assent", "Vault archaeology"],
+  // The framework corpus, ungoverned since it is written as prose rather than
+  // filed as vault content. It was the vault-root `Assent/` tree; it was
+  // refiled under 00.89 (2026-08-17) and that folder was then renamed from
+  // `Assent` to `obsidian-governor` (2026-08-19). One prefix now covers both
+  // it and the `Vault archaeology` corpus, which moved inside it — the old
+  // bare `"Vault archaeology"` root no longer resolves anywhere in the vault.
+  ungovernedRoots: ["00-09 System/00 System management/00.89 obsidian-governor"],
 };
 
 /**

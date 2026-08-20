@@ -51,10 +51,12 @@ const RULES = [
   {
     id: "retired-name: Assent as the framework outside annotated legacy context",
     pattern: /\bAssent\b/,
-    // Legit mentions: the legacy/former-name annotation itself, the vault's
-    // `00.89 Assent` folder (a real path that keeps its historical name), and
-    // the ASSENT_* legacy env-var aliases.
-    allowIf: /legacy|former|formerly|historical|00\.89 Assent|ASSENT_/,
+    // Legit mentions: the legacy/former-name annotation itself, and the
+    // ASSENT_* legacy env-var aliases. The `00.89 Assent` folder USED to be a
+    // legit bare mention (a real path holding the historical name); it was
+    // renamed to `00.89 obsidian-governor` on 2026-08-19, so that escape hatch
+    // is gone — a doc naming the old folder is now drift, not a real path.
+    allowIf: /legacy|former|formerly|historical|ASSENT_/,
   },
   {
     id: "retired-key: modules.governance settings key outside migration context",
@@ -146,7 +148,7 @@ test("annotated legacy contexts stay allowed for the 0.12.0 rename rules (no ove
   const cases = [
     ["retired-name: Assent as the framework outside annotated legacy context", [
       "(*Assent*, the framework's former name, is legacy vocabulary)",
-      "`README.md` is symlinked into the Obsidian vault (`00.89 Assent/Build/vault-mcp README.md`)",
+      "`00.89 Assent` is the former folder name, renamed to `00.89 obsidian-governor`",
       "overridable via `GOVERNOR_VAULT_CONVENTIONS` (legacy alias `ASSENT_VAULT_CONVENTIONS`)",
     ]],
     ["retired-key: modules.governance settings key outside migration context", [

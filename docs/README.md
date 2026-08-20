@@ -108,7 +108,7 @@ only transport-visible surfaces; none exposes an accept verb.
 
 ## README lives in the vault too
 
-`README.md` is symlinked into the Obsidian vault (`00.89 Assent/Build/vault-mcp README.md`),
+`README.md` is symlinked into the Obsidian vault (`00.89 obsidian-governor/Build/vault-mcp README.md`),
 where vault machinery (the Linter, fileclass stamps) may add YAML frontmatter to it. A git
 **clean filter** (`scripts/strip-frontmatter.sh`, bound via `.gitattributes`) strips any
 leading frontmatter block when git reads the file, so the committed blob never carries it and

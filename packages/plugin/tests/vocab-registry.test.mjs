@@ -82,12 +82,15 @@ describe("VocabRegistry", () => {
     );
     // Stale-defaults regression pins: never gen3, never the dead 00.05
     // registries slot (emptied by the 2026-08 reorganizations), never the
-    // vault-root Assent tree (refiled to 00.89).
+    // vault-root Assent tree (refiled to 00.89), and never 00.89's own former
+    // `Assent` folder name (renamed to `obsidian-governor` on 2026-08-19).
     for (const row of DEFAULT_VOCABULARIES) {
       assert.doesNotMatch(row.root, /gen3/);
       assert.doesNotMatch(row.root, /00\.05 Registries/);
     }
-    assert.match(String(DEFAULT_VOCABULARIES[1].config?.termsRoot), /00\.89 Assent/);
+    const termsRoot = String(DEFAULT_VOCABULARIES[1].config?.termsRoot);
+    assert.match(termsRoot, /00\.89 obsidian-governor/);
+    assert.doesNotMatch(termsRoot, /00\.89 Assent/);
   });
 
   test("the defaults parse a fixture mirroring the live vault shapes", () => {
