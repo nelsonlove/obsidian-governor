@@ -27,8 +27,10 @@ import {
   regenerateAudit,
   auditPath,
   resolveSource,
+  resolveEntries,
   extractSections,
   reinsertSections,
+  auditDerivedFrom,
 } from "../src/kernel/provenance/index.ts";
 import {
   registerProvenanceTools,
@@ -103,6 +105,182 @@ describe("checkFreshness: fresh vs stale (port of test_freshness.py)", () => {
     const v = await checkFreshness(src, "audit.md");
     assert.equal(v.fresh, true);
   });
+
+  test("REGRESSION: an untouched note still reads FRESH — the new rules add no false positive", async () => {
+    const src = fakeBackend({
+      notes: { "audit.md": { "derived-from": ["a.md", "b.md"], generated: GEN_2035 } },
+      stats: { "a.md": { type: "file", mtime: MS_2001 }, "b.md": { type: "file", mtime: MS_2001 } },
+    });
+    const v = await checkFreshness(src, "audit.md");
+    assert.equal(v.fresh, true);
+    assert.deepEqual(v.changed, []);
+    assert.deepEqual(v.missing, []);
+    assert.equal(v.sourcesRemoved, undefined);
+  });
+
+  test("REGRESSION: the pre-existing fields keep their names and meaning", async () => {
+    const src = fakeBackend({
+      notes: { "audit.md": { "derived-from": ["a.md", "b.md"], generated: GEN_2020 } },
+      stats: { "a.md": { type: "file", mtime: MS_2030 }, "b.md": { type: "file", mtime: MS_2001 } },
+    });
+    const v = await checkFreshness(src, "audit.md");
+    assert.equal(v.fresh, false);
+    assert.deepEqual(v.changed, ["a.md"]);
+    assert.deepEqual(v.sources, ["a.md", "b.md"]);
+    assert.equal(v.generatedMs, Date.parse(GEN_2020));
+    // …and the note has no glob entry, so nothing is undetectable about it.
+    assert.equal(v.globDeletionsUndetectable, false);
+    assert.deepEqual(v.missing, []);
+  });
+});
+
+// ── 1a′. the deleted-source blind spot: tier 1 (plain paths) + tier 2 (witness)
+
+describe("checkFreshness: deleted sources (tier 1 — missing plain-path entries)", () => {
+  const GEN_2035 = "2035-01-01T00:00:00";
+  const MS_2001 = Date.parse("2001-01-01T00:00:00Z");
+  const MS_2040 = Date.parse("2040-01-01T00:00:00Z");
+
+  test("a NON-GLOB entry resolving to nothing is STALE and NAMED in `missing`", async () => {
+    const src = fakeBackend({
+      notes: { "audit.md": { "derived-from": ["kept.md", "gone.md"], generated: GEN_2035 } },
+      stats: { "kept.md": { type: "file", mtime: MS_2001 } }, // gone.md absent
+    });
+    const v = await checkFreshness(src, "audit.md");
+    assert.equal(v.fresh, false, "a deleted plain-path source must not read FRESH");
+    assert.deepEqual(v.missing, ["gone.md"]);
+    assert.deepEqual(v.changed, [], "nothing was modified — only removed");
+    assert.deepEqual(v.sources, ["kept.md"]);
+  });
+
+  test("a plain entry pointing at a FOLDER counts as missing (it names no file)", async () => {
+    const src = fakeBackend({
+      notes: { "audit.md": { "derived-from": ["dir"], generated: GEN_2035 } },
+      stats: { dir: { type: "folder", mtime: MS_2001 } },
+    });
+    const v = await checkFreshness(src, "audit.md");
+    assert.equal(v.fresh, false);
+    assert.deepEqual(v.missing, ["dir"]);
+  });
+
+  test("an EMPTY GLOB is NOT reported as missing (an empty source set can be legitimate)", async () => {
+    const src = fakeBackend({
+      notes: { "audit.md": { "derived-from": ["src/*.md"], generated: GEN_2035 } },
+      globs: { "src/*.md": [] },
+    });
+    const v = await checkFreshness(src, "audit.md");
+    assert.deepEqual(v.missing, [], "a glob matching nothing is not a missing entry");
+    assert.equal(v.fresh, true, "…and is not staleness by itself, with no witness to say otherwise");
+    assert.equal(v.globDeletionsUndetectable, true, "but the caller must be told it could not be checked");
+  });
+
+  test("an intact source set is FRESH with no false positive", async () => {
+    const src = fakeBackend({
+      notes: { "audit.md": { "derived-from": ["one.md", "src/*.md"], generated: GEN_2035 } },
+      stats: {
+        "one.md": { type: "file", mtime: MS_2001 },
+        "src/a.md": { type: "file", mtime: MS_2001 },
+        "src/b.md": { type: "file", mtime: MS_2001 },
+      },
+      globs: { "src/*.md": ["src/a.md", "src/b.md"] },
+    });
+    const v = await checkFreshness(src, "audit.md");
+    assert.equal(v.fresh, true);
+    assert.deepEqual(v.changed, []);
+    assert.deepEqual(v.missing, []);
+    assert.equal(v.sourcesRemoved, undefined);
+  });
+
+  test("a modified source still trips the mtime rule beside the new fields", async () => {
+    const src = fakeBackend({
+      notes: { "audit.md": { "derived-from": ["src/*.md"], generated: GEN_2035 } },
+      stats: { "src/a.md": { type: "file", mtime: MS_2040 } },
+      globs: { "src/*.md": ["src/a.md"] },
+    });
+    const v = await checkFreshness(src, "audit.md");
+    assert.equal(v.fresh, false);
+    assert.deepEqual(v.changed, ["src/a.md"]);
+    assert.deepEqual(v.missing, []);
+  });
+});
+
+describe("checkFreshness: deleted sources (tier 2 — the derived-source-count witness)", () => {
+  const GEN_2035 = "2035-01-01T00:00:00";
+  const MS_2001 = Date.parse("2001-01-01T00:00:00Z");
+  const MS_2040 = Date.parse("2040-01-01T00:00:00Z");
+
+  /** A glob-sourced derived note over `files`, optionally stamping the witness. */
+  function globNote(files, witness, mtime = MS_2001) {
+    const fm = { "derived-from": ["src/*.md"], generated: GEN_2035 };
+    if (witness !== undefined) fm["derived-source-count"] = witness;
+    return fakeBackend({
+      notes: { "audit.md": fm },
+      globs: { "src/*.md": files },
+      stats: Object.fromEntries(files.map((f) => [f, { type: "file", mtime }])),
+    });
+  }
+
+  test("witness says 3, only 2 resolve now ⇒ STALE with the count reason", async () => {
+    const v = await checkFreshness(globNote(["src/a.md", "src/b.md"], 3), "audit.md");
+    assert.equal(v.fresh, false, "a glob that lost a file must not read FRESH");
+    assert.deepEqual(v.sourcesRemoved, { expected: 3, actual: 2 });
+    assert.deepEqual(v.changed, [], "the reason is removal, not modification");
+    assert.deepEqual(v.missing, [], "globs never populate `missing`");
+    assert.equal(v.expectedSourceCount, 3);
+    assert.equal(v.globDeletionsUndetectable, false, "with a witness, the class WAS checked");
+  });
+
+  test("witness matches the current count ⇒ FRESH, and the check is reported as done", async () => {
+    const v = await checkFreshness(globNote(["src/a.md", "src/b.md"], 2), "audit.md");
+    assert.equal(v.fresh, true);
+    assert.equal(v.sourcesRemoved, undefined);
+    assert.equal(v.globDeletionsUndetectable, false);
+  });
+
+  test("MORE files than the witness is NOT stale by count alone", async () => {
+    const v = await checkFreshness(globNote(["src/a.md", "src/b.md", "src/c.md"], 2), "audit.md");
+    assert.equal(v.sourcesRemoved, undefined, "a grown source set is not a removal");
+    assert.equal(v.fresh, true, "…and every file predates `generated`, so nothing is stale");
+  });
+
+  test("MORE files whose mtime is fresh IS stale — by mtime, the rule that already covered additions", async () => {
+    const v = await checkFreshness(globNote(["src/a.md", "src/b.md", "src/c.md"], 2, MS_2040), "audit.md");
+    assert.equal(v.fresh, false);
+    assert.equal(v.sourcesRemoved, undefined);
+    assert.equal(v.changed.length, 3);
+  });
+
+  test("NO witness ⇒ exactly the pre-witness behavior, plus the undetectable flag", async () => {
+    const v = await checkFreshness(globNote(["src/a.md", "src/b.md"], undefined), "audit.md");
+    assert.equal(v.fresh, true, "a glob that silently lost files still reads FRESH without a witness");
+    assert.equal(v.sourcesRemoved, undefined);
+    assert.equal(v.expectedSourceCount, undefined);
+    assert.equal(v.globDeletionsUndetectable, true, "…but the caller can tell it was not checked");
+  });
+
+  test("a witness stamped as a numeric STRING is honored; a malformed one degrades to absent", async () => {
+    const asString = await checkFreshness(globNote(["src/a.md"], "3"), "audit.md");
+    assert.deepEqual(asString.sourcesRemoved, { expected: 3, actual: 1 });
+
+    for (const bad of ["many", -1, 2.5, true, null]) {
+      const v = await checkFreshness(globNote(["src/a.md"], bad), "audit.md");
+      assert.equal(v.expectedSourceCount, undefined, `witness ${JSON.stringify(bad)} must not be trusted`);
+      assert.equal(v.sourcesRemoved, undefined);
+      assert.equal(v.globDeletionsUndetectable, true, "an unusable witness is no witness");
+    }
+  });
+
+  test("the witness also covers plain paths — and a deletion is reported by BOTH tiers", async () => {
+    const src = fakeBackend({
+      notes: { "audit.md": { "derived-from": ["a.md", "b.md"], generated: GEN_2035, "derived-source-count": 2 } },
+      stats: { "a.md": { type: "file", mtime: MS_2001 } },
+    });
+    const v = await checkFreshness(src, "audit.md");
+    assert.equal(v.fresh, false);
+    assert.deepEqual(v.missing, ["b.md"]);
+    assert.deepEqual(v.sourcesRemoved, { expected: 2, actual: 1 });
+    assert.equal(v.globDeletionsUndetectable, false, "no glob entry ⇒ nothing undetectable");
+  });
 });
 
 // ── 1b. sources: glob vs literal (port of test_sources.py) ──────────────────
@@ -122,6 +300,35 @@ describe("resolveSource: glob defers to source.glob; literal keeps only a file",
     const src = fakeBackend({ stats: { dir: { type: "folder", mtime: 1 } } });
     assert.deepEqual(await resolveSource(src, "dir"), []);
     assert.deepEqual(await resolveSource(src, "gone.md"), []);
+  });
+
+  test("resolveEntries separates unresolved PLAIN entries from empty globs", async () => {
+    const src = fakeBackend({
+      stats: { "note.md": { type: "file", mtime: 1 } },
+      globs: { "empty/*.md": [], "src/*.md": ["src/a.md"] },
+    });
+    const r = await resolveEntries(src, ["note.md", "gone.md", "empty/*.md", "src/*.md"]);
+    assert.deepEqual(r.files, ["note.md", "src/a.md"]);
+    assert.deepEqual(r.missing, ["gone.md"], "only the plain path counts as missing");
+    assert.equal(r.hasGlob, true);
+  });
+
+  test("resolveEntries KEEPS duplicates when two entries name the same file", async () => {
+    // Load-bearing: the witness counts the length of THIS list, so de-duplicating
+    // here would silently under-count overlapping entries and read stale forever.
+    const src = fakeBackend({
+      stats: { "a.md": { type: "file", mtime: 1 } },
+      globs: { "*.md": ["a.md"] },
+    });
+    const r = await resolveEntries(src, ["a.md", "*.md"]);
+    assert.deepEqual(r.files, ["a.md", "a.md"]);
+  });
+
+  test("resolveEntries over plain paths only reports hasGlob false", async () => {
+    const src = fakeBackend({ stats: { "note.md": { type: "file", mtime: 1 } } });
+    const r = await resolveEntries(src, ["note.md"]);
+    assert.equal(r.hasGlob, false);
+    assert.deepEqual(r.missing, []);
   });
 });
 
@@ -206,6 +413,104 @@ describe("regenerateAudit: reports unnoted and preserves the human section", () 
     assert.match(out, /generator: obsidian-plugin-audit/);
   });
 
+  test("the regenerated audit STAMPS the derived-source-count witness over its own sources", async () => {
+    // 2 plugin notes (one of them the audit itself) + 1 manifest +
+    // community-plugins.json = 4 resolved sources.
+    const src = fakeBackend({
+      globs: {
+        ".obsidian/plugins/*/manifest.json": [".obsidian/plugins/aaa/manifest.json"],
+        "08.10 Obsidian plugins/*.md": ["08.10 Obsidian plugins/A.md", auditPath()],
+      },
+      // `.obsidian/community-plugins.json` is a plain path — resolved via stat.
+      stats: { ".obsidian/community-plugins.json": { type: "file", mtime: 1 } },
+      files: {
+        ".obsidian/plugins/aaa/manifest.json": JSON.stringify({ id: "aaa", version: "1.0.0" }),
+        ".obsidian/community-plugins.json": JSON.stringify(["aaa"]),
+      },
+    });
+    const out = await regenerateAudit(src, "2036-01-01T00:00:00");
+    assert.match(out, /^derived-source-count: 4$/m);
+    // The stamped list and the counted list are the SAME definition.
+    assert.deepEqual(auditDerivedFrom(), [
+      "08.10 Obsidian plugins/*.md",
+      ".obsidian/plugins/*/manifest.json",
+      ".obsidian/community-plugins.json",
+    ]);
+    for (const entry of auditDerivedFrom()) assert.ok(out.includes(`  - "${entry}"`), `missing entry ${entry}`);
+  });
+
+  test("a FIRST regen (the audit note does not exist yet) counts itself in — it is inside its own glob", async () => {
+    const src = fakeBackend({
+      globs: {
+        ".obsidian/plugins/*/manifest.json": [],
+        "08.10 Obsidian plugins/*.md": ["08.10 Obsidian plugins/A.md"], // no audit note yet
+      },
+      stats: { ".obsidian/community-plugins.json": { type: "file", mtime: 1 } },
+      files: { ".obsidian/community-plugins.json": JSON.stringify([]) },
+    });
+    // Resolves to 2 files now; 3 the instant the write lands. Witness the LATER
+    // number, or the first deletion after a first-ever regen would be masked.
+    assert.match(await regenerateAudit(src, "2036-01-01T00:00:00"), /^derived-source-count: 3$/m);
+  });
+
+  test("a regenerated audit SELF-CHECKS: it reads FRESH, and STALE once a source is deleted", async () => {
+    const files = {
+      ".obsidian/plugins/aaa/manifest.json": JSON.stringify({ id: "aaa", version: "1.0.0" }),
+      ".obsidian/community-plugins.json": JSON.stringify(["aaa"]),
+    };
+    const OLD = Date.parse("2001-01-01T00:00:00Z");
+    const notePaths = ["08.10 Obsidian plugins/A.md", auditPath()];
+    const globs = {
+      ".obsidian/plugins/*/manifest.json": [".obsidian/plugins/aaa/manifest.json"],
+      "08.10 Obsidian plugins/*.md": [...notePaths],
+    };
+    const stats = {
+      ".obsidian/community-plugins.json": { type: "file", mtime: OLD },
+      ".obsidian/plugins/aaa/manifest.json": { type: "file", mtime: OLD },
+      ...Object.fromEntries(notePaths.map((n) => [n, { type: "file", mtime: OLD }])),
+    };
+    const src = fakeBackend({ files, globs, stats });
+    const text = await regenerateAudit(src, "2035-01-01T00:00:00");
+    assert.match(text, /^derived-source-count: 4$/m);
+
+    // Re-check the audit as a derived note: parse the witness back out of the
+    // rendered text (the frontmatter Obsidian would hand back).
+    const witness = Number(/^derived-source-count: (\d+)$/m.exec(text)[1]);
+    const auditFm = {
+      "derived-from": auditDerivedFrom(),
+      generated: "2035-01-01T00:00:00",
+      "derived-source-count": witness,
+    };
+    const checkSrc = fakeBackend({ files, globs, stats, notes: { [auditPath()]: auditFm } });
+    assert.equal((await checkFreshness(checkSrc, auditPath())).fresh, true);
+
+    // Now DELETE one plugin note — no mtime anywhere moves.
+    globs["08.10 Obsidian plugins/*.md"] = [auditPath()];
+    const after = await checkFreshness(checkSrc, auditPath());
+    assert.equal(after.fresh, false, "a deleted source must make the audit STALE");
+    assert.deepEqual(after.sourcesRemoved, { expected: 4, actual: 3 });
+    assert.deepEqual(after.changed, [], "nothing was modified — this is the blind spot the witness closes");
+  });
+
+  test("the witness is correct under a non-default notesDir — trailing slash included", async () => {
+    for (const notesDir of ["Meta/Plugins", "Meta/Plugins/"]) {
+      const src = fakeBackend({
+        globs: {
+          ".obsidian/plugins/*/manifest.json": [],
+          "Meta/Plugins/*.md": ["Meta/Plugins/A.md", "Meta/Plugins/Plugins.md"], // audit note present
+        },
+        stats: { ".obsidian/community-plugins.json": { type: "file", mtime: 1 } },
+        files: { ".obsidian/community-plugins.json": JSON.stringify([]) },
+      });
+      const out = await regenerateAudit(src, "2036-01-01T00:00:00", notesDir);
+      // 2 notes (one is the audit itself) + community-plugins.json = 3; the audit
+      // already resolves, so nothing is added for it.
+      assert.match(out, /^derived-source-count: 3$/m, `notesDir ${JSON.stringify(notesDir)}`);
+      assert.equal(auditPath(notesDir), "Meta/Plugins/Plugins.md");
+      assert.deepEqual(auditDerivedFrom(notesDir)[0], "Meta/Plugins/*.md");
+    }
+  });
+
   test("auditPath derives the note name from the notes-dir basename", () => {
     assert.equal(auditPath(), "08.10 Obsidian plugins/08.10 Obsidian plugins.md");
     assert.equal(auditPath("Meta/Plugins"), "Meta/Plugins/Plugins.md");
@@ -271,6 +576,42 @@ describe("provenance tools: handlers answer over the injected backend", () => {
     assert.equal(res.isError, undefined);
     assert.equal(res.structuredContent.fresh, false);
     assert.deepEqual(res.structuredContent.changed, ["src.md"]);
+    // Additive shape: the new keys ride beside the originals.
+    assert.deepEqual(res.structuredContent.missing, []);
+    assert.equal(res.structuredContent.globDeletionsUndetectable, false);
+    assert.ok(!("sourcesRemoved" in res.structuredContent), "sourcesRemoved is omitted when no removal is detected");
+    assert.ok(!("expectedSourceCount" in res.structuredContent), "expectedSourceCount is omitted with no witness");
+  });
+
+  test("provenance_check surfaces missing entries, the count reason, and the undetectable flag", async () => {
+    const missingBackend = fakeBackend({
+      notes: { "audit.md": { "derived-from": ["gone.md"], generated: "2035-01-01T00:00:00" } },
+    });
+    const m = await tools(missingBackend).tools.get("provenance_check").handler({ path: "audit.md" });
+    assert.equal(m.structuredContent.fresh, false);
+    assert.deepEqual(m.structuredContent.missing, ["gone.md"]);
+
+    const shrunk = fakeBackend({
+      notes: {
+        "audit.md": { "derived-from": ["src/*.md"], generated: "2035-01-01T00:00:00", "derived-source-count": 5 },
+      },
+      globs: { "src/*.md": ["src/a.md"] },
+      stats: { "src/a.md": { type: "file", mtime: Date.parse("2001-01-01T00:00:00Z") } },
+    });
+    const s = await tools(shrunk).tools.get("provenance_check").handler({ path: "audit.md" });
+    assert.equal(s.structuredContent.fresh, false);
+    assert.deepEqual(s.structuredContent.sourcesRemoved, { expected: 5, actual: 1 });
+    assert.equal(s.structuredContent.expectedSourceCount, 5);
+    assert.equal(s.structuredContent.globDeletionsUndetectable, false);
+
+    const unwitnessed = fakeBackend({
+      notes: { "audit.md": { "derived-from": ["src/*.md"], generated: "2035-01-01T00:00:00" } },
+      globs: { "src/*.md": ["src/a.md"] },
+      stats: { "src/a.md": { type: "file", mtime: Date.parse("2001-01-01T00:00:00Z") } },
+    });
+    const u = await tools(unwitnessed).tools.get("provenance_check").handler({ path: "audit.md" });
+    assert.equal(u.structuredContent.fresh, true);
+    assert.equal(u.structuredContent.globDeletionsUndetectable, true);
   });
 
   test("provenance_reconcile reports counts + unnoted + stale", async () => {

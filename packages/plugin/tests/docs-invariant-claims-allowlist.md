@@ -56,6 +56,7 @@ Known-overstated section instead — see its header for the format.
 - **The human keeps the sole accept veto — by design, and by enforcement on the surfaces the guard covers.** Acceptance is a gesture made in the **[acceptance module](#the-acceptance-module)** — never through a tool, agent, or CLI call the guard sees.
 - The acceptance model's guarantees below are stated for the **plugin's guarded write surfaces**; these issues are the honest boundary of that claim until closed.
 - "Every write is journaled" is true of the **plugin's kernel-guarded path** only, never of this fallback.
+- | [provenance.md](provenance.md) | The provenance module: derived-content freshness — what `derived-from` + `generated` detect, the two-tier deleted-source detection (missing plain paths always; glob deletions via the opt-in `derived-source-count` witness), and the honest limits of an mtime-based check. |
 
 ## docs/acceptance-model.md
 

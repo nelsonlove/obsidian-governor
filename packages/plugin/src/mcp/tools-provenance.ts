@@ -242,7 +242,10 @@ export function registerProvenanceTools(
       description:
         "Report whether a derived note is FRESH or STALE against its own `derived-from:` sources. Reads the note's " +
         "`derived-from` (vault-relative globs/paths) and `generated:` timestamp and flags any source file modified " +
-        "after `generated`. Read-only.",
+        "after `generated` (`changed`), any NON-GLOB entry that no longer resolves to a file (`missing` — a deleted " +
+        "or moved source), and — when the note stamps the optional `derived-source-count:` witness — a source set " +
+        "that has SHRUNK since generation (`sourcesRemoved`). Without that witness, deletions inside a GLOB entry " +
+        "cannot be seen, and the result says so (`globDeletionsUndetectable: true`). Read-only.",
       inputSchema: {
         path: z
           .string()
@@ -254,12 +257,21 @@ export function registerProvenanceTools(
     async ({ path }) => {
       try {
         const v = await checkFreshness(source as ProvenanceSource, path);
+        // Additive in SHAPE: `changed` / `sources` / `generated` keep their names
+        // and meaning, and the deleted-source fields are new keys beside them.
+        // `fresh` keeps its name but is deliberately STRICTER — `missing` empty
+        // and no `sourcesRemoved` are new conditions, which is the whole point:
+        // a note whose plain-path source was deleted used to read fresh.
         return ok({
           path,
           fresh: v.fresh,
           changed: v.changed,
+          missing: v.missing,
           sources: v.sources,
           generated: new Date(v.generatedMs).toISOString(),
+          ...(v.expectedSourceCount !== undefined ? { expectedSourceCount: v.expectedSourceCount } : {}),
+          ...(v.sourcesRemoved ? { sourcesRemoved: v.sourcesRemoved } : {}),
+          globDeletionsUndetectable: v.globDeletionsUndetectable,
         });
       } catch (e) {
         return fail(e);
