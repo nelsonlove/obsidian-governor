@@ -92,6 +92,31 @@ export interface ReadAuthorizationInput {
 export interface ObservationStoreOpts {
   blobs: BlobStore;
   /**
+   * May this reader replay ANYTHING at all?
+   *
+   * A coarse gate, checked before the store is touched, and it exists to close
+   * an oracle rather than to express policy.
+   *
+   * `ref` is a CONTENT DIGEST. Without this gate, a caller with no authority
+   * whatsoever could compute `digest(P)` for content it merely suspects was
+   * captured and call `playback` to learn whether that ref exists — because
+   * `payload_missing` and `payload_corrupt` are raised while loading, before
+   * per-source authorization is reachable at all. `canRead` would never even be
+   * invoked. That is a confirmation oracle over the whole payload store,
+   * callable by anyone.
+   *
+   * With the gate, a reader who may replay nothing gets one uniform refusal for
+   * every ref and learns nothing from the difference.
+   *
+   * The residual, stated rather than glossed: a reader who MAY replay something
+   * can still distinguish missing from corrupt from not-permitted for an
+   * arbitrary digest. Closing that too would mean refusing to report corruption
+   * to people entitled to know about it. What leaks is confirmation that
+   * content the reader could already reconstruct was observed — metadata, not
+   * content.
+   */
+  canReplay: (reader: string) => boolean;
+  /**
    * May this reader replay this payload, NOW?
    *
    * Asked per playback rather than resolved at capture, because the answer can
@@ -107,6 +132,17 @@ export interface ObservationStoreOpts {
   /** Claims that currently depend on a payload, so pruning can refuse to
    * destroy evidence something still rests on. */
   dependents?: (ref: string) => string[];
+  /**
+   * What a payload BACKS, whether or not that blocks pruning.
+   *
+   * `dependents` gates removal, so by construction it is empty for everything
+   * actually removed — which left the report unable to answer the question the
+   * design asks it to: "which replay, recovery or standing explanations become
+   * unavailable?" A completed proposal's audit trail is not a live dependency,
+   * but a user deleting its payload should still be told the trail is about to
+   * stop being verifiable.
+   */
+  explains?: (ref: string) => string[];
   now?: () => number;
 }
 
@@ -121,6 +157,14 @@ export interface PlaybackResult {
 
 export interface PruneReport {
   removed: string[];
+  /**
+   * What each removed payload backed, and can no longer substantiate.
+   *
+   * Pruning evidence does not rewrite an authority claim — it makes the claim
+   * locally unverifiable, and saying which is the difference between a
+   * retention control and a quiet loss.
+   */
+  nowUnverifiable: Array<{ ref: string; explanations: string[] }>;
   /** Payloads left in place because something still depends on them, with what
    * depends on them — a prune that silently skipped would look like a prune
    * that worked. */
@@ -158,6 +202,11 @@ export function createObservationStore(opts: ObservationStoreOpts): ObservationS
     // the content is checked against it — otherwise the address is a filename.
     if (payloadDigest(stored.payload) !== ref) throw new PayloadCorruptError(ref);
     return stored;
+  }
+
+  /** The coarse gate. Uniform refusal, before the store is touched. */
+  function gate(ref: string, ctx: PlaybackContext): void {
+    if (!opts.canReplay(ctx.reader)) throw new PlaybackUnauthorizedError(ref);
   }
 
   async function authorized(ref: string, stored: StoredPayload, ctx: PlaybackContext): Promise<void> {
@@ -200,10 +249,15 @@ export function createObservationStore(opts: ObservationStoreOpts): ObservationS
     },
 
     async playback(ref, ctx) {
-      // Integrity BEFORE authorization, so a corrupt payload is reported as
-      // corrupt to anyone entitled to know the observation exists — and
-      // authorization before RETURNING anything, so an unauthorized reader
-      // learns nothing either way.
+      // Order matters, and the first draft had it wrong.
+      //
+      // 1. the coarse gate, BEFORE the store is touched. A reader who may
+      //    replay nothing gets one uniform refusal for every ref, so the
+      //    missing/corrupt/unauthorized distinction discloses nothing to them.
+      // 2. load, so integrity failures are reported to readers entitled to
+      //    know the observation exists.
+      // 3. per-source authorization, before any payload is returned.
+      gate(ref, ctx);
       const stored = await load(ref);
       await authorized(ref, stored, ctx);
       return { ref, payload: stored.payload, historical: true, playedAt: now() };
@@ -212,6 +266,9 @@ export function createObservationStore(opts: ObservationStoreOpts): ObservationS
     async export(refs, ctx) {
       const out: Array<{ ref: string; payload: unknown }> = [];
       for (const ref of refs) {
+        // Same ordering as playback — export is playback that leaves the
+        // machine, so it must not be the weaker door.
+        gate(ref, ctx);
         const stored = await load(ref);
         // Export is playback that leaves the machine, so it is authorized the
         // same way. Anything else would make export the way around playback.
@@ -224,16 +281,21 @@ export function createObservationStore(opts: ObservationStoreOpts): ObservationS
     async prune(refs) {
       const removed: string[] = [];
       const stillReferenced: Array<{ ref: string; dependents: string[] }> = [];
+      const nowUnverifiable: Array<{ ref: string; explanations: string[] }> = [];
       for (const ref of refs) {
         const deps = opts.dependents?.(ref) ?? [];
         if (deps.length > 0) {
           stillReferenced.push({ ref, dependents: deps });
           continue;
         }
+        // Collected BEFORE removal — afterwards there is nothing left to ask
+        // about.
+        const explanations = opts.explains?.(ref) ?? [];
         await opts.blobs.remove(ref);
         removed.push(ref);
+        if (explanations.length > 0) nowUnverifiable.push({ ref, explanations });
       }
-      return { removed, stillReferenced };
+      return { removed, stillReferenced, nowUnverifiable };
     },
   };
 }
