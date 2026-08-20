@@ -224,4 +224,4 @@ Deep-dive index with the architecture story: [docs/README.md](docs/README.md).
 
 ## Repo
 
-`~/repos/obsidian-vault-mcp-plugin`. See `CLAUDE.md` for the locked architecture decisions.
+`~/repos/system/obsidian-governor`. See `CLAUDE.md` for the locked architecture decisions.
