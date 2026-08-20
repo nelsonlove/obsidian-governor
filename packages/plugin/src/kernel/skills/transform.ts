@@ -320,7 +320,9 @@ function fileBaseOf(path: string): string {
 export function transformAll(notes: NoteInput[], opts: TransformOptions): TransformResult {
   const warnings: string[] = [];
   const errors: string[] = [];
-  const preloadCap = Number.isFinite(opts.preloadCap) ? Math.max(0, Math.trunc(opts.preloadCap as number)) : DEFAULT_PRELOAD_CAP;
+  const preloadCap = typeof opts.preloadCap === "number" && Number.isFinite(opts.preloadCap) && opts.preloadCap >= 0
+    ? Math.trunc(opts.preloadCap)
+    : DEFAULT_PRELOAD_CAP;
   const preloads: PreloadPlacement[] = [];
 
   // ---- phase 1: parse candidate nodes ----
@@ -358,10 +360,18 @@ export function transformAll(notes: NoteInput[], opts: TransformOptions): Transf
     const nameBase = slug(str(fm.name) || fileBase);
     // `preload` is a SKILL directive and `no-skills` an AGENT one; the other way round is a
     // no-op, so say so rather than letting the field sit there looking effective.
-    const preload = fm.preload === true;
+    let preload = fm[PRELOAD_FIELD] === true;
     const noSkills = fm[NO_SKILLS_FIELD] === true;
-    if (preload && kind !== "skill") warnings.push(`${note.path}: \`preload\` applies to skills — ignored on a ${kind} note`);
+    if (preload && kind !== "skill") warnings.push(`${note.path}: \`${PRELOAD_FIELD}\` applies to skills — ignored on a ${kind} note`);
     if (noSkills && kind !== "agent") warnings.push(`${note.path}: \`${NO_SKILLS_FIELD}\` applies to agents — ignored on a ${kind} note`);
+    // The platform's one constraint on the preload set: "You can't preload skills that set
+    // `disable-model-invocation: true`, since preloading draws from the same set of skills
+    // Claude can invoke" — a listed one is skipped and logged. Drop it here instead, so the
+    // compiled `skills:` says what will actually be loaded.
+    if (preload && kind === "skill" && (extra["disable-model-invocation"] === true || extra["disable-model-invocation"] === "true")) {
+      warnings.push(`${note.path}: \`${PRELOAD_FIELD}\` is ignored — a skill with \`disable-model-invocation: true\` can't be preloaded (the platform skips it); it stays invocable by you`);
+      preload = false;
+    }
     nodes.push({
       kind,
       path: note.path,
@@ -427,6 +437,7 @@ export function transformAll(notes: NoteInput[], opts: TransformOptions): Transf
       if (!root) { n.valid = false; errors.push(`${n.path}: no parent and no root`); continue; }
       n.parent = root; continue;
     }
+    if (primaryPath === n.path) { n.valid = false; errors.push(`${n.path}: names itself as a parent`); continue; }
     const parent = byPath.get(primaryPath);
     if (!parent) { n.valid = false; errors.push(`${n.path}: unresolved parent ${primaryPath}`); continue; }
     if (parent.kind !== "agent") { n.valid = false; errors.push(`${n.path}: parent is not an agent`); continue; }
@@ -569,7 +580,7 @@ export function transformAll(notes: NoteInput[], opts: TransformOptions): Transf
     if (overCap) {
       warnings.push(`${label}: ${skillRefs.length} skills preloaded into \`${n.genName}\` exceeds the preload cap of ${preloadCap} — preloading fills the fresh context window delegation exists to provide; leave the ones this agent can find on demand un-opted-in`);
     }
-    if (skillRefs.length) preloads.push({ agent: n.genName, path: n.path, skills: skillRefs, overCap });
+    if (skillRefs.length) preloads.push({ agent: n.genName, path: label, skills: skillRefs, overCap });
 
     // guarantee structural tools from tree position (Agent to delegate, Skill to invoke
     // attached skills). Only matters when tools are explicitly listed; omitting tools

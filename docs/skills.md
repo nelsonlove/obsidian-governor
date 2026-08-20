@@ -14,9 +14,10 @@ Files: `packages/plugin/src/kernel/skills/` (pure compiler — `transform.ts`, `
 
 Compiled names come from each note's own `name:` (or filename), deduped — not from its position
 in the `parent:` tree. So a compiled skill sits at `skills/<name>/SKILL.md` whatever it hangs
-off, and a compiled agent may invoke any skill in the plugin through the Skill tool. Sharing a
-skill between agents needs no special construction: it is the default state of the emitted
-plugin, and it holds whatever a note's `parent:` says.
+off, and a compiled agent may invoke any skill in the plugin through the Skill tool (unless it
+is locked out of the Skill tool entirely — see `no-skills:` below). Sharing a skill between
+agents needs no special construction: it is the default state of the emitted plugin, and it
+holds whatever a note's `parent:` says.
 
 What the tree still decides: the **breadcrumb** prefixed to a listing description, the **level**
 (depth past 5 is warned — live delegation stops nesting there), **policy lineage** (which agents
@@ -67,6 +68,9 @@ preload: true     # this skill is preloaded into BOTH of those agents
 - No opted-in attachments ⇒ the agent gets **no `skills:` key at all** (not an empty list).
 - Attached-but-not-opted-in skills are still named in the agent's body, under "attached to you
   but not preloaded — invoke them with the Skill tool," which is what actually happens.
+- One platform constraint is enforced at compile time: a skill with `disable-model-invocation:
+  true` is dropped from the preload set with a warning, because preloading "draws from the same
+  set of skills Claude can invoke" — Claude Code would skip such an entry anyway.
 
 **The anti-pattern guard.** Preloading a whole scope spends the fresh context window that
 delegating to a subagent exists to provide. The compile therefore WARNS — it does not refuse;
