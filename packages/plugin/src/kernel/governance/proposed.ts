@@ -37,6 +37,11 @@ export interface ProposedItem {
  * pending queue's own "newest activity first" convention (queue.ts). Alphabetical-by-path
  * was the prior default and had nothing to do with which proposed note actually needs
  * attention soonest.
+ *
+ * Ties break on PATH, so the order is TOTAL. A bulk operation (sync, git checkout, reindex)
+ * stamps many notes with the same mtime; without a tiebreaker `Array.sort`'s stability would
+ * expose the caller's iteration order (Obsidian's `getMarkdownFiles()`), which can change
+ * across reloads — rows would shuffle for no visible reason.
  */
 export function buildProposedList(
   candidates: ProposedCandidate[],
@@ -46,6 +51,6 @@ export function buildProposedList(
   const pending = new Set(pendingPaths);
   return candidates
     .filter((c) => c.status === "proposed" && !isExcluded(c.path) && !pending.has(c.path))
-    .sort((a, b) => b.mtime - a.mtime)
+    .sort((a, b) => b.mtime - a.mtime || a.path.localeCompare(b.path))
     .map((c) => ({ path: c.path, title: c.title }));
 }
