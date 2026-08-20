@@ -30,6 +30,14 @@ export {
   type DetectConfig,
 } from "./exporter.js";
 export {
+  DEFAULT_PRELOAD_CAP,
+  NO_SKILLS_FIELD,
+  PRELOAD_FIELD,
+  type Attachment,
+  type PreloadPlacement,
+  type TreeNode,
+} from "./transform.js";
+export {
   DEFAULT_SKILLS_CONFIG,
   skillsConfigOf,
   fieldsOf,

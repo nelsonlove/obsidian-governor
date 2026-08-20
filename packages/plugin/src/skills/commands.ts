@@ -94,7 +94,7 @@ export function pick<T>(app: App, items: T[], label: (t: T) => string): Promise<
 
 export async function cmdValidate(ctx: SkillsGuiCtx): Promise<void> {
   const cfg = ctx.config();
-  const a = await analyzeVault(ctx.backend, fieldsOf(cfg), cfg.pluginName);
+  const a = await analyzeVault(ctx.backend, fieldsOf(cfg), cfg.pluginName, cfg.preloadCap);
   const lines = [
     `${a.counts.agents} agents · ${a.counts.skills} skills · ${a.counts.policies} policies · ${a.counts.commands} commands`,
     "",
@@ -106,7 +106,7 @@ export async function cmdValidate(ctx: SkillsGuiCtx): Promise<void> {
 
 export async function cmdTree(ctx: SkillsGuiCtx): Promise<void> {
   const cfg = ctx.config();
-  const a = await analyzeVault(ctx.backend, fieldsOf(cfg), cfg.pluginName);
+  const a = await analyzeVault(ctx.backend, fieldsOf(cfg), cfg.pluginName, cfg.preloadCap);
   const byName = new Map(a.tree.map((n) => [n.name, n]));
   const lines: string[] = [];
   const walk = (name: string, depth: number): void => {
@@ -178,6 +178,7 @@ export async function cmdRelease(ctx: SkillsGuiCtx): Promise<void> {
       fields: fieldsOf(cfg),
       assetsRoot: expandTilde(cfg.assetsRoot),
       version,
+      preloadCap: cfg.preloadCap,
     });
     const issues = summary.errors.length ? ` · ${summary.errors.length} error(s): ${summary.errors[0]}` : "";
     new Notice(
