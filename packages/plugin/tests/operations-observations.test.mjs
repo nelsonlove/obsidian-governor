@@ -30,7 +30,7 @@ import {
   strongestOf,
 } from "../src/kernel/observations/capture-policy.ts";
 import { validateDependencies, DEPENDENCY_PROBLEMS } from "../src/kernel/observations/dependencies.ts";
-import { buildObservation, redactForCapture } from "../src/kernel/observations/observation.ts";
+import { buildObservation, redactForCapture, payloadDigest } from "../src/kernel/observations/observation.ts";
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
@@ -248,7 +248,7 @@ describe("observations — the record", () => {
   test("an evidence observation keeps the shape but not the bytes", () => {
     const obs = buildObservation({ ...base, level: "evidence", payload: { body: "the note text" } });
     assert.equal(obs.level, "evidence");
-    assert.ok(obs.result.digest.startsWith("fnv1a64:"));
+    assert.ok(obs.result.digest.startsWith("sha256:"));
     assert.equal(obs.result.payloadObject, null, "evidence does not retain the payload");
     assert.ok(!JSON.stringify(obs).includes("the note text"));
   });
@@ -272,5 +272,39 @@ describe("observations — the record", () => {
       () => buildObservation({ ...base, level: "replayable", payload: { body: "x" } }),
       /payloadObject/
     );
+  });
+});
+
+// ── the digest must distinguish what was returned ────────────────────────────
+
+describe("observations — the payload digest is content-sensitive", () => {
+  test("two DIFFERENT payloads of the same length digest differently", () => {
+    // The operation-identity normalizer collapses long strings to `<N chars>`,
+    // which is right for keeping note bodies out of a metadata record and
+    // catastrophic here: distinguishing what was returned is most of what an
+    // evidence-level observation is FOR. Measured before fixing — these two
+    // digested identically under the truncating normalizer.
+    const a = payloadDigest({ body: "A".repeat(500) });
+    const b = payloadDigest({ body: "B".repeat(500) });
+    assert.notEqual(a, b);
+  });
+
+  test("the same payload digests identically regardless of key order", () => {
+    assert.equal(payloadDigest({ a: 1, b: 2 }), payloadDigest({ b: 2, a: 1 }));
+  });
+
+  test("it is a cryptographic digest, because this one has an adversary", () => {
+    // An agent that could collide two payloads could make a proposal cite
+    // evidence of having read something other than what it read.
+    assert.match(payloadDigest({ a: 1 }), /^sha256:[0-9a-f]{64}$/);
+  });
+
+  test("an evidence record still embeds no content", () => {
+    const obs = buildObservation({
+      id: "o", operationId: "op", action: { id: "a", version: 1 }, capturedAt: 0,
+      level: "evidence", actorBinding: "c", normalizedRequestDigest: "x",
+      effectiveScopeDigest: "y", sourceState: [], payload: { body: "SENSITIVE-TEXT" },
+    });
+    assert.ok(!JSON.stringify(obs).includes("SENSITIVE-TEXT"));
   });
 });
