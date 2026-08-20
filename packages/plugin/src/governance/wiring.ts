@@ -104,6 +104,7 @@ import type { RenameIndex } from "../kernel/governance/auto-accept/detectors.js"
 import { badgeVisible } from "../kernel/governance/badge.js";
 import { governanceDisplaySettings, governanceAcceptanceSettings } from "../kernel/governance/settings.js";
 import { isRealGesture } from "../kernel/governance/gesture.js";
+import { computeAcceptEligiblePaths } from "../kernel/governance/menu-eligibility.js";
 import {
   GovernanceReviewView,
   VIEW_TYPE_GOVERNANCE,
@@ -111,6 +112,7 @@ import {
   renderAllowlist,
   wireAdoptButton,
   ADOPT_BASELINE_DESC,
+  acceptThroughGate,
   type ReviewController,
   type RevisingItem,
 } from "./pane.js";
@@ -583,13 +585,19 @@ async function performWithdraw(plugin: Plugin, path: string): Promise<void> {
   await refresh(plugin);
 }
 // The Revising listing — read-only, from Obsidian's metadata cache (no file reads). Plain data.
+// Sorted by mtime DESCENDING (most recently touched first) — the same "newest activity
+// first" convention as the pending queue and the Proposed listing below. `RevisingItem`
+// itself carries no mtime (display data only); decorate-sort-undecorate keeps that public
+// shape unchanged.
 function listRevising(plugin: Plugin): RevisingItem[] {
-  const out: RevisingItem[] = [];
+  const out: Array<RevisingItem & { mtime: number }> = [];
   for (const file of governedMarkdownFiles(plugin)) {
     const fm = plugin.app.metadataCache.getFileCache(file)?.frontmatter as Record<string, unknown> | undefined;
-    if (fm?.["acceptance-status"] === "revising") out.push({ path: file.path, title: file.basename });
+    if (fm?.["acceptance-status"] === "revising") {
+      out.push({ path: file.path, title: file.basename, mtime: file.stat.mtime });
+    }
   }
-  return out.sort((a, b) => a.path.localeCompare(b.path));
+  return out.sort((a, b) => b.mtime - a.mtime).map(({ path, title }) => ({ path, title }));
 }
 // The Proposed listing (#221/#164) — read-only, from the metadata cache exactly like the
 // Revising listing, with the dedupe/exclusion rules in the pure kernel builder: proposed
@@ -602,6 +610,7 @@ function listProposed(plugin: Plugin): ProposedItem[] {
     status: (plugin.app.metadataCache.getFileCache(file)?.frontmatter as Record<string, unknown> | undefined)?.[
       "acceptance-status"
     ],
+    mtime: file.stat.mtime,
   }));
   return buildProposedList(candidates, getCachedPending(plugin).map((p) => p.path), isExcluded);
 }
@@ -1188,6 +1197,69 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
         console.error("vault-mcp governance: queue refresh after delete failed", e)
       );
     }, QUEUE_DELETE_DEBOUNCE_MS));
+  }));
+
+  // Right-click "Accept" (file explorer context menu) — a second entry point to the SAME
+  // context-aware Accept the pane's Accept buttons call (acceptThroughGate), for the common
+  // case of accepting one or more notes without opening the pane. Registered on `component`
+  // like every other governance-mounted listener, so it lives/dies with the module toggle.
+  // Single-file (`file-menu`) and multi-select (`files-menu`) are both wired; multi-select
+  // loops the SAME single-path accept per file — there is no separate batch-accept primitive,
+  // and looping keeps every file's stamp/baseline-advance/journal-record independent (one
+  // failure does not block the rest).
+  //
+  // Gesture gate: EVERY accept-class handler in this codebase requires isRealGesture(evt),
+  // and this is no exception, even though MenuItem.onClick's real runtime behavior for a
+  // NATIVE (Electron OS) context menu vs. a DOM-rendered one is unverified — Obsidian's own
+  // menu can render either way (Menu.setUseNativeMenu), and only a human physically
+  // right-clicking can confirm which one this specific menu uses and whether its click event
+  // is genuinely isTrusted. Gating defensively means the worst case if it turns out untrusted
+  // is "the menu item does nothing" (fails closed, a UX bug) rather than silently bypassing
+  // the one guarantee this whole module exists to uphold.
+  const menuController = buildController(plugin);
+  const eligibleMenuPaths = (): Set<string> =>
+    computeAcceptEligiblePaths(menuController.getPending(), menuController.getProposed(), menuController.getRevising());
+  const acceptViaMenu = async (path: string, title: string): Promise<void> => {
+    try {
+      const res = await acceptThroughGate(plugin.app, menuController, path, title);
+      if (res === null) return; // gate: open/cancel — nothing happened
+      new Notice(
+        res.stamped
+          ? `governor acceptance: accepted ${title} — stamped accepted-by: ${menuController.acceptedBy()}`
+          : `governor acceptance: accepted ${title}`,
+      );
+      await menuController.refresh();
+    } catch (e) {
+      new Notice(`governor acceptance: accept failed — ${(e as Error).message}`);
+    }
+  };
+  component.registerEvent(plugin.app.workspace.on("file-menu", (menu, file) => {
+    if (!(file instanceof TFile) || file.extension !== "md") return;
+    if (!eligibleMenuPaths().has(file.path)) return;
+    menu.addItem((item) => {
+      item.setTitle("Accept").setIcon("check").onClick((evt) => {
+        if (!isRealGesture(evt)) return; // inert on a forged/synthesized menu click
+        void acceptViaMenu(file.path, file.basename);
+      });
+    });
+  }));
+  component.registerEvent(plugin.app.workspace.on("files-menu", (menu, files) => {
+    const eligible = eligibleMenuPaths();
+    const targets = files.filter(
+      (f): f is TFile => f instanceof TFile && f.extension === "md" && eligible.has(f.path),
+    );
+    if (targets.length === 0) return;
+    menu.addItem((item) => {
+      item
+        .setTitle(targets.length === 1 ? "Accept" : `Accept (${targets.length})`)
+        .setIcon("check")
+        .onClick((evt) => {
+          if (!isRealGesture(evt)) return; // inert on a forged/synthesized menu click
+          void (async () => {
+            for (const f of targets) await acceptViaMenu(f.path, f.basename);
+          })();
+        });
+    });
   }));
 
   // Clear the debounce timers on unmount/unload (Obsidian tears down views/events/dom-events/ribbon

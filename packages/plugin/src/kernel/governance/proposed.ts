@@ -12,12 +12,15 @@
 // Plain data in, plain data out: nothing here reads a file, advances a baseline, or carries
 // a callable. The wiring's `listProposed` feeds it the metadata cache; tests feed it fakes.
 
-/** One candidate from the metadata cache: path, display title, and the note's
- * `acceptance-status` frontmatter value (unknown-typed — the cache is untrusted data). */
+/** One candidate from the metadata cache: path, display title, the note's
+ * `acceptance-status` frontmatter value (unknown-typed — the cache is untrusted data), and
+ * `mtime` (the file's own last-modified time, ms since epoch — plain data, no Date/Obsidian
+ * type needed to keep this module Obsidian-free) used only to order the listing. */
 export interface ProposedCandidate {
   path: string;
   title: string;
   status: unknown;
+  mtime: number;
 }
 
 /** One note listed in the Proposed section — display data only. */
@@ -30,7 +33,10 @@ export interface ProposedItem {
  * Build the Proposed-section listing: `status === "proposed"` (exact string — the cache
  * value is untrusted, so anything else, including arrays or objects, does not match), not
  * under an excluded root, and NOT in the pending queue (deduped — pending items already
- * carry Accept). Sorted by path for a stable render.
+ * carry Accept). Sorted by `mtime` DESCENDING (most recently touched first) — matching the
+ * pending queue's own "newest activity first" convention (queue.ts). Alphabetical-by-path
+ * was the prior default and had nothing to do with which proposed note actually needs
+ * attention soonest.
  */
 export function buildProposedList(
   candidates: ProposedCandidate[],
@@ -40,6 +46,6 @@ export function buildProposedList(
   const pending = new Set(pendingPaths);
   return candidates
     .filter((c) => c.status === "proposed" && !isExcluded(c.path) && !pending.has(c.path))
-    .map((c) => ({ path: c.path, title: c.title }))
-    .sort((a, b) => a.path.localeCompare(b.path));
+    .sort((a, b) => b.mtime - a.mtime)
+    .map((c) => ({ path: c.path, title: c.title }));
 }

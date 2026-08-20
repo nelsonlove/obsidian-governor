@@ -526,6 +526,26 @@ describe("#101 dispositions-as-data: THE TRIPWIRE — the wrap adds no reachable
     }
   });
 
+  test("wiring.ts: the file-menu/files-menu Accept items are onClick-wired and isRealGesture-gated", () => {
+    const wiringRaw = readRaw("governance/wiring.ts");
+    const lines = wiringRaw.split("\n");
+    for (const evt of ['"file-menu"', '"files-menu"']) {
+      let found = false;
+      for (let i = 0; i < lines.length; i++) {
+        if (new RegExp(`workspace\\.on\\(${evt}`).test(lines[i])) found = true;
+      }
+      assert.ok(found, `${evt} must be registered via plugin.app.workspace.on`);
+    }
+    let onClickCount = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (/\.onClick\(\(evt\)/.test(lines[i])) {
+        onClickCount++;
+        assert.match(lines.slice(i, i + 3).join("\n"), /isRealGesture/, "menu item onClick must gate on isRealGesture");
+      }
+    }
+    assert.equal(onClickCount, 2, "both the single-file and multi-select Accept menu items must be onClick-wired");
+  });
+
   test("pane.ts: the request-changes modal's confirm button is gesture-gated like the adopt confirm", () => {
     const paneRaw = readRaw("governance/pane.ts");
     // Both modal confirm buttons are named `confirm`; every one must be addEventListener-wired
