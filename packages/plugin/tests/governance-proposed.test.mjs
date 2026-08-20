@@ -20,22 +20,30 @@ import {
 const EXCLUDED = ["obsidian-old/", "80-89", "_keep/", "holds/"];
 const isExcluded = (p) => EXCLUDED.some((x) => p.startsWith(x));
 
-// A metadata-cache fake: path/title/status triples, as listProposed derives them.
-const cache = (entries) => entries.map(([path, status]) => ({ path, title: path.split("/").pop().replace(/\.md$/, ""), status }));
+// A metadata-cache fake: path/status/mtime triples, as listProposed derives them. mtime
+// defaults to 0 when omitted — fine for tests that don't care about order (a single result,
+// or an empty one); tests that DO care about order pass explicit, distinct mtimes.
+const cache = (entries) =>
+  entries.map(([path, status, mtime = 0]) => ({
+    path,
+    title: path.split("/").pop().replace(/\.md$/, ""),
+    status,
+    mtime,
+  }));
 
 describe("buildProposedList — the Proposed section's dedupe/exclusion rules", () => {
-  test("proposed notes with no pending delta are listed, sorted by path", () => {
+  test("proposed notes with no pending delta are listed, sorted by mtime DESCENDING (most recently touched first)", () => {
     const out = buildProposedList(
       cache([
-        ["Notes/B.md", "proposed"],
-        ["Notes/A.md", "proposed"],
+        ["Notes/A.md", "proposed", 1000],
+        ["Notes/B.md", "proposed", 2000],
       ]),
       [],
       isExcluded,
     );
     assert.deepEqual(out, [
+      { path: "Notes/B.md", title: "B" }, // newer mtime first
       { path: "Notes/A.md", title: "A" },
-      { path: "Notes/B.md", title: "B" },
     ]);
   });
 

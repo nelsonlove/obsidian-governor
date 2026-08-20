@@ -526,6 +526,55 @@ describe("#101 dispositions-as-data: THE TRIPWIRE — the wrap adds no reachable
     }
   });
 
+  test("wiring.ts: NO menu-item onClick is accept-capable — each only opens the confirmation modal", () => {
+    // A MenuItem handler can carry LAYER 2 (isRealGesture) but structurally cannot carry LAYER 1
+    // (unreachability): `workspace.trigger("file-menu", <fake menu>, file, "…")` is public API, so
+    // renderer-JS can hand this registration a stub menu that CAPTURES the onClick callback and
+    // then calls it with a real, trusted MouseEvent kept from an earlier unrelated click. So the
+    // menu path must reach the accept only THROUGH a modal whose own confirm button carries both
+    // layers (pane.ts ConfirmModal: addEventListener + isRealGesture).
+    const wiring = code("governance/wiring.ts");
+    const lines = wiring.split("\n");
+    for (const evt of ['"file-menu"', '"files-menu"']) {
+      assert.match(wiring, new RegExp(`workspace\\.on\\(${evt}`), `${evt} must be registered via plugin.app.workspace.on`);
+    }
+    // Any parameter name, optional `async` — a renamed parameter must not silently opt a handler
+    // out of this tripwire. No fixed count either: EVERY onClick found is checked, so a third
+    // menu item added later is covered without editing a number here.
+    const onClick = /\.onClick\(\s*(?:async\s*)?\(\s*\w*\s*\)?/;
+    let onClickCount = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (!onClick.test(lines[i])) continue;
+      onClickCount++;
+      const body = lines.slice(i, i + 4).join("\n");
+      assert.match(body, /isRealGesture/, "menu item onClick must still gate on isRealGesture (defense in depth)");
+      assert.match(body, /runMenuAccept/, "menu item onClick must only hand off to the confirm-modal flow");
+      // The accept-capable calls must NOT be reachable from the menu callback itself.
+      assert.ok(!/acceptThroughGate|acceptViaMenu|\bdeps\.accept\b/.test(body),
+        "a menu onClick must never call the accept path directly — it opens confirmMenuAccept instead");
+    }
+    assert.ok(onClickCount >= 2, "the single-file and multi-select Accept menu items must both be onClick-wired");
+    // The hand-off itself: the batch confirm modal is the ONLY way the menu flow reaches accept.
+    const flow = wiring.match(/const runMenuAccept[\s\S]{0,600}/);
+    assert.ok(flow, "runMenuAccept must exist");
+    assert.match(flow[0], /confirmMenuAccept\(/, "runMenuAccept must open the confirmation modal first");
+    assert.match(flow[0], /if \(!confirmed\) return/, "an unconfirmed modal must accept nothing");
+    // ONE modal for the whole batch, then per-file accepts (a per-file confirm would be both worse
+    // UX and a different gate); the per-file loop is what keeps one failure from aborting the rest.
+    assert.match(flow[0], /for \(const t of targets\) await acceptViaMenu\(/,
+      "the confirmed batch runs the per-file accepts independently");
+  });
+
+  test("pane.ts: confirmMenuAccept routes through the addEventListener+isRealGesture ConfirmModal", () => {
+    const pane = code("governance/pane.ts");
+    assert.match(pane, /export function confirmMenuAccept\(/, "the menu-accept confirmation must live in the pane");
+    const fn = pane.match(/export function confirmMenuAccept\([\s\S]{0,900}/);
+    assert.match(fn[0], /new ConfirmModal\(/, "it must reuse the gesture-gated ConfirmModal, not a bespoke dialog");
+    // It must disclose the accepted-by stamp, like the pane's own Accept tooltip (acceptEffectFor).
+    assert.match(fn[0], /acceptedBy/, "the confirmation must name the accepted-by identity it will stamp");
+    assert.match(fn[0], /accepted-by/, "the confirmation must say that accepting stamps the accepted family");
+  });
+
   test("pane.ts: the request-changes modal's confirm button is gesture-gated like the adopt confirm", () => {
     const paneRaw = readRaw("governance/pane.ts");
     // Both modal confirm buttons are named `confirm`; every one must be addEventListener-wired
