@@ -1,9 +1,20 @@
 // Pure vault → Claude Code plugin transform (frontmatter tree model).
 //
-// A note declares `type` (skill|agent) and a single `parent` ([[wikilink]], resolved to a
-// path by the caller). The exporter builds a strict tree, validates its edges, and compiles
-// it: each agent owns the skills whose parent is it (preloaded via `skills:`) and delegates
-// to the agents whose parent is it. See docs/spec-frontmatter-tree.md.
+// A note declares `type` (skill|agent) and `parent` ([[wikilink]]s, resolved to paths by the
+// caller). The FIRST parent is PRIMARY — it is the tree edge, and it alone drives breadcrumb,
+// level, ownership and the depth checks. Any further parents are recorded ATTACHMENTS: a
+// second organizational/provenance edge, reported by the validate/preview surfaces, that
+// changes nothing about where the compiled file lands (the output is flat:
+// `skills/<name>/SKILL.md`, `agents/<name>.md`, and the generated name comes from the note's
+// own name). Every named parent is still validated — it must resolve and it must be an agent.
+//
+// The compiled `skills:` frontmatter on an agent is PRELOAD, not permission: per Claude Code's
+// subagent docs it "controls which skills are preloaded, not which skills the subagent can
+// access", and unlisted skills stay invokable through the Skill tool. So it is emitted from an
+// OPT-IN per-skill `preload: true` (over that skill's attached agents), not from attachment —
+// preloading a whole scope would spend the fresh context window delegation exists to provide.
+// A per-agent `no-skills: true` emits the one real boundary the platform offers
+// (`disallowedTools: [Skill]`). See docs/overview.md.
 //
 // `type: command` notes are flat — they take no part in the tree (no parent, no ownership) and
 // emit a Claude Code slash command at `commands/<name>.md`. `type: policy` bodies are injected
@@ -23,7 +34,8 @@ export interface NoteInput {
   path: string;
   frontmatter: Record<string, unknown>;
   body: string;
-  /** Resolved parent note path(s). 0 ⇒ child of root; 1 ⇒ that parent; >1 ⇒ error. */
+  /** Resolved parent note path(s). 0 ⇒ child of root; otherwise the FIRST is the primary
+   *  parent (the tree edge) and the rest are recorded attachments. All are validated. */
   parentPaths: string[];
   /** Vault paths of notes transcluded (inlined) into `body`, all depths — provenance for
    *  the compiled artifact. Populated by the collector; the transform passes it through. */
@@ -50,16 +62,60 @@ export interface TransformOptions {
   synthesizeRoot?: boolean;
   /** Absolute vault path, baked into each agent so it can read/write the vault. */
   vaultPath?: string;
+  /** How many skills may be preloaded into ONE agent before the compile warns. Not a
+   *  refusal — the vault decides — but past a handful, preloading spends the fresh
+   *  context window instead of leaving skills to on-demand discovery. */
+  preloadCap?: number;
 }
+
+/** Default {@link TransformOptions.preloadCap} — also the skills module's config default. */
+export const DEFAULT_PRELOAD_CAP = 5;
 
 export interface TreeNode {
   name: string;            // generated name
   kind: Kind;              // agent | skill
-  parent: string | null;  // parent agent's generated name (null for the root)
+  parent: string | null;  // primary parent agent's generated name (null for the root)
   level: number;
   skills: string[];        // owned skills' generated names (agents only)
   children: string[];      // child agents' generated names (agents only)
   crosscutting: boolean;   // horizontal slot agent (fanned into scope agents' routing)
+  /** Generated names of the non-primary parents this note also names (attachments).
+   *  Omitted when there are none, so a single-parent tree reads exactly as before. */
+  extraParents?: string[];
+  /** Agents: generated names of the notes attached to it by a NON-primary parent edge —
+   *  the other half of `extraParents`. Omitted when empty. */
+  attached?: string[];
+  /** Skills: `preload: true` — opted into being preloaded (`skills:`) on every agent it is
+   *  attached to. Omitted when absent/false. */
+  preload?: boolean;
+  /** Agents: `no-skills: true` — compiled with `disallowedTools: [Skill]`. Omitted when off. */
+  noSkills?: boolean;
+}
+
+/** A note that names more than one parent: the primary tree edge plus the extra
+ *  (attachment) edges, as reported by the validate/preview surfaces. */
+export interface Attachment {
+  /** The attached note's generated name. */
+  name: string;
+  kind: Kind;
+  path: string;
+  /** Generated name of the primary parent — the tree edge. */
+  primary: string | null;
+  /** Generated names of the additional parents this note is attached to. */
+  extra: string[];
+  /** Skills only: whether it opted into preloading (`preload: true`). */
+  preload: boolean;
+}
+
+/** What one agent's compiled `skills:` frontmatter ends up carrying. */
+export interface PreloadPlacement {
+  /** The agent's generated name. */
+  agent: string;
+  path: string;
+  /** Plugin-namespaced skill refs, exactly as emitted in `skills:`. */
+  skills: string[];
+  /** True when the set exceeds the configured cap (also reported as a warning). */
+  overCap: boolean;
 }
 
 /** Where a policy note's body actually landed: the agents whose compiled files include it
@@ -77,6 +133,13 @@ export interface TransformResult {
   errors: string[];
   tree: TreeNode[];
   policies: PolicyPlacement[];
+  /** Notes naming more than one parent — the multi-parent attachments, reported so a
+   *  human can see which agents a shared skill is recorded against. */
+  attachments: Attachment[];
+  /** Per-agent preload sets: what each agent's `skills:` frontmatter carries. */
+  preloads: PreloadPlacement[];
+  /** The cap the preload sets were checked against (see {@link TransformOptions.preloadCap}). */
+  preloadCap: number;
 }
 
 interface Node {
@@ -93,6 +156,10 @@ interface Node {
   model?: string;
   crosscutting: boolean;
   slot?: string;
+  /** Skills: `preload: true` — opt into being preloaded into every attached agent. */
+  preload: boolean;
+  /** Agents: `no-skills: true` — compile the Skill-tool lockout. */
+  noSkills: boolean;
   extra: Record<string, unknown>;
   body: string;
   sources?: string[];
@@ -100,6 +167,10 @@ interface Node {
   parent: Node | null;
   children: Node[];
   ownedSkills: Node[];
+  /** Parents beyond the primary — attachment edges, no bearing on the tree. */
+  extraParents: Node[];
+  /** Agents: the notes attached to this agent by a non-primary parent edge. */
+  attached: Node[];
   level: number;
   genName: string;
   valid: boolean;
@@ -128,6 +199,14 @@ interface Command {
 }
 
 const SYNTH_ROOT_PATH = " synth-root";
+
+/** The authored agent field that compiles the Skill-tool lockout (`disallowedTools: [Skill]`).
+ *  Named here so the transform, the field-namespacing view in exporter.ts, and the docs can
+ *  never disagree about its spelling. */
+export const NO_SKILLS_FIELD = "no-skills";
+
+/** The authored skill field that opts into preloading (`skills:` on every attached agent). */
+export const PRELOAD_FIELD = "preload";
 
 /** Documented SKILL.md frontmatter keys passed through verbatim from a skill note
  *  (Claude Code silently ignores unknown keys, so this is a curated allowlist rather
@@ -241,6 +320,10 @@ function fileBaseOf(path: string): string {
 export function transformAll(notes: NoteInput[], opts: TransformOptions): TransformResult {
   const warnings: string[] = [];
   const errors: string[] = [];
+  const preloadCap = typeof opts.preloadCap === "number" && Number.isFinite(opts.preloadCap) && opts.preloadCap >= 0
+    ? Math.trunc(opts.preloadCap)
+    : DEFAULT_PRELOAD_CAP;
+  const preloads: PreloadPlacement[] = [];
 
   // ---- phase 1: parse candidate nodes ----
   const nodes: Node[] = [];
@@ -275,6 +358,20 @@ export function transformAll(notes: NoteInput[], opts: TransformOptions): Transf
     const fileBase = fileBaseOf(note.path);
     const extra = kind === "skill" ? passthrough(fm, SKILL_PASSTHROUGH_FIELDS, note.path, warnings) : {};
     const nameBase = slug(str(fm.name) || fileBase);
+    // `preload` is a SKILL directive and `no-skills` an AGENT one; the other way round is a
+    // no-op, so say so rather than letting the field sit there looking effective.
+    let preload = fm[PRELOAD_FIELD] === true;
+    const noSkills = fm[NO_SKILLS_FIELD] === true;
+    if (preload && kind !== "skill") warnings.push(`${note.path}: \`${PRELOAD_FIELD}\` applies to skills — ignored on a ${kind} note`);
+    if (noSkills && kind !== "agent") warnings.push(`${note.path}: \`${NO_SKILLS_FIELD}\` applies to agents — ignored on a ${kind} note`);
+    // The platform's one constraint on the preload set: "You can't preload skills that set
+    // `disable-model-invocation: true`, since preloading draws from the same set of skills
+    // Claude can invoke" — a listed one is skipped and logged. Drop it here instead, so the
+    // compiled `skills:` says what will actually be loaded.
+    if (preload && kind === "skill" && (extra["disable-model-invocation"] === true || extra["disable-model-invocation"] === "true")) {
+      warnings.push(`${note.path}: \`${PRELOAD_FIELD}\` is ignored — a skill with \`disable-model-invocation: true\` can't be preloaded (the platform skips it); it stays invocable by you`);
+      preload = false;
+    }
     nodes.push({
       kind,
       path: note.path,
@@ -289,10 +386,13 @@ export function transformAll(notes: NoteInput[], opts: TransformOptions): Transf
       model: str(fm.model),
       crosscutting: fm.crosscutting === true,
       slot: str(fm.slot),
+      preload: preload && kind === "skill",
+      noSkills: noSkills && kind === "agent",
       sources: note.sources,
       extra,
       body: note.body.trim(),
-      parent: null, children: [], ownedSkills: [], level: -1, genName: "", valid: true,
+      parent: null, children: [], ownedSkills: [], extraParents: [], attached: [],
+      level: -1, genName: "", valid: true,
     });
   }
   const byPath = new Map(nodes.map((n) => [n.path, n]));
@@ -312,25 +412,46 @@ export function transformAll(notes: NoteInput[], opts: TransformOptions): Transf
       rawDesc: "General vault agent — routes each request to the appropriate sub-agent.",
       extra: {},
       body: "You are the general agent for this vault. Understand each request and delegate to the appropriate sub-agent; coordinate across sub-agents yourself when a request spans several.",
-      crosscutting: false, parent: null, children: [], ownedSkills: [], level: 0, genName: "", valid: true,
+      crosscutting: false, preload: false, noSkills: false,
+      parent: null, children: [], ownedSkills: [], extraParents: [], attached: [],
+      level: 0, genName: "", valid: true,
     };
     nodes.unshift(root);
     byPath.set(root.path, root);
   }
   if (root) root.level = 0;
 
-  // ---- phase 3: resolve each node's parent ----
+  // ---- phase 3: resolve each node's parents (first = primary tree edge, rest = attachments) ----
   for (const n of nodes) {
     if (n === root) continue;
-    if (n.parentPaths.length > 1) { n.valid = false; errors.push(`${n.path}: multiple parents (strict single-parent)`); continue; }
-    if (n.parentPaths.length === 0) {
+    // Dedup first, so "the same agent twice" can't become a self-attachment further down.
+    const seenParent = new Set<string>();
+    const parentPaths: string[] = [];
+    for (const p of n.parentPaths) {
+      if (seenParent.has(p)) { warnings.push(`${n.path}: parent ${p} listed twice — the duplicate is ignored`); continue; }
+      seenParent.add(p);
+      parentPaths.push(p);
+    }
+    const [primaryPath, ...extraPaths] = parentPaths;
+    if (primaryPath === undefined) {
       if (!root) { n.valid = false; errors.push(`${n.path}: no parent and no root`); continue; }
       n.parent = root; continue;
     }
-    const parent = byPath.get(n.parentPaths[0]);
-    if (!parent) { n.valid = false; errors.push(`${n.path}: unresolved parent ${n.parentPaths[0]}`); continue; }
+    if (primaryPath === n.path) { n.valid = false; errors.push(`${n.path}: names itself as a parent`); continue; }
+    const parent = byPath.get(primaryPath);
+    if (!parent) { n.valid = false; errors.push(`${n.path}: unresolved parent ${primaryPath}`); continue; }
     if (parent.kind !== "agent") { n.valid = false; errors.push(`${n.path}: parent is not an agent`); continue; }
     n.parent = parent;
+    // Every named parent is validated the same way, primary or not: an extra parent that
+    // doesn't resolve, or that isn't an agent, is an error — it is a broken authored edge
+    // either way. What an extra parent does NOT do is move the note in the tree.
+    for (const ep of extraPaths) {
+      if (ep === n.path) { n.valid = false; errors.push(`${n.path}: names itself as a parent`); continue; }
+      const extraParent = byPath.get(ep);
+      if (!extraParent) { n.valid = false; errors.push(`${n.path}: unresolved parent ${ep}`); continue; }
+      if (extraParent.kind !== "agent") { n.valid = false; errors.push(`${n.path}: parent ${ep} is not an agent`); continue; }
+      n.extraParents.push(extraParent);
+    }
   }
 
   // ---- phase 4: validate reachability / cycles / depth; compute level ----
@@ -356,10 +477,21 @@ export function transformAll(notes: NoteInput[], opts: TransformOptions): Transf
     if (!n.valid || n === root || !n.parent) continue;
     if (n.kind === "agent") { if (!n.crosscutting) n.parent.children.push(n); }
     else n.parent.ownedSkills.push(n);
+    // Attachment edges are wired only between valid nodes: an extra parent that failed its
+    // own validation (broken chain, duplicate root, …) emits nothing to attach to, so the
+    // attachment is dropped with a warning rather than invalidating this note too.
+    for (const ep of n.extraParents) {
+      if (!ep.valid) { warnings.push(`${n.path}: attached parent ${ep.path} is invalid — attachment ignored`); continue; }
+      ep.attached.push(n);
+    }
+    n.extraParents = n.extraParents.filter((ep) => ep.valid);
   }
 
   // ---- resolve policy notes: attach each to the agent whose subtree it governs ----
   // (no parent ⇒ root ⇒ applies to every agent; strict single parent, must be an agent).
+  // Policies keep the STRICT single-parent rule deliberately: a policy's parent is a lineage
+  // edge — it decides which agents the body is injected into — so a second parent would mean
+  // a second injection site, not a recorded attachment. Only skills/agents relaxed.
   const policiesByNode = new Map<string, Policy[]>();
   for (const pol of policies) {
     let parent: Node | null;
@@ -430,14 +562,42 @@ export function transformAll(notes: NoteInput[], opts: TransformOptions): Transf
       continue;
     }
 
-    // agent — guarantee structural tools from tree position (Agent to delegate, Skill to
-    // invoke owned skills). Only matters when tools are explicitly listed; omitting tools
-    // inherits everything.
+    // agent — the skills ATTACHED to it: those whose primary parent is this agent, plus
+    // those naming it as an extra parent. Attachment is organizational; it decides what this
+    // agent is recorded as carrying, not what any agent may invoke (every compiled skill is
+    // reachable through the Skill tool regardless).
+    const attachedSkills = [...n.ownedSkills, ...n.attached.filter((a) => a.kind === "skill")];
+    // PRELOAD is opt-in per skill (`preload: true`) — see the header note: `skills:` is
+    // context provisioning, so preloading a whole scope spends the fresh window.
+    const preloadSkills = attachedSkills.filter((s) => s.preload);
+    let skillRefs = preloadSkills.map((s) => `${opts.pluginName}:${s.genName}`);
+    const label = n.path === SYNTH_ROOT_PATH ? "(synthesized root)" : n.path;
+    if (n.noSkills && skillRefs.length) {
+      warnings.push(`${label}: \`${NO_SKILLS_FIELD}\` is set, so the ${skillRefs.length} skill(s) opted into preloading here are not listed — drop one of the two`);
+      skillRefs = [];
+    }
+    const overCap = skillRefs.length > preloadCap;
+    if (overCap) {
+      warnings.push(`${label}: ${skillRefs.length} skills preloaded into \`${n.genName}\` exceeds the preload cap of ${preloadCap} — preloading fills the fresh context window delegation exists to provide; leave the ones this agent can find on demand un-opted-in`);
+    }
+    if (skillRefs.length) preloads.push({ agent: n.genName, path: label, skills: skillRefs, overCap });
+
+    // guarantee structural tools from tree position (Agent to delegate, Skill to invoke
+    // attached skills). Only matters when tools are explicitly listed; omitting tools
+    // inherits everything. Under `no-skills` the Skill guarantee is off — adding a tool the
+    // next line denies would be theatre.
     let tools = n.tools;
     if ((n.children.length || (crosscut.length && !n.crosscutting)) && tools && !tools.includes("Agent")) tools = [...tools, "Agent"];
-    if (n.ownedSkills.length && tools && !tools.includes("Skill")) tools = [...tools, "Skill"];
-    const skillRefs = n.ownedSkills.map((s) => `${opts.pluginName}:${s.genName}`);
-    const fmOut = toYaml({ name: n.genName, description: describe(n), tools, model: n.model, skills: skillRefs });
+    if (attachedSkills.length && !n.noSkills && tools && !tools.includes("Skill")) tools = [...tools, "Skill"];
+    // The one boundary the platform actually offers (subagent docs: to stop a subagent
+    // invoking skills, omit Skill from `tools` or deny it here). `disallowedTools` is applied
+    // before `tools` resolves, so denying Skill leaves the agent's other tools alone —
+    // unlike an allowlist, which would also drop everything it forgot to mention.
+    const disallowedTools = n.noSkills ? ["Skill"] : undefined;
+    if (n.noSkills && tools?.includes("Skill")) {
+      warnings.push(`${label}: \`tools\` lists Skill while \`${NO_SKILLS_FIELD}\` is set — the deny wins; remove Skill from \`tools\``);
+    }
+    const fmOut = toYaml({ name: n.genName, description: describe(n), tools, disallowedTools, model: n.model, skills: skillRefs });
 
     const policyObjs = applicablePolicyObjs(n);
     for (const p of policyObjs) placePolicy(p.path, n.genName);
@@ -464,8 +624,14 @@ export function transformAll(notes: NoteInput[], opts: TransformOptions): Transf
     if (policyBlocks.length) {
       bodyOut += `\n\n${policyBlocks.join("\n\n")}`;
     }
-    if (skillRefs.length) {
-      bodyOut += `\n\n## Skills\n\nThese scope skills are preloaded into your context — use them for work in this scope: ${skillRefs.map((s) => `\`${s}\``).join(", ")}.`;
+    // Two lists, honestly labelled: what is already in the context window, and what is
+    // attached but has to be invoked. Under `no-skills` neither is offered.
+    const onDemandRefs = n.noSkills ? [] : attachedSkills.filter((s) => !s.preload).map((s) => `${opts.pluginName}:${s.genName}`);
+    if (skillRefs.length || onDemandRefs.length) {
+      const parts: string[] = [];
+      if (skillRefs.length) parts.push(`These scope skills are preloaded into your context — use them for work in this scope: ${skillRefs.map((s) => `\`${s}\``).join(", ")}.`);
+      if (onDemandRefs.length) parts.push(`These scope skills are attached to you but not preloaded — invoke them with the Skill tool when a task calls for one: ${onDemandRefs.map((s) => `\`${s}\``).join(", ")}.`);
+      bodyOut += `\n\n## Skills\n\n${parts.join("\n\n")}`;
     }
     if (n.children.length) {
       const items = n.children.map((c) => `- \`${opts.pluginName}:${c.genName}\` — ${c.label}`);
@@ -531,6 +697,8 @@ export function transformAll(notes: NoteInput[], opts: TransformOptions): Transf
       content: `${fmOut}\n\n${provenanceFor(c.path)}\n\n${c.body}\n` });
   }
 
+  // The optional fields are OMITTED when empty/false, so a single-parent, no-preload tree
+  // reads exactly as it did before this shape grew.
   const tree: TreeNode[] = nodes.filter((n) => n.valid).map((n) => ({
     name: n.genName,
     kind: n.kind,
@@ -539,7 +707,22 @@ export function transformAll(notes: NoteInput[], opts: TransformOptions): Transf
     skills: n.ownedSkills.map((s) => s.genName),
     children: n.children.map((c) => c.genName),
     crosscutting: n.crosscutting,
+    ...(n.extraParents.length ? { extraParents: n.extraParents.map((p) => p.genName) } : {}),
+    ...(n.attached.length ? { attached: n.attached.map((a) => a.genName) } : {}),
+    ...(n.preload ? { preload: true } : {}),
+    ...(n.noSkills ? { noSkills: true } : {}),
   }));
+
+  const attachments: Attachment[] = nodes
+    .filter((n) => n.valid && n.extraParents.length)
+    .map((n) => ({
+      name: n.genName,
+      kind: n.kind,
+      path: n.path,
+      primary: n.parent ? n.parent.genName : null,
+      extra: n.extraParents.map((p) => p.genName),
+      preload: n.preload,
+    }));
 
   // Placements only for policies that resolved to a valid agent (errored ones never landed).
   const resolvedPolicies = new Set([...policiesByNode.values()].flat());
@@ -547,5 +730,5 @@ export function transformAll(notes: NoteInput[], opts: TransformOptions): Transf
     .filter((p) => resolvedPolicies.has(p))
     .map((p) => ({ path: p.path, title: p.title, hard: p.hard, agents: [...(policyAgents.get(p.path) ?? [])] }));
 
-  return { generated, warnings, errors, tree, policies: policyPlacements };
+  return { generated, warnings, errors, tree, policies: policyPlacements, attachments, preloads, preloadCap };
 }

@@ -72,15 +72,19 @@ describe("skills module: registration + config tab", () => {
     assert.ok(!names.some((n) => n.startsWith("vault_skills_")));
   });
 
-  test("collect() renders a skills config tab: summary, ten config fields with defaults, six-tool directory", () => {
+  test("collect() renders a skills config tab: summary, eleven config fields with defaults, six-tool directory", () => {
     const mods = builtinModules(deps({}));
     const hosted = collect(mods, {}, {});
     const skills = hosted.find((h) => h.id === "skills");
     assert.ok(skills, "skills module not rendered");
     assert.ok(skills.summary.length > 0);
-    // Ten fields: the nine folded from the standalone settings tab plus exportOnSave,
-    // re-added with the GUI fold (#82 residuals) as an opt-in toggle.
-    assert.equal(skills.fields.length, 10);
+    // Eleven fields: the nine folded from the standalone settings tab, exportOnSave
+    // (re-added with the GUI fold, #82 residuals), and the preload cap (#292).
+    assert.equal(skills.fields.length, 11);
+    const cap = skills.fields.find((f) => f.key === "preloadCap");
+    assert.ok(cap, "preloadCap field not rendered");
+    assert.equal(cap.type, "number");
+    assert.equal(cap.value, 5);
     // Fields render their manifest defaults (blank until the user overrides).
     assert.equal(skills.fields.find((f) => f.key === "pluginName").value, "vault-skills");
     assert.equal(skills.fields.find((f) => f.key === "outputDir").value, "~/.claude/skills/vault-skills");

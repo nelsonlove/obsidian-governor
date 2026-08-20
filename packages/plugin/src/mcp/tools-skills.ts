@@ -185,14 +185,19 @@ export function registerSkillsTools(server: McpServer, source: SkillsBackend, ct
       title: "Validate the vault-skills tree",
       description:
         "Collect skill/agent/policy/command notes and run the transform without writing. Returns errors, warnings, " +
-        "and counts. Read-only.",
+        "counts, multi-parent attachments (first parent is primary, the rest are recorded attachments), and each " +
+        "agent's preload set — the `skills:` frontmatter the export would emit, which preloads content rather than " +
+        "restricting access. Read-only.",
       inputSchema: {},
       annotations: RO,
     },
     async () => {
       try {
-        const a = await analyzeVault(source, fields, cfg.pluginName);
-        return ok({ ok: a.errors.length === 0, errors: a.errors, warnings: a.warnings, counts: a.counts });
+        const a = await analyzeVault(source, fields, cfg.pluginName, cfg.preloadCap);
+        return ok({
+          ok: a.errors.length === 0, errors: a.errors, warnings: a.warnings, counts: a.counts,
+          attachments: a.attachments, preloads: a.preloads, preloadCap: a.preloadCap,
+        });
       } catch (e) {
         return fail(e);
       }
@@ -204,14 +209,15 @@ export function registerSkillsTools(server: McpServer, source: SkillsBackend, ct
     {
       title: "Show the vault-skills tree",
       description:
-        "Return the current agent/skill hierarchy (name, kind, parent, level, owned skills, children). Read-only.",
+        "Return the current agent/skill hierarchy (name, kind, primary parent, level, owned skills, children, plus " +
+        "any extra-parent attachments and preload flags). Read-only.",
       inputSchema: {},
       annotations: RO,
     },
     async () => {
       try {
-        const a = await analyzeVault(source, fields, cfg.pluginName);
-        return ok({ tree: a.tree, counts: a.counts });
+        const a = await analyzeVault(source, fields, cfg.pluginName, cfg.preloadCap);
+        return ok({ tree: a.tree, counts: a.counts, attachments: a.attachments, preloads: a.preloads });
       } catch (e) {
         return fail(e);
       }
@@ -235,9 +241,12 @@ export function registerSkillsTools(server: McpServer, source: SkillsBackend, ct
     },
     async ({ name, content }) => {
       try {
-        const p = await previewVault(source, { outputDir: expandTilde(cfg.outputDir), pluginName: cfg.pluginName, fields });
+        const p = await previewVault(source, {
+          outputDir: expandTilde(cfg.outputDir), pluginName: cfg.pluginName, fields, preloadCap: cfg.preloadCap,
+        });
         const summary = {
           diff: p.diff, removed: p.removed, policies: p.policies,
+          attachments: p.attachments, preloads: p.preloads, preloadCap: p.preloadCap,
           errors: p.errors, warnings: p.warnings, counts: p.counts,
           outputDir: p.outputDir, assetsNote: p.assetsNote,
         };
@@ -270,7 +279,7 @@ export function registerSkillsTools(server: McpServer, source: SkillsBackend, ct
       try {
         const summary = await runExport(source, {
           outputDir: expandTilde(cfg.outputDir), pluginName: cfg.pluginName, fields,
-          assetsRoot: expandTilde(cfg.assetsRoot),
+          assetsRoot: expandTilde(cfg.assetsRoot), preloadCap: cfg.preloadCap,
         });
         return ok({
           skills: summary.skills, agents: summary.agents, commands: summary.commands,
@@ -304,7 +313,7 @@ export function registerSkillsTools(server: McpServer, source: SkillsBackend, ct
         const previous = readPluginVersion(releaseDir) ?? null;
         const summary = await runExport(source, {
           outputDir: releaseDir, pluginName: cfg.pluginName, fields,
-          assetsRoot: expandTilde(cfg.assetsRoot), version,
+          assetsRoot: expandTilde(cfg.assetsRoot), version, preloadCap: cfg.preloadCap,
         });
         return ok({
           version, previous,

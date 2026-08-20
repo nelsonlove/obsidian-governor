@@ -17,6 +17,7 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import type { DetectConfig } from "./exporter.js";
+import { DEFAULT_PRELOAD_CAP } from "./transform.js";
 
 /** The skills module's config, as stored under `modules.skills.config` and
  * merged over the manifest defaults. A superset of what the exporter needs:
@@ -45,6 +46,10 @@ export interface SkillsConfig {
    *  (or a transcluded source note) changes. Debounced; opt-in (default false).
    *  The MCP tool surface never reads this — it is a human-GUI affordance. */
   exportOnSave: boolean;
+  /** How many skills may be preloaded (`preload: true`) into ONE agent before the
+   *  compile warns. A WARNING, not a refusal — the vault decides — because a large
+   *  preload set spends the fresh context window a subagent is delegated for. */
+  preloadCap: number;
 }
 
 /** The module's config defaults — mirrors the standalone plugin's
@@ -62,6 +67,7 @@ export const DEFAULT_SKILLS_CONFIG: SkillsConfig = {
   assetsRoot: "",
   releaseDir: "",
   exportOnSave: false,
+  preloadCap: DEFAULT_PRELOAD_CAP,
 };
 
 /** Coerce a merged config record (defaults + user override, as `register()`
@@ -85,6 +91,11 @@ export function skillsConfigOf(config: Record<string, unknown>): SkillsConfig {
     releaseDir: str("releaseDir"),
     // Only a literal `true` enables it; any other/missing value degrades to off.
     exportOnSave: config.exportOnSave === true,
+    // A hand-edited non-number (or a negative) degrades to the default rather than
+    // disabling the warning silently.
+    preloadCap: typeof config.preloadCap === "number" && Number.isFinite(config.preloadCap) && config.preloadCap >= 0
+      ? Math.trunc(config.preloadCap)
+      : DEFAULT_SKILLS_CONFIG.preloadCap,
   };
 }
 
@@ -108,6 +119,10 @@ export function validateSkillsConfig(config: Record<string, unknown>): string[] 
   }
   if (config.fieldMode !== undefined && config.fieldMode !== "prefix" && config.fieldMode !== "nested") {
     problems.push('fieldMode must be "prefix" or "nested"');
+  }
+  if (config.preloadCap !== undefined &&
+      !(typeof config.preloadCap === "number" && Number.isFinite(config.preloadCap) && config.preloadCap >= 0)) {
+    problems.push("preloadCap must be a number ≥ 0 — how many preloaded skills on one agent trip the warning");
   }
   return problems;
 }
