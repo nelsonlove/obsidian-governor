@@ -51,6 +51,7 @@ import {
   WIRING_EXPORTS,
   PLAIN_SURFACES,
   NOT_SURFACES,
+  outsideVaultSurfaces,
   nonMcpActions,
   nonMcpBindings,
   plainActions,
@@ -358,20 +359,37 @@ describe("non-MCP inventory — bridge, settings and internal surfaces", () => {
     assert.equal(new Set(ids).size, ids.length);
   });
 
-  test("the outside-vault writers are exactly the known set", () => {
-    // These write to ~/.claude/governor/ and spawn a binary. They are the
-    // plugin's whole footprint outside the vault, so the set is a privacy
-    // disclosure and belongs in one checkable place rather than spread across
-    // a README.
-    const outside = PLAIN_SURFACES.filter((r) => r.outsideVault).map((r) => r.id).sort();
+  test("the outside-vault writers are exactly the known set, across ALL surface families", () => {
+    // The plugin's footprint outside the vault is a privacy disclosure, and it
+    // belongs in one checkable place rather than spread across a README.
+    //
+    // Computed over every family, not just PLAIN_SURFACES. The first draft
+    // scoped it to the bridge/settings rows while claiming to describe the
+    // whole plugin, which silently omitted the skills export and release
+    // commands and their export-on-save timer — all three write outside the
+    // vault. A disclosure scoped to one row family is not a disclosure.
+    const outside = outsideVaultSurfaces().map((r) => r.id);
     assert.deepEqual(outside, [
+      "automation.skills.export-on-save",
       "bridge.claude-register",
+      "bridge.ensure-connect-plugin",
       "bridge.remove-discovery",
       "bridge.write-bridge",
       "bridge.write-discovery",
+      "command:skills-export",
+      "command:skills-release",
       "settings.connect-claude-code",
       "settings.disconnect",
     ]);
+  });
+
+  test("the network-reaching surfaces are named", () => {
+    // Exactly one, and it is the one a distribution review will ask about:
+    // provisioning the companion Claude Code plugin adds a marketplace source
+    // and installs a second plugin at USER scope, which reaches the network to
+    // do it, on every plugin load.
+    const network = outsideVaultSurfaces().filter((r) => r.network).map((r) => r.id);
+    assert.deepEqual(network, ["bridge.ensure-connect-plugin"]);
   });
 
   test("the unconditional-on-load surfaces are named, because they ignore settings.enabled", () => {
@@ -380,7 +398,7 @@ describe("non-MCP inventory — bridge, settings and internal surfaces", () => {
     // gets a file written outside the vault and a binary spawned; that is
     // surprising enough to pin.
     const unconditional = PLAIN_SURFACES.filter((r) => r.unconditional).map((r) => r.id).sort();
-    assert.deepEqual(unconditional, ["bridge.claude-register", "bridge.write-bridge"]);
+    assert.deepEqual(unconditional, ["bridge.claude-register", "bridge.ensure-connect-plugin", "bridge.write-bridge"]);
   });
 
   test("a settings control that reaches an authority action says which one", () => {
@@ -410,11 +428,24 @@ describe("non-MCP inventory — bridge, settings and internal surfaces", () => {
       assert.ok(n.partOf?.length > 5, `${n.name} needs a stated owner`);
       // `appendLog` is owned by "every audited authority action" rather than
       // one id, so only single-id owners are checked against the registry.
-      if (declaredActions.has(n.partOf)) continue;
-      assert.ok(n.partOf.includes("every") || declaredActions.has(n.partOf), `${n.name} names an unknown owner '${n.partOf}'`);
+      // An owner is either a declared action id, or an explicit statement that
+      // the helper is shared rather than one action's. Both are acceptable
+      // answers to "why isn't this listed"; a name that is neither is not.
+      const shared = /shared|every/.test(n.partOf);
+      assert.ok(
+        declaredActions.has(n.partOf) || shared,
+        `${n.name} names owner '${n.partOf}', which is neither a declared action nor an explicit shared-infrastructure note`
+      );
     }
-    // Most live in wiring.ts; the scan confirms the ones that should.
-    assert.ok(present.size > 0, "none of the excluded helpers was found — the exclusion list is describing gone code");
+    // EXACT set, not a size check. `present.size > 0` would still pass with
+    // seven of the eight renamed or deleted — which is precisely the
+    // "describing gone code" failure this is supposed to catch. Same pattern
+    // the accept-perimeter check already uses.
+    assert.deepEqual(
+      [...present].sort(),
+      NOT_SURFACES.map((n) => n.name).sort(),
+      "an excluded helper named here no longer exists in wiring.ts — the exclusion list is describing gone code"
+    );
   });
 
   test("the whole non-MCP inventory builds a valid registry together", () => {
