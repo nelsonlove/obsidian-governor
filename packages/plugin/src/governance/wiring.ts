@@ -104,11 +104,16 @@ import type { RenameIndex } from "../kernel/governance/auto-accept/detectors.js"
 import { badgeVisible } from "../kernel/governance/badge.js";
 import { governanceDisplaySettings, governanceAcceptanceSettings } from "../kernel/governance/settings.js";
 import { isRealGesture } from "../kernel/governance/gesture.js";
-import { computeAcceptEligiblePaths } from "../kernel/governance/menu-eligibility.js";
+import {
+  isAcceptEligible,
+  selectAcceptEligible,
+  type AcceptEligibilityCtx,
+} from "../kernel/governance/menu-eligibility.js";
 import {
   GovernanceReviewView,
   VIEW_TYPE_GOVERNANCE,
   confirmAdopt,
+  confirmMenuAccept,
   renderAllowlist,
   wireAdoptButton,
   ADOPT_BASELINE_DESC,
@@ -586,9 +591,12 @@ async function performWithdraw(plugin: Plugin, path: string): Promise<void> {
 }
 // The Revising listing — read-only, from Obsidian's metadata cache (no file reads). Plain data.
 // Sorted by mtime DESCENDING (most recently touched first) — the same "newest activity
-// first" convention as the pending queue and the Proposed listing below. `RevisingItem`
-// itself carries no mtime (display data only); decorate-sort-undecorate keeps that public
-// shape unchanged.
+// first" convention as the pending queue and the Proposed listing below, with a PATH
+// tiebreaker so the order is total: a sync, a git checkout or a reindex can stamp many notes
+// with the same mtime, and Array.sort's stability would then leak getMarkdownFiles()'s own
+// (reload-dependent) order into the pane as rows that shuffle for no visible reason.
+// `RevisingItem` itself carries no mtime (display data only); decorate-sort-undecorate keeps
+// that public shape unchanged.
 function listRevising(plugin: Plugin): RevisingItem[] {
   const out: Array<RevisingItem & { mtime: number }> = [];
   for (const file of governedMarkdownFiles(plugin)) {
@@ -597,7 +605,9 @@ function listRevising(plugin: Plugin): RevisingItem[] {
       out.push({ path: file.path, title: file.basename, mtime: file.stat.mtime });
     }
   }
-  return out.sort((a, b) => b.mtime - a.mtime).map(({ path, title }) => ({ path, title }));
+  return out
+    .sort((a, b) => b.mtime - a.mtime || a.path.localeCompare(b.path))
+    .map(({ path, title }) => ({ path, title }));
 }
 // The Proposed listing (#221/#164) — read-only, from the metadata cache exactly like the
 // Revising listing, with the dedupe/exclusion rules in the pure kernel builder: proposed
@@ -1029,6 +1039,9 @@ function injectStyles(component: Component): void {
   .governance-proposed-accept{font-size:12px;cursor:pointer;}
   .governance-request-text{width:100%;min-height:110px;font-size:13px;margin:8px 0;
     font-family:var(--font-interface);}
+  .governance-confirm-items{margin:4px 0 8px;padding-left:20px;font-size:12px;
+    max-height:220px;overflow-y:auto;}
+  .governance-confirm-items li{word-break:break-word;}
   `;
   const style = document.createElement("style");
   style.id = "vault-mcp-governance-styles";
@@ -1208,17 +1221,38 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
   // and looping keeps every file's stamp/baseline-advance/journal-record independent (one
   // failure does not block the rest).
   //
-  // Gesture gate: EVERY accept-class handler in this codebase requires isRealGesture(evt),
-  // and this is no exception, even though MenuItem.onClick's real runtime behavior for a
-  // NATIVE (Electron OS) context menu vs. a DOM-rendered one is unverified — Obsidian's own
-  // menu can render either way (Menu.setUseNativeMenu), and only a human physically
-  // right-clicking can confirm which one this specific menu uses and whether its click event
-  // is genuinely isTrusted. Gating defensively means the worst case if it turns out untrusted
-  // is "the menu item does nothing" (fails closed, a UX bug) rather than silently bypassing
-  // the one guarantee this whole module exists to uphold.
+  // ── WHY THE MENU ITEM IS NOT ACCEPT-CAPABLE (both gesture layers, restored) ──
+  // A menu item can only ever carry LAYER 2 (isRealGesture). It cannot carry LAYER 1
+  // (unreachability): `workspace.trigger("file-menu", <fake menu>, file, "…")` is public
+  // Obsidian API, so any renderer-JS holding `app` (js-engine / execute-code / meta-bind /
+  // quickadd all run arbitrary JS this vault loads) can fire this very registration with a stub
+  // menu whose addItem/onClick CAPTURE the callback as a plain function — then call it with a
+  // real, trusted MouseEvent kept from some earlier, unrelated click (a stale Event's isTrusted
+  // stays true forever). isRealGesture passes, and a one-layer accept path would run with no
+  // human clicking Accept. (Demonstrated live against this vault by an independent review of
+  // #299: 24 loaded plugins' menu callbacks were captured this way.)
+  //
+  // So the handler below is deliberately INERT beyond opening a confirmation modal
+  // (pane.ts `confirmMenuAccept`). The accept runs only from that modal's own confirm button,
+  // which restores both layers — addEventListener-wired (Layer 1: the function is not a
+  // reachable property of any element) and isRealGesture-gated (Layer 2). Worst case for a
+  // forged/replayed menu trigger is therefore "a dialog appeared", never a write.
+  //
+  // The isRealGesture check on the menu callback itself is kept as defense in depth. It is not
+  // load-bearing (the modal carries the real gate) and it is the one branch that could make the
+  // item look dead if Obsidian rendered this menu as a NATIVE Electron menu whose click event is
+  // not a DOM Event — so it warns rather than failing silently.
   const menuController = buildController(plugin);
-  const eligibleMenuPaths = (): Set<string> =>
-    computeAcceptEligiblePaths(menuController.getPending(), menuController.getProposed(), menuController.getRevising());
+  const menuEligibilityCtx = (): AcceptEligibilityCtx => ({
+    pendingPaths: new Set(getCachedPending(plugin).map((p) => p.path)),
+    statusOf: (p) => acceptanceStatusFor(plugin, p),
+    isExcluded,
+  });
+  // ONE file's accept attempt. Every failure mode is contained HERE — a gate cancel returns, a
+  // throw becomes a Notice — so a batch loop over this never aborts on one file (the guarantee
+  // the multi-select path depends on). No refresh call: performAccept (deps.accept) already
+  // refreshes in its own `finally`, and a second sweep per file re-read every governed note plus
+  // the journal for nothing.
   const acceptViaMenu = async (path: string, title: string): Promise<void> => {
     try {
       const res = await acceptThroughGate(plugin.app, menuController, path, title);
@@ -1228,36 +1262,47 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
           ? `governor acceptance: accepted ${title} — stamped accepted-by: ${menuController.acceptedBy()}`
           : `governor acceptance: accepted ${title}`,
       );
-      await menuController.refresh();
     } catch (e) {
       new Notice(`governor acceptance: accept failed — ${(e as Error).message}`);
     }
   };
+  // The whole menu flow: ONE confirmation modal naming every selected note (never one per file),
+  // then the independent per-file accepts.
+  const runMenuAccept = async (targets: ReadonlyArray<{ path: string; title: string }>): Promise<void> => {
+    if (targets.length === 0) return;
+    const confirmed = await confirmMenuAccept(plugin.app, targets, menuController.acceptedBy());
+    if (!confirmed) return; // cancelled — nothing written
+    for (const t of targets) await acceptViaMenu(t.path, t.title);
+  };
+  const warnUntrustedMenuClick = (): void => {
+    console.warn(
+      "governor acceptance: the context-menu Accept click was not a trusted DOM gesture — " +
+        "no confirmation was opened. (Expected only for a native Electron context menu; the " +
+        "pane's own Accept buttons are unaffected.)",
+    );
+  };
   component.registerEvent(plugin.app.workspace.on("file-menu", (menu, file) => {
     if (!(file instanceof TFile) || file.extension !== "md") return;
-    if (!eligibleMenuPaths().has(file.path)) return;
+    if (!isAcceptEligible(file.path, menuEligibilityCtx())) return;
     menu.addItem((item) => {
-      item.setTitle("Accept").setIcon("check").onClick((evt) => {
-        if (!isRealGesture(evt)) return; // inert on a forged/synthesized menu click
-        void acceptViaMenu(file.path, file.basename);
+      item.setTitle("Accept…").setIcon("check").onClick((evt) => {
+        if (!isRealGesture(evt)) return void warnUntrustedMenuClick();
+        void runMenuAccept([{ path: file.path, title: file.basename }]);
       });
     });
   }));
   component.registerEvent(plugin.app.workspace.on("files-menu", (menu, files) => {
-    const eligible = eligibleMenuPaths();
-    const targets = files.filter(
-      (f): f is TFile => f instanceof TFile && f.extension === "md" && eligible.has(f.path),
-    );
+    const notes = files.filter((f): f is TFile => f instanceof TFile && f.extension === "md");
+    const targets = selectAcceptEligible(notes, menuEligibilityCtx());
     if (targets.length === 0) return;
+    const selection = targets.map((f) => ({ path: f.path, title: f.basename }));
     menu.addItem((item) => {
       item
-        .setTitle(targets.length === 1 ? "Accept" : `Accept (${targets.length})`)
+        .setTitle(selection.length === 1 ? "Accept…" : `Accept (${selection.length})…`)
         .setIcon("check")
         .onClick((evt) => {
-          if (!isRealGesture(evt)) return; // inert on a forged/synthesized menu click
-          void (async () => {
-            for (const f of targets) await acceptViaMenu(f.path, f.basename);
-          })();
+          if (!isRealGesture(evt)) return void warnUntrustedMenuClick();
+          void runMenuAccept(selection);
         });
     });
   }));

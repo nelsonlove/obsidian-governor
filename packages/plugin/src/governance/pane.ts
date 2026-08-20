@@ -129,7 +129,7 @@ class ConfirmModal extends Modal {
   private decided = false;
   constructor(
     app: App,
-    private readonly opts: { title: string; body: string; confirmText: string },
+    private readonly opts: { title: string; body: string; confirmText: string; items?: string[] },
     private readonly resolve: (ok: boolean) => void,
   ) {
     super(app);
@@ -143,6 +143,13 @@ class ConfirmModal extends Modal {
     const { contentEl } = this;
     contentEl.createEl("h3", { text: this.opts.title });
     contentEl.createEl("p", { text: this.opts.body });
+    // Optional itemisation (the menu-accept batch names every note it will accept). Note titles
+    // and paths are vault data, so every entry lands in a TEXT NODE only (createEl `text`) —
+    // never HTML — the same discipline renderIntent uses for agent-authored strings.
+    if (this.opts.items?.length) {
+      const list = contentEl.createEl("ul", { cls: "governance-confirm-items" });
+      for (const entry of this.opts.items) list.createEl("li", { text: entry });
+    }
     const row = contentEl.createDiv({ cls: "governance-actions" });
     const cancel = row.createEl("button", { text: "Cancel" });
     cancel.onclick = () => this.close();
@@ -248,6 +255,49 @@ export function confirmAdopt(app: App): Promise<boolean> {
         title: "Adopt current state as baseline",
         body: "This accepts all current content as the reviewed baseline and clears the queue. Continue?",
         confirmText: "Adopt baseline",
+      },
+      resolve,
+    ).open();
+  });
+}
+
+// ── the context-menu Accept's confirmation gate (the LAYER-1 restoration) ─────
+// The file-explorer right-click "Accept" item cannot carry Layer 1 by itself. An Obsidian
+// MenuItem handler is registered by handing a callback to `item.onClick(fn)`, and
+// `workspace.trigger("file-menu", <fake menu>, file, "…")` is public API: any renderer-JS
+// holding `app` can trigger the event with a stub menu whose `addItem`/`onClick` simply
+// CAPTURE the callback, then invoke it directly with a real, trusted MouseEvent recorded from
+// some earlier unrelated click (isTrusted stays true on a stale Event forever). That defeats
+// Layer 2 on its own — which is exactly why gesture.ts requires BOTH layers.
+//
+// So the menu item's handler is deliberately NOT accept-capable: all it can do is OPEN this
+// modal. The accept itself runs only from the modal's own confirm button, which restores both
+// layers — wired with addEventListener (Layer 1: `.onclick` stays null, the function is not a
+// reachable property of any element renderer-JS can walk to) and gated on isRealGesture
+// (Layer 2). A forged or replayed trigger of the menu callback can therefore, at absolute
+// worst, make a confirmation dialog appear; nothing is written until a human physically clicks
+// the modal's button.
+//
+// ONE modal per invocation, however many notes are selected: the batch is named in full here,
+// and the per-file accepts run afterwards with no further gating (each independently, so one
+// failure never aborts the rest — wiring.ts `acceptViaMenu`).
+export function confirmMenuAccept(
+  app: App,
+  items: ReadonlyArray<{ path: string; title: string }>,
+  acceptedBy: string,
+): Promise<boolean> {
+  const n = items.length;
+  return new Promise((resolve) => {
+    new ConfirmModal(
+      app,
+      {
+        title: n === 1 ? "Accept this note?" : `Accept ${n} notes?`,
+        body:
+          `Accept advances ${n === 1 ? "the note's" : "each note's"} baseline, and for a note with ` +
+          `acceptance-status: proposed ALSO stamps acceptance-status: accepted (accepted-by: ` +
+          `${acceptedBy}, accepted-on: minutes precision) into its frontmatter. Continue?`,
+        items: items.map((i) => (i.title === i.path ? i.path : `${i.title} — ${i.path}`)),
+        confirmText: n === 1 ? "Accept" : `Accept ${n} notes`,
       },
       resolve,
     ).open();
