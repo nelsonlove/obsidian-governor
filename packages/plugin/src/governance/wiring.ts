@@ -1238,10 +1238,10 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
   // reachable property of any element) and isRealGesture-gated (Layer 2). Worst case for a
   // forged/replayed menu trigger is therefore "a dialog appeared", never a write.
   //
-  // The isRealGesture check on the menu callback itself is kept as defense in depth. It is not
-  // load-bearing (the modal carries the real gate) and it is the one branch that could make the
-  // item look dead if Obsidian rendered this menu as a NATIVE Electron menu whose click event is
-  // not a DOM Event — so it warns rather than failing silently.
+  // #299 also kept an isRealGesture check on the menu callback itself as defence in depth,
+  // noting it was the one branch that could make the item look dead if Obsidian rendered this
+  // menu natively. It does, and it did — see the note directly above the registrations below,
+  // where that check was removed and why. The modal is and always was the real gate.
   const menuController = buildController(plugin);
   const menuEligibilityCtx = (): AcceptEligibilityCtx => ({
     pendingPaths: new Set(getCachedPending(plugin).map((p) => p.path)),
@@ -1274,19 +1274,32 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
     if (!confirmed) return; // cancelled — nothing written
     for (const t of targets) await acceptViaMenu(t.path, t.title);
   };
-  const warnUntrustedMenuClick = (): void => {
-    console.warn(
-      "governor acceptance: the context-menu Accept click was not a trusted DOM gesture — " +
-        "no confirmation was opened. (Expected only for a native Electron context menu; the " +
-        "pane's own Accept buttons are unaffected.)",
-    );
-  };
+  // NO isRealGesture ON THE MENU CALLBACKS — settled empirically, not assumed.
+  //
+  // #299 shipped the item gated on isRealGesture as defence in depth, flagging that whether a
+  // native Electron menu delivers a trusted DOM Event was unverified. It does not. Confirmed
+  // 2026-08-20 against 0.15.0 (Nelson, right-click in the file explorer — the left sidebar,
+  // the primary surface for this feature): the gate rejected every real click and logged
+  // "the context-menu Accept click was not a trusted DOM gesture", so the item was inert
+  // exactly where it exists to be used.
+  //
+  // Removed rather than worked around, because it was never the load-bearing gate and #299
+  // said so when it added it: this callback CANNOT accept anything. It opens a confirmation
+  // modal, and the accept runs solely from that modal's own button — addEventListener-wired
+  // (so the function is not a reachable property, Layer 1) and isRealGesture-gated (Layer 2).
+  // Both layers stand unchanged at the step that actually writes; what is removed is a third
+  // check on a step that writes nothing.
+  //
+  // The cost, stated plainly: a vault script that forges a menu click can now make a dialog
+  // appear. That is not a new capability — renderer JS holding `app` can already open modals
+  // and notices directly — and the dialog names every note it would accept, so a human still
+  // reads and clicks before anything is written. A dialog nobody asked for is a smaller
+  // problem than a feature that cannot work at all.
   component.registerEvent(plugin.app.workspace.on("file-menu", (menu, file) => {
     if (!(file instanceof TFile) || file.extension !== "md") return;
     if (!isAcceptEligible(file.path, menuEligibilityCtx())) return;
     menu.addItem((item) => {
-      item.setTitle("Accept…").setIcon("check").onClick((evt) => {
-        if (!isRealGesture(evt)) return void warnUntrustedMenuClick();
+      item.setTitle("Accept…").setIcon("check").onClick(() => {
         void runMenuAccept([{ path: file.path, title: file.basename }]);
       });
     });
@@ -1300,8 +1313,7 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
       item
         .setTitle(selection.length === 1 ? "Accept…" : `Accept (${selection.length})…`)
         .setIcon("check")
-        .onClick((evt) => {
-          if (!isRealGesture(evt)) return void warnUntrustedMenuClick();
+        .onClick(() => {
           void runMenuAccept(selection);
         });
     });
