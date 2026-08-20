@@ -32,7 +32,7 @@
 // proposal citing an observation that was never captured is worse than one
 // citing nothing.
 
-import type { ActionDefinition, SurfaceKind } from "./action.js";
+import type { SurfaceKind } from "./action.js";
 import { isAgentReachable } from "./surface-binding.js";
 import type { ActionRegistry } from "./registry.js";
 import {
@@ -120,30 +120,67 @@ export interface OperationExecutorOpts {
   onClose?: (operation: OperationV1) => void;
 }
 
+/** Lets a handler record the phases only it can witness. */
+export type MarkPhase = (phase: OperationPhase) => void;
+
 export interface OperationExecutor {
-  run<T>(request: OperationRequest, handler: () => Promise<T>): Promise<{ result: T; operation: OperationV1 }>;
+  run<T>(
+    request: OperationRequest,
+    handler: (mark: MarkPhase) => Promise<T>
+  ): Promise<{ result: T; operation: OperationV1 }>;
 }
 
 let seq = 0;
 const EPOCH = Date.now().toString(36);
 
+// PHASES RECORD ONLY WHAT HAPPENED.
+//
+// The first draft derived the phase set from the action's declared MODE and
+// pushed all of it at close time — so a mutation refused before the queue (an
+// allowlist refusal, an unresolved uid, a revision conflict, a record refusal,
+// a lock cap) closed with an envelope claiming `queued` and `attempted`. That
+// is exactly the defect this module's own header warns about: a receipt
+// describing work nobody did. And it would have been the COMMON case, since
+// refusals are what a guard produces.
+//
+// A declared mode says what an action MAY do, never what one invocation DID.
+// The executor therefore records only the four phases it witnesses itself —
+// `received`, `resolved`, `receipt-produced`, `closed` — and the handler marks
+// the rest as it reaches them, through the `mark` callback `run` passes it.
+
 /**
- * Which phases an action's MODE actually activates.
+ * Coded refusals this repo already emits, mapped to the outcome each means.
  *
- * A read closes after producing its result; it never queues and never attempts
- * an effect. Recording only what happened is what keeps a receipt honest — and
- * it is checked by a test, because "the envelope has all the fields" is exactly
- * the kind of completeness that reads as evidence without being any.
+ * The wire form is `Error [code]: message` (`codedError` in mcp/guarded.ts and
+ * mcp/helpers.ts) — a documented convention, not a heuristic, which is why
+ * reading the prefix is legitimate rather than screen-scraping.
+ *
+ * The distinctions matter to a caller deciding what to do next, and collapsing
+ * them all to `refused` would throw away exactly the information that decides
+ * it:
+ *
+ *   conflict   nothing was written; re-read and re-plan
+ *   uncertain  the operation was ABANDONED at its deadline and may still land;
+ *              re-read before any retry. Calling this one `refused` would be
+ *              actively dangerous — it invites a retry that duplicates a write.
+ *
+ * Anything else stays `refused`, and a handler-level error with no code stays
+ * `failed`: an unrecognized error is not evidence of a guard decision.
  */
-function phasesFor(action: ActionDefinition): OperationPhase[] {
-  const mutates = action.modes.some((m) => m === "proposal-mutation" || m === "mandated-mutation");
-  const authority = action.modes.includes("authority");
-  const phases: OperationPhase[] = ["received", "resolved"];
-  if (mutates) phases.push("queued", "attempted");
-  if (authority) phases.push("authorized");
-  phases.push("receipt-produced", "closed");
-  // Canonical order regardless of the order pushed above.
-  return OPERATION_PHASES.filter((p) => phases.includes(p));
+const CODED_OUTCOMES: Record<string, OperationOutcome> = {
+  rev_conflict: "conflict",
+  write_timeout: "uncertain",
+};
+
+const CODED_ERROR = /^Error \[([a-z_]+)\]:/;
+
+/** The `Error [code]:` code carried by a returned error envelope, if any. */
+function codeOf(result: unknown): string | undefined {
+  if (result === null || typeof result !== "object") return undefined;
+  const content = (result as { content?: unknown }).content;
+  const first = Array.isArray(content) ? (content[0] as { text?: unknown } | undefined) : undefined;
+  if (typeof first?.text !== "string") return undefined;
+  return CODED_ERROR.exec(first.text)?.[1];
 }
 
 /**
@@ -157,18 +194,45 @@ function phasesFor(action: ActionDefinition): OperationPhase[] {
  */
 function outcomeOf(result: unknown): OperationOutcome {
   if (result === null || typeof result !== "object") return "completed";
-  return (result as { isError?: unknown }).isError === true ? "refused" : "completed";
+  if ((result as { isError?: unknown }).isError !== true) return "completed";
+  const code = codeOf(result);
+  return (code ? CODED_OUTCOMES[code] : undefined) ?? "refused";
+}
+
+/** The outcome for a THROWN failure, which the kernel uses for its typed errors. */
+function thrownOutcome(error: unknown): OperationOutcome {
+  const code = (error as { code?: unknown } | null)?.code;
+  if (typeof code === "string" && CODED_OUTCOMES[code]) return CODED_OUTCOMES[code];
+  if (typeof code === "string") return "refused";
+  return "failed";
 }
 
 export function createOperationExecutor(opts: OperationExecutorOpts): OperationExecutor {
   const now = opts.now ?? (() => Date.now());
   const newId = opts.newId ?? (() => `${EPOCH}-${++seq}`);
 
-  function close(operation: OperationV1, outcome: OperationOutcome, phases: OperationPhase[]): OperationV1 {
-    for (const phase of phases.slice(operation.phases.length)) {
-      operation.phases.push({ phase, at: now() });
-      operation.phase = phase;
-    }
+  /**
+   * Append a phase, keeping the record in canonical order and never
+   * duplicating one. Marking a phase already recorded is a no-op rather than an
+   * error: a handler that re-enters the queue after a late settlement should
+   * not have to track what it already said.
+   */
+  function mark(operation: OperationV1, phase: OperationPhase): void {
+    if (operation.phases.some((p) => p.phase === phase)) return;
+    operation.phases.push({ phase, at: now() });
+    operation.phases.sort((a, b) => OPERATION_PHASES.indexOf(a.phase) - OPERATION_PHASES.indexOf(b.phase));
+    operation.phase = operation.phases[operation.phases.length - 1]!.phase;
+  }
+
+  const closedOps = new WeakSet<OperationV1>();
+
+  function close(operation: OperationV1, outcome: OperationOutcome): OperationV1 {
+    // Re-entrancy guard. Closing twice would emit one operation id to the sink
+    // twice, which a consumer counting operations would read as two.
+    if (closedOps.has(operation)) return operation;
+    closedOps.add(operation);
+    mark(operation, "receipt-produced");
+    mark(operation, "closed");
     operation.outcome = outcome;
     try {
       opts.onClose?.(operation);
@@ -180,27 +244,22 @@ export function createOperationExecutor(opts: OperationExecutorOpts): OperationE
 
   return {
     async run(request, handler) {
-      const action = opts.registry.get(request.action, request.actionVersion);
-      if (!action) throw new UnregisteredActionError(request.action, request.actionVersion);
-
-      const binding = opts.registry.bindings().find((b) => b.id === request.surface.id);
-      if (!binding || binding.action !== action.id || binding.actionVersion !== action.version) {
-        throw new UnboundSurfaceError(request.surface.id, `${request.action}@${request.actionVersion}`);
-      }
-
-      // The runtime half of the acceptance fence. Checked against the surface
-      // the CALLER presented, not the one the inventory declared — the two can
-      // differ for a runtime-named surface, and that gap is the whole reason
-      // this check exists in addition to the build-time one.
-      if (action.authority.governorOnly && isAgentReachable(request.surface.kind)) {
-        throw new AuthoritySurfaceError(request.surface.id, request.surface.kind, action.id);
-      }
-
-      const phases = phasesFor(action);
+      // The envelope is built BEFORE the checks, on purpose.
+      //
+      // The first draft threw the three refusals above envelope construction,
+      // so a refused invocation produced no operation record and never reached
+      // the sink — while this same file claimed "a failed operation still
+      // closes; evidence that only exists when work succeeds is not evidence."
+      // The worst case was `AuthoritySurfaceError`: an agent-reachable surface
+      // attempting a Governor-only action is the single event a governance
+      // system most needs recorded, and it was the one leaving no trace.
+      //
+      // The action id and version here are what the CALLER CLAIMED. For a
+      // refusal that is the right thing to record — the claim is the evidence.
       const operation: OperationV1 = {
         schema: "governor.operation/v1",
         id: newId(),
-        action: { id: action.id, version: action.version },
+        action: { id: request.action, version: request.actionVersion },
         surface: { ...request.surface },
         // Derived, never taken from inputs. A caller that sends `actor` or
         // `signer` is ignored here and refused at the registry.
@@ -225,17 +284,41 @@ export function createOperationExecutor(opts: OperationExecutorOpts): OperationE
         outcome: null,
         recovery: null,
       };
-      operation.phases.push({ phase: "resolved", at: now() });
-      operation.phase = "resolved";
+
+      const refuse = (error: OperationRefusedError): never => {
+        close(operation, "refused");
+        throw error;
+      };
+
+      const action = opts.registry.get(request.action, request.actionVersion);
+      if (!action) refuse(new UnregisteredActionError(request.action, request.actionVersion));
+
+      const binding = opts.registry.binding(request.surface.id);
+      if (!binding || binding.action !== action!.id || binding.actionVersion !== action!.version) {
+        refuse(new UnboundSurfaceError(request.surface.id, `${request.action}@${request.actionVersion}`));
+      }
+
+      // The runtime half of the acceptance fence. Checked against the surface
+      // the CALLER presented, not the one the inventory declared — the two can
+      // differ for a runtime-named surface, and that gap is the whole reason
+      // this check exists in addition to the build-time one.
+      if (action!.authority.governorOnly && isAgentReachable(request.surface.kind)) {
+        refuse(new AuthoritySurfaceError(request.surface.id, request.surface.kind, action!.id));
+      }
+
+      mark(operation, "resolved");
 
       try {
-        const result = await handler();
-        close(operation, outcomeOf(result), phases);
+        // The handler marks the phases only IT can witness — reaching the
+        // queue, attempting an effect. The executor never assumes them from a
+        // declared mode.
+        const result = await handler((phase) => mark(operation, phase));
+        close(operation, outcomeOf(result));
         return { result, operation };
       } catch (e) {
         // A failed operation still closes. Evidence that only exists when work
         // succeeds is not evidence.
-        close(operation, "failed", phases);
+        close(operation, thrownOutcome(e));
         throw e;
       }
     },
