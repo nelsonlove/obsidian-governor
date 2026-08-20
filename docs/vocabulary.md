@@ -43,7 +43,8 @@ The registry (`VocabRegistry`) skip-and-reports duplicate ids, unknown providers
 per-provider configs into a `problems` array (it never throws), reserving an id before the
 provider check. Shipped defaults (corrected 2026-08-19): one `scope-tags` instance over the
 whole vault, one `glossary` with `termsRoot` at the framework document's live slot
-(the vault's `00.89 Assent` folder — the folder keeps its historical name).
+(the vault's `00.89 obsidian-governor` folder — renamed from its former `Assent`
+name on 2026-08-19, which the default was corrected to follow).
 
 ## The four tools
 

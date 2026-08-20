@@ -57,6 +57,20 @@ describe("real call sites honor the alias", () => {
     assert.equal(baselineRelFrom({}), DEFAULT_BASELINE_REL);
   });
 
+  // The line above is a tautology by construction (it compares the function's
+  // fallback to the constant it falls back to), so it cannot catch the failure
+  // this default actually has: going stale under a vault reorganization. The
+  // baseline moved twice — vault-root `Assent/` → `00.89 Assent` (2026-08-17)
+  // → `00.89 obsidian-governor` (2026-08-19) — and the default followed
+  // neither, because nothing failed when it pointed at a path that no longer
+  // existed. These assert the SHAPE of a live location, not the exact string,
+  // so a future move still only has to update one constant.
+  test("DEFAULT_BASELINE_REL names a live folder, not a retired ancestor", () => {
+    assert.doesNotMatch(DEFAULT_BASELINE_REL, /^Assent\//, "vault-root Assent/ was refiled in 2026-08");
+    assert.doesNotMatch(DEFAULT_BASELINE_REL, /00\.89 Assent/, "00.89 was renamed to obsidian-governor");
+    assert.match(DEFAULT_BASELINE_REL, /^00-09 System\/.*\/Conformance baseline\.md$/);
+  });
+
   test("excludedRootsFrom: both spellings", () => {
     assert.deepEqual(excludedRootsFrom([], { GOVERNOR_EXCLUDED_ROOTS: "A, B", ASSENT_EXCLUDED_ROOTS: "C" }), ["A", "B"]);
     assert.deepEqual(excludedRootsFrom([], { ASSENT_EXCLUDED_ROOTS: "C" }), ["C"]);

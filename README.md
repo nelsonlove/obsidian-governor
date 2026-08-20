@@ -66,7 +66,7 @@ keeps it that way.**
 
 ## Install
 
-1. **Build** (or grab a [release](https://github.com/nelsonlove/obsidian-vault-mcp-plugin/releases) — BRAT-installable):
+1. **Build** (or grab a [release](https://github.com/nelsonlove/obsidian-governor/releases) — BRAT-installable):
    ```bash
    npm install && npm run build      # emits main.js (bridge embedded) + manifest.json
    ```
@@ -125,15 +125,15 @@ currently-open hardening work, in **[docs/acceptance-model.md](docs/acceptance-m
 - **The FS-fallback path is the one documented exception to "journaled."** The headless
   filesystem-failover mode in `packages/server` — refused by default, explicit opt-in only —
   writes with no journal and no serialized queue until Obsidian reconnects
-  ([#92](https://github.com/nelsonlove/obsidian-vault-mcp-plugin/issues/92)). Every claim above
+  ([#92](https://github.com/nelsonlove/obsidian-governor/issues/92)). Every claim above
   about journaling is scoped to the plugin's guarded path, not this fallback.
 - **Actively hardened, in the open.** The write perimeter is under continuous adversarial
   review; known gaps are tracked as public issues on this repo (milestone `0.8.1 — perimeter`)
   rather than papered over. The docs bound every claim to what's actually shipped.
 - **The guard doesn't cover every surface yet — named, not papered over.** Templated note
-  creation ([#137](https://github.com/nelsonlove/obsidian-vault-mcp-plugin/issues/137),
-  [#105](https://github.com/nelsonlove/obsidian-vault-mcp-plugin/issues/105)), CLI flag-form
-  arguments ([#107](https://github.com/nelsonlove/obsidian-vault-mcp-plugin/issues/107)), and a
+  creation ([#137](https://github.com/nelsonlove/obsidian-governor/issues/137),
+  [#105](https://github.com/nelsonlove/obsidian-governor/issues/105)), CLI flag-form
+  arguments ([#107](https://github.com/nelsonlove/obsidian-governor/issues/107)), and a
   couple of lower-severity paths can currently introduce or resurrect acceptance without going
   through the guarded primitive. Each is a public, tracked issue; the full residual list lives
   in [docs/acceptance-model.md](docs/acceptance-model.md).

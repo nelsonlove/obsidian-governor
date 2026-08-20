@@ -18,6 +18,14 @@ import assert from "node:assert/strict";
 import { structurePack, portPack, stePack, DEFAULT_BLUEPRINT_ROOT } from "../src/conformance/packs/index.ts";
 import { proseLines, steHits } from "../src/conformance/packs/ste.ts";
 import { portHits } from "../src/conformance/packs/port.ts";
+import { DEFAULT_VAULT_CONVENTIONS } from "../src/conformance/vault-conventions.ts";
+
+// Build ungoverned-root fixtures from the SHIPPED roots rather than restating
+// them. Restated literals stop exercising the exclusion the moment a root
+// moves (the framework corpus went vault-root `Assent/` → `00.89 Assent` →
+// `00.89 obsidian-governor` across 2026-08), and the test keeps passing for
+// the wrong reason: the paths it names are simply no longer special.
+const UNGOVERNED = DEFAULT_VAULT_CONVENTIONS.ungovernedRoots;
 
 function snapshot({ sources = [], blueprints = [] } = {}) {
   return { notes: [], paths: sources.map((s) => s.path), sources, blueprints };
@@ -115,11 +123,12 @@ describe("structurePack (conformance_check)", () => {
     assert.deepEqual(structurePack().run(snap), []);
   });
 
-  test("ungoverned roots (Assent, Vault archaeology, _staging) are out of scope", () => {
+  test("every shipped ungoverned root, and underscore roots, are out of scope", () => {
     const mk = (p) => ({ path: p, text: '---\nblueprint: "[[Tag.blueprint]]"\n---\n## Purpose\n## Rogue\n' });
+    assert.ok(UNGOVERNED.length > 0, "the fixture is vacuous if no roots ship");
     const snap = snapshot({
       blueprints: [tagBp],
-      sources: [mk("Assent/a.md"), mk("Vault archaeology/b.md"), mk("_hold/c.md")],
+      sources: [...UNGOVERNED.map((r) => mk(`${r}/a.md`)), mk("_hold/c.md")],
     });
     assert.deepEqual(structurePack().run(snap), []);
   });
@@ -362,7 +371,11 @@ describe("structurePack (#112c) — UNRESOLVED-INCLUDE", () => {
   test("ungoverned and underscore-root blueprints are out of scope", () => {
     const mk = (p) => ({ path: p, text: '---\n---\n{% include "gone.blueprint" %}\n' });
     const snap = snapshot({
-      blueprints: [mk("Vault archaeology/_maybe/blueprints/gen2/old.blueprint"), mk("_hold/x.blueprint"), mk("Assent/y.blueprint")],
+      blueprints: [
+        mk(`${UNGOVERNED[0]}/_maybe/blueprints/gen2/old.blueprint`),
+        mk("_hold/x.blueprint"),
+        ...UNGOVERNED.map((r) => mk(`${r}/y.blueprint`)),
+      ],
     });
     assert.deepEqual(structurePack().run(snap), []);
   });

@@ -28,3 +28,20 @@ export function hasDotOrTrashSegment(vaultPath: string): boolean {
 export function isUnderscoreRoot(vaultPath: string): boolean {
   return firstSegment(vaultPath).startsWith("_");
 }
+
+/**
+ * True if `vaultPath` is inside (or is) one of `roots`.
+ *
+ * Callers used to compare `firstSegment(path)` against the ungoverned-roots
+ * list, which silently required every ungoverned root to be a TOP-LEVEL
+ * folder. That held while the framework corpus was the vault-root `Assent/`
+ * tree; when it was refiled under `00-09 System/00 System management/00.89 …`
+ * the exclusion could no longer match anything, and nothing failed — a nested
+ * ungoverned root simply became governed, quietly, which is the harder failure
+ * to notice (findings appear rather than disappear).
+ *
+ * Matching is on segment boundaries, so `Assent` never swallows `Assentless/`.
+ */
+export function isUnderRoot(vaultPath: string, roots: readonly string[]): boolean {
+  return roots.some((r) => r !== "" && (vaultPath === r || vaultPath.startsWith(r + "/")));
+}
