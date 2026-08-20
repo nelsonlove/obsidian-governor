@@ -58,13 +58,18 @@ export const DEFAULT_VOCABULARIES: VocabInstanceSettings[] = [
   { id: "scope-tags", provider: "scope-tags", root: "" },
   // termsRoot is read by the TOOL layer (it decides which bodies to read for
   // `## Terms` sections); the provider itself parses whatever bodies arrive.
-  // The Assent chapters live under 00.89 since the vault-root `Assent/` tree
-  // was refiled (stale shipped default corrected 2026-08-19).
+  // The framework chapters live under 00.89, whose folder was renamed from
+  // `Assent` to `obsidian-governor` on 2026-08-19 (the framework's former name
+  // is legacy vocabulary). Corrected here twice now — a dead termsRoot fails
+  // silently, returning nothing rather than erroring, so the shipped default
+  // drifting is invisible until someone queries the glossary and gets zero.
   {
     id: "glossary",
     provider: "glossary",
     root: "",
-    config: { termsRoot: "00-09 System/00 System management/00.89 Assent" },
+    config: {
+      termsRoot: "00-09 System/00 System management/00.89 obsidian-governor",
+    },
   },
 ];
 
