@@ -156,7 +156,28 @@ describe("local blob store — absence is not the same fact as failure", () => {
     const { store: s } = store(base);
     await s.put(A, "x");
     await s.put(B, "y");
-    base.files.set(path.join(observationDir("my-vault"), "leftover.tmp-1234"), "junk");
+    // The REAL temp shape, not an invented one: `<hex>.json.tmp-<pid>-<rand>`.
+    // Using a made-up name would have proved nothing about the actual filter.
+    base.files.set(path.join(observationDir("my-vault"), `${"a".repeat(64)}.json.tmp-999-zz`), "junk");
     assert.deepEqual((await s.keys()).sort(), [A, B].sort());
+  });
+});
+
+describe("local blob store — the vault slug is a path segment, not a path", () => {
+  for (const bad of ["..", "../escape", "a/b", "", ".hidden", "-leading"]) {
+    test(`refuses slug '${bad || "(empty)"}'`, () => {
+      assert.throws(() => observationDir(bad), /single safe path segment/);
+    });
+  }
+
+  test("an ordinary slug is accepted", () => {
+    assert.ok(observationDir("my-vault-2"));
+  });
+
+  test("the refusal happens before any filesystem call", () => {
+    // `vaultSlug()` strips separators but preserves dots, and this function
+    // takes a plain string from whatever calls it — "the caller always passes a
+    // real slug" is an assumption, not a control.
+    assert.throws(() => createLocalBlobStore({ vaultSlug: "..", fsImpl: fakeFs() }), /single safe path segment/);
   });
 });

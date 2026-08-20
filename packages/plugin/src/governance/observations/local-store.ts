@@ -30,8 +30,23 @@ import * as path from "node:path";
 import { stateDir } from "../../paths.js";
 import type { BlobStore } from "../../kernel/observations/store.js";
 
+/**
+ * A vault slug is one path SEGMENT. `vaultSlug()` already strips separators,
+ * but it preserves dots — so a name that slugged to `..` would climb out of
+ * the observation directory, and this function takes a plain string from
+ * whatever calls it.
+ *
+ * Validated rather than trusted, for the same reason the digest is: a store
+ * addressed by a caller-supplied string is a traversal surface, and "the
+ * caller always passes a real slug" is an assumption, not a control.
+ */
+const SLUG = /^[a-z0-9][a-z0-9._-]*$/;
+
 /** `~/.claude/governor/observations/<vault-slug>/` */
 export function observationDir(vaultSlug: string): string {
+  if (!SLUG.test(vaultSlug) || vaultSlug.includes("..")) {
+    throw new Error(`refusing to place the observation store at vault slug '${vaultSlug}': not a single safe path segment`);
+  }
   return path.join(stateDir(), "observations", vaultSlug);
 }
 
@@ -69,6 +84,12 @@ export interface LocalBlobStoreOpts {
  * a digest that claims to describe it. The store above verifies digests on
  * read regardless; this just means the common failure produces an absent
  * payload rather than a corrupt one, and absent is the honest state.
+ *
+ * Known residual: a process killed between `writeFile` and `rename` leaves a
+ * temp file that nothing later removes. It can never be READ as a payload
+ * (`keys()` matches the digest name exactly), so it costs disk rather than
+ * correctness. Sweeping them belongs with the retention pass that will own
+ * this directory's housekeeping, not here.
  */
 export function createLocalBlobStore(opts: LocalBlobStoreOpts): BlobStore {
   const dir = observationDir(opts.vaultSlug);
@@ -93,6 +114,15 @@ export function createLocalBlobStore(opts: LocalBlobStoreOpts): BlobStore {
       } catch {
         // Not present — fall through and write it.
       }
+      // `<hex>.json.tmp-<pid>-<random>` — deliberately a SUFFIX of the final
+      // name, so `keys()`'s exact `<hex>.json` match excludes it by
+      // construction rather than by a second exclusion rule that could drift.
+      //
+      // Two concurrent puts of the same digest both see "not present", write
+      // distinct temp files and both rename onto the same target. That is
+      // benign precisely because the store is content-addressed: whichever
+      // rename lands last wrote identical bytes. The pid and random suffix
+      // keep the two temp files from colliding with each other.
       const tmp = `${target}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
       await io.writeFile(tmp, data, "utf8");
       try {
