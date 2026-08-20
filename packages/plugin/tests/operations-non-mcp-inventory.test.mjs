@@ -31,7 +31,7 @@
 
 import { test, describe, after } from "node:test";
 import assert from "node:assert/strict";
-import { rm, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { resolve as resolvePath } from "node:path";
 
 import {
@@ -49,8 +49,12 @@ import {
   AUTOMATION_SURFACES,
   ACCEPT_PERIMETER_FUNCTIONS,
   WIRING_EXPORTS,
+  PLAIN_SURFACES,
+  NOT_SURFACES,
   nonMcpActions,
   nonMcpBindings,
+  plainActions,
+  plainBindings,
 } from "../src/kernel/operations/inventory-non-mcp.ts";
 import { createActionRegistry } from "../src/kernel/operations/registry.ts";
 import { MCP_SURFACE_INVENTORY } from "../src/kernel/operations/inventory-mcp.ts";
@@ -330,5 +334,93 @@ describe("non-MCP inventory — the command scan is proven against a planted com
       rescan.has("planted-violation"),
       "the command scan no longer matches this repo's addCommand shape — it would silently under-report a new command"
     );
+  });
+});
+
+// ── bridge, settings, and internal surfaces ──────────────────────────────────
+
+describe("non-MCP inventory — bridge, settings and internal surfaces", () => {
+  test("every plain surface names a file that exists", async () => {
+    for (const row of PLAIN_SURFACES) {
+      const abs = resolvePath(PLUGIN_SRC, row.file.replace(/^src\//, ""));
+      const text = await readFile(abs, "utf8").catch(() => null);
+      assert.ok(text !== null, `surface '${row.id}' names ${row.file}, which does not exist`);
+    }
+  });
+
+  test("no duplicate surface ids across the whole non-MCP inventory", () => {
+    const ids = [
+      ...COMMAND_SURFACES.map((r) => `command:${r.id}`),
+      ...AUTOMATION_SURFACES.map((r) => r.id),
+      ...AUTHORITY_SURFACES.map((r) => r.id),
+      ...PLAIN_SURFACES.map((r) => r.id),
+    ];
+    assert.equal(new Set(ids).size, ids.length);
+  });
+
+  test("the outside-vault writers are exactly the known set", () => {
+    // These write to ~/.claude/governor/ and spawn a binary. They are the
+    // plugin's whole footprint outside the vault, so the set is a privacy
+    // disclosure and belongs in one checkable place rather than spread across
+    // a README.
+    const outside = PLAIN_SURFACES.filter((r) => r.outsideVault).map((r) => r.id).sort();
+    assert.deepEqual(outside, [
+      "bridge.claude-register",
+      "bridge.remove-discovery",
+      "bridge.write-bridge",
+      "bridge.write-discovery",
+      "settings.connect-claude-code",
+      "settings.disconnect",
+    ]);
+  });
+
+  test("the unconditional-on-load surfaces are named, because they ignore settings.enabled", () => {
+    // `writeBridge()` and `autoRegister()` run on every plugin load whether or
+    // not the socket is enabled. A user who turns Governor's socket off still
+    // gets a file written outside the vault and a binary spawned; that is
+    // surprising enough to pin.
+    const unconditional = PLAIN_SURFACES.filter((r) => r.unconditional).map((r) => r.id).sort();
+    assert.deepEqual(unconditional, ["bridge.claude-register", "bridge.write-bridge"]);
+  });
+
+  test("a settings control that reaches an authority action says which one", () => {
+    const reaching = PLAIN_SURFACES.filter((r) => r.reachesAuthority);
+    // Exactly one today: enabling the acceptance module mounts governance,
+    // which arms the one-shot reconcileBaselines handler.
+    assert.deepEqual(reaching.map((r) => r.id), ["settings.module-enabled"]);
+    const authorityActionIds = new Set(AUTHORITY_SURFACES.map((r) => r.action));
+    for (const row of reaching) {
+      assert.ok(
+        authorityActionIds.has(row.reachesAuthority),
+        `'${row.id}' names '${row.reachesAuthority}', which is not a declared authority action`
+      );
+    }
+  });
+
+  test("the NOT_SURFACES exclusions each name a real function and the action they belong to", async () => {
+    // An inventory is only trustworthy if "why isn't this listed?" has a
+    // written answer. Each exclusion must be a function that actually exists
+    // and must name a declared action as its owner.
+    const declaredActions = new Set(AUTHORITY_SURFACES.map((r) => r.action));
+    const { present } = await scanModuleScopeOnly(
+      "governance/wiring.ts",
+      NOT_SURFACES.map((n) => n.name)
+    );
+    for (const n of NOT_SURFACES) {
+      assert.ok(n.partOf?.length > 5, `${n.name} needs a stated owner`);
+      // `appendLog` is owned by "every audited authority action" rather than
+      // one id, so only single-id owners are checked against the registry.
+      if (declaredActions.has(n.partOf)) continue;
+      assert.ok(n.partOf.includes("every") || declaredActions.has(n.partOf), `${n.name} names an unknown owner '${n.partOf}'`);
+    }
+    // Most live in wiring.ts; the scan confirms the ones that should.
+    assert.ok(present.size > 0, "none of the excluded helpers was found — the exclusion list is describing gone code");
+  });
+
+  test("the whole non-MCP inventory builds a valid registry together", () => {
+    const registry = createActionRegistry();
+    for (const a of [...nonMcpActions(), ...plainActions()]) registry.register(a);
+    for (const b of [...nonMcpBindings(), ...plainBindings()]) registry.bind(b);
+    assert.deepEqual(registry.validate().map((p) => `${p.code}: ${p.message}`), []);
   });
 });
