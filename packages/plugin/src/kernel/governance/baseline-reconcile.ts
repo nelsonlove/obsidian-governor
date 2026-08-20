@@ -31,7 +31,17 @@ export type UnresolvedReason =
   | "uid-not-found"
   /** Several live notes carry the uid — resolving would be a guess. */
   | "uid-ambiguous"
-  /** The destination already has its own baseline; repointing would overwrite a live acceptance. */
+  /**
+   * The destination already has its own baseline; repointing would overwrite a live acceptance.
+   *
+   * NOTE — a CHAIN converges over successive runs rather than in one pass. The plan is computed
+   * from a single pre-move snapshot, so in an offline shuffle X→Y→Z the baseline at X is refused
+   * here (Y still holds its own baseline at plan time) even though Y's is about to vacate to Z.
+   * That is the conservative direction on purpose: never overwrite on the strength of a move that
+   * has not happened yet. The refusal is reported, the next run sees Y free and repoints it, so an
+   * N-long chain settles in N runs. Only worth revisiting if real vaults produce long chains —
+   * ordering the plan by dependency would trade a self-healing refusal for a live overwrite risk.
+   */
   | "target-has-baseline"
   /** Another drifted baseline resolves to the same note and was accepted more recently. */
   | "superseded";

@@ -80,8 +80,10 @@ export class BaselineStore {
   get size(): number { return this.cache.size; }
 
   // Advance (or create) the baseline for a note to `content`, attributed to `acceptedBy`.
-  // This is the ONLY mutation of a baseline; both Accept and the silent human-edit path
-  // funnel through here.
+  // This is the only thing that ADVANCES a baseline — the only place `acceptedAt`/`acceptedBy`
+  // are ever stamped; both Accept and the silent human-edit path funnel through here. (`rekey`
+  // also writes baseline files, but it only RE-ADDRESSES an existing one and stamps nothing,
+  // which is exactly why it does not route through this method.)
   async setBaseline(
     path: string,
     content: string,
