@@ -57,6 +57,7 @@ function store(over = {}) {
     now: () => 1_700_000_000_000,
     // Default: the reviewer may see everything. Individual tests narrow it.
     canRead: () => true,
+    canReplay: () => true,
     ...over,
   });
   return { store: s, blobs };
@@ -107,8 +108,12 @@ describe("observation store — playback is historical, never a fresh read", () 
     // Structural, not conventional: nothing is injected that could re-read
     // current state, so a future edit cannot quietly make playback recompute.
     const { store: s } = store();
-    assert.equal(typeof s.playback, "function");
-    assert.ok(!("vault" in s) && !("read" in s), "the store exposes no vault access");
+    // The real guarantee is compile-time — `ObservationStoreOpts` admits a blob
+    // interface, two predicates and a clock, and nothing that could read the
+    // vault. What a runtime assertion CAN close is the surface: pinning the
+    // exact method set means someone adding a `readCurrent` fails here rather
+    // than quietly making playback recompute.
+    assert.deepEqual(Object.keys(s).sort(), ["export", "playback", "prune", "put"]);
   });
 });
 
@@ -258,5 +263,71 @@ describe("observation store — a shared payload carries every source's provenan
     const before = await blobs.get(ref);
     await s.put({ body: "x" }, { sources: ["A.md"] });
     assert.equal(await blobs.get(ref), before, "an unchanged source set is not a write");
+  });
+});
+
+// ── the oracle the first draft left open ─────────────────────────────────────
+
+describe("observation store — a reader with no replay authority learns nothing", () => {
+  test("missing, corrupt and forbidden are INDISTINGUISHABLE to an ungated reader", async () => {
+    // `ref` is a content digest, so without a coarse gate a caller could
+    // compute digest(P) for content it merely suspects was captured and learn
+    // whether it exists — with `canRead` never invoked. That is a confirmation
+    // oracle over the whole store, callable by anyone.
+    const { store: s, blobs } = store({ canReplay: () => false });
+    const real = await store().store.put({ body: "x" }, { sources: ["A.md"] });
+    void blobs;
+    const errors = [];
+    for (const ref of [real, "sha256:definitely-not-stored"]) {
+      await s.playback(ref, { reader: "nobody" }).catch((e) => errors.push(e.constructor.name));
+    }
+    assert.deepEqual(errors, ["PlaybackUnauthorizedError", "PlaybackUnauthorizedError"]);
+  });
+
+  test("canRead is never even consulted for a reader who may replay nothing", async () => {
+    let consulted = false;
+    const { store: s } = store({
+      canReplay: () => false,
+      canRead: () => {
+        consulted = true;
+        return true;
+      },
+    });
+    const ref = await store().store.put({ body: "x" }, { sources: ["A.md"] });
+    await s.playback(ref, { reader: "nobody" }).catch(() => {});
+    assert.equal(consulted, false, "the gate runs before the store is touched");
+  });
+
+  test("export is gated identically — it must not be the weaker door", async () => {
+    const { store: s } = store({ canReplay: () => false });
+    await assert.rejects(() => s.export(["sha256:anything"], { reader: "nobody" }), PlaybackUnauthorizedError);
+  });
+
+  test("an ENTITLED reader still gets the honest distinction", async () => {
+    // The residual, and it is deliberate: closing this too would mean refusing
+    // to report corruption to people entitled to know about it.
+    const { store: s } = store();
+    await assert.rejects(() => s.playback("sha256:not-stored", { reader: "human-1" }), PayloadMissingError);
+  });
+});
+
+describe("observation store — pruning says what stops being verifiable", () => {
+  test("a removed payload reports what it backed", async () => {
+    // `dependents` gates removal, so by construction it is empty for everything
+    // actually removed — which left the report unable to answer the question it
+    // exists to answer.
+    const { store: s } = store({ explains: (ref) => [`proposal-3 cited ${ref.slice(0, 12)}`] });
+    const ref = await s.put({ body: "x" }, { sources: ["A.md"] });
+    const report = await s.prune([ref]);
+    assert.deepEqual(report.removed, [ref]);
+    assert.equal(report.nowUnverifiable.length, 1);
+    assert.match(report.nowUnverifiable[0].explanations[0], /proposal-3/);
+  });
+
+  test("a payload that backed nothing reports nothing, rather than an empty entry", async () => {
+    const { store: s } = store();
+    const ref = await s.put({ body: "x" }, { sources: ["A.md"] });
+    const report = await s.prune([ref]);
+    assert.deepEqual(report.nowUnverifiable, []);
   });
 });
