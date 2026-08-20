@@ -23,6 +23,31 @@ export const AUDIT_GENERATOR = "obsidian-plugin-audit";
  *  regen write an `accepted`-family field. */
 export const AUDIT_DERIVATION_MODE = "snapshot";
 
+/** The optional frontmatter field a derived note may carry to witness how many
+ *  source files its `derived-from` set resolved to at generation time — read by
+ *  the freshness engine (freshness.ts), stamped by `renderAudit`. Opt-in: absent
+ *  ⇒ the glob half of the deletion check degrades to pre-witness behavior. */
+export const SOURCE_COUNT_FIELD = "derived-source-count";
+
+/**
+ * The audit note's own `derived-from` entries, for a given notes dir — the ONE
+ * definition of what the audit is derived from.
+ *
+ * `renderAudit` emits this list into the note's frontmatter and `regenerateAudit`
+ * resolves the SAME list to count the sources it stamps as
+ * `derived-source-count`, so the witness can never describe a different set from
+ * the one `provenance_check` will later resolve.
+ */
+export function auditDerivedFrom(notesDir: string = DEFAULT_NOTES_DIR): string[] {
+  // Trailing slashes are stripped HERE, not only in `provenanceConfigOf`: these
+  // are exported kernel functions with a defaulted argument, so a caller that
+  // skips the config coercion must still get `Meta/Plugins/*.md`, never
+  // `Meta/Plugins//*.md` — which would make `auditPath` and this list disagree
+  // about the same folder and throw the source count off by one.
+  const dir = notesDir.replace(/\/+$/, "") || notesDir;
+  return [`${dir}/*.md`, ".obsidian/plugins/*/manifest.json", ".obsidian/community-plugins.json"];
+}
+
 /** The provenance module's config, stored under `modules.provenance.config` and
  *  merged over the manifest defaults. */
 export interface ProvenanceConfig {
