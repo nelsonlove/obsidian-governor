@@ -35,7 +35,7 @@ import { DEFAULT_VAULT_CONVENTIONS, type VaultConventions } from "../vault-conve
 import type { Finding } from "../finding.js";
 import type { RulePack, SourceFile, VaultSnapshot } from "../rule-pack.js";
 import { requireSources, requireBlueprints } from "../rule-pack.js";
-import { firstSegment, hasDotOrTrashSegment } from "./legacy-scope.js";
+import { firstSegment, hasDotOrTrashSegment, isUnderRoot } from "./legacy-scope.js";
 
 export const STRUCTURE_PACK_ID = "conformance_check";
 
@@ -193,8 +193,7 @@ export function structurePack(opts: StructurePackOpts = {}): RulePack {
       // itself the anomaly), not an oversight.
       for (const bp of blueprints) {
         if (hasDotOrTrashSegment(bp.path)) continue;
-        const bpRoot = firstSegment(bp.path);
-        if (bpRoot.startsWith("_") || conv.ungovernedRoots.includes(bpRoot)) continue;
+        if (firstSegment(bp.path).startsWith("_") || isUnderRoot(bp.path, conv.ungovernedRoots)) continue;
         const scanned = stripLeadingFrontmatter(bp.text).replace(COMMENT, "").replace(REST, "");
         const seenTargets = new Set<string>();
         for (const inc of scanned.matchAll(INCLUDE)) {
@@ -218,8 +217,7 @@ export function structurePack(opts: StructurePackOpts = {}): RulePack {
         // conformance_check.targets(): no dot/.trash segments, no `_` root, no
         // ungoverned Assent / Vault archaeology roots.
         if (hasDotOrTrashSegment(src.path)) continue;
-        const root = firstSegment(src.path);
-        if (root.startsWith("_") || conv.ungovernedRoots.includes(root)) continue;
+        if (firstSegment(src.path).startsWith("_") || isUnderRoot(src.path, conv.ungovernedRoots)) continue;
 
         const { bp, heads } = noteInfo(src.text);
         if (bp === null) continue;

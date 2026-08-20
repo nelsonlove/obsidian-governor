@@ -21,9 +21,14 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, link } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { runCli, rebaselineTargetRefusal } from "../src/conformance/cli.ts";
+import { runCli, rebaselineTargetRefusal, DEFAULT_BASELINE_REL } from "../src/conformance/cli.ts";
 
-const REL = "Assent/Build/conformance/Conformance baseline.md";
+// Track the constant rather than restating it: what makes these fixtures the
+// LIVE record is that their path is the default baseline location, so a
+// hardcoded copy silently stops testing the guard the moment the default
+// moves (which it did — the baseline has been refiled twice in 2026-08).
+const REL = DEFAULT_BASELINE_REL;
+const REL_DIR = path.posix.dirname(REL);
 const BODY = "# Conformance baseline\n\n```ratchet-baseline\nste_lint|editable|N/A.md|\n```\n";
 
 let root, live, outside;
@@ -31,7 +36,7 @@ let root, live, outside;
 before(async () => {
   root = await mkdtemp(path.join(tmpdir(), "id144-"));
   outside = await mkdtemp(path.join(tmpdir(), "id144-out-"));
-  await mkdir(path.join(root, "Assent/Build/conformance"), { recursive: true });
+  await mkdir(path.join(root, REL_DIR), { recursive: true });
   await mkdir(path.join(root, "N"), { recursive: true });
   await writeFile(path.join(root, "N", "A.md"), "prose with a semicolon; here\n");
   live = path.join(root, REL);
@@ -63,7 +68,7 @@ describe("#144 — the live acceptance record cannot be rewritten via any alias"
   });
 
   test("bypass 2a: a hardlink to the live record is refused (device+inode identity)", async () => {
-    const alias = path.join(root, "Assent/Build/conformance/alias.md");
+    const alias = path.join(root, REL_DIR, "alias.md");
     await rm(alias, { force: true });
     await link(live, alias);
     const before = await readFile(live, "utf8");
@@ -77,7 +82,7 @@ describe("#144 — the live acceptance record cannot be rewritten via any alias"
   // (realpathSync resolved both sides). Kept as a regression guard so the
   // rewrite does not lose a property the old code did have.
   test("regression: a resolvable symlink to the live record stays refused", async () => {
-    const alias = path.join(root, "Assent/Build/conformance/link.md");
+    const alias = path.join(root, REL_DIR, "link.md");
     await rm(alias, { force: true });
     await symlink(live, alias);
     const before = await readFile(live, "utf8");
@@ -91,11 +96,11 @@ describe("#144 — the live acceptance record cannot be rewritten via any alias"
     // sides and the old fallback compared unequal -> the write CREATED it.
     const root2 = await mkdtemp(path.join(tmpdir(), "id144-fab-"));
     try {
-      await mkdir(path.join(root2, "Assent/Build/conformance"), { recursive: true });
+      await mkdir(path.join(root2, REL_DIR), { recursive: true });
       await mkdir(path.join(root2, "N"), { recursive: true });
       await writeFile(path.join(root2, "N", "A.md"), "prose; here\n");
       const live2 = path.join(root2, REL);
-      const dangling = path.join(root2, "Assent/Build/conformance/scratch.md");
+      const dangling = path.join(root2, REL_DIR, "scratch.md");
       await symlink(live2, dangling); // target does not exist yet
       // --no-baseline is load-bearing: without it #133's missing-baseline guard
       // refuses first and the identity check is never reached, so the test

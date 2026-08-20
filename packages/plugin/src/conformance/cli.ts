@@ -540,7 +540,8 @@ function renderReport(
  * (absolute), so the default is a starting point rather than a hardcoded
  * assumption about somebody's folder layout.
  */
-export const DEFAULT_BASELINE_REL = "Assent/Build/conformance/Conformance baseline.md";
+export const DEFAULT_BASELINE_REL =
+  "00-09 System/00 System management/00.89 obsidian-governor/Build/Conformance baseline.md";
 
 /** The baseline's vault-relative path for this invocation. */
 export function baselineRelFrom(env: Record<string, string | undefined>): string {
