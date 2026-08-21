@@ -71,6 +71,13 @@ export async function openGitRepository(opts: GitRepositoryOpts): Promise<Histor
       // swallowed here would let a concurrent casRef(ref, null, …) read an
       // EXISTING ref as absent and force-write over it — the one interleaving
       // CAS exists to prevent, reintroduced by a transient read error.
+      //
+      // Known bound (verified in review): isomorphic-git's own fs wrapper can
+      // swallow an EACCES on the loose-ref file and surface it as
+      // NotFoundError, below where this classification can see it. This layer
+      // rethrows everything the library surfaces distinctly; the residual is
+      // the library's, not reachable from here without bypassing its ref
+      // reading.
       const name = (e as { code?: string; name?: string })?.code ?? (e as { name?: string })?.name ?? "";
       const msg = e instanceof Error ? e.message : String(e);
       if (name === "NotFoundError" || /Could not find/i.test(msg)) return null;
