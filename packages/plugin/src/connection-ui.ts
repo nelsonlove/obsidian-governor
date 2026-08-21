@@ -735,6 +735,45 @@ export class VaultMcpSettingTab extends PluginSettingTab {
         })
       );
 
+    // ── observation capture ─────────────────────────────────────────────────
+    //
+    // DEFAULT OFF, and the copy says plainly what turning it on does. Capturing
+    // note bodies writes vault content outside the vault; a user should be able
+    // to decide that from the toggle's own description without reading a doc.
+    new Setting(containerEl)
+      .setName("Record what agents were shown")
+      .setDesc(
+        "Off by default. When on, Governor keeps the exact text it returns from a note read, so you can later see what an agent was actually shown rather than what it says it saw. " +
+          "The text is stored outside your vault, at ~/.claude/governor/observations/, and is never synced. " +
+          "Only tools with a reviewed contract are recorded — today that is reading a note. Nothing is deleted automatically yet, so recording stops at the size limit below."
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.captureObservations === true).onChange(async (value) => {
+          this.plugin.settings.captureObservations = value;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Recording size limit (MB)")
+      .setDesc(
+        "How much recorded text to keep before Governor stops adding more. It stops and says so rather than filling the disk. Deleting old recordings is not automatic yet."
+      )
+      .addText((t) =>
+        t
+          .setPlaceholder("50")
+          .setValue(String(Math.round((this.plugin.settings.captureMaxBytes ?? 50 * 1024 * 1024) / (1024 * 1024))))
+          .onChange(async (value) => {
+            const mb = Number(value);
+            // A blank or nonsense value leaves the setting alone rather than
+            // becoming zero — a zero limit would silently disable a feature the
+            // user just switched on.
+            if (!Number.isFinite(mb) || mb <= 0) return;
+            this.plugin.settings.captureMaxBytes = Math.round(mb * 1024 * 1024);
+            await this.plugin.saveSettings();
+          })
+      );
+
     // Developer affordances. The tool-runner defaults ON because it grants no
     // capability beyond the MCP surface itself: it invokes the same guarded
     // captured tools a code-mode connection gets (read-only mode, allowlist,
