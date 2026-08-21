@@ -52,6 +52,18 @@ describe("note.write@1 — the contract", () => {
     assert.equal(NOTE_WRITE_V1.observations.supportsProposal, false);
   });
 
+  test("exactly one path-shaped input — the contract that makes pathChanged:false TRUE", () => {
+    // The producer hardcodes pathChanged: false, which is correct because
+    // this action has ONE path and no destination. Nothing pinned that
+    // contract (governor-lead's finding — third literal-true-by-untested-
+    // contract in three days): the day someone adds a `to`/`destination`
+    // input, the literal silently becomes a lie and a move classifies as
+    // content-only. This makes that day a red test instead.
+    const pathShaped = NOTE_WRITE_V1.inputs.filter((k) => /path|^to$|dest|target|from/i.test(k));
+    assert.deepEqual(pathShaped, ["path"], "one path-shaped input; a destination means a NEW action, not a wider write");
+    assert.deepEqual(NOTE_WRITE_V1.scope.argumentKeys, ["path"]);
+  });
+
   test("obsidian_write_note resolves to the native action through the real registry", () => {
     const { registry, problems } = buildMcpActionRegistry([]);
     assert.deepEqual(problems, []);

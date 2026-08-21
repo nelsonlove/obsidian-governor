@@ -37,6 +37,8 @@ export function isRealGesture(evt?: unknown): evt is Event {
 export type DispositionOutcome = "blocked-untrusted" | "cancelled" | "done";
 export type AdoptOutcome = DispositionOutcome;
 
+import { uuidv7 } from "../uuidv7.js";
+
 // THE ONE SHARED GESTURE GATE for every state-mutating human disposition (#101/#221: gating is
 // applied by authority CLASS, not per-button code). `action` runs only when `evt` is a genuine
 // trusted gesture AND — when a `confirm` gate is supplied (adopt's confirmation modal) — the human
@@ -45,15 +47,28 @@ export type AdoptOutcome = DispositionOutcome;
 export async function runGuardedDisposition(
   evt: unknown,
   confirm: (() => Promise<boolean>) | null,
-  action: () => Promise<void>,
+  action: (gestureRef: string) => Promise<void>,
 ): Promise<DispositionOutcome> {
   if (!isRealGesture(evt)) return "blocked-untrusted";
   if (confirm) {
     const confirmed = await confirm();
     if (!confirmed) return "cancelled";
   }
-  await action();
+  // The gesture reference is minted HERE — after the trust check, after the
+  // confirmation — and handed to the action. It cannot be minted at render
+  // time or fabricated by a captured callback, because the only mint is this
+  // line and this line is downstream of both gates. "It exists only if a
+  // real click happened" is a property of the control flow, not of anyone's
+  // care (governor-lead's #330 attack run: a render-time mint kept every
+  // test green while corrupting what the authority record MEANS — the fix
+  // deletes the possibility rather than pinning the placement).
+  await action(mintGestureRefInternal(Date.now()));
   return "done";
+}
+
+/** The ONE mint. Module-private on purpose: reachable only through the gate above. */
+function mintGestureRefInternal(nowMs: number): string {
+  return `gesture-${uuidv7(nowMs)}`;
 }
 
 // Adopt-baseline is the most dangerous action (it silences the ENTIRE queue), so it is gated
