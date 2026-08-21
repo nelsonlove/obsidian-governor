@@ -105,13 +105,14 @@ describe("settlement decisions — the two asymmetric rules", () => {
 // ── crash windows through the real service ───────────────────────────────────
 
 describe("admission crash windows — claim always lands before the ref moves", () => {
+  const registry = createPredicateRegistry();
+  registry.register(PRED);
+  const verify = (subject) => verifySubject(registry, subject, {}, T0);
+
   async function readyRequest() {
-    const registry = createPredicateRegistry();
-    registry.register(PRED);
     const subject = subjectFixture();
     const proposal = withVerification(openProposal({ subject, sessionId: "s" }, T0, RAND), "passed");
-    const outcome = await verifySubject(registry, subject, {}, T0);
-    return { proposal, subject, verification: outcome.records, authority: { kind: "human-gesture", gestureRef: "g" } };
+    return { proposal, subject, authority: { kind: "human-gesture", gestureRef: "g" } };
   }
 
   test("crash BETWEEN claim and ref: the claim is durable and unattached; recovery says retry", async () => {
@@ -122,6 +123,7 @@ describe("admission crash windows — claim always lands before the ref moves", 
       standingAdvance: async () => {
         throw new Error("simulated crash before the ref moved");
       },
+      verify,
       currentStanding: async () => standing,
       recordSettlement: async () => assert.fail("settlement must not be recorded when the ref never moved"),
       now: () => T0,
@@ -144,6 +146,7 @@ describe("admission crash windows — claim always lands before the ref moves", 
         assert.equal(standing, expected);
         standing = next;
       },
+      verify,
       currentStanding: async () => standing,
       recordSettlement: async () => {
         throw new Error("simulated crash after the ref moved");
@@ -165,6 +168,7 @@ describe("admission crash windows — claim always lands before the ref moves", 
     const service = createAdmissionService({
       claims,
       standingAdvance: async (_e, next) => void (standing = next),
+      verify,
       currentStanding: async () => standing,
       recordSettlement: async () => {},
       refreshProjections: async () => {

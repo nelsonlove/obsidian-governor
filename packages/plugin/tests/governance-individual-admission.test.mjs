@@ -86,6 +86,11 @@ function harness() {
 
   const claims = createClaimStore(memoryIo());
   const settlements = [];
+  // The service runs verification ITSELF (the review's forged-records exploit
+  // is why); the harness's verify capability is the real verifySubject over
+  // the real registry, with evidence the harness controls.
+  let evidence = { proposedBytes: new Uint8Array(1) };
+  const setEvidence = (e) => (evidence = e);
   // The clock ticks per call: a fixed now + fixed rand would mint IDENTICAL
   // claim ids for two admissions (UUIDv7 is deterministic under injection),
   // which is a property of the test's determinism, not of admissions.
@@ -93,13 +98,14 @@ function harness() {
   const service = createAdmissionService({
     claims,
     standingAdvance,
+    verify: (subject) => verifySubject(registry, subject, evidence, T0 + 5),
     currentStanding: async () => standing,
     recordSettlement: async (r) => void settlements.push(r),
     now: () => T0 + 10 + ++tick,
     rand: () => RAND(9),
   });
   const resolver = createStandingResolver({ claims, currentStanding: async () => standing });
-  return { registry, claims, service, resolver, settlements, casCalls, standing: () => standing };
+  return { registry, claims, service, resolver, settlements, casCalls, standing: () => standing, setEvidence };
 }
 
 // ── the end-to-end path ──────────────────────────────────────────────────────
@@ -124,7 +130,6 @@ describe("individual admission — the seven steps, end to end", () => {
     const { claim } = await h.service.admit({
       proposal: verified,
       subject,
-      verification: outcome.records,
       authority: { kind: "human-gesture", gestureRef: "gesture-123" },
     });
 
@@ -151,12 +156,12 @@ describe("individual admission — the seven steps, end to end", () => {
     const s1 = buildProposalSubjectFromOperation(subjectInput());
     const p1 = openProposal({ subject: s1, sessionId: "s" }, T0, RAND(1));
     const o1 = await verifySubject(h.registry, s1, { proposedBytes: new Uint8Array(1) }, T0);
-    const a1 = await h.service.admit({ proposal: withVerification(p1, "passed"), subject: s1, verification: o1.records, authority: { kind: "human-gesture", gestureRef: "g1" } });
+    const a1 = await h.service.admit({ proposal: withVerification(p1, "passed"), subject: s1, authority: { kind: "human-gesture", gestureRef: "g1" } });
 
     const s2 = buildProposalSubjectFromOperation(subjectInput({ proposed: d("v2\n"), base: d("proposed\n") }));
     const p2 = openProposal({ subject: s2, sessionId: "s" }, T0 + 20, RAND(2));
     const o2 = await verifySubject(h.registry, s2, { proposedBytes: new Uint8Array(1) }, T0 + 20);
-    const a2 = await h.service.admit({ proposal: withVerification(p2, "passed"), subject: s2, verification: o2.records, authority: { kind: "human-gesture", gestureRef: "g2" } });
+    const a2 = await h.service.admit({ proposal: withVerification(p2, "passed"), subject: s2, authority: { kind: "human-gesture", gestureRef: "g2" } });
 
     assert.equal(h.standing(), a2.claim.id);
     const first = await h.resolver.forSubject(a1.claim.subjectDigest.value);
@@ -169,54 +174,71 @@ describe("individual admission — the seven steps, end to end", () => {
 
 describe("admission policy — every §9 refusal, by code", () => {
   const subject = () => buildProposalSubjectFromOperation(subjectInput());
-  async function records(h, subj) {
-    return (await verifySubject(h.registry, subj, { proposedBytes: new Uint8Array(1) }, T0)).records;
-  }
 
   test("a drifted subject refuses: subject_drift", async () => {
     const h = harness();
     const subj = subject();
     const proposal = withVerification(openProposal({ subject: subj, sessionId: "s" }, T0, RAND(1)), "passed");
     const drifted = buildProposalSubjectFromOperation(subjectInput({ proposed: d("SOMETHING ELSE") }));
-    const driftedRecords = await records(h, drifted);
     await assert.rejects(
-      () => h.service.admit({ proposal, subject: drifted, verification: driftedRecords, authority: { kind: "human-gesture", gestureRef: "g" } }),
+      () => h.service.admit({ proposal, subject: drifted, authority: { kind: "human-gesture", gestureRef: "g" } }),
       (e) => e instanceof AdmissionRefusedError && e.code === "subject_drift"
     );
     assert.equal(h.standing(), null, "nothing advanced");
   });
 
-  test("failed verification refuses: verification_failed", async () => {
+  test("the service RUNS verification — a failing predicate refuses regardless of anyone's opinion", async () => {
+    // The review's exploit was fabricated passed:true records. The fix is
+    // structural: the request has NO verification field, so there is nothing
+    // to fabricate — the service runs the predicates itself, and here the
+    // evidence makes the real predicate fail.
     const h = harness();
+    h.setEvidence({ proposedBytes: null });
     const subj = subject();
     const proposal = withVerification(openProposal({ subject: subj, sessionId: "s" }, T0, RAND(1)), "passed");
-    const failing = await verifySubject(h.registry, subj, { proposedBytes: null }, T0);
-    assert.ok(!failing.passed);
     await assert.rejects(
-      () => h.service.admit({ proposal, subject: subj, verification: failing.records, authority: { kind: "human-gesture", gestureRef: "g" } }),
+      () => h.service.admit({ proposal, subject: subj, authority: { kind: "human-gesture", gestureRef: "g" } }),
       (e) => e.code === "verification_failed"
     );
+    assert.equal(h.standing(), null);
   });
 
-  test("missing required verification refuses: verification_incomplete — sampling is not coverage", async () => {
+  test("forged records have no field to arrive through — structurally", async () => {
+    // A caller passing a verification field gets it IGNORED by the type
+    // system's erasure... which is exactly the silent-ignore hazard — so pin
+    // the stronger fact: even WITH a forged field present at runtime, the
+    // service's own run decides. Failing evidence + forged passing records =
+    // refusal.
     const h = harness();
+    h.setEvidence({ proposedBytes: null });
     const subj = subject();
     const proposal = withVerification(openProposal({ subject: subj, sessionId: "s" }, T0, RAND(1)), "passed");
+    const forged = [{ predicate: { id: "diff-complete", version: "1" }, subjectDigest: proposal.subjectDigest, passed: true, detail: "trust me", evaluatedAt: T0 }];
     await assert.rejects(
-      () => h.service.admit({ proposal, subject: subj, verification: [], authority: { kind: "human-gesture", gestureRef: "g" } }),
-      (e) => e.code === "verification_incomplete"
+      () => h.service.admit({ proposal, subject: subj, verification: forged, authority: { kind: "human-gesture", gestureRef: "g" } }),
+      (e) => e.code === "verification_failed"
     );
+    assert.equal(h.standing(), null, "the forgery moved nothing");
   });
 
-  test("verification addressed to another digest refuses: verification_stale", async () => {
+  test("a subject requiring an unregistered predicate refuses at admission — the check that cannot run has not passed", async () => {
+    const h = harness();
+    const subj = buildProposalSubjectFromOperation(subjectInput({ predicates: [{ id: "ghost", version: "9" }] }));
+    const proposal = withVerification(openProposal({ subject: subj, sessionId: "s" }, T0, RAND(1)), "passed");
+    await assert.rejects(
+      () => h.service.admit({ proposal, subject: subj, authority: { kind: "human-gesture", gestureRef: "g" } }),
+      PredicateRegistryError
+    );
+    assert.equal(h.standing(), null);
+  });
+
+  test("a partial or uncertain result refuses: result_not_settled (§9)", async () => {
     const h = harness();
     const subj = subject();
-    const other = buildProposalSubjectFromOperation(subjectInput({ proposed: d("other") }));
-    const proposal = withVerification(openProposal({ subject: subj, sessionId: "s" }, T0, RAND(1)), "passed");
-    const staleRecords = await records(h, other);
+    const proposal = withVerification(openProposal({ subject: subj, sessionId: "s", producedOutcome: "uncertain" }, T0, RAND(1)), "passed");
     await assert.rejects(
-      () => h.service.admit({ proposal, subject: subj, verification: staleRecords, authority: { kind: "human-gesture", gestureRef: "g" } }),
-      (e) => e.code === "verification_stale"
+      () => h.service.admit({ proposal, subject: subj, authority: { kind: "human-gesture", gestureRef: "g" } }),
+      (e) => e.code === "result_not_settled"
     );
   });
 
@@ -224,9 +246,8 @@ describe("admission policy — every §9 refusal, by code", () => {
     const h = harness();
     const subj = subject();
     const proposal = withVerification(openProposal({ subject: subj, sessionId: "s" }, T0, RAND(1)), "passed");
-    const okRecords = await records(h, subj);
     await assert.rejects(
-      () => h.service.admit({ proposal, subject: subj, verification: okRecords, authority: { kind: "mandate", mandateId: "m-1" } }),
+      () => h.service.admit({ proposal, subject: subj, authority: { kind: "mandate", mandateId: "m-1" } }),
       (e) => e.code === "mandate_not_supported"
     );
   });
@@ -235,7 +256,7 @@ describe("admission policy — every §9 refusal, by code", () => {
     const subj = subject();
     const proposal = withVerification(openProposal({ subject: subj, sessionId: "s" }, T0, RAND(1)), "passed");
     assert.throws(
-      () => requireAdmissible({ proposal, subject: subj, verification: [], authority: { kind: "human-gesture", gestureRef: "" } }, T0),
+      () => requireAdmissible({ proposal, subject: subj, authority: { kind: "human-gesture", gestureRef: "" } }, [], T0),
       (e) => e.code === "authority_missing" || e.code === "verification_incomplete"
     );
   });
@@ -244,11 +265,10 @@ describe("admission policy — every §9 refusal, by code", () => {
     const h = harness();
     const subj = subject();
     const p = withVerification(openProposal({ subject: subj, sessionId: "s" }, T0, RAND(1)), "passed");
-    const recs = await records(h, subj);
-    await h.service.admit({ proposal: p, subject: subj, verification: recs, authority: { kind: "human-gesture", gestureRef: "g" } });
+    await h.service.admit({ proposal: p, subject: subj, authority: { kind: "human-gesture", gestureRef: "g" } });
     const admitted = { ...p, authority: "admitted" };
     await assert.rejects(
-      () => h.service.admit({ proposal: admitted, subject: subj, verification: recs, authority: { kind: "human-gesture", gestureRef: "g" } }),
+      () => h.service.admit({ proposal: admitted, subject: subj, authority: { kind: "human-gesture", gestureRef: "g" } }),
       (e) => e.code === "proposal_not_proposed"
     );
   });
@@ -267,11 +287,7 @@ describe("admission policy — every §9 refusal, by code", () => {
     );
   });
 
-  test("a subject requiring an unregistered predicate cannot even verify", async () => {
-    const h = harness();
-    const subj = buildProposalSubjectFromOperation(subjectInput({ predicates: [{ id: "ghost", version: "9" }] }));
-    await assert.rejects(() => verifySubject(h.registry, subj, {}, T0), PredicateRegistryError);
-  });
+
 });
 
 // ── concurrency and the CAS ──────────────────────────────────────────────────
@@ -281,27 +297,22 @@ describe("admission — standing moves only by CAS, serialized", () => {
     const h = harness();
     const subj = buildProposalSubjectFromOperation(subjectInput());
     const p = withVerification(openProposal({ subject: subj, sessionId: "s" }, T0, RAND(1)), "passed");
-    const recs = (await verifySubject(h.registry, subj, { proposedBytes: new Uint8Array(1) }, T0)).records;
 
     // Sabotage: standing moves after the service reads its expectation. The
     // serialized chain prevents INTERNAL interleaving, so simulate an external
-    // mover by wrapping currentStanding to lie once.
-    let lied = false;
+    // mover by a CAS that reports the conflict.
     const service = createAdmissionService({
       claims: h.claims,
-      standingAdvance: async (expected, next) => {
-        if (!lied) {
-          lied = true;
-          throw new RefCasError("refs/governor/standing", expected, "someone-else");
-        }
-        void next;
+      standingAdvance: async (expected) => {
+        throw new RefCasError("standing", expected, "someone-else");
       },
+      verify: (s2) => verifySubject(h.registry, s2, { proposedBytes: new Uint8Array(1) }, T0),
       currentStanding: async () => null,
       recordSettlement: async () => {},
       now: () => T0,
     });
     await assert.rejects(
-      () => service.admit({ proposal: p, subject: subj, verification: recs, authority: { kind: "human-gesture", gestureRef: "g" } }),
+      () => service.admit({ proposal: p, subject: subj, authority: { kind: "human-gesture", gestureRef: "g" } }),
       RefCasError
     );
     // The claim was durably stored before the CAS — unattached evidence,
@@ -312,12 +323,56 @@ describe("admission — standing moves only by CAS, serialized", () => {
 
 // ── the isolation, enforced at the source ────────────────────────────────────
 
+describe("proposal fold — a crafted opened event cannot skip the transition functions", () => {
+  test("an opened event with authority admitted baked in is DROPPED, not believed", async () => {
+    // Review finding: the fold validated transitions but stored the opened
+    // event verbatim, so a crafted line with an already-admitted proposal
+    // skipped withAdmitted entirely. The fold now refuses any opened event
+    // not in the mint shape.
+    const { foldProposalEvents } = await import("../src/kernel/governance/proposals/proposal-store.ts");
+    const subj = buildProposalSubjectFromOperation(subjectInput());
+    const legit = openProposal({ subject: subj, sessionId: "s" }, T0, RAND(1));
+    const crafted = { ...legit, authority: "admitted", verification: "unverified" };
+    const m = foldProposalEvents([JSON.stringify({ kind: "opened", at: T0, proposal: crafted })]);
+    assert.equal(m.size, 0, "the crafted line folds to nothing");
+    const ok = foldProposalEvents([JSON.stringify({ kind: "opened", at: T0, proposal: legit })]);
+    assert.equal(ok.get(legit.id)?.authority, "proposed");
+  });
+});
+
+describe("standing resolver — the head is the truth for its own subject", () => {
+  test("a head naming an older same-subject claim answers admitted with THAT claim", async () => {
+    // Unreachable through the service (CAS always advances to the new claim),
+    // but the resolver answers from what IS. The first draft could say
+    // "superseded ... by an older version of itself".
+    const { buildAdmissionClaim, createClaimStore } = await import("../src/kernel/governance/admission/settlement.ts");
+    const io = memoryIo();
+    const claims = createClaimStore(io);
+    const older = buildAdmissionClaim({ subjectDigest: d("S"), proposalId: "p1", gestureRef: "g", verification: [], expectedStanding: null, now: T0, rand: RAND(1) });
+    const newer = buildAdmissionClaim({ subjectDigest: d("S"), proposalId: "p2", gestureRef: "g", verification: [], expectedStanding: older.id, now: T0 + 5, rand: RAND(2) });
+    await claims.append(older);
+    await claims.append(newer);
+    const resolver = createStandingResolver({ claims, currentStanding: async () => older.id });
+    const answer = await resolver.forSubject(d("S").value);
+    assert.equal(answer.state, "admitted");
+    assert.equal(answer.claim.id, older.id, "the head IS the standing claim");
+  });
+});
+
 describe("standing isolation — nothing outside the sanctioned modules touches the standing ref", () => {
-  test("standingRef() is constructed only in refs.ts; no suggestive public surface exists", () => {
+  test("nothing in production can ADDRESS the standing ref — call-site scan, not string scan", () => {
+    // The first version of this scan grepped for the literal
+    // "refs/governor/standing", which appears in ZERO production files (the
+    // ref is built as `${NAMESPACE}/standing`) — so the scan passed
+    // vacuously while a new module calling casRef(standingRef(), …) on the
+    // public repository would have advanced standing undetected. Found by
+    // review. The real property: standingRef is the only way to obtain the
+    // ref name, so scanning its IMPORTERS and the raw template covers both
+    // routes to addressing it.
     const srcDir = path.join(HERE, "..", "src");
     const offenders = [];
     const allowed = [
-      path.join("kernel", "governance", "history-store", "refs.ts"), // the construction point
+      path.join("kernel", "governance", "history-store", "refs.ts"), // defines it
     ];
     const walk = (dir) => {
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -325,14 +380,27 @@ describe("standing isolation — nothing outside the sanctioned modules touches 
         if (entry.isDirectory()) walk(p);
         else if (entry.name.endsWith(".ts")) {
           const text = fs.readFileSync(p, "utf8");
-          if (/refs\/governor\/standing/.test(text) && !allowed.some((a) => p.endsWith(a))) {
-            offenders.push(p);
-          }
+          // A CALL (standingRef(...)), an IMPORT from the refs module naming
+          // it, or the raw template — the three routes to the name. The bare
+          // word alone is not enough: RESERVED_IDENTITY_INPUTS in action.ts
+          // legitimately contains "standingRef" as a refused ARGUMENT name.
+          const calls = /standingRef\s*\(/.test(text);
+          const imports = /history-store\/refs/.test(text) && /\bstandingRef\b/.test(text);
+          const template = /\$\{NAMESPACE\}\/standing/.test(text) || /refs\/governor\/standing/.test(text);
+          if ((calls || imports || template) && !allowed.some((a) => p.endsWith(a))) offenders.push(p);
         }
       }
     };
     walk(srcDir);
-    assert.deepEqual(offenders, [], "the standing ref name is constructed in exactly one module");
+    assert.deepEqual(offenders, [], "only refs.ts may know the standing ref's name; WP6b's wiring point joins this list DELIBERATELY when it builds the capability");
+  });
+
+  test("the scan is not vacuous: it sees refs.ts itself", () => {
+    // A scan that finds zero files INCLUDING its own allowlist would be
+    // scanning the wrong thing — the exact failure the first version had.
+    const refsPath = path.join(HERE, "..", "src", "kernel", "governance", "history-store", "refs.ts");
+    const text = fs.readFileSync(refsPath, "utf8");
+    assert.ok(/standingRef\s*\(/.test(text) || /\$\{NAMESPACE\}\/standing/.test(text), "the pattern matches the definition site");
   });
 
   test("the AdmissionService is not placed on any ambient surface", () => {

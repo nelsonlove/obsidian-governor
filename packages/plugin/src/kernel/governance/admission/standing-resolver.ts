@@ -54,16 +54,19 @@ export function createStandingResolver(deps: {
       } catch (e) {
         return { state: "unresolvable", detail: e instanceof Error ? e.message : String(e) };
       }
+      // THE HEAD IS THE TRUTH for its own subject: whatever claim the
+      // standing ref names is what stands, full stop — even if a newer claim
+      // for the same subject exists in the store (which the service cannot
+      // produce, but the resolver answers from what IS, not from what should
+      // be possible). The first draft compared the head against the store's
+      // newest same-subject claim and could answer "superseded ... by an
+      // older version of itself", which is not a sentence.
+      if (head && head.subjectDigest.value === subjectDigest) {
+        return { state: "admitted", claim: head };
+      }
       const mine = await deps.claims.bySubject(subjectDigest);
       if (mine.length === 0) return { state: "ungoverned", detail: "no admission claim covers this subject" };
       const newest = mine.reduce((a, b) => (b.admittedAt >= a.admittedAt ? b : a));
-      if (head && head.subjectDigest.value === subjectDigest && head.id === newest.id) {
-        return { state: "admitted", claim: newest };
-      }
-      if (head && head.id !== newest.id) {
-        return { state: "superseded", claim: newest, by: head };
-      }
-      // A claim exists but the chain has moved past it without a head match.
       return head
         ? { state: "superseded", claim: newest, by: head }
         : { state: "ungoverned", detail: "claims exist but nothing currently stands" };

@@ -50,7 +50,16 @@ export function foldProposalEvents(lines: readonly string[]): Map<string, Propos
       continue;
     }
     if (ev.kind === "opened" && ev.proposal?.id) {
-      if (!out.has(ev.proposal.id)) out.set(ev.proposal.id, ev.proposal);
+      // The opened event is validated against the MINT shape, not stored
+      // verbatim: openProposal always emits ready/unverified/proposed, so an
+      // opened event carrying anything else (authority "admitted" baked in,
+      // say) is a crafted line trying to skip the transition functions this
+      // fold exists to enforce. Dropped, like any other illegal claim.
+      const p0 = ev.proposal;
+      if (p0.authority !== "proposed" || p0.verification !== "unverified" || (p0.development !== "ready" && p0.development !== "draft")) {
+        continue;
+      }
+      if (!out.has(p0.id)) out.set(p0.id, p0);
       continue;
     }
     const cur = "proposalId" in ev ? out.get(ev.proposalId) : undefined;

@@ -26,6 +26,8 @@
 import { AdmissionRefusedError, requireAdmissible, type AdmissionRequest } from "./policy.js";
 import { buildAdmissionClaim, type AdmissionClaimV1, type ClaimStore } from "./settlement.js";
 import { RefCasError } from "../history-store/types.js";
+import type { ProposalItemSubjectV1 } from "../contracts/subject-v1.js";
+import type { VerificationOutcome } from "../verification/verify.js";
 
 /**
  * The capability: CAS over the standing ref, pre-bound to the ref name by
@@ -37,6 +39,17 @@ export type StandingAdvance = (expectedClaimId: string | null, nextClaimId: stri
 export interface AdmissionDeps {
   claims: ClaimStore;
   standingAdvance: StandingAdvance;
+  /**
+   * Run the subject's required predicates, NOW, and return the outcome. §9:
+   * the service "resolves every required predicate" — itself, at admission
+   * time. This is a capability like standingAdvance: the wiring builds it
+   * from the predicate registry and evidence sources, and the REQUEST has no
+   * field a caller-supplied verdict could arrive through. The first draft
+   * checked caller-provided records instead, and the review admitted an
+   * unverified subject with hand-forged passed:true records; this closure is
+   * that hole closed structurally.
+   */
+  verify: (subject: ProposalItemSubjectV1) => Promise<VerificationOutcome>;
   /** Current standing claim id, read fresh — the CAS expectation. */
   currentStanding: () => Promise<string | null>;
   /** Step 4: append the settlement record. Failures here are retried by recovery, not silently dropped. */
@@ -79,8 +92,17 @@ export function createAdmissionService(deps: AdmissionDeps): AdmissionService {
         const now = deps.now();
 
         // 1. Revalidate, FRESH — the facts may have aged while this call
-        //    waited behind another admission.
-        requireAdmissible(request, now);
+        //    waited behind another admission — and RUN the verification
+        //    ourselves. The caller's opinion of the verdict never existed as
+        //    an input.
+        const outcome = await deps.verify(request.subject);
+        requireAdmissible(request, outcome.records, now);
+        if (!outcome.passed) {
+          // requireAdmissible refuses per-record failures with specifics;
+          // this is the belt for an outcome failing for any other reason
+          // (zero records for a subject requiring some, an aggregate rule).
+          throw new AdmissionRefusedError("verification_failed", "verification did not pass for the exact subject");
+        }
 
         // 2. Durable claim, before any authority moves. If we crash after
         //    this line, the claim is unattached evidence: retriable, harmless.
@@ -89,7 +111,7 @@ export function createAdmissionService(deps: AdmissionDeps): AdmissionService {
           subjectDigest: request.proposal.subjectDigest,
           proposalId: request.proposal.id,
           gestureRef: request.authority.kind === "human-gesture" ? request.authority.gestureRef : "",
-          verification: request.verification,
+          verification: outcome.records,
           expectedStanding: expected,
           now,
           rand: deps.rand?.(),

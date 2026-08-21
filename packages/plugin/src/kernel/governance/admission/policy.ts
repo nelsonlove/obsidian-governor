@@ -38,18 +38,26 @@ export interface AdmissionRequest {
   proposal: ProposalV1;
   /** The subject as the CALLER believes it stands. Revalidated against the proposal's. */
   subject: ProposalItemSubjectV1;
-  verification: VerificationRecord[];
   authority: AdmissionAuthority;
 }
 
 /**
  * The refusal table. Returns nothing; throws the first violated rule.
  *
+ * `verification` is NOT part of the request: the records arrive from the
+ * SERVICE, which ran them itself. The first draft accepted caller-supplied
+ * records and compared them to the subject's predicate list — and since the
+ * caller controls both the subject and the records, it could forge matching
+ * pairs freely (proven by the review's exploit: an unverified subject
+ * admitted with hand-built passed:true records). Removing the field is the
+ * fix §9 actually asks for: "resolves every required predicate" is the
+ * service's act, and a verdict has no path into admission except through it.
+ *
  * Order matters only for message quality — every rule is independently
  * sufficient to refuse, and none may be skipped for any caller.
  */
-export function requireAdmissible(request: AdmissionRequest, now: number): void {
-  const { proposal, subject, verification, authority } = request;
+export function requireAdmissible(request: AdmissionRequest, verification: VerificationRecord[], now: number): void {
+  const { proposal, subject, authority } = request;
 
   // The exact subject, not a selector: the caller's subject must digest to
   // exactly what the proposal recorded. A drifted working tree, an edited
@@ -65,6 +73,15 @@ export function requireAdmissible(request: AdmissionRequest, now: number): void 
   if (proposal.authority !== "proposed") {
     throw new AdmissionRefusedError("proposal_not_proposed", `the proposal is ${proposal.authority}; only a proposed subject can be admitted`);
   }
+  // §9: "a result with partial, uncertain, receiving, or conflicted state"
+  // is never admitted. The proposal records its producing operation's
+  // outcome at open; anything but a clean completion refuses here.
+  if (proposal.producedOutcome !== "completed") {
+    throw new AdmissionRefusedError(
+      "result_not_settled",
+      `the producing operation's outcome is '${proposal.producedOutcome}'; only a completed result can be admitted`
+    );
+  }
   if (proposal.development === "revision-requested") {
     throw new AdmissionRefusedError("revision_open", "a revision was requested; the revised result is a new subject");
   }
@@ -79,9 +96,17 @@ export function requireAdmissible(request: AdmissionRequest, now: number): void 
   }
 
   // Verification: exact coverage of the EXACT digest, every record passed,
-  // and no required predicate missing. Caller-supplied "trust me, it passed"
-  // has no field to arrive through — records are compared to the subject's
-  // own predicate list.
+  // and no required predicate missing. The records parameter arrives from
+  // the SERVICE, which ran them — the request type has no field a
+  // caller-supplied verdict could ride in on.
+  //
+  // The proposal's verification AXIS is deliberately not checked here: it is
+  // a projection, and the truth is the freshly-run outcome — a proposal whose
+  // axis lags at "unverified" admits fine when the predicates pass NOW, and
+  // an axis claiming "passed" proves nothing. (The proposal STORE's
+  // withAdmitted still requires the axis, so the projection catches up
+  // through setVerification before markAdmitted — two records, each honest
+  // about what it is.)
   const required = new Map(subject.predicates.map((p) => [`${p.id}@${p.version}`, false]));
   for (const record of verification) {
     if (record.subjectDigest.value !== digest.value) {

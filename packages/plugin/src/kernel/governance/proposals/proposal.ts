@@ -30,6 +30,11 @@ export interface ProposalV1 {
   /** The history-store recording ref holding the snapshot, when recorded. */
   recordingRef: string | null;
   createdAt: number;
+  /**
+   * The producing operation's outcome, recorded at open. §9 refuses partial,
+   * uncertain, receiving, or conflicted results; only "completed" admits.
+   */
+  producedOutcome: string;
   development: DevelopmentState;
   verification: VerificationState;
   authority: AuthorityState;
@@ -48,6 +53,8 @@ export interface OpenProposalInput {
   subject: ProposalItemSubjectV1;
   sessionId: string;
   recordingRef?: string | null;
+  /** The producing operation's outcome. Defaults to "completed" — the only admissible value. */
+  producedOutcome?: string;
 }
 
 /**
@@ -66,6 +73,7 @@ export function openProposal(input: OpenProposalInput, now: number, rand?: Uint8
     operationId: input.subject.producingOperation.id,
     recordingRef: input.recordingRef ?? null,
     createdAt: now,
+    producedOutcome: input.producedOutcome ?? "completed",
     development: "ready",
     verification: "unverified",
     authority: "proposed",
