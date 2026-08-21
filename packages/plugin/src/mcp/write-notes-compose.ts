@@ -72,40 +72,13 @@ export function canonicalOrder(fm: Record<string, unknown>): Record<string, unkn
   return out;
 }
 
-// ── UUIDv7, created-seeded ────────────────────────────────────────────────────
+// ── UUIDv7 ────────────────────────────────────────────────────────────────────
 //
-// The 48-bit big-endian millisecond timestamp is seeded from the note's
-// `created` rather than from wall-clock now, so a uid minted for an old note
-// sorts by when the note was authored, not when it was stamped. Version (7) and
-// variant (10) bits are set per RFC 9562; the remaining 74 bits are random.
-// Randomness is injected so the mint is deterministic under test.
-
-function defaultRandomBytes(n: number): Uint8Array {
-  const out = new Uint8Array(n);
-  // Renderer + Node 18+ both expose a Web Crypto `crypto.getRandomValues`.
-  const c = (globalThis as { crypto?: { getRandomValues?: (a: Uint8Array) => Uint8Array } }).crypto;
-  if (c?.getRandomValues) c.getRandomValues(out);
-  else for (let i = 0; i < n; i++) out[i] = Math.floor(Math.random() * 256);
-  return out;
-}
-
-/** A UUIDv7 whose timestamp field is `ms`. `rand` (≥10 bytes) is injectable for deterministic tests. */
-export function uuidv7(ms: number, rand?: Uint8Array): string {
-  const r = rand ?? defaultRandomBytes(10);
-  const b = new Uint8Array(16);
-  const t = Math.max(0, Math.floor(ms));
-  b[0] = Math.floor(t / 2 ** 40) & 0xff;
-  b[1] = Math.floor(t / 2 ** 32) & 0xff;
-  b[2] = Math.floor(t / 2 ** 24) & 0xff;
-  b[3] = Math.floor(t / 2 ** 16) & 0xff;
-  b[4] = Math.floor(t / 2 ** 8) & 0xff;
-  b[5] = t & 0xff;
-  for (let i = 0; i < 10; i++) b[6 + i] = r[i] ?? 0;
-  b[6] = (b[6] & 0x0f) | 0x70; // version 7
-  b[8] = (b[8] & 0x3f) | 0x80; // variant 10
-  const hex = [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
+// Moved to kernel/uuidv7.ts when the governance contracts became a second
+// consumer; re-exported so existing importers keep working. For note uids the
+// timestamp is seeded from the note's `created`, so a uid minted for an old
+// note sorts by when the note was authored, not when it was stamped.
+export { uuidv7 } from "../kernel/uuidv7.js";
 
 // ── local timestamp formatting ────────────────────────────────────────────────
 //

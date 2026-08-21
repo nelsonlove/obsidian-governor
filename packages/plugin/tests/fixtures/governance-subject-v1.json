@@ -1,0 +1,484 @@
+{
+  "comment": "Golden cross-runtime fixture for governor.proposal-item/v1 and governor.cohort/v1 (WP3, D13). Regenerating requires a deliberate schema version bump — /v1 canonical bytes never change in place.",
+  "entries": [
+    {
+      "name": "ascii-minimal",
+      "subject": {
+        "schema": "governor.proposal-item/v1",
+        "vaultId": "vault-fixture",
+        "noteId": "note-1",
+        "path": "Notes/Plain.md",
+        "pathSemanticallyRelevant": false,
+        "base": {
+          "algorithm": "sha256",
+          "value": "43545873aa1aac9afd27e090e00911ef2dba2c83eb8b09cab82e3b0e89204664"
+        },
+        "proposed": {
+          "algorithm": "sha256",
+          "value": "b91dfbe05574dc2c05f36d722d9c85f90d47a8c3d2868e2115c682129e3f4a80"
+        },
+        "attachments": [],
+        "sideEffects": [],
+        "changeClasses": [
+          "content"
+        ],
+        "transformation": {
+          "id": "edit",
+          "version": "1"
+        },
+        "predicates": [
+          {
+            "id": "diff-complete",
+            "version": "1"
+          }
+        ],
+        "producingOperation": {
+          "id": "0190a1b2-0000-7000-8000-000000000001",
+          "action": "note.write",
+          "actionVersion": 1
+        },
+        "observations": [
+          {
+            "id": "obs-1",
+            "digest": {
+              "algorithm": "sha256",
+              "value": "9637886e7ee42f6a9e6c19a5e91b77ad85695e4f4aa6de86ff5dbce4ce98625a"
+            },
+            "capture": "replayable"
+          }
+        ],
+        "sessionId": "0190a1b2-0000-7000-8000-00000000aaaa",
+        "mandateId": null
+      },
+      "canonical": "{\"attachments\":[],\"base\":{\"algorithm\":\"sha256\",\"value\":\"43545873aa1aac9afd27e090e00911ef2dba2c83eb8b09cab82e3b0e89204664\"},\"changeClasses\":[\"content\"],\"mandateId\":null,\"noteId\":\"note-1\",\"observations\":[{\"capture\":\"replayable\",\"digest\":{\"algorithm\":\"sha256\",\"value\":\"9637886e7ee42f6a9e6c19a5e91b77ad85695e4f4aa6de86ff5dbce4ce98625a\"},\"id\":\"obs-1\"}],\"path\":\"Notes/Plain.md\",\"pathSemanticallyRelevant\":false,\"predicates\":[{\"id\":\"diff-complete\",\"version\":\"1\"}],\"producingOperation\":{\"action\":\"note.write\",\"actionVersion\":1,\"id\":\"0190a1b2-0000-7000-8000-000000000001\"},\"proposed\":{\"algorithm\":\"sha256\",\"value\":\"b91dfbe05574dc2c05f36d722d9c85f90d47a8c3d2868e2115c682129e3f4a80\"},\"schema\":\"governor.proposal-item/v1\",\"sessionId\":\"0190a1b2-0000-7000-8000-00000000aaaa\",\"sideEffects\":[],\"transformation\":{\"id\":\"edit\",\"version\":\"1\"},\"vaultId\":\"vault-fixture\"}",
+      "digest": "690904761f3c4acaac09f7257ceb3b2ddd3948f3d79caa813041757e7550defd"
+    },
+    {
+      "name": "unicode-content-and-path",
+      "subject": {
+        "schema": "governor.proposal-item/v1",
+        "vaultId": "vault-fixture",
+        "noteId": "note-unicode",
+        "path": "Notes/Café — résumé 📝.md",
+        "pathSemanticallyRelevant": true,
+        "base": {
+          "algorithm": "sha256",
+          "value": "270be788fe5768d862a556fa266c001395d332ded2f72d0aad339453d4bb56aa"
+        },
+        "proposed": {
+          "algorithm": "sha256",
+          "value": "6bda4771651f9349801aa76af575cfc819ef0511bd3e99f4220252146d59d3aa"
+        },
+        "attachments": [],
+        "sideEffects": [],
+        "changeClasses": [
+          "content"
+        ],
+        "transformation": {
+          "id": "edit",
+          "version": "1"
+        },
+        "predicates": [
+          {
+            "id": "diff-complete",
+            "version": "1"
+          }
+        ],
+        "producingOperation": {
+          "id": "0190a1b2-0000-7000-8000-000000000001",
+          "action": "note.write",
+          "actionVersion": 1
+        },
+        "observations": [
+          {
+            "id": "obs-1",
+            "digest": {
+              "algorithm": "sha256",
+              "value": "9637886e7ee42f6a9e6c19a5e91b77ad85695e4f4aa6de86ff5dbce4ce98625a"
+            },
+            "capture": "replayable"
+          }
+        ],
+        "sessionId": "0190a1b2-0000-7000-8000-00000000aaaa",
+        "mandateId": null
+      },
+      "canonical": "{\"attachments\":[],\"base\":{\"algorithm\":\"sha256\",\"value\":\"270be788fe5768d862a556fa266c001395d332ded2f72d0aad339453d4bb56aa\"},\"changeClasses\":[\"content\"],\"mandateId\":null,\"noteId\":\"note-unicode\",\"observations\":[{\"capture\":\"replayable\",\"digest\":{\"algorithm\":\"sha256\",\"value\":\"9637886e7ee42f6a9e6c19a5e91b77ad85695e4f4aa6de86ff5dbce4ce98625a\"},\"id\":\"obs-1\"}],\"path\":\"Notes/Café — résumé 📝.md\",\"pathSemanticallyRelevant\":true,\"predicates\":[{\"id\":\"diff-complete\",\"version\":\"1\"}],\"producingOperation\":{\"action\":\"note.write\",\"actionVersion\":1,\"id\":\"0190a1b2-0000-7000-8000-000000000001\"},\"proposed\":{\"algorithm\":\"sha256\",\"value\":\"6bda4771651f9349801aa76af575cfc819ef0511bd3e99f4220252146d59d3aa\"},\"schema\":\"governor.proposal-item/v1\",\"sessionId\":\"0190a1b2-0000-7000-8000-00000000aaaa\",\"sideEffects\":[],\"transformation\":{\"id\":\"edit\",\"version\":\"1\"},\"vaultId\":\"vault-fixture\"}",
+      "digest": "853dbe27b88fbf9c2920024aac25d5c49b1c1a3013e5e2291894e92580608fdb"
+    },
+    {
+      "name": "null-path-creation",
+      "subject": {
+        "schema": "governor.proposal-item/v1",
+        "vaultId": "vault-fixture",
+        "noteId": "note-created",
+        "path": null,
+        "pathSemanticallyRelevant": false,
+        "base": null,
+        "proposed": {
+          "algorithm": "sha256",
+          "value": "b91dfbe05574dc2c05f36d722d9c85f90d47a8c3d2868e2115c682129e3f4a80"
+        },
+        "attachments": [],
+        "sideEffects": [],
+        "changeClasses": [
+          "content"
+        ],
+        "transformation": {
+          "id": "edit",
+          "version": "1"
+        },
+        "predicates": [
+          {
+            "id": "diff-complete",
+            "version": "1"
+          }
+        ],
+        "producingOperation": {
+          "id": "0190a1b2-0000-7000-8000-000000000001",
+          "action": "note.write",
+          "actionVersion": 1
+        },
+        "observations": [
+          {
+            "id": "obs-1",
+            "digest": {
+              "algorithm": "sha256",
+              "value": "9637886e7ee42f6a9e6c19a5e91b77ad85695e4f4aa6de86ff5dbce4ce98625a"
+            },
+            "capture": "replayable"
+          }
+        ],
+        "sessionId": "0190a1b2-0000-7000-8000-00000000aaaa",
+        "mandateId": null
+      },
+      "canonical": "{\"attachments\":[],\"base\":null,\"changeClasses\":[\"content\"],\"mandateId\":null,\"noteId\":\"note-created\",\"observations\":[{\"capture\":\"replayable\",\"digest\":{\"algorithm\":\"sha256\",\"value\":\"9637886e7ee42f6a9e6c19a5e91b77ad85695e4f4aa6de86ff5dbce4ce98625a\"},\"id\":\"obs-1\"}],\"path\":null,\"pathSemanticallyRelevant\":false,\"predicates\":[{\"id\":\"diff-complete\",\"version\":\"1\"}],\"producingOperation\":{\"action\":\"note.write\",\"actionVersion\":1,\"id\":\"0190a1b2-0000-7000-8000-000000000001\"},\"proposed\":{\"algorithm\":\"sha256\",\"value\":\"b91dfbe05574dc2c05f36d722d9c85f90d47a8c3d2868e2115c682129e3f4a80\"},\"schema\":\"governor.proposal-item/v1\",\"sessionId\":\"0190a1b2-0000-7000-8000-00000000aaaa\",\"sideEffects\":[],\"transformation\":{\"id\":\"edit\",\"version\":\"1\"},\"vaultId\":\"vault-fixture\"}",
+      "digest": "60a7bf8928ef678c92f2479697b237c28d30101ebfce52c7c6db8f3f875e2c66"
+    },
+    {
+      "name": "attachments-and-side-effects",
+      "subject": {
+        "schema": "governor.proposal-item/v1",
+        "vaultId": "vault-fixture",
+        "noteId": "note-attach",
+        "path": "Notes/Plain.md",
+        "pathSemanticallyRelevant": false,
+        "base": {
+          "algorithm": "sha256",
+          "value": "43545873aa1aac9afd27e090e00911ef2dba2c83eb8b09cab82e3b0e89204664"
+        },
+        "proposed": {
+          "algorithm": "sha256",
+          "value": "b91dfbe05574dc2c05f36d722d9c85f90d47a8c3d2868e2115c682129e3f4a80"
+        },
+        "attachments": [
+          {
+            "id": "img-1",
+            "digest": {
+              "algorithm": "sha256",
+              "value": "77684a3b8872e702cb93bf58de846ff0ad916c2f2cffe69ea341832cabe01411"
+            }
+          },
+          {
+            "id": "img-2",
+            "digest": {
+              "algorithm": "sha256",
+              "value": "a14ac3cafbfbaf466393047f2078acf90ac96758bc78b96f95592490aa287e66"
+            }
+          }
+        ],
+        "sideEffects": [
+          {
+            "kind": "create",
+            "target": "Notes/New.md",
+            "digest": null
+          },
+          {
+            "kind": "link-heal",
+            "target": "Notes/Other.md",
+            "digest": {
+              "algorithm": "sha256",
+              "value": "71f18ea0d704fcbf51d0d0c1abbcf05d93410165b485ba945cbf75bf635b96eb"
+            }
+          }
+        ],
+        "changeClasses": [
+          "content"
+        ],
+        "transformation": {
+          "id": "edit",
+          "version": "1"
+        },
+        "predicates": [
+          {
+            "id": "diff-complete",
+            "version": "1"
+          }
+        ],
+        "producingOperation": {
+          "id": "0190a1b2-0000-7000-8000-000000000001",
+          "action": "note.write",
+          "actionVersion": 1
+        },
+        "observations": [
+          {
+            "id": "obs-1",
+            "digest": {
+              "algorithm": "sha256",
+              "value": "9637886e7ee42f6a9e6c19a5e91b77ad85695e4f4aa6de86ff5dbce4ce98625a"
+            },
+            "capture": "replayable"
+          }
+        ],
+        "sessionId": "0190a1b2-0000-7000-8000-00000000aaaa",
+        "mandateId": null
+      },
+      "canonical": "{\"attachments\":[{\"digest\":{\"algorithm\":\"sha256\",\"value\":\"77684a3b8872e702cb93bf58de846ff0ad916c2f2cffe69ea341832cabe01411\"},\"id\":\"img-1\"},{\"digest\":{\"algorithm\":\"sha256\",\"value\":\"a14ac3cafbfbaf466393047f2078acf90ac96758bc78b96f95592490aa287e66\"},\"id\":\"img-2\"}],\"base\":{\"algorithm\":\"sha256\",\"value\":\"43545873aa1aac9afd27e090e00911ef2dba2c83eb8b09cab82e3b0e89204664\"},\"changeClasses\":[\"content\"],\"mandateId\":null,\"noteId\":\"note-attach\",\"observations\":[{\"capture\":\"replayable\",\"digest\":{\"algorithm\":\"sha256\",\"value\":\"9637886e7ee42f6a9e6c19a5e91b77ad85695e4f4aa6de86ff5dbce4ce98625a\"},\"id\":\"obs-1\"}],\"path\":\"Notes/Plain.md\",\"pathSemanticallyRelevant\":false,\"predicates\":[{\"id\":\"diff-complete\",\"version\":\"1\"}],\"producingOperation\":{\"action\":\"note.write\",\"actionVersion\":1,\"id\":\"0190a1b2-0000-7000-8000-000000000001\"},\"proposed\":{\"algorithm\":\"sha256\",\"value\":\"b91dfbe05574dc2c05f36d722d9c85f90d47a8c3d2868e2115c682129e3f4a80\"},\"schema\":\"governor.proposal-item/v1\",\"sessionId\":\"0190a1b2-0000-7000-8000-00000000aaaa\",\"sideEffects\":[{\"digest\":null,\"kind\":\"create\",\"target\":\"Notes/New.md\"},{\"digest\":{\"algorithm\":\"sha256\",\"value\":\"71f18ea0d704fcbf51d0d0c1abbcf05d93410165b485ba945cbf75bf635b96eb\"},\"kind\":\"link-heal\",\"target\":\"Notes/Other.md\"}],\"transformation\":{\"id\":\"edit\",\"version\":\"1\"},\"vaultId\":\"vault-fixture\"}",
+      "digest": "b0052ccb84c6b1a2c7479589cd61bfa8564f3164559c2ec796d4c4865ce3beec"
+    },
+    {
+      "name": "structural-move",
+      "subject": {
+        "schema": "governor.proposal-item/v1",
+        "vaultId": "vault-fixture",
+        "noteId": "note-moved",
+        "path": "10-19 Life admin/13 Home/13.02 Tasks/Move me.md",
+        "pathSemanticallyRelevant": true,
+        "base": {
+          "algorithm": "sha256",
+          "value": "43545873aa1aac9afd27e090e00911ef2dba2c83eb8b09cab82e3b0e89204664"
+        },
+        "proposed": {
+          "algorithm": "sha256",
+          "value": "b91dfbe05574dc2c05f36d722d9c85f90d47a8c3d2868e2115c682129e3f4a80"
+        },
+        "attachments": [],
+        "sideEffects": [],
+        "changeClasses": [
+          "structural",
+          "content"
+        ],
+        "transformation": {
+          "id": "edit",
+          "version": "1"
+        },
+        "predicates": [
+          {
+            "id": "diff-complete",
+            "version": "1"
+          }
+        ],
+        "producingOperation": {
+          "id": "0190a1b2-0000-7000-8000-000000000001",
+          "action": "note.write",
+          "actionVersion": 1
+        },
+        "observations": [
+          {
+            "id": "obs-1",
+            "digest": {
+              "algorithm": "sha256",
+              "value": "9637886e7ee42f6a9e6c19a5e91b77ad85695e4f4aa6de86ff5dbce4ce98625a"
+            },
+            "capture": "replayable"
+          }
+        ],
+        "sessionId": "0190a1b2-0000-7000-8000-00000000aaaa",
+        "mandateId": "0190a1b2-0000-7000-8000-00000000bbbb"
+      },
+      "canonical": "{\"attachments\":[],\"base\":{\"algorithm\":\"sha256\",\"value\":\"43545873aa1aac9afd27e090e00911ef2dba2c83eb8b09cab82e3b0e89204664\"},\"changeClasses\":[\"structural\",\"content\"],\"mandateId\":\"0190a1b2-0000-7000-8000-00000000bbbb\",\"noteId\":\"note-moved\",\"observations\":[{\"capture\":\"replayable\",\"digest\":{\"algorithm\":\"sha256\",\"value\":\"9637886e7ee42f6a9e6c19a5e91b77ad85695e4f4aa6de86ff5dbce4ce98625a\"},\"id\":\"obs-1\"}],\"path\":\"10-19 Life admin/13 Home/13.02 Tasks/Move me.md\",\"pathSemanticallyRelevant\":true,\"predicates\":[{\"id\":\"diff-complete\",\"version\":\"1\"}],\"producingOperation\":{\"action\":\"note.write\",\"actionVersion\":1,\"id\":\"0190a1b2-0000-7000-8000-000000000001\"},\"proposed\":{\"algorithm\":\"sha256\",\"value\":\"b91dfbe05574dc2c05f36d722d9c85f90d47a8c3d2868e2115c682129e3f4a80\"},\"schema\":\"governor.proposal-item/v1\",\"sessionId\":\"0190a1b2-0000-7000-8000-00000000aaaa\",\"sideEffects\":[],\"transformation\":{\"id\":\"edit\",\"version\":\"1\"},\"vaultId\":\"vault-fixture\"}",
+      "digest": "27b426863d2af3795bec3c7e17d08ae19c39c82864396cede36e3533f569c4c7"
+    },
+    {
+      "name": "reordered-input-converges",
+      "subject": {
+        "schema": "governor.proposal-item/v1",
+        "vaultId": "vault-fixture",
+        "noteId": "note-1",
+        "path": "Notes/Plain.md",
+        "pathSemanticallyRelevant": false,
+        "base": {
+          "algorithm": "sha256",
+          "value": "43545873aa1aac9afd27e090e00911ef2dba2c83eb8b09cab82e3b0e89204664"
+        },
+        "proposed": {
+          "algorithm": "sha256",
+          "value": "b91dfbe05574dc2c05f36d722d9c85f90d47a8c3d2868e2115c682129e3f4a80"
+        },
+        "attachments": [],
+        "sideEffects": [],
+        "changeClasses": [
+          "content"
+        ],
+        "transformation": {
+          "id": "edit",
+          "version": "1"
+        },
+        "predicates": [
+          {
+            "id": "diff-complete",
+            "version": "1"
+          }
+        ],
+        "producingOperation": {
+          "id": "0190a1b2-0000-7000-8000-000000000001",
+          "action": "note.write",
+          "actionVersion": 1
+        },
+        "observations": [
+          {
+            "id": "obs-1",
+            "digest": {
+              "algorithm": "sha256",
+              "value": "9637886e7ee42f6a9e6c19a5e91b77ad85695e4f4aa6de86ff5dbce4ce98625a"
+            },
+            "capture": "replayable"
+          }
+        ],
+        "sessionId": "0190a1b2-0000-7000-8000-00000000aaaa",
+        "mandateId": null
+      },
+      "canonical": "{\"attachments\":[],\"base\":{\"algorithm\":\"sha256\",\"value\":\"43545873aa1aac9afd27e090e00911ef2dba2c83eb8b09cab82e3b0e89204664\"},\"changeClasses\":[\"content\"],\"mandateId\":null,\"noteId\":\"note-1\",\"observations\":[{\"capture\":\"replayable\",\"digest\":{\"algorithm\":\"sha256\",\"value\":\"9637886e7ee42f6a9e6c19a5e91b77ad85695e4f4aa6de86ff5dbce4ce98625a\"},\"id\":\"obs-1\"}],\"path\":\"Notes/Plain.md\",\"pathSemanticallyRelevant\":false,\"predicates\":[{\"id\":\"diff-complete\",\"version\":\"1\"}],\"producingOperation\":{\"action\":\"note.write\",\"actionVersion\":1,\"id\":\"0190a1b2-0000-7000-8000-000000000001\"},\"proposed\":{\"algorithm\":\"sha256\",\"value\":\"b91dfbe05574dc2c05f36d722d9c85f90d47a8c3d2868e2115c682129e3f4a80\"},\"schema\":\"governor.proposal-item/v1\",\"sessionId\":\"0190a1b2-0000-7000-8000-00000000aaaa\",\"sideEffects\":[],\"transformation\":{\"id\":\"edit\",\"version\":\"1\"},\"vaultId\":\"vault-fixture\"}",
+      "digest": "690904761f3c4acaac09f7257ceb3b2ddd3948f3d79caa813041757e7550defd"
+    },
+    {
+      "name": "cohort-two-items",
+      "subject": {
+        "schema": "governor.cohort/v1",
+        "items": [
+          {
+            "schema": "governor.proposal-item/v1",
+            "vaultId": "vault-fixture",
+            "noteId": "note-a",
+            "path": null,
+            "pathSemanticallyRelevant": false,
+            "base": null,
+            "proposed": {
+              "algorithm": "sha256",
+              "value": "b91dfbe05574dc2c05f36d722d9c85f90d47a8c3d2868e2115c682129e3f4a80"
+            },
+            "attachments": [],
+            "sideEffects": [],
+            "changeClasses": [
+              "content"
+            ],
+            "transformation": {
+              "id": "edit",
+              "version": "1"
+            },
+            "predicates": [
+              {
+                "id": "diff-complete",
+                "version": "1"
+              }
+            ],
+            "producingOperation": {
+              "id": "0190a1b2-0000-7000-8000-000000000001",
+              "action": "note.write",
+              "actionVersion": 1
+            },
+            "observations": [
+              {
+                "id": "obs-1",
+                "digest": {
+                  "algorithm": "sha256",
+                  "value": "9637886e7ee42f6a9e6c19a5e91b77ad85695e4f4aa6de86ff5dbce4ce98625a"
+                },
+                "capture": "replayable"
+              }
+            ],
+            "sessionId": "0190a1b2-0000-7000-8000-00000000aaaa",
+            "mandateId": null
+          },
+          {
+            "schema": "governor.proposal-item/v1",
+            "vaultId": "vault-fixture",
+            "noteId": "note-b",
+            "path": "Notes/Plain.md",
+            "pathSemanticallyRelevant": false,
+            "base": {
+              "algorithm": "sha256",
+              "value": "43545873aa1aac9afd27e090e00911ef2dba2c83eb8b09cab82e3b0e89204664"
+            },
+            "proposed": {
+              "algorithm": "sha256",
+              "value": "b91dfbe05574dc2c05f36d722d9c85f90d47a8c3d2868e2115c682129e3f4a80"
+            },
+            "attachments": [],
+            "sideEffects": [],
+            "changeClasses": [
+              "content"
+            ],
+            "transformation": {
+              "id": "edit",
+              "version": "1"
+            },
+            "predicates": [
+              {
+                "id": "diff-complete",
+                "version": "1"
+              }
+            ],
+            "producingOperation": {
+              "id": "0190a1b2-0000-7000-8000-000000000001",
+              "action": "note.write",
+              "actionVersion": 1
+            },
+            "observations": [
+              {
+                "id": "obs-1",
+                "digest": {
+                  "algorithm": "sha256",
+                  "value": "9637886e7ee42f6a9e6c19a5e91b77ad85695e4f4aa6de86ff5dbce4ce98625a"
+                },
+                "capture": "replayable"
+              }
+            ],
+            "sessionId": "0190a1b2-0000-7000-8000-00000000aaaa",
+            "mandateId": null
+          }
+        ],
+        "resolvedScope": {
+          "include": [
+            "Notes/"
+          ],
+          "exclude": [
+            "Notes/private/"
+          ]
+        },
+        "excludedProposalIds": [
+          "0190a1b2-0000-7000-8000-00000000cccc"
+        ],
+        "recoveryUnit": "item"
+      },
+      "canonical": "{\"excludedProposalIds\":[\"0190a1b2-0000-7000-8000-00000000cccc\"],\"items\":[{\"attachments\":[],\"base\":null,\"changeClasses\":[\"content\"],\"mandateId\":null,\"noteId\":\"note-a\",\"observations\":[{\"capture\":\"replayable\",\"digest\":{\"algorithm\":\"sha256\",\"value\":\"9637886e7ee42f6a9e6c19a5e91b77ad85695e4f4aa6de86ff5dbce4ce98625a\"},\"id\":\"obs-1\"}],\"path\":null,\"pathSemanticallyRelevant\":false,\"predicates\":[{\"id\":\"diff-complete\",\"version\":\"1\"}],\"producingOperation\":{\"action\":\"note.write\",\"actionVersion\":1,\"id\":\"0190a1b2-0000-7000-8000-000000000001\"},\"proposed\":{\"algorithm\":\"sha256\",\"value\":\"b91dfbe05574dc2c05f36d722d9c85f90d47a8c3d2868e2115c682129e3f4a80\"},\"schema\":\"governor.proposal-item/v1\",\"sessionId\":\"0190a1b2-0000-7000-8000-00000000aaaa\",\"sideEffects\":[],\"transformation\":{\"id\":\"edit\",\"version\":\"1\"},\"vaultId\":\"vault-fixture\"},{\"attachments\":[],\"base\":{\"algorithm\":\"sha256\",\"value\":\"43545873aa1aac9afd27e090e00911ef2dba2c83eb8b09cab82e3b0e89204664\"},\"changeClasses\":[\"content\"],\"mandateId\":null,\"noteId\":\"note-b\",\"observations\":[{\"capture\":\"replayable\",\"digest\":{\"algorithm\":\"sha256\",\"value\":\"9637886e7ee42f6a9e6c19a5e91b77ad85695e4f4aa6de86ff5dbce4ce98625a\"},\"id\":\"obs-1\"}],\"path\":\"Notes/Plain.md\",\"pathSemanticallyRelevant\":false,\"predicates\":[{\"id\":\"diff-complete\",\"version\":\"1\"}],\"producingOperation\":{\"action\":\"note.write\",\"actionVersion\":1,\"id\":\"0190a1b2-0000-7000-8000-000000000001\"},\"proposed\":{\"algorithm\":\"sha256\",\"value\":\"b91dfbe05574dc2c05f36d722d9c85f90d47a8c3d2868e2115c682129e3f4a80\"},\"schema\":\"governor.proposal-item/v1\",\"sessionId\":\"0190a1b2-0000-7000-8000-00000000aaaa\",\"sideEffects\":[],\"transformation\":{\"id\":\"edit\",\"version\":\"1\"},\"vaultId\":\"vault-fixture\"}],\"recoveryUnit\":\"item\",\"resolvedScope\":{\"exclude\":[\"Notes/private/\"],\"include\":[\"Notes/\"]},\"schema\":\"governor.cohort/v1\"}",
+      "digest": "324029112226b4b16363f1b4f9fa987381e4853b0e075687d4e6b86906c0691c"
+    }
+  ],
+  "contentProbes": [
+    {
+      "name": "ascii",
+      "text": "plain ascii body\n",
+      "digest": "6116bb4ed1f58530326f24ea7754388ca9cd94075ec69a439dab3c89b3c166dd"
+    },
+    {
+      "name": "unicode-composed",
+      "text": "café",
+      "digest": "850f7dc43910ff890f8879c0ed26fe697c93a067ad93a7d50f466a7028a9bf4e"
+    },
+    {
+      "name": "unicode-decomposed",
+      "text": "café",
+      "digest": "81ef060bcd98adc7824eb5c1ada83c32491b16018e11e79f00ab9d09e04b015a"
+    },
+    {
+      "name": "emoji-surrogates",
+      "text": "📝 notes",
+      "digest": "0a01ded40f144fefaa6a45b782f5b4e936041e473ca4669e6bbf874cc7229ce1"
+    },
+    {
+      "name": "sha256-abc-vector",
+      "text": "abc",
+      "digest": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    }
+  ]
+}
