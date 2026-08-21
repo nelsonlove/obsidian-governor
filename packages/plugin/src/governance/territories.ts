@@ -11,6 +11,8 @@
 // promoting it to real configuration. Until that lands, this module is the
 // single place the names live.
 
+import { posix } from "node:path";
+
 /**
  * Top-level areas the plugin must never review or touch (guarded territories /
  * hold zones — they are archival or legally sensitive, not live governed
@@ -19,7 +21,17 @@
  */
 export const EXCLUDED_PREFIXES = ["obsidian-old/", "80-89", "_keep/", "holds/"];
 
-/** Whether a vault path lies inside a guarded territory. */
+/**
+ * Whether a vault path lies inside a guarded territory.
+ *
+ * The path is normalized first (mirroring guard.ts's allowlist check) so a
+ * spelling like `./80-89 Divorce/x.md` or `Notes/../80-89 Divorce/x.md`
+ * cannot defeat the prefix match. A path that still escapes upward after
+ * normalization (`../…`) answers TRUE: this predicate guards retention, so
+ * "cannot tell where this points" fails closed, not open.
+ */
 export function isExcludedTerritory(path: string): boolean {
-  return EXCLUDED_PREFIXES.some((p) => path.startsWith(p));
+  const p = posix.normalize(path.replace(/\\/g, "/"));
+  if (p.startsWith("..")) return true;
+  return EXCLUDED_PREFIXES.some((prefix) => p.startsWith(prefix));
 }

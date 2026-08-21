@@ -126,7 +126,7 @@ export function createCapture(opts: CaptureOpts): Capture {
         return { observation: null, note: `ephemeral by policy: ${decision.reason}` };
       }
 
-      // Gate 4, and it was found by a test rather than by design. Without a
+      // Gate 3, and it was found by a test rather than by design. Without a
       // recorded source the store cannot authorize a replay — it refuses a
       // source-less payload outright — so capturing one writes note text to
       // disk that nobody can ever read back. That is the worst combination
@@ -148,6 +148,11 @@ export function createCapture(opts: CaptureOpts): Capture {
       if (opts.excludedSource) {
         const guarded = input.sources.filter(opts.excludedSource);
         if (guarded.length > 0) {
+          // This note carries the guarded PATHS (not bodies) on the in-memory
+          // operation envelope — same posture the write journal takes for
+          // paths today. If a durable operations sink is ever wired, whether
+          // guarded paths may flow into it is a decision to make THEN, on
+          // purpose, not to inherit from this string.
           return {
             observation: null,
             note: `source in a guarded territory (${guarded.join(", ")}); guarded content is never retained outside its territory`,
@@ -160,7 +165,7 @@ export function createCapture(opts: CaptureOpts): Capture {
         const serialized = JSON.stringify(payload);
         const size = serialized ? serialized.length : 0;
 
-        // Gate 3. Checked BEFORE writing, so the cap is a limit rather than a
+        // Gate 5. Checked BEFORE writing, so the cap is a limit rather than a
         // description of what already happened.
         if (storedBytes === null) {
           seeding ??= opts.store.totalBytes();
