@@ -669,7 +669,7 @@ export class GovernanceReviewView extends ItemView {
               new Notice(
                 `Admitted ${outcome.receipt.subjectDigest.slice(0, 12)}… — verified by ${outcome.receipt.verifier} ` +
                   `(${outcome.receipt.predicates.join(", ")}; coverage ${outcome.receipt.coverage}).` +
-                  (outcome.degraded ? " journal: DEGRADED — the admission stands; its settlement record is catching up." : ""),
+                  (outcome.degraded ? " journal: DEGRADED — the admission stands; its settlement record was NOT written." : ""),
                 10000
               );
             } else {

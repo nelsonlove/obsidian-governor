@@ -608,10 +608,20 @@ export default class VaultMcpPlugin extends Plugin {
           if (file instanceof TFile) await this.app.vault.modify(file, text);
           else await this.app.vault.create(path, text);
         },
-        appendSettlement: async (record) => {
-          const line = JSON.stringify(record) + "\n";
-          if (await sessionAdapter.exists(acceptanceLogFile)) await sessionAdapter.append(acceptanceLogFile, line);
-          else await sessionAdapter.write(acceptanceLogFile, line);
+        appendSettlement: (record) => {
+          // Serialized like its sibling stores, and the exists?append:write
+          // pair kept inside the chain: the acceptance log has a SECOND
+          // in-process appender (wiring.ts's appendLog), and the first-ever
+          // settlement racing the first-ever accept record could otherwise
+          // clobber a line through the write branch.
+          const task = async () => {
+            const line = JSON.stringify(record) + "\n";
+            if (await sessionAdapter.exists(acceptanceLogFile)) await sessionAdapter.append(acceptanceLogFile, line);
+            else await sessionAdapter.write(acceptanceLogFile, line);
+          };
+          const next = claimIoChain.then(task, task);
+          claimIoChain = next.catch(() => undefined);
+          return next;
         },
         refreshProjections: async () => nudgeGovernanceQueue(this),
       })

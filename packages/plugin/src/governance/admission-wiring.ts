@@ -181,10 +181,32 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
     },
 
     async admitWithGesture(proposalId, gestureRef) {
+      // Visible to the catch below: the degraded discriminator is standing
+      // MOVEMENT during this call, so the pre-call head must survive the try.
+      let preHead: string | null = null;
       try {
         const proposal = await deps.proposals.get(proposalId);
         if (!proposal) return { ok: false, code: "proposal_unknown", detail: `no proposal ${proposalId}` };
         if (proposal.subject.path === null) return { ok: false, code: "path_missing", detail: "this proposal has no path to re-observe" };
+
+        // Already standing? Refuse TRUTHFULLY rather than chaining a silent
+        // duplicate admission commit (review F2: a failed projection update
+        // left the pane offering Admit again, and the second gesture passed
+        // every policy row). The refusal also retries the projection catch-up
+        // so the pane self-heals instead of offering the button forever.
+        preHead = await currentStanding().catch(() => null);
+        if (preHead !== null) {
+          const headClaim = await claims.byId(preHead);
+          if (headClaim && headClaim.subjectDigest.value === proposal.subjectDigest.value) {
+            try {
+              await deps.proposals.setVerification(proposalId, "passed", now());
+              await deps.proposals.markAdmitted(proposalId, headClaim.id, now());
+            } catch {
+              /* projection remains behind; the refusal below still tells the truth */
+            }
+            return { ok: false, code: "already_admitted", detail: `this exact subject already stands as claim ${headClaim.id}; nothing further to admit` };
+          }
+        }
 
         // RE-OBSERVE AT CLICK TIME (review-and-safety: "a changed item aborts
         // admission rather than shrinking or expanding the decision
@@ -223,12 +245,15 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
         if (e instanceof AdmissionRefusedError) return { ok: false, code: e.code, detail: e.message };
         if (e instanceof RefCasError) return { ok: false, code: e.code, detail: "standing moved during this admission; re-open the pane and decide again" };
         // A throw AFTER the CAS is the degraded window: the claim may stand
-        // while the settlement record is missing. Distinguish by re-reading
-        // standing — if it names a claim for this subject, the admission
-        // happened and the receipt says degraded rather than lying either way.
+        // while the settlement record is missing. The discriminator is
+        // MOVEMENT (review F1): standing must have advanced DURING THIS CALL
+        // to a claim for this subject — a pre-existing claim with a matching
+        // digest means this act never happened, and that case is answered by
+        // the already_admitted refusal above, never by a degraded success
+        // that would attribute a failed act to a prior admission.
         try {
           const head = await currentStanding();
-          if (head !== null) {
+          if (head !== null && head !== preHead) {
             const claim = await claims.byId(head);
             const proposal = await deps.proposals.get(proposalId);
             if (claim && proposal && claim.subjectDigest.value === proposal.subjectDigest.value) {
@@ -259,16 +284,38 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
         if (!proposal) return { ok: false, code: "proposal_unknown", detail: `no proposal ${proposalId}` };
         if (proposal.authority !== "proposed") return { ok: false, code: "proposal_not_proposed", detail: `the proposal is ${proposal.authority}` };
         if (proposal.subject.path === null) return { ok: false, code: "path_missing", detail: "no path to revert" };
+        // A creation's recorded base is NON-EXISTENCE. Writing an empty file
+        // would misdescribe it (review F3: "the recorded base bytes" would be
+        // a lie), and deletion machinery is the structural action's territory
+        // — so this refuses with the honest code until that action exists.
+        if (proposal.subject.base === null) {
+          return { ok: false, code: "creation_revert_unsupported", detail: "this proposal created the note; its base is non-existence, and deleting is a structural act this surface does not perform" };
+        }
         const base = await baseBytesOf(proposal);
-        if (base === null && proposal.subject.base !== null) {
+        if (base === null) {
           return { ok: false, code: "base_unavailable", detail: "the recorded base cannot be read back; refusing a guessed revert" };
+        }
+        // The recording is VERIFIED against the subject before anything is
+        // written (review F7): if the ref chain ever grows past the
+        // producer's two commits, "oldest of the last 10" could be the wrong
+        // commit, and a revert writing wrong bytes while saying "the
+        // recorded base" is the exact confident-wrong-answer class.
+        if (digestBytes(base).value !== proposal.subject.base.value) {
+          return { ok: false, code: "base_mismatch", detail: "the recording's base does not digest to the subject's base; refusing rather than reverting to the wrong bytes" };
         }
         // D06: the revert WRITES NEW bytes through the ordinary machinery —
         // new history, a new subject if anything proposes it — and the
         // rejected result stays preserved in the recording ref. Nothing is
         // rewritten.
-        await deps.writeNoteBytes(proposal.subject.path, base ?? new Uint8Array(0));
-        await deps.proposals.supersede(proposalId, now());
+        await deps.writeNoteBytes(proposal.subject.path, base);
+        try {
+          await deps.proposals.supersede(proposalId, now());
+        } catch (e) {
+          // The bytes ARE back; only the projection failed. The receipt must
+          // say what ran (review F4) — a plain "not reverted" would deny a
+          // mutation that happened.
+          return { ok: false, code: "revert_partial", detail: `the base bytes were written back, but the proposal could not be superseded (${e instanceof Error ? e.message : String(e)}); a later Admit will refuse with subject_drift` };
+        }
         return { ok: true, supersededProposalId: proposalId };
       } catch (e) {
         return { ok: false, code: "revert_error", detail: e instanceof Error ? e.message : String(e) };

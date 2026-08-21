@@ -184,6 +184,72 @@ describe("admission wiring — the full path against the real repository", () =>
     assert.match(head.message, new RegExp(`^admission ${outcome.claimId}`));
   });
 
+  test("re-admitting an already-standing subject refuses TRUTHFULLY and self-heals the projection — review F1/F2", async () => {
+    // The false-degraded misattribution: admit succeeds but the projection
+    // update fails, the pane offers Admit again, and the second click used to
+    // either chain a silent duplicate admission commit (F2) or — failing
+    // pre-CAS — report ok+degraded with the OLD claim id (F1). Now: a
+    // truthful already_admitted refusal that also catches the projection up.
+    const proposal = await h.produce("Notes/Dup.md", "base\n", "proposed\n");
+    const first = await h.admission.admitWithGesture(proposal.id, mintGestureRef(T0));
+    assert.ok(first.ok);
+    const headBefore = await h.repo.resolveRef(standingRef());
+    const second = await h.admission.admitWithGesture(proposal.id, mintGestureRef(T0));
+    assert.ok(!second.ok, JSON.stringify(second));
+    assert.equal(second.code, "already_admitted");
+    assert.equal(await h.repo.resolveRef(standingRef()), headBefore, "no duplicate admission commit chained");
+  });
+
+  test("a creation revert refuses honestly — its base is non-existence, not an empty file (review F3)", async () => {
+    const proposal = await h.produce("Notes/CreatedRevert.md", null, "created content\n");
+    const outcome = await h.admission.revertToBase(proposal.id, mintGestureRef(T0));
+    assert.ok(!outcome.ok);
+    assert.equal(outcome.code, "creation_revert_unsupported");
+    assert.equal(h.vault.get("Notes/CreatedRevert.md"), "created content\n", "the note is untouched — no empty-file lie");
+  });
+
+  test("revert digest-checks the recorded base before writing anything (review F7)", async () => {
+    // If the recording chain ever grows past the producer's two commits, the
+    // "oldest of 10" heuristic could name the wrong commit — and a revert
+    // writing wrong bytes while saying "the recorded base" is the confident-
+    // wrong-answer class. Exercised for real: the recording's base commit
+    // holds DIFFERENT bytes than the subject claims, and the revert refuses
+    // with base_mismatch, writing nothing.
+    const notePath = "Notes/Tampered.md";
+    h.vault.set(notePath, "proposed\n");
+    const subject = buildProposalSubjectFromOperation({
+      vaultId: "vault-1",
+      noteId: `path:${notePath}`,
+      path: notePath,
+      pathSemanticallyRelevant: false,
+      base: digestBytes(enc("what the subject CLAIMS\n")),
+      proposed: digestBytes(enc("proposed\n")),
+      changeClasses: ["content"],
+      transformation: { id: "note.write", version: "1" },
+      predicates: [{ id: "content-diff", version: "1" }],
+      producingOperation: { id: "op-tampered", action: "note.write", actionVersion: 1 },
+      observations: [],
+      sessionId: "sess-1",
+      mandateId: null,
+    });
+    const proposal = openProposal({ subject, sessionId: "sess-1" }, T0 + 99, new Uint8Array(10).fill(99));
+    const ref = proposalRef(proposal.id);
+    const base = await h.repo.recordSnapshot({
+      ref,
+      files: [{ path: notePath, bytes: enc("what the recording HOLDS\n") }],
+      message: "base",
+      timestamp: 1,
+      expectedRef: null,
+    });
+    await h.repo.recordSnapshot({ ref, files: [{ path: notePath, bytes: enc("proposed\n") }], message: "proposed", timestamp: 2, expectedRef: base.oid });
+    await h.proposals.open({ ...proposal, recordingRef: ref }, T0);
+
+    const outcome = await h.admission.revertToBase(proposal.id, mintGestureRef(T0));
+    assert.ok(!outcome.ok);
+    assert.equal(outcome.code, "base_mismatch");
+    assert.equal(h.vault.get(notePath), "proposed\n", "nothing was written");
+  });
+
   test("revert writes the recorded base back as a NEW change and supersedes the proposal", async () => {
     const proposal = await h.produce("Notes/Revert.md", "the base\n", "the proposal\n");
     const outcome = await h.admission.revertToBase(proposal.id, mintGestureRef(T0));
