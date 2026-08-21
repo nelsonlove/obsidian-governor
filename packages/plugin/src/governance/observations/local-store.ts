@@ -63,6 +63,18 @@ export function observationDir(vaultSlug: string): string {
  */
 const DIGEST = /^sha256:([0-9a-f]{64})$/;
 
+/** Byte length of one stored payload, or 0 if it vanished mid-walk. */
+async function readMaybeSize(
+  io: Pick<typeof fs.promises, "readFile">,
+  abs: string
+): Promise<number> {
+  try {
+    return (await io.readFile(abs, "utf8")).length;
+  } catch {
+    return 0;
+  }
+}
+
 function fileFor(dir: string, key: string): string {
   const m = DIGEST.exec(key);
   if (!m) throw new Error(`refusing to address the observation store with '${key}': not a sha256 digest`);
@@ -173,6 +185,24 @@ export function createLocalBlobStore(opts: LocalBlobStoreOpts): BlobStore {
         await io.unlink(fileFor(dir, key));
       } catch (e) {
         if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") throw e;
+      }
+    },
+
+    async totalBytes() {
+      // A directory walk, called once per connection when capture is first
+      // used — not per read. Cheap enough at that cadence, and it is the only
+      // way to make the cap describe the store rather than the session.
+      try {
+        const names = await io.readdir(dir);
+        let total = 0;
+        for (const n of names) {
+          if (!/^[0-9a-f]{64}\.json$/.test(n)) continue;
+          total += await readMaybeSize(io, path.join(dir, n));
+        }
+        return total;
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException)?.code === "ENOENT") return 0;
+        throw e;
       }
     },
 

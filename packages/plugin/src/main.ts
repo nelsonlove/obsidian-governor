@@ -106,6 +106,18 @@ interface VaultMcpSettings {
    */
   enforceRecordImmutability: boolean;
   /**
+   * Capture the exact bytes Governor returns from a native read, so a reviewer can replay what an agent was actually shown.
+   *
+   * DEFAULT OFF, and it stays off until a human turns it on. Capturing note bodies writes vault content to `~/.claude/governor/observations/<vault>/` — outside the vault, outside Sync — and that is a privacy decision a plugin must not make on somebody's behalf by shipping it enabled.
+   *
+   * Only NATIVE actions are captured. The 123 derived contracts claim nothing about their observations, so turning this on does not suddenly start recording every tool in the product; today it means `obsidian_read_note` alone.
+   */
+  captureObservations: boolean;
+  /**
+   * Ceiling on total captured bytes, per vault. A stopgap, and named as one: real retention does not exist yet, so without a cap the store grows forever. Capture stops and says why rather than filling the disk.
+   */
+  captureMaxBytes: number;
+  /**
    * The in-Obsidian dev tool-runner ("Vault MCP: Run tool…" — src/tool-runner.ts).
    * Default ON: it grants nothing the MCP surface doesn't already grant — it
    * invokes the same guarded captured tools a code-mode connection gets, so
@@ -136,6 +148,8 @@ const DEFAULT_SETTINGS: VaultMcpSettings = {
   cliPolicy: { deny: [], allowOpaque: [] },
   enforceRecordImmutability: true,
   devToolRunner: true,
+  captureObservations: false,
+  captureMaxBytes: 50 * 1024 * 1024,
 };
 
 class DiagnosticsModal extends Modal {
@@ -181,6 +195,11 @@ export default class VaultMcpPlugin extends Plugin {
     // property normalization below, where a dropped malformed entry can only
     // mean more denied, never less).
     this.settings.enforceRecordImmutability = this.settings.enforceRecordImmutability !== false;
+    // Explicit opt-in: anything other than a literal `true` reads as off, so a corrupt or partial settings file can never turn capture on by accident.
+    this.settings.captureObservations = this.settings.captureObservations === true;
+    if (typeof this.settings.captureMaxBytes !== "number" || this.settings.captureMaxBytes <= 0) {
+      this.settings.captureMaxBytes = DEFAULT_SETTINGS.captureMaxBytes;
+    }
     // 0.12.0 module-id rename (`governance` → `acceptance`): adopt a legacy
     // `modules.governance` row under the new id when no `modules.acceptance`
     // row exists yet, dropping the old key so the next save persists the new
@@ -463,6 +482,8 @@ export default class VaultMcpPlugin extends Plugin {
         schemes: this.settings.schemes,
         modules: this.settings.modules,
         cliPolicy: this.settings.cliPolicy,
+        captureObservations: this.settings.captureObservations,
+        captureMaxBytes: this.settings.captureMaxBytes,
       }),
       serverIdentity,
       getExternalTools: () => this.externalRegistry.entries(),

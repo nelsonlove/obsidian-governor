@@ -114,7 +114,11 @@ describe("observation store — playback is historical, never a fresh read", () 
     // vault. What a runtime assertion CAN close is the surface: pinning the
     // exact method set means someone adding a `readCurrent` fails here rather
     // than quietly making playback recompute.
-    assert.deepEqual(Object.keys(s).sort(), ["export", "playback", "prune", "put"]);
+    // `totalBytes` reads the STORE's own disk usage for the capture size cap —
+    // it takes no path and returns a number, so it widens nothing this pin
+    // protects. It exists because the cap must bound the store across
+    // connections, and only the store knows what is already on disk.
+    assert.deepEqual(Object.keys(s).sort(), ["export", "playback", "prune", "put", "totalBytes"]);
   });
 });
 

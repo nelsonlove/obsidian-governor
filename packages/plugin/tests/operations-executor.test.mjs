@@ -112,7 +112,7 @@ const MCP = { kind: "mcp", id: "obsidian_read_note" };
 // ── the refusal that makes the inventory real at runtime ─────────────────────
 
 describe("operation executor — an unregistered action cannot execute", () => {
-  test("an unknown action id is refused before the handler runs", async () => {
+  test("an unbound SURFACE is refused before the handler runs", async () => {
     const executor = fixtureExecutor();
     let ran = false;
     await assert.rejects(
@@ -123,7 +123,7 @@ describe("operation executor — an unregistered action cannot execute", () => {
             ran = true;
           }
         ),
-      UnregisteredActionError
+      UnboundSurfaceError
     );
     assert.equal(ran, false, "the handler must not run — refusal comes before execution, not after");
   });
@@ -131,8 +131,10 @@ describe("operation executor — an unregistered action cannot execute", () => {
   test("a known action at an unknown version is refused", async () => {
     const executor = fixtureExecutor();
     await assert.rejects(
+      // The surface IS bound — to version 1. Claiming 9 is claiming a contract
+      // this door does not open onto.
       () => executor.run({ action: "note.read", actionVersion: 9, surface: MCP, inputs: {} }, async () => "x"),
-      UnregisteredActionError
+      UnboundSurfaceError
     );
   });
 
@@ -602,7 +604,7 @@ describe("operation executor — a caller cannot talk its way past the fence", (
           { action: "note.mystery", actionVersion: 1, surface: { kind: "automation", id: "nowhere" }, inputs: {} },
           async () => "x"
         ),
-      UnregisteredActionError
+      UnboundSurfaceError
     );
     assert.equal(closed[0].surface.kind, "automation");
   });
@@ -612,8 +614,38 @@ describe("operation executor — a caller cannot talk its way past the fence", (
     const executor = fixtureExecutor(fixtureRegistry(), { onClose: (op) => closed.push(op) });
     await assert.rejects(
       () => executor.run({ action: "note.mystery", actionVersion: 1, surface: { id: "nowhere" }, inputs: {} }, async () => "x"),
-      UnregisteredActionError
+      UnboundSurfaceError
     );
     assert.equal(closed[0].surface.kind, "mcp");
+  });
+});
+
+// ── the surface is the primary key ───────────────────────────────────────────
+
+describe("operation executor — a caller need not know the action", () => {
+  test("omitting the action resolves it from the surface's binding", async () => {
+    // A door knows which door it is, not which contract currently sits behind
+    // it. This is what lets a surface be migrated from a derived contract to a
+    // native one without touching the adapter that calls it — the first draft
+    // had the MCP adapter construct `compat.<tool>` itself, so the first
+    // migration silently broke every call through that surface.
+    const executor = fixtureExecutor();
+    const { operation, result } = await executor.run({ surface: { id: "obsidian_read_note" }, inputs: {} }, async () => "ok");
+    assert.equal(result, "ok");
+    assert.deepEqual(operation.action, { id: "note.read", version: 1 });
+  });
+
+  test("a binding whose action is not registered is UnregisteredActionError", async () => {
+    // The genuine drift case the error exists for: the surface is bound, but
+    // the contract it names is gone.
+    const registry = createActionRegistry();
+    registry.register(readAction());
+    registry.bind({ kind: "mcp", id: "obsidian_read_note", action: "note.read", actionVersion: 1 });
+    registry.bind({ kind: "mcp", id: "obsidian_ghost", action: "note.deleted", actionVersion: 1 });
+    const executor = fixtureExecutor(registry);
+    await assert.rejects(
+      () => executor.run({ surface: { id: "obsidian_ghost" }, inputs: {} }, async () => "x"),
+      UnregisteredActionError
+    );
   });
 });

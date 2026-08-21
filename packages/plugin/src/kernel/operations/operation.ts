@@ -111,6 +111,16 @@ export interface OperationV1 {
   standingTransition: string | null;
   outcome: OperationOutcome | null;
   recovery: string | null;
+  /**
+   * Why nothing was captured, when nothing was.
+   *
+   * Present only on a non-capture. Without it, an empty `observations` list
+   * would mean three different things at once — capture is off, the action
+   * declares nothing worth keeping, or the store refused — and a reviewer
+   * could not tell which. "Absence is not emptiness", applied to evidence
+   * about evidence.
+   */
+  captureNote?: string;
 }
 
 /**

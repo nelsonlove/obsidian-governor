@@ -119,7 +119,10 @@ describe("guarded seam — an unregistered tool is refused at runtime", () => {
     const result = await call({}, {});
     assert.equal(ran, false, "the handler must not run");
     assert.equal(result.isError, true);
-    assert.match(result.content[0].text, /Error \[unregistered_action\]/);
+    // `unbound_surface` now, not `unregistered_action`: the surface is the
+    // primary key. A tool nobody registered has no binding, and that IS the
+    // failure — the action id is downstream of it.
+    assert.match(result.content[0].text, /Error \[unbound_surface\]/);
   });
 
   test("the refusal is recorded — an invocation nobody registered is worth knowing about", async () => {
@@ -136,7 +139,10 @@ describe("guarded seam — an unregistered tool is refused at runtime", () => {
     const result = await call({ path: "A.md" }, {});
     assert.equal(result.content[0].text, "hi");
     assert.equal(operations.length, 1);
-    assert.equal(operations[0].action.id, "compat.obsidian_read_note");
+    // `obsidian_read_note` is the first surface migrated to an authored
+    // contract, so the operation records the native action rather than a
+    // derived one — resolved from the binding, not constructed by the adapter.
+    assert.equal(operations[0].action.id, "note.read");
     assert.equal(operations[0].outcome, "completed");
   });
 });
