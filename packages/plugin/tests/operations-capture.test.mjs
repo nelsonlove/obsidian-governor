@@ -63,7 +63,7 @@ function registry() {
   return r;
 }
 
-function harness({ enabled = true, maxBytes = 1_000_000 } = {}) {
+function harness({ enabled = true, maxBytes = 1_000_000, excludedSource } = {}) {
   const b = blobs();
   const store = createObservationStore({ blobs: b, canReplay: () => true, canRead: () => true });
   const observations = [];
@@ -71,6 +71,7 @@ function harness({ enabled = true, maxBytes = 1_000_000 } = {}) {
     store,
     enabled: () => enabled,
     maxBytes,
+    excludedSource,
     now: () => 1_700_000_000_000,
     newId: (() => { let n = 0; return () => `obs-${++n}`; })(),
     onObservation: (o) => observations.push(o),
@@ -293,6 +294,63 @@ describe("capture — the native read declares what it can back", () => {
     assert.deepEqual(NOTE_READ_V1.changeClasses, []);
     assert.deepEqual(NOTE_READ_V1.effects.direct, []);
     assert.equal(NOTE_READ_V1.authority.governorOnly, false);
+  });
+});
+
+describe("capture — a guarded territory is never retained outside itself", () => {
+  // The gap #322 named: reads under a guarded territory (80-89 is legal/PII
+  // with a standing rule that its contents do not leave it) were legal — and
+  // must stay legal — but capture would have written their bodies to a durable
+  // store OUTSIDE the territory. Retention is what the territory forbids, so
+  // capture refuses; the read itself is untouched.
+  const guarded = (path) => path.startsWith("80-89");
+
+  test("a read sourced from a guarded territory is NOT stored, and says why", async () => {
+    const { executor, blobs: b } = harness({ enabled: true, excludedSource: guarded });
+    const { result, operation } = await executor.run(
+      { ...READ, inputs: { path: "80-89 Divorce/evidence.md" } },
+      async () => ({ content: "sensitive body" })
+    );
+    assert.deepEqual(result, { content: "sensitive body" }, "the read still succeeds — reading there is legal");
+    assert.equal(b.map.size, 0, "nothing durable was written");
+    assert.deepEqual(operation.observations, []);
+    assert.match(operation.captureNote ?? "", /guarded territory/i);
+    assert.match(operation.captureNote ?? "", /80-89 Divorce\/evidence\.md/, "the refusal names the guarded source");
+  });
+
+  test("ONE guarded source refuses the WHOLE payload — a mixed read is not split", async () => {
+    // The payload is one object; keeping "just the ungoverned part" would still
+    // retain the guarded part inside it.
+    const { executor, blobs: b } = harness({ enabled: true, excludedSource: guarded });
+    const { operation } = await executor.run(
+      { ...READ, inputs: {} },
+      async (_mark, ctx) => {
+        ctx.setSources(["Notes/fine.md", "80-89 Divorce/evidence.md"]);
+        return { content: "merged bodies" };
+      }
+    );
+    assert.equal(b.map.size, 0);
+    assert.match(operation.captureNote ?? "", /guarded/i);
+  });
+
+  test("an ordinary read is unaffected by the gate's presence", async () => {
+    const { executor, blobs: b } = harness({ enabled: true, excludedSource: guarded });
+    await executor.run({ ...READ, inputs: { path: "Notes/plain.md" } }, async () => ({ content: "x" }));
+    assert.equal(b.map.size, 1);
+  });
+
+  test("the gate is actually WIRED in production, not merely available", async () => {
+    // The inert-toggle bug (#318's review, finding 1) was exactly this shape:
+    // the mechanism existed, tests exercised it against fixtures, and the one
+    // line connecting it to production was missing. So the wiring is pinned at
+    // the source: buildMcpServer must hand createCapture the shared territory
+    // predicate, and the predicate must come from governance/territories.
+    const fs = await import("node:fs");
+    const server = fs.readFileSync(new URL("../src/mcp/server.ts", import.meta.url), "utf8");
+    assert.match(server, /excludedSource:\s*isExcludedTerritory/, "createCapture must receive the territory predicate");
+    assert.match(server, /from "\.\.\/governance\/territories\.js"/, "and it must be the SHARED list, not a local copy");
+    const territories = fs.readFileSync(new URL("../src/governance/territories.ts", import.meta.url), "utf8");
+    assert.match(territories, /"80-89"/, "the guarded legal/PII area is on the shared list");
   });
 });
 

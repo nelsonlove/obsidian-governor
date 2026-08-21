@@ -44,6 +44,7 @@ import { makeRegistry, DEFAULT_SCHEMES } from "../kernel/scheme/registry.js";
 import { buildMcpActionRegistry } from "../kernel/operations/mcp-registry.js";
 import { createOperationExecutor } from "../kernel/operations/executor.js";
 import { createCapture } from "../kernel/observations/capture.js";
+import { isExcludedTerritory } from "../governance/territories.js";
 import { createObservationStore } from "../kernel/observations/store.js";
 import { createLocalBlobStore } from "../governance/observations/local-store.js";
 import { vaultSlug } from "../paths.js";
@@ -171,6 +172,11 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
     store: observationStore,
     enabled: () => ctx.getSettings().captureObservations === true,
     maxBytes: ctx.getSettings().captureMaxBytes ?? 50 * 1024 * 1024,
+    // The same territory list the governance pane enumerates by — one list,
+    // one meaning (governance/territories.ts). Reads in a guarded territory
+    // stay legal; RETAINING copies of them outside the territory is what this
+    // forbids (issue #322).
+    excludedSource: isExcludedTerritory,
   });
 
   const executor = createOperationExecutor({
