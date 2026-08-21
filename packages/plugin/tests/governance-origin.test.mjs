@@ -79,12 +79,22 @@ describe("origin classifier — evidence strength, falling downward", () => {
 // ── retention of the adopted behavior ────────────────────────────────────────
 
 describe("origin classifier — the adopted modify classifier survives verbatim", () => {
-  test("classifyChange agrees with classifyModify on every input combination", () => {
+  test("classifyChange agrees with classifyModify on every input combination — ALL THREE signals swept", () => {
+    // The first version of this test swept agent × human and left syncEvidence
+    // at its default — so its name claimed more than its loop checked, and a
+    // mutation routing sync evidence to "human" (sync forcing a silent
+    // baseline advance) survived the suite. Found by governor-lead's slice
+    // review via exactly that mutation. All eight combinations now, with the
+    // explicit independence assertion: the modify class must not vary with
+    // syncEvidence at all — better sync evidence may one day move a case into
+    // review, never into silent advancement.
     for (const agent of [true, false]) {
       for (const human of [true, false]) {
         const expected = classifyModify({ recentAgentWrite: agent, recentGenuineHumanInput: human });
-        const { modifyClass } = classifyChange(sig({ recentAgentWrite: agent, recentGenuineHumanInput: human }));
-        assert.equal(modifyClass, expected, `agent=${agent} human=${human}`);
+        for (const sync of [true, false]) {
+          const { modifyClass } = classifyChange(sig({ recentAgentWrite: agent, recentGenuineHumanInput: human, syncEvidence: sync }));
+          assert.equal(modifyClass, expected, `agent=${agent} human=${human} sync=${sync}`);
+        }
       }
     }
   });
