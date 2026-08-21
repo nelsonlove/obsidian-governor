@@ -88,6 +88,12 @@ export class ObsidianBackend implements VaultBackend {
   constructor(
     private readonly app: App,
     private readonly visible: VisibleFilter = (paths) => paths,
+    /**
+     * Fired after a successful writeNote with the exact base and proposed
+     * bytes (WP6b: proposal production). Observability only — a throw here
+     * is logged and never fails the write, the same rule capture follows.
+     */
+    private readonly onWriteNote?: (facts: { path: string; baseBytes: Uint8Array | null; proposedBytes: Uint8Array; created: boolean }) => void,
   ) {}
 
   /**
@@ -559,12 +565,32 @@ export class ObsidianBackend implements VaultBackend {
     const existing = this.app.vault.getAbstractFileByPath(relPath);
     if (existing instanceof TFile) {
       if (!overwrite) throw new Error(`exists (set overwrite=true to replace): ${relPath}`);
+      // Base bytes are read BEFORE the modify — after it they are gone, and a
+      // proposal's base digest must cover what was actually replaced.
+      const baseText = this.onWriteNote ? await this.app.vault.read(existing) : null;
       await this.app.vault.modify(existing, content);
+      this.reportWrite(relPath, baseText, content, false);
       return { path: relPath, created: false };
     }
     await ensureParentFolders(this.app, relPath);
     await this.app.vault.create(relPath, content);
+    this.reportWrite(relPath, null, content, true);
     return { path: relPath, created: true };
+  }
+
+  /** Never the caller's problem — same rule as capture. */
+  private reportWrite(path: string, baseText: string | null, content: string, created: boolean): void {
+    if (!this.onWriteNote) return;
+    try {
+      this.onWriteNote({
+        path,
+        baseBytes: baseText === null ? null : new TextEncoder().encode(baseText),
+        proposedBytes: new TextEncoder().encode(content),
+        created,
+      });
+    } catch (e) {
+      console.error("[governor] write-facts hook failed (observability only)", e);
+    }
   }
 
   async appendNote(

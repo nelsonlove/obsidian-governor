@@ -97,6 +97,19 @@ export interface ServerCtx {
     /** The journal's current head marker, for the session's base state. */
     journalHead(): string | null;
   };
+  /**
+   * Proposal production (WP6b-1): the durable store plus the vault identity
+   * facts the producer needs. Absent ⇒ no proposals are produced (tests,
+   * bare embeds, and any build until main.ts wires it).
+   */
+  proposals?: {
+    open(proposal: import("../kernel/governance/proposals/proposal.js").ProposalV1, now: number): Promise<void>;
+    /** The note's stable uid from frontmatter, when the cache has one. */
+    uidOf(path: string): string | null;
+    vaultId: string;
+    /** Record base+proposed snapshots; the recording ref, or null when the path is outside the history scope. */
+    record(proposalId: string, path: string, baseBytes: Uint8Array | null, proposedBytes: Uint8Array): Promise<string | null>;
+  };
 }
 
 const RO = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };

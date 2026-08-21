@@ -324,7 +324,7 @@ describe("inventory — builds a valid action registry", () => {
     assert.ok(native >= 1, "at least one surface has an authored contract");
     // Pinned so the number is a fact someone reads rather than a vibe. Raising
     // it means updating this line, which is the point.
-    assert.equal(native, 1, "one native surface so far: obsidian_read_note");
+    assert.equal(native, 2, "two native surfaces: obsidian_read_note (WP2) and obsidian_write_note (WP6b)");
   });
 });
 

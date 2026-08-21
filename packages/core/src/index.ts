@@ -26,6 +26,7 @@ export {
   declaredProtectedProperties,
   declaredGradeOf,
   canonicalPropertyKey,
+  isAuthorityFamilyKey,
   findPropertiesCanonical,
   frontmatterValuesEqual,
   acceptTransitionNeedsBefore,
