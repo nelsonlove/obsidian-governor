@@ -128,6 +128,16 @@ export function buildProposalItemSubject(input: ProposalItemInput): ProposalItem
   requireNonEmptyString(input.sessionId, "sessionId");
   if (input.mandateId !== null) requireNonEmptyString(input.mandateId, "mandateId");
 
+  // Array fields are checked BEFORE iteration so a structurally malformed
+  // item — one missing `attachments` entirely, say — refuses with the stable
+  // identifier instead of a raw TypeError from the spread. Same refusal
+  // either way; only the error contract differs, and WP3 promises the code.
+  requireArray(input.changeClasses, "changeClasses");
+  requireArray(input.attachments, "attachments");
+  requireArray(input.sideEffects, "sideEffects");
+  requireArray(input.predicates, "predicates");
+  requireArray(input.observations, "observations");
+
   for (const c of input.changeClasses) {
     if (!isChangeClass(c)) throw new SubjectInvalidError(`unknown change class: ${String(c)}`);
   }
@@ -296,6 +306,10 @@ function requireNonEmptyString(v: unknown, field: string): asserts v is string {
 
 function requireBoolean(v: unknown, field: string): asserts v is boolean {
   if (typeof v !== "boolean") throw new SubjectInvalidError(`${field} must be a boolean`);
+}
+
+function requireArray(v: unknown, field: string): asserts v is unknown[] {
+  if (!Array.isArray(v)) throw new SubjectInvalidError(`${field} must be an array`);
 }
 
 function rejectAdjacentDuplicates<T>(sorted: readonly T[], key: (t: T) => string, what: string): void {

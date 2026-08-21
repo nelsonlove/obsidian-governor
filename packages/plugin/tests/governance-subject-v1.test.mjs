@@ -268,6 +268,21 @@ describe("proposal-item subject — canonical form", () => {
     );
   });
 
+  test("a structurally malformed item refuses with the stable code, not a TypeError", () => {
+    // Reachable through the cohort rebuild path, which feeds arbitrary
+    // runtime items into this builder — a missing array field must still be
+    // `subject_invalid`, because callers dispatch on the code.
+    const noArrays = { ...itemInput() };
+    delete noArrays.attachments;
+    assert.throws(() => buildProposalItemSubject(noArrays), (e) => e.code === "subject_invalid");
+    const cohortSmuggle = { ...buildProposalItemSubject(itemInput()) };
+    delete cohortSmuggle.changeClasses;
+    assert.throws(
+      () => buildCohortSubject({ items: [cohortSmuggle], resolvedScope: { include: [], exclude: [] }, excludedProposalIds: [], recoveryUnit: "item" }),
+      (e) => e.code === "subject_invalid"
+    );
+  });
+
   test("invalid inputs are refused with the stable identifier", () => {
     for (const bad of [
       itemInput({ vaultId: "" }),
