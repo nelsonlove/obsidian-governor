@@ -68,7 +68,8 @@ import { planBaselineReconcile, summarizePlan } from "../kernel/governance/basel
 import { parseJournal, recentAgentWrite, agentWritesSince, type JournalRecord } from "../kernel/governance/journal-reader.js";
 import { computeQueue, type PendingItem, type NoteSnapshot } from "../kernel/governance/queue.js";
 import { deleteInvalidatesQueue } from "./queue-invalidation.js";
-import { classifyModify, shouldAdvanceBaselineSilently } from "../kernel/governance/classify.js";
+import { shouldAdvanceBaselineSilently } from "../kernel/governance/classify.js";
+import { classifyChange } from "../kernel/governance/origins/classifier.js";
 import {
   acceptNote,
   revertNote,
@@ -698,9 +699,15 @@ async function reconcile(plugin: Plugin, file: TFile): Promise<void> {
   // POSITIVE human-authorship signal: a genuine (isTrusted) input event on THIS path within the
   // window. Mere active-editor focus is NOT used — a non-journaled/programmatic write to the
   // focused file must NOT be misread as human.
-  const cls = classifyModify({
+  // WP5: ONE evaluation of the evidence yields both the modify class (which
+  // keeps driving the silent-advance decision exactly as before) and the
+  // durable D12 origin record. syncEvidence is hard false — no reconciliation
+  // producer exists until WP12, and synthesizing it from anything local would
+  // be a false attribution.
+  const { modifyClass: cls, origin } = classifyChange({
     recentAgentWrite: recentAgentWrite(journal, path, nowIso, RECENT_WRITE_WINDOW_MS),
     recentGenuineHumanInput: recentGenuineHumanInput(plugin, path, Date.now(), HUMAN_INPUT_WINDOW_MS),
+    syncEvidence: false,
   });
 
   if (shouldAdvanceBaselineSilently(cls)) {
@@ -712,6 +719,7 @@ async function reconcile(plugin: Plugin, file: TFile): Promise<void> {
       ts: nowIso,
       path,
       reason: "human-edit",
+      origin,
       fromHash: baseline ? baseline.hash : null,
       toHash,
     }));

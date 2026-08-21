@@ -10,6 +10,7 @@ import { ConnectionSetupModal, VaultMcpSettingTab } from "./connection-ui.js";
 import { findClaudeBinary, claudeIsRegistered, claudeRegister, claudeRemove, claudeEnsureConnectPlugin } from "./claude-cli.js";
 import { ExternalToolRegistry, type VaultMcpApi } from "./mcp/external-tools.js";
 import { Kernel, WriteQueue, WriteJournal, IdempotencyStore, LockStore, UidIndex, loadInstallId, migrateLegacyModuleIds, DEFAULT_VOCABULARIES, type VocabInstanceSettings, type ModuleSettings } from "./kernel/index.js";
+import { createSessionStore } from "./kernel/governance/sessions/session-store.js";
 import { obsidianProbe, obsidianServerIdentity, obsidianUidSource } from "./kernel/obsidian-probe.js";
 import { DEFAULT_SCHEMES, type SchemeInstanceConfig } from "./kernel/scheme/registry.js";
 import { DEFAULT_PROTECTED_PROPERTIES, setDeclaredProtectedProperties } from "@vault-mcp/core";
@@ -469,10 +470,19 @@ export default class VaultMcpPlugin extends Plugin {
     // operation instead of leaving it holding the queue in an occluded window.
     const writeQueue = new WriteQueue();
     const journal = new WriteJournal(this.app.vault.adapter, `${pluginDir}/journal`);
+    // A cheap monotonic head marker for session base states (WP5): the count
+    // of appends observed since this plugin instance loaded, anchored by the
+    // load instant. Approximate on purpose — evidence for reconciliation,
+    // not a lock — and honest about its scope: it orders points WITHIN one
+    // plugin lifetime and identifies the lifetime across restarts.
+    const journalBoot = new Date().toISOString();
+    let journalAppends = 0;
+    const journalHeadMarker = () => `${journalBoot}#${journalAppends}`;
     const journalAppend = journal.append.bind(journal);
     journal.append = (record) => {
       const done = journalAppend(record);
       void done.then(() => {
+        journalAppends++;
         writeQueue.nudge();
         nudgeGovernanceQueue(this);
       });
@@ -495,6 +505,38 @@ export default class VaultMcpPlugin extends Plugin {
     const { install } = await loadInstallId(this.app.vault.adapter, pluginDir);
     const serverIdentity = obsidianServerIdentity(this.app, install, this.manifest.version);
 
+    // ── the session store (WP5) ─────────────────────────────────────────────
+    //
+    // One durable append-only log beside the plugin's other evidence
+    // (`governance/sessions.jsonl`). Session records carry identifiers and
+    // digests, never note bodies, so — unlike observation payloads — they
+    // belong WITH the synced/backed-up evidence, and auditability wins.
+    const sessionsFile = `${pluginDir}/governance/sessions.jsonl`;
+    const sessionAdapter = this.app.vault.adapter;
+    // Appends are serialized through one chain: the exists?append:write pair
+    // is not atomic, and two concurrent connection opens on a fresh vault
+    // could otherwise both take the `write` branch, silently losing one
+    // `opened` event. Same mutex shape the history store's CAS uses.
+    let sessionIoChain: Promise<unknown> = Promise.resolve();
+    const sessionStore = createSessionStore({
+      appendLine: (line) => {
+        const task = async () => {
+          const dir = `${pluginDir}/governance`;
+          if (!(await sessionAdapter.exists(dir))) await sessionAdapter.mkdir(dir);
+          if (await sessionAdapter.exists(sessionsFile)) await sessionAdapter.append(sessionsFile, line + "\n");
+          else await sessionAdapter.write(sessionsFile, line + "\n");
+        };
+        const next = sessionIoChain.then(task, task);
+        sessionIoChain = next.catch(() => undefined);
+        return next;
+      },
+      readLines: async () => {
+        if (!(await sessionAdapter.exists(sessionsFile))) return [];
+        const raw = await sessionAdapter.read(sessionsFile);
+        return raw.split("\n").filter(Boolean);
+      },
+    });
+
     const ctx = {
       pluginVersion: this.manifest.version,
       socketPath: sock,
@@ -516,6 +558,15 @@ export default class VaultMcpPlugin extends Plugin {
         historyScope: this.settings.historyScope,
       }),
       serverIdentity,
+      sessions: {
+        open: (session: import("./kernel/governance/sessions/session.js").SessionV1, now: number) => sessionStore.open(session, now),
+        get: (sessionId: string) => sessionStore.get(sessionId),
+        close: (sessionId: string, now: number) => sessionStore.close(sessionId, now),
+        markExpired: (sessionId: string, now: number) => sessionStore.markExpired(sessionId, now),
+        replicaId: install,
+        vaultId: vaultName,
+        journalHead: () => journalHeadMarker(),
+      },
       getExternalTools: () => this.externalRegistry.entries(),
       getVocabularies: () => this.settings.vocabularies,
       kernel,

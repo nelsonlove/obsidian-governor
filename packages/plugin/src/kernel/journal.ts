@@ -52,6 +52,8 @@ export interface JournalActor {
   client?: string;
   /** Per-connection id, minted when this connection's server was built. */
   connection: string;
+  /** The connection's durable session id (WP5), once sessions are wired. */
+  session?: string;
   /** Server identity: `{vault, install, version}`. See kernel/install-id.ts. */
   server?: ServerIdentity;
 }
