@@ -10,6 +10,7 @@ import { ConnectionSetupModal, VaultMcpSettingTab } from "./connection-ui.js";
 import { findClaudeBinary, claudeIsRegistered, claudeRegister, claudeRemove, claudeEnsureConnectPlugin } from "./claude-cli.js";
 import { ExternalToolRegistry, type VaultMcpApi } from "./mcp/external-tools.js";
 import { Kernel, WriteQueue, WriteJournal, IdempotencyStore, LockStore, UidIndex, loadInstallId, migrateLegacyModuleIds, DEFAULT_VOCABULARIES, type VocabInstanceSettings, type ModuleSettings } from "./kernel/index.js";
+import { createSessionStore } from "./kernel/governance/sessions/session-store.js";
 import { obsidianProbe, obsidianServerIdentity, obsidianUidSource } from "./kernel/obsidian-probe.js";
 import { DEFAULT_SCHEMES, type SchemeInstanceConfig } from "./kernel/scheme/registry.js";
 import { DEFAULT_PROTECTED_PROPERTIES, setDeclaredProtectedProperties } from "@vault-mcp/core";
@@ -495,6 +496,28 @@ export default class VaultMcpPlugin extends Plugin {
     const { install } = await loadInstallId(this.app.vault.adapter, pluginDir);
     const serverIdentity = obsidianServerIdentity(this.app, install, this.manifest.version);
 
+    // ── the session store (WP5) ─────────────────────────────────────────────
+    //
+    // One durable append-only log beside the plugin's other evidence
+    // (`governance/sessions.jsonl`). Session records carry identifiers and
+    // digests, never note bodies, so — unlike observation payloads — they
+    // belong WITH the synced/backed-up evidence, and auditability wins.
+    const sessionsFile = `${pluginDir}/governance/sessions.jsonl`;
+    const sessionAdapter = this.app.vault.adapter;
+    const sessionStore = createSessionStore({
+      appendLine: async (line) => {
+        const dir = `${pluginDir}/governance`;
+        if (!(await sessionAdapter.exists(dir))) await sessionAdapter.mkdir(dir);
+        if (await sessionAdapter.exists(sessionsFile)) await sessionAdapter.append(sessionsFile, line + "\n");
+        else await sessionAdapter.write(sessionsFile, line + "\n");
+      },
+      readLines: async () => {
+        if (!(await sessionAdapter.exists(sessionsFile))) return [];
+        const raw = await sessionAdapter.read(sessionsFile);
+        return raw.split("\n").filter(Boolean);
+      },
+    });
+
     const ctx = {
       pluginVersion: this.manifest.version,
       socketPath: sock,
@@ -516,6 +539,17 @@ export default class VaultMcpPlugin extends Plugin {
         historyScope: this.settings.historyScope,
       }),
       serverIdentity,
+      sessions: {
+        open: (session: import("./kernel/governance/sessions/session.js").SessionV1, now: number) => sessionStore.open(session, now),
+        close: (sessionId: string, now: number) => sessionStore.close(sessionId, now),
+        markExpired: (sessionId: string, now: number) => sessionStore.markExpired(sessionId, now),
+        replicaId: install,
+        vaultId: vaultName,
+        // The newest journal file's name+size is a cheap, monotonic-enough head
+        // marker for a session's base state — evidence for reconciliation, not
+        // a lock, so approximate is honest here.
+        journalHead: () => null,
+      },
       getExternalTools: () => this.externalRegistry.entries(),
       getVocabularies: () => this.settings.vocabularies,
       kernel,

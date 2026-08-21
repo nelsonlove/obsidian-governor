@@ -236,6 +236,14 @@ export interface GuardedOpts {
    */
   schemes?: () => SchemeRegistry | null;
   /**
+   * Session liveness, consulted AT DEQUEUE (WP5). A mutation that waited in
+   * the queue past its session's expiry — or whose session was revoked while
+   * it waited — refuses instead of executing under an authority context that
+   * no longer exists. Absent ⇒ no session machinery (tests, bare embeds);
+   * the check is skipped, exactly like the kernel itself.
+   */
+  sessionLive?: () => { live: boolean; status: string; sessionId: string | null };
+  /**
    * The shared operation executor (WP1). Every guarded call runs inside one
    * operation, so action identity, actor binding and phase history are the
    * same whichever surface a call came in through.
@@ -534,6 +542,18 @@ async function runGuarded(opts: GuardedOpts, def: any, handler: any, name: strin
         // Inside the queued closure: this runs at DEQUEUE, after the kernel's
         // own revision, record and lock checks have passed. Anything that
         // refuses before this point never attempted an effect.
+        //
+        // Session liveness is re-checked HERE, not only at enqueue: a
+        // mutation can wait in the queue across its session's expiry or
+        // revocation, and executing it then would act under an authority
+        // context that no longer exists (WP5).
+        const live = opts.sessionLive?.();
+        if (live && !live.live) {
+          return codedError(
+            "session_not_live",
+            `this connection's session${live.sessionId ? ` (${live.sessionId})` : ""} is ${live.status}; reconnect to open a new session`
+          );
+        }
         mark("attempted");
         return handler(toolArgs, extra);
       }

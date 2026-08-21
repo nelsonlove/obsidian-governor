@@ -81,6 +81,20 @@ export interface ServerCtx {
    * absent in tests that don't exercise it.
    */
   serverIdentity?: ServerIdentity;
+  /**
+   * Session machinery (WP5): the durable store plus the facts needed to open
+   * one per connection. Absent in tests/bare embeds — everything session-
+   * shaped degrades to "no session", never to a crash.
+   */
+  sessions?: {
+    open(session: import("../kernel/governance/sessions/session.js").SessionV1, now: number): Promise<void>;
+    close(sessionId: string, now: number): Promise<void>;
+    markExpired(sessionId: string, now: number): Promise<void>;
+    replicaId: string;
+    vaultId: string;
+    /** The journal's current head marker, for the session's base state. */
+    journalHead(): string | null;
+  };
 }
 
 const RO = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };

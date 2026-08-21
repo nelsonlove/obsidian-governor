@@ -44,6 +44,9 @@ import { makeRegistry, DEFAULT_SCHEMES } from "../kernel/scheme/registry.js";
 import { buildMcpActionRegistry } from "../kernel/operations/mcp-registry.js";
 import { createOperationExecutor } from "../kernel/operations/executor.js";
 import { createCapture } from "../kernel/observations/capture.js";
+import { openSession, isLive, livenessOf, type SessionV1 } from "../kernel/governance/sessions/session.js";
+import { canonicalize } from "../kernel/governance/contracts/canonical-json.js";
+import { digestUtf8 } from "../kernel/governance/contracts/digest.js";
 import { isExcludedTerritory } from "../governance/territories.js";
 import { createObservationStore } from "../kernel/observations/store.js";
 import { createLocalBlobStore } from "../governance/observations/local-store.js";
@@ -108,6 +111,57 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   // the initialize handshake, which happens well after the server is built.
   // `server` is the transport's own assertion — which vault, which install,
   // which version — and is resolved once at load, not per call.
+  // ── the connection's session (WP5, D01) ─────────────────────────────────
+  //
+  // One durable, replica-local session per connection, minted at build time
+  // and recorded in the session store. The record is evidence; the CAPABILITY
+  // is this closure — nothing serialized here lets another process act as
+  // this session. When no session machinery is wired (tests, bare embeds)
+  // the connection simply has no session, and everything downstream treats
+  // null as "no session" rather than failing.
+  let session: SessionV1 | null = null;
+  if (ctx.sessions) {
+    const st = ctx.getSettings();
+    session = openSession(
+      {
+        vaultId: ctx.sessions.vaultId,
+        replicaId: ctx.sessions.replicaId,
+        actor: { connection: connectionId, clientClaim: opts.clientLabel ?? null },
+        journalHead: ctx.sessions.journalHead(),
+        // The effective connection scope at open: read-only + allowlist are
+        // what bound this connection's reach. Digested so the record carries
+        // a comparable fingerprint, not a second copy of settings.
+        scopeDigest: digestUtf8(canonicalize({ readOnly: st.readOnly === true, allowlist: [...(st.allowlist ?? [])].sort() })).value,
+      },
+      Date.now()
+    );
+    ctx.sessions.open(session, Date.now()).catch((e) => console.error("[governor] session open failed", e));
+
+    // The session ends when the connection does. Protocol.onclose is the
+    // SDK's own close callback, invoked when the transport closes; chaining
+    // preserves anything a later assignment composes on top. A server that
+    // never connects (the dev tool-runner) never fires this — its session is
+    // bounded by the TTL instead, which is the designed fallback.
+    const sid = session.id;
+    const prevClose = (server.server as { onclose?: () => void }).onclose;
+    (server.server as { onclose?: () => void }).onclose = () => {
+      prevClose?.();
+      ctx.sessions?.close(sid, Date.now()).catch(() => undefined);
+    };
+  }
+
+  /** Liveness for the dequeue check; marks expiry durably when first observed. */
+  const sessionLive = () => {
+    if (!session) return { live: true, status: "open", sessionId: null };
+    const now = Date.now();
+    const live = isLive(session, now);
+    const status = livenessOf(session, now);
+    if (!live && status === "expired" && ctx.sessions) {
+      ctx.sessions.markExpired(session.id, now).catch(() => undefined);
+    }
+    return { live, status, sessionId: session.id };
+  };
+
   const actor = (): JournalActor => {
     const info = (server.server as any)?.getClientVersion?.();
     // opts.clientLabel is a fallback for builds no client ever connects to
@@ -117,6 +171,7 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
       transport: "mcp",
       ...(client ? { client } : {}),
       connection: connectionId,
+      ...(session ? { session: session.id } : {}),
       ...(ctx.serverIdentity ? { server: ctx.serverIdentity } : {}),
     };
   };
@@ -185,6 +240,7 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
       const a = actor();
       return { binding: `${a.connection}`, clientClaim: a.client ?? null };
     },
+    sessionId: () => session?.id ?? null,
     capture: observationCapture,
     // The paths a call NAMES, via the same walker the guard and the journal
     // already use — so what a payload is attributed to is the same set the
@@ -200,6 +256,7 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
     kernel: ctx.kernel,
     actor,
     executor,
+    sessionLive,
     // `jd:<address>` addressing at the interception point: same per-call
     // freshness as registerSchemeTools's own registry() below (a scheme
     // config edit lands live), and the same notes() source it uses.
