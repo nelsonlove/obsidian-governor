@@ -45,7 +45,7 @@ import { buildMcpActionRegistry } from "../kernel/operations/mcp-registry.js";
 import { createOperationExecutor } from "../kernel/operations/executor.js";
 import { createCapture } from "../kernel/observations/capture.js";
 import { openSession, isLive, livenessOf, type SessionV1 } from "../kernel/governance/sessions/session.js";
-import { deriveClasses, requireClassesCovered } from "../kernel/governance/proposals/class-firewall.js";
+import { deriveClasses, requireClassesCovered, authorityKeysDiffer, frontmatterUid } from "../kernel/governance/proposals/class-firewall.js";
 import { buildProposalSubjectFromOperation } from "../kernel/governance/proposals/proposal-builder.js";
 import { openProposal } from "../kernel/governance/proposals/proposal.js";
 import { NOTE_WRITE_V1 } from "../kernel/operations/actions/note-write.js";
@@ -273,34 +273,53 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
     // operation); this decides WHETHER: the surface's action is the native
     // write, the human turned history on, the store is wired, and the backend
     // reported the write's exact bytes. Failures degrade — the write stands.
-    propose: async (operation) => {
+    propose: async (operation, _result, sources) => {
       const facts = writeFacts;
       writeFacts = null; // taken exactly once, for exactly this operation
       if (!facts) return;
       if (operation.action.id !== NOTE_WRITE_V1.id) return;
+      // Attribution guard: the facts must describe THE path this operation
+      // resolved. The slot's timing safety is a scheduling property (nothing
+      // awaits between the backend's report and this take today) — this check
+      // is the guarantee that outlives refactors: a mismatch means the facts
+      // belong to some other write, and the safe direction is to propose
+      // NOTHING rather than a record with the wrong operation id on it.
+      if (!sources.includes(facts.path)) {
+        console.warn(`[governor] write facts for '${facts.path}' do not match operation ${operation.id}'s sources; proposal skipped`);
+        return;
+      }
       const st = ctx.getSettings();
       if (st.historyEnabled !== true || !ctx.proposals) return;
 
-      // Class firewall (classification rule 5): the class is DERIVED from the
-      // diff and the declaration must cover it. On this surface the derivation
-      // can only say content — the path is fixed by the contract (a move is a
-      // different action) and an authority-key transition was already refused
-      // by the backend's accept guard before any bytes landed, so a diff that
-      // reaches here cannot carry those classes.
+      // Class firewall (classification rule 5): classes DERIVED from the
+      // diff, declaration must cover them. pathChanged is false because this
+      // surface writes at a fixed path (a move is a different action);
+      // authority-key changes ARE derivable here — the accept guard refuses
+      // introducing/changing accepted keys, but REMOVING them or downgrading
+      // acceptance-status passes it and changes standing (review finding), so
+      // the diff is inspected rather than assumed clean. An authority-shaped
+      // diff fails coverage below and the proposal is skipped — the write
+      // stands; the legacy queue still governs it.
+      const dec = new TextDecoder();
+      const baseText = facts.baseBytes === null ? null : dec.decode(facts.baseBytes);
+      const proposedText = dec.decode(facts.proposedBytes);
       const derived = deriveClasses({
         baseBytes: facts.baseBytes,
         proposedBytes: facts.proposedBytes,
         pathChanged: false,
-        touchesAuthorityKeys: false,
+        touchesAuthorityKeys: authorityKeysDiffer(baseText, proposedText),
       });
       requireClassesCovered(NOTE_WRITE_V1.changeClasses, derived);
       if (derived.length === 0) return; // a byte-identical rewrite proposes nothing
 
-      const uid = ctx.proposals.uidOf(facts.path);
-      const subject = buildProposalSubjectFromOperation({
+      // Identity: the uid from the EXACT written bytes first (the metadata
+      // cache lags a create), the cache for pre-existing uids, the honest
+      // path fallback last — never invented.
+      const uid = frontmatterUid(proposedText) ?? ctx.proposals.uidOf(facts.path);
+      const proposalSession = operation.sessionId ?? "no-session";
+      const now = Date.now();
+      const proposal = openProposal({ subject: buildProposalSubjectFromOperation({
         vaultId: ctx.proposals.vaultId,
-        // The vault's uid is the stable identity; a note without one gets the
-        // honest path-derived fallback, named as such — never invented.
         noteId: uid ?? `path:${facts.path}`,
         path: facts.path,
         pathSemanticallyRelevant: false,
@@ -311,11 +330,23 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
         predicates: [{ id: "content-diff", version: "1" }],
         producingOperation: { id: operation.id, action: operation.action.id, actionVersion: operation.action.version },
         observations: [], // a write's subject needs no read observation; capture is uncoupled (D16)
-        sessionId: operation.sessionId ?? "no-session",
+        sessionId: proposalSession,
         mandateId: null,
-      });
-      const proposal = openProposal({ subject, sessionId: operation.sessionId ?? "no-session" }, Date.now());
-      await ctx.proposals.open(proposal, Date.now());
+      }), sessionId: proposalSession }, now);
+
+      // Snapshots FIRST, proposal second — a proposal without its recording is
+      // permanently unverifiable (base bytes die with the write; the review's
+      // HIGH finding), so a failed or out-of-scope recording skips the
+      // proposal rather than opening a dead one.
+      const recordingRef = await ctx.proposals.record(proposal.id, facts.path, facts.baseBytes, facts.proposedBytes);
+      if (recordingRef === null) return;
+      await ctx.proposals.open({ ...proposal, recordingRef }, now);
+    },
+    // The slot is cleared on EVERY close, completed or not — a write whose
+    // operation was later judged failed (or a timeout's late settlement) must
+    // not leave facts for a future operation to mis-attribute.
+    onClose: () => {
+      writeFacts = null;
     },
     capture: observationCapture,
     // The paths a call NAMES, via the same walker the guard and the journal

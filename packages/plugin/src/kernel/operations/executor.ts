@@ -168,7 +168,7 @@ export interface OperationExecutorOpts {
    * caller their result — but unlike capture, what it records is the start
    * of the authority path, so the wiring gates it on the history setting.
    */
-  propose?: (operation: OperationV1, result: unknown) => Promise<void> | void;
+  propose?: (operation: OperationV1, result: unknown, sources: string[]) => Promise<void> | void;
   now?: () => number;
   newId?: () => string;
   /**
@@ -468,7 +468,7 @@ export function createOperationExecutor(opts: OperationExecutorOpts): OperationE
         // native action, write facts present); the executor only decides WHEN.
         if (opts.propose && outcomeOf(result) === "completed") {
           try {
-            await opts.propose(operation, result);
+            await opts.propose(operation, result, resolvedSources ?? opts.sourcesOf?.(request) ?? []);
           } catch (e) {
             console.error("[governor] proposal production failed (the write itself stands)", e);
           }

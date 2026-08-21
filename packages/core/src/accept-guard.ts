@@ -275,6 +275,17 @@ export function canonicalPropertyKey(key: string): string {
 
 /** Keys the config may NOT declare: the hardcoded floor governs them already. */
 function isFloorKey(canonical: string): boolean {
+  return isAuthorityFamilyKey(canonical);
+}
+
+/**
+ * Whether a CANONICAL key (see canonicalPropertyKey) belongs to the authority
+ * family — the accepted provenance fields plus acceptance-status. Exported so
+ * the class firewall (plugin kernel) classifies authority-touching diffs with
+ * THIS recognizer rather than a second, driftable copy — the exact hazard the
+ * one-recognizer comment above documents for the frontmatter fence.
+ */
+export function isAuthorityFamilyKey(canonical: string): boolean {
   return isAcceptedKey(canonical) || canonical === "acceptance-status";
 }
 

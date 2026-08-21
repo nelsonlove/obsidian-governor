@@ -17,7 +17,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { NOTE_WRITE_V1 } from "../src/kernel/operations/actions/note-write.ts";
-import { deriveClasses, requireClassesCovered, ClassMismatchError } from "../src/kernel/governance/proposals/class-firewall.ts";
+import { deriveClasses, requireClassesCovered, ClassMismatchError, authorityKeysDiffer, frontmatterUid } from "../src/kernel/governance/proposals/class-firewall.ts";
 import { CONTENT_DIFF_V1, createDefaultPredicateRegistry } from "../src/kernel/governance/verification/predicates.ts";
 import { buildProposalSubjectFromOperation } from "../src/kernel/governance/proposals/proposal-builder.ts";
 import { openProposal } from "../src/kernel/governance/proposals/proposal.ts";
@@ -91,6 +91,46 @@ describe("class firewall — derived from the diff, never solely from the declar
   });
 });
 
+// ── the authority-diff and uid helpers ───────────────────────────────────────
+
+describe("authorityKeysDiffer — what the accept guard permits, the firewall still classifies", () => {
+  test("REMOVING an accepted key differs — the guard permits removal; standing still changed", () => {
+    assert.ok(authorityKeysDiffer("---\naccepted-by: Nelson\n---\nbody", "---\n---\nbody"));
+  });
+
+  test("an acceptance-status downgrade differs — deliberately guard-allowed, still authority-class", () => {
+    assert.ok(authorityKeysDiffer("---\nacceptance-status: accepted\n---\nx", "---\nacceptance-status: proposed\n---\nx"));
+  });
+
+  test("byte-identical preservation does not differ", () => {
+    const t = "---\naccepted-by: Nelson\naccepted-on: 2026-01-01\n---\nbody";
+    assert.ok(!authorityKeysDiffer(t, t.replace("body", "new body")));
+  });
+
+  test("ordinary frontmatter changes do not differ; creation with no authority keys does not differ", () => {
+    assert.ok(!authorityKeysDiffer("---\ntitle: a\n---\nx", "---\ntitle: b\n---\nx"));
+    assert.ok(!authorityKeysDiffer(null, "---\ntitle: new\n---\nx"));
+  });
+
+  test("INTRODUCING an accepted key on a creation differs — belt behind the guard's refusal", () => {
+    assert.ok(authorityKeysDiffer(null, "---\naccepted-by: someone\n---\nx"));
+  });
+
+  test("case and separator variants are the same key — core's one recognizer", () => {
+    assert.ok(authorityKeysDiffer("---\nAccepted_By: Nelson\n---\nx", "---\n---\nx"));
+  });
+});
+
+describe("frontmatterUid — identity from the exact written bytes", () => {
+  test("reads the uid, unquotes it, and answers null honestly", () => {
+    assert.equal(frontmatterUid("---\nuid: 0190-abc\n---\nbody"), "0190-abc");
+    assert.equal(frontmatterUid('---\nuid: "0190-q"\n---\nx'), "0190-q");
+    assert.equal(frontmatterUid("---\ntitle: no uid here\n---\nx"), null);
+    assert.equal(frontmatterUid("no frontmatter at all"), null);
+    assert.equal(frontmatterUid("---\nuid:\n---\nx"), null, "an empty uid is no uid");
+  });
+});
+
 // ── the first real predicate ─────────────────────────────────────────────────
 
 describe("content-diff@1 — the subject describes the actual bytes", () => {
@@ -140,7 +180,7 @@ describe("content-diff@1 — the subject describes the actual bytes", () => {
 // ── the propose hook, through the real executor ──────────────────────────────
 
 describe("proposal production — a completed write becomes a durable proposal", () => {
-  function harness({ enabled = true } = {}) {
+  function harness({ enabled = true, untracked = false, recordFails = false } = {}) {
     const r = createActionRegistry();
     r.register(NOTE_WRITE_V1);
     r.bind({ kind: "mcp", id: "obsidian_write_note", action: NOTE_WRITE_V1.id, actionVersion: NOTE_WRITE_V1.version });
@@ -148,24 +188,40 @@ describe("proposal production — a completed write becomes a durable proposal",
 
     const store = createProposalStore(memoryIo());
     // The server wiring's shape, minus Obsidian: slot set by the "backend",
-    // taken exactly once by propose, gated on the setting.
+    // taken exactly once by propose (with the attribution guard), snapshots
+    // recorded before the proposal opens, slot cleared on every close.
     let writeFacts = null;
+    const recordings = [];
+    const record = async (proposalId, path, baseBytes, proposedBytes) => {
+      if (recordFails) throw new Error("gitdir on fire");
+      if (untracked) return null;
+      recordings.push({ proposalId, path, baseBytes, proposedBytes });
+      return `refs/governor/proposals/${proposalId}`;
+    };
     const executor = createOperationExecutor({
       registry: r,
       actor: () => ({ binding: "c", clientClaim: null }),
       sessionId: () => "sess-1",
-      propose: async (operation) => {
+      sourcesOf: (req) => (req.inputs?.path ? [req.inputs.path] : []),
+      propose: async (operation, _result, sources) => {
         const facts = writeFacts;
         writeFacts = null;
         if (!facts) return;
         if (operation.action.id !== NOTE_WRITE_V1.id) return;
+        if (!sources.includes(facts.path)) return;
         if (!enabled) return;
-        const derived = deriveClasses({ baseBytes: facts.baseBytes, proposedBytes: facts.proposedBytes, pathChanged: false, touchesAuthorityKeys: false });
+        const dec2 = new TextDecoder();
+        const derived = deriveClasses({
+          baseBytes: facts.baseBytes,
+          proposedBytes: facts.proposedBytes,
+          pathChanged: false,
+          touchesAuthorityKeys: authorityKeysDiffer(facts.baseBytes === null ? null : dec2.decode(facts.baseBytes), dec2.decode(facts.proposedBytes)),
+        });
         requireClassesCovered(NOTE_WRITE_V1.changeClasses, derived);
         if (derived.length === 0) return;
         const subject = buildProposalSubjectFromOperation({
           vaultId: "vault-1",
-          noteId: `path:${facts.path}`,
+          noteId: frontmatterUid(dec2.decode(facts.proposedBytes)) ?? `path:${facts.path}`,
           path: facts.path,
           pathSemanticallyRelevant: false,
           base: facts.baseBytes === null ? null : digestBytes(facts.baseBytes),
@@ -178,11 +234,17 @@ describe("proposal production — a completed write becomes a durable proposal",
           sessionId: operation.sessionId ?? "no-session",
           mandateId: null,
         });
-        await store.open(openProposal({ subject, sessionId: operation.sessionId ?? "no-session" }, T0), T0);
+        const proposal = openProposal({ subject, sessionId: operation.sessionId ?? "no-session" }, T0);
+        const ref = await record(proposal.id, facts.path, facts.baseBytes, facts.proposedBytes);
+        if (ref === null) return;
+        await store.open({ ...proposal, recordingRef: ref }, T0);
+      },
+      onClose: () => {
+        writeFacts = null;
       },
     });
     const setFacts = (f) => (writeFacts = f);
-    return { executor, store, setFacts };
+    return { executor, store, setFacts, recordings };
   }
 
   const WRITE = { surface: { id: "obsidian_write_note" }, inputs: { path: "A.md", content: "new" } };
@@ -202,6 +264,67 @@ describe("proposal production — a completed write becomes a durable proposal",
     assert.equal(p.subject.base.value, digestBytes(enc("old")).value);
     assert.equal(p.sessionId, "sess-1");
     assert.equal(p.authority, "proposed");
+    assert.match(p.recordingRef ?? "", /refs\/governor\/proposals\//, "the proposal carries its recording — admission evidence exists");
+  });
+
+  test("no recording, no proposal — an untracked path is ungoverned, never a dead proposal", async () => {
+    const { executor, store, setFacts } = harness({ untracked: true });
+    await executor.run(WRITE, async (mark) => {
+      mark("attempted");
+      setFacts({ path: "A.md", baseBytes: enc("old"), proposedBytes: enc("new"), created: false });
+      return "ok";
+    });
+    assert.equal((await store.all()).length, 0);
+  });
+
+  test("a recording failure skips the proposal and never costs the write", async () => {
+    const { executor, store, setFacts } = harness({ recordFails: true });
+    const { result } = await executor.run(WRITE, async (mark) => {
+      mark("attempted");
+      setFacts({ path: "A.md", baseBytes: enc("old"), proposedBytes: enc("new"), created: false });
+      return "written";
+    });
+    assert.equal(result, "written");
+    assert.equal((await store.all()).length, 0);
+  });
+
+  test("facts whose path does not match the operation's sources are DROPPED — attribution over production", async () => {
+    const { executor, store, setFacts } = harness();
+    await executor.run(WRITE, async (mark) => {
+      mark("attempted");
+      setFacts({ path: "SOMEWHERE-ELSE.md", baseBytes: enc("a"), proposedBytes: enc("b"), created: false });
+      return "ok";
+    });
+    assert.equal((await store.all()).length, 0, "a mis-attributed proposal is worse than none");
+  });
+
+  test("an authority-touching diff refuses production — the write stands, the legacy queue governs it", async () => {
+    // Removal of accepted keys passes the accept guard (it refuses introduce/
+    // change, not removal) — the firewall catches what the guard permits.
+    const { executor, store, setFacts } = harness();
+    const { result } = await executor.run(WRITE, async (mark) => {
+      mark("attempted");
+      setFacts({
+        path: "A.md",
+        baseBytes: enc("---\naccepted-by: Nelson\n---\nbody"),
+        proposedBytes: enc("---\n---\nbody"),
+        created: false,
+      });
+      return "ok";
+    });
+    assert.equal(result, "ok");
+    assert.equal((await store.all()).length, 0, "an authority-class diff cannot ride a content declaration");
+  });
+
+  test("the uid from the written bytes wins over the (lagging) cache path fallback", async () => {
+    const { executor, store, setFacts } = harness();
+    await executor.run({ surface: { id: "obsidian_write_note" }, inputs: { path: "New.md", content: "x" } }, async (mark) => {
+      mark("attempted");
+      setFacts({ path: "New.md", baseBytes: null, proposedBytes: enc("---\nuid: 0190-fresh\n---\nbody"), created: true });
+      return "ok";
+    });
+    const all = await store.all();
+    assert.equal(all[0].subject.noteId, "0190-fresh", "a freshly-stamped uid is the identity from the first proposal");
   });
 
   test("disabled ⇒ no proposal; the write is untouched either way", async () => {
@@ -263,6 +386,25 @@ describe("wiring pins — the mechanism-exists-but-unwired lesson, again", () =>
     assert.match(server, /historyEnabled !== true \|\| !ctx\.proposals/, "production is gated on the human's setting");
     assert.match(server, /requireClassesCovered\(NOTE_WRITE_V1\.changeClasses, derived\)/, "the firewall runs in production");
     assert.match(server, /ctx\.proposals\.open\(/, "the proposal reaches the durable store");
+    assert.match(server, /touchesAuthorityKeys: authorityKeysDiffer\(/, "authority classification is derived from the bytes, never hardcoded");
+    assert.match(server, /sources\.includes\(facts\.path\)/, "the attribution guard binds facts to the operation's resolved path");
+    assert.match(server, /frontmatterUid\(proposedText\)/, "identity comes from the written bytes before the lagging cache");
+    assert.match(server, /onClose: \(\) => \{\s*writeFacts = null;/, "the slot clears on EVERY close, not only completed ones");
+  });
+
+  test("server.ts records snapshots BEFORE opening the proposal — no dead proposals", () => {
+    const server = read("mcp/server.ts");
+    const recordAt = server.indexOf("ctx.proposals.record(");
+    const openAt = server.indexOf("ctx.proposals.open(");
+    assert.ok(recordAt > 0 && openAt > 0 && recordAt < openAt, "record precedes open in the producer");
+    assert.match(server, /if \(recordingRef === null\) return;/, "an out-of-scope or failed recording skips the proposal");
+  });
+
+  test("main.ts wires the history repository behind the effective scope", () => {
+    const main = read("main.ts");
+    assert.match(main, /effectiveScope\(this\.settings\.historyScope, EXCLUDED_PREFIXES\)/, "the composed scope gates recording — the WP4 contract consumed");
+    assert.match(main, /openGitRepository\(/, "the real history store is the recording target");
+    assert.match(main, /proposalRef\(proposalId\)/, "snapshots land on the proposal's own ref");
   });
 
   test("main.ts wires the proposal store and the uid lookup", () => {

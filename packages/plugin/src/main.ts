@@ -12,6 +12,12 @@ import { ExternalToolRegistry, type VaultMcpApi } from "./mcp/external-tools.js"
 import { Kernel, WriteQueue, WriteJournal, IdempotencyStore, LockStore, UidIndex, loadInstallId, migrateLegacyModuleIds, DEFAULT_VOCABULARIES, type VocabInstanceSettings, type ModuleSettings } from "./kernel/index.js";
 import { createSessionStore } from "./kernel/governance/sessions/session-store.js";
 import { createProposalStore } from "./kernel/governance/proposals/proposal-store.js";
+import { openGitRepository } from "./governance/history-store/git-repository.js";
+import { historyDir } from "./governance/history-store/local-data-root.js";
+import { effectiveScope, isTracked } from "./kernel/governance/history-store/history-scope.js";
+import { proposalRef } from "./kernel/governance/history-store/refs.js";
+import { EXCLUDED_PREFIXES } from "./governance/territories.js";
+import type { HistoryRepository } from "./kernel/governance/history-store/repository.js";
 import { obsidianProbe, obsidianServerIdentity, obsidianUidSource } from "./kernel/obsidian-probe.js";
 import { DEFAULT_SCHEMES, type SchemeInstanceConfig } from "./kernel/scheme/registry.js";
 import { DEFAULT_PROTECTED_PROPERTIES, setDeclaredProtectedProperties } from "@vault-mcp/core";
@@ -543,6 +549,16 @@ export default class VaultMcpPlugin extends Plugin {
       },
     });
 
+    // The history repository, opened LAZILY on first recording: an idle vault
+    // with history off never touches the gitdir. One instance per plugin —
+    // the single-writer assumption the CAS mutex documents.
+    let historyRepoPromise: Promise<HistoryRepository> | null = null;
+    const lazyHistoryRepo = () =>
+      (historyRepoPromise ??= openGitRepository({
+        gitdir: historyDir(vaultSlug(vaultName)),
+        worktree: (this.app.vault.adapter as unknown as { basePath: string }).basePath,
+      }));
+
     const sessionStore = createSessionStore({
       appendLine: (line) => {
         const task = async () => {
@@ -599,6 +615,37 @@ export default class VaultMcpPlugin extends Plugin {
           return typeof uid === "string" && uid.length > 0 ? uid : null;
         },
         vaultId: vaultName,
+        // Record the proposal's base and proposed snapshots in the history
+        // store (WP4 consumed at last), returning the recording ref — the
+        // evidence admission-time verification replays base bytes from,
+        // because the write itself destroys them (the review's HIGH finding:
+        // without this, every overwrite proposal was permanently
+        // unverifiable). Null when the path is outside the effective history
+        // scope: an untracked path is ungoverned by the new system, and the
+        // producer skips the proposal rather than opening a dead one.
+        record: async (proposalId: string, path: string, baseBytes: Uint8Array | null, proposedBytes: Uint8Array) => {
+          const scope = effectiveScope(this.settings.historyScope, EXCLUDED_PREFIXES);
+          if (!isTracked(scope, path)) return null;
+          const repo = await lazyHistoryRepo();
+          const ref = proposalRef(proposalId);
+          // Base first (recorded-missing for a creation), proposed chained on
+          // it — the ref chain IS the diff, and stock git can read both.
+          const base = await repo.recordSnapshot({
+            ref,
+            files: [{ path, bytes: baseBytes }],
+            message: `base for proposal ${proposalId}`,
+            timestamp: Math.floor(Date.now() / 1000),
+            expectedRef: null,
+          });
+          await repo.recordSnapshot({
+            ref,
+            files: [{ path, bytes: proposedBytes }],
+            message: `proposed for proposal ${proposalId}`,
+            timestamp: Math.floor(Date.now() / 1000),
+            expectedRef: base.oid,
+          });
+          return ref;
+        },
       },
       getExternalTools: () => this.externalRegistry.entries(),
       getVocabularies: () => this.settings.vocabularies,

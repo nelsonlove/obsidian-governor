@@ -21,6 +21,7 @@
 // derives `structural`, which can only over-classify — the safe direction.
 
 import { CHANGE_CLASSES, sortClasses, type ChangeClass } from "../contracts/change-class.js";
+import { LEADING_FRONTMATTER_RE, stripLeadingBom, canonicalPropertyKey, isAuthorityFamilyKey } from "@vault-mcp/core";
 
 export interface DiffFacts {
   /** Exact base bytes, null for a creation. */
@@ -79,6 +80,65 @@ export function requireClassesCovered(declared: readonly ChangeClass[], derived:
       `the diff carries ${missing.join("+")} which the declaration does not cover — a substantive change cannot ride a mechanical claim`
     );
   }
+}
+
+/**
+ * Whether the diff touches the authority frontmatter family — accepted
+ * provenance fields or acceptance-status, recognized by core's ONE family
+ * predicate (never a local copy). The scan is line-based over the leading
+ * frontmatter block: authority keys are flat scalars in practice, and the
+ * scan's failure mode is OVER-detection (a block scalar containing
+ * "accepted-by:" text), which derives authority, fails the coverage check,
+ * and skips the proposal — the write itself stands. Erring toward refusal on
+ * an authority-shaped diff is the direction rule 6 requires.
+ *
+ * The first draft hardcoded false with a "by construction" claim the review
+ * disproved: the accept guard refuses INTRODUCING or CHANGING accepted keys,
+ * but a write that REMOVES them, or downgrades acceptance-status
+ * accepted → proposed (deliberately allowed, #228), passes the guard and
+ * changes standing — an authority-class change that would have classified as
+ * content-only.
+ */
+export function authorityKeysDiffer(baseText: string | null, proposedText: string): boolean {
+  const a = authorityEntries(baseText);
+  const b = authorityEntries(proposedText);
+  if (a.size !== b.size) return true;
+  for (const [k, v] of a) if (b.get(k) !== v) return true;
+  return false;
+}
+
+function authorityEntries(text: string | null): Map<string, string> {
+  const out = new Map<string, string>();
+  if (text === null) return out;
+  const m = LEADING_FRONTMATTER_RE.exec(stripLeadingBom(text));
+  if (!m) return out;
+  for (const line of m[1].split(/\r\n|\n|\r/)) {
+    const kv = /^([A-Za-z0-9_ -]+?)\s*:(.*)$/.exec(line);
+    if (!kv) continue;
+    const key = canonicalPropertyKey(kv[1]);
+    if (isAuthorityFamilyKey(key)) out.set(key, kv[2].trim());
+  }
+  return out;
+}
+
+/**
+ * The note's uid, parsed from the EXACT bytes the write landed — not from the
+ * metadata cache, which updates asynchronously and lags a create long enough
+ * that every new note's proposal would get the path fallback even when the
+ * write stamped a uid (review finding). Cache remains the caller's fallback
+ * for notes whose uid predates this write.
+ */
+export function frontmatterUid(text: string): string | null {
+  const m = LEADING_FRONTMATTER_RE.exec(stripLeadingBom(text));
+  if (!m) return null;
+  for (const line of m[1].split(/\r\n|\n|\r/)) {
+    const kv = /^uid\s*:(.*)$/.exec(line);
+    if (kv) {
+      const v = kv[1].trim().replace(/^["']|["']$/g, "");
+      return v.length > 0 ? v : null;
+    }
+  }
+  return null;
 }
 
 /** Exported for tests: the canonical order the firewall sorts into. */

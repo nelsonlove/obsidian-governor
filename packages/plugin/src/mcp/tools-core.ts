@@ -107,6 +107,8 @@ export interface ServerCtx {
     /** The note's stable uid from frontmatter, when the cache has one. */
     uidOf(path: string): string | null;
     vaultId: string;
+    /** Record base+proposed snapshots; the recording ref, or null when the path is outside the history scope. */
+    record(proposalId: string, path: string, baseBytes: Uint8Array | null, proposedBytes: Uint8Array): Promise<string | null>;
   };
 }
 
