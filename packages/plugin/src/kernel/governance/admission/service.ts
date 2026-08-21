@@ -126,7 +126,11 @@ export function createAdmissionService(deps: AdmissionDeps): AdmissionService {
         //    HAS happened); recovery completes the record from the claim.
         await deps.recordSettlement({ claimId: claim.id, subjectDigest: claim.subjectDigest.value, at: now });
 
-        // 5. Projections: best-effort, rebuildable by definition.
+        // 5. Projections: best-effort, rebuildable by definition — D05's own
+        //    words: "Mutable indexes are rebuildable projections, never
+        //    authority." A projection failure cannot be an integrity problem
+        //    because a projection is never authority; the event-driven nudge
+        //    machinery rebuilds it from the stores.
         try {
           await deps.refreshProjections?.();
         } catch (e) {
