@@ -95,9 +95,14 @@ export function createSessionStore(io: SessionEventIo): SessionStore {
   }
 
   async function append(ev: SessionEvent): Promise<void> {
+    // Cache seeded BEFORE the append — a cold cache read after appendLine
+    // would already contain the new line and pushing would double-count.
+    // Every public method folds first today, which seeds it; this makes the
+    // ordering structural rather than an accident of the callers.
+    const cached = await allLines();
     const line = JSON.stringify(ev);
     await io.appendLine(line);
-    (await allLines()).push(line);
+    cached.push(line);
   }
 
   return {
