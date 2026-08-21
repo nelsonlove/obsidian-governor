@@ -118,6 +118,14 @@ interface VaultMcpSettings {
    */
   captureMaxBytes: number;
   /**
+   * Local history recording (WP4, D10). DEFAULT OFF: Git retains historical bytes, and D10 makes turning that on a disclosed human choice, never a shipped default. Nothing consumes the repository until proposals (WP6) — the setting exists now so the scope is chosen before the first byte is recorded, not after.
+   */
+  historyEnabled: boolean;
+  /**
+   * The human-chosen history scope (D10) — SEPARATE from any connection allowlist, which can never widen or narrow it. whole-vault records everything minus exclusions; explicit records only the included roots. Exclusions always win, and the guarded territories are always appended at runtime regardless of what this stores.
+   */
+  historyScope: { mode: "whole-vault" | "explicit"; include: string[]; exclude: string[] };
+  /**
    * The in-Obsidian dev tool-runner ("Vault MCP: Run tool…" — src/tool-runner.ts).
    * Default ON: it grants nothing the MCP surface doesn't already grant — it
    * invokes the same guarded captured tools a code-mode connection gets, so
@@ -150,6 +158,8 @@ const DEFAULT_SETTINGS: VaultMcpSettings = {
   devToolRunner: true,
   captureObservations: false,
   captureMaxBytes: 50 * 1024 * 1024,
+  historyEnabled: false,
+  historyScope: { mode: "whole-vault", include: [], exclude: [] },
 };
 
 class DiagnosticsModal extends Modal {
@@ -199,6 +209,24 @@ export default class VaultMcpPlugin extends Plugin {
     this.settings.captureObservations = this.settings.captureObservations === true;
     if (typeof this.settings.captureMaxBytes !== "number" || this.settings.captureMaxBytes <= 0) {
       this.settings.captureMaxBytes = DEFAULT_SETTINGS.captureMaxBytes;
+    }
+    // History fails toward NOT recording: only an explicit true enables, and a
+    // corrupt scope disables recording AND resets to explicit-with-nothing —
+    // the shape that records zero paths. The first draft reset to the
+    // whole-vault DEFAULT, which is the MOST-recording shape: a user whose
+    // explicit include list survived a corrupted mode field would silently
+    // have gone from "record Notes/" to "record everything".
+    this.settings.historyEnabled = this.settings.historyEnabled === true;
+    const hs = this.settings.historyScope;
+    if (
+      !hs ||
+      (hs.mode !== "whole-vault" && hs.mode !== "explicit") ||
+      !Array.isArray(hs.include) ||
+      !Array.isArray(hs.exclude) ||
+      ![...hs.include, ...hs.exclude].every((x) => typeof x === "string")
+    ) {
+      this.settings.historyScope = { mode: "explicit", include: [], exclude: [] };
+      this.settings.historyEnabled = false;
     }
     // 0.12.0 module-id rename (`governance` → `acceptance`): adopt a legacy
     // `modules.governance` row under the new id when no `modules.acceptance`
@@ -484,6 +512,8 @@ export default class VaultMcpPlugin extends Plugin {
         cliPolicy: this.settings.cliPolicy,
         captureObservations: this.settings.captureObservations,
         captureMaxBytes: this.settings.captureMaxBytes,
+        historyEnabled: this.settings.historyEnabled,
+        historyScope: this.settings.historyScope,
       }),
       serverIdentity,
       getExternalTools: () => this.externalRegistry.entries(),

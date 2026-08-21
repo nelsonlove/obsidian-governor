@@ -55,6 +55,15 @@ import type { BlobStore } from "../../kernel/observations/store.js";
  * default. Exporting payloads is designed as a separate, explicit,
  * disclosed action — not a side effect of where the files happen to sit.
  *
+ * The obvious counter — every synced device already HAS these notes, so
+ * replication is duplication, not exposure — fails because an observation
+ * OUTLIVES ITS SOURCE. Delete a note, or edit the sensitive paragraph out,
+ * and the vault propagates that removal to every replica; a synced
+ * observation would carry the old bytes to every device permanently, and
+ * "delete it and it is gone" would quietly stop being true. Replica-local
+ * bounds retained history to one machine. (Argument owed to the
+ * governor-lead session's review of #322.)
+ *
  * The real cost of this choice is also real: this directory is outside the
  * vault backup. That is a retention/recovery question (D16's "retention
  * controls", still to be built), and the answer to it is a deliberate
