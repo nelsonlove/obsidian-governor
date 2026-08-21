@@ -6,7 +6,11 @@
 // INTERNAL — ref names, layouts, and these shapes carry no external
 // compatibility promise. What IS promised externally is standard Git object
 // compatibility: every object a repository stores must be readable by stock
-// git, which the adapter tests prove.
+// git. The committed tests exercise round-trips through the adapter and
+// refuse the malformed inputs that would produce fsck-rejected trees; the
+// stock-git read-back itself (cat-file, log, fsck) was proven in the WP4
+// dependency spike rather than in this suite, which deliberately does not
+// depend on a system git binary.
 
 /** A 40-hex SHA-1 Git object id — Git's own address, not Governor's. */
 export type ObjectId = string;

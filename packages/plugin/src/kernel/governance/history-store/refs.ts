@@ -16,14 +16,22 @@ import { RefNameError } from "./types.js";
 const NAMESPACE = "refs/governor";
 
 /**
- * A component of a ref name: the characters our minted ids (UUIDv7) and
- * schema-fixed kind names actually use. Anything else is refused — this is a
- * validator for OUR names, not an implementation of git-check-ref-format.
+ * A component of a ref name: the characters our minted ids (UUIDv7, lowercase
+ * hex) and schema-fixed kind names actually use. LOWERCASE ONLY — loose refs
+ * are files, and on a case-insensitive filesystem (APFS, the primary target)
+ * `proposals/ABC` and `proposals/abc` alias ONE file, so two logically
+ * distinct ids differing only in case would silently share a ref. Nothing
+ * mints uppercase today; this pins that nothing ever may. Trailing `.` and a
+ * `.lock` suffix are git's own reserved forms — refusing them here keeps the
+ * refusal typed instead of leaking isomorphic-git's InvalidRefNameError
+ * through the contract.
  */
-const COMPONENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const COMPONENT = /^[a-z0-9][a-z0-9._-]*$/;
 
 function component(v: string, what: string): string {
-  if (!COMPONENT.test(v) || v.includes("..")) throw new RefNameError(`${what} '${v}' cannot appear in a ref name`);
+  if (!COMPONENT.test(v) || v.includes("..") || v.endsWith(".") || v.endsWith(".lock")) {
+    throw new RefNameError(`${what} '${v}' cannot appear in a ref name`);
+  }
   return v;
 }
 

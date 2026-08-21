@@ -32,6 +32,7 @@ import {
   type TreeEntry,
 } from "../../kernel/governance/history-store/types.js";
 import type { HistoryRepository } from "../../kernel/governance/history-store/repository.js";
+import { normalizeVaultPath } from "../../kernel/governance/history-store/history-scope.js";
 
 /** The fixed machine identity. Not an authority claim — see the header. */
 const COMMITTER = { name: "governor", email: "governor@local" };
@@ -65,8 +66,15 @@ export async function openGitRepository(opts: GitRepositoryOpts): Promise<Histor
   async function resolveRefOrNull(ref: string): Promise<ObjectId | null> {
     try {
       return await git.resolveRef({ ...base, ref });
-    } catch {
-      return null;
+    } catch (e) {
+      // ONLY genuine absence maps to null. An I/O failure (EACCES, EMFILE)
+      // swallowed here would let a concurrent casRef(ref, null, …) read an
+      // EXISTING ref as absent and force-write over it — the one interleaving
+      // CAS exists to prevent, reintroduced by a transient read error.
+      const name = (e as { code?: string; name?: string })?.code ?? (e as { name?: string })?.name ?? "";
+      const msg = e instanceof Error ? e.message : String(e);
+      if (name === "NotFoundError" || /Could not find/i.test(msg)) return null;
+      throw e;
     }
   }
 
@@ -178,12 +186,36 @@ export async function openGitRepository(opts: GitRepositoryOpts): Promise<Histor
     },
 
     async recordSnapshot(args) {
+      // Paths are validated with the SAME discipline the history scope
+      // applies, and for the same reason refs.ts validates components: tree
+      // entries are structural. Empirically, an empty segment ("a//b", "a/",
+      // "") writes a tree stock git's fsck rejects as unparsable, and "../x"
+      // writes a literal ".." entry — a write-outside-the-vault traversal
+      // waiting for any future materializer. Duplicates after normalization
+      // are refused rather than silently last-wins.
+      const seen = new Set<string>();
+      const files: SnapshotFile[] = args.files.map((file) => {
+        // A trailing slash names a directory, and a snapshot file cannot be
+        // one — normalization would silently strip it ("a/" → "a") and write
+        // a blob where the caller described a folder, so it refuses instead.
+        if (file.path.endsWith("/")) {
+          throw new Error(`refusing snapshot path '${file.path}': a file path cannot end in '/'`);
+        }
+        const p = normalizeVaultPath(file.path);
+        if (p === null || p === "" || p === "." || p.split("/").some((seg) => seg === "")) {
+          throw new Error(`refusing snapshot path '${file.path}': not a clean vault-relative path`);
+        }
+        if (seen.has(p)) throw new Error(`refusing snapshot: path '${p}' appears twice`);
+        seen.add(p);
+        return { path: p, bytes: file.bytes };
+      });
+
       // Objects first, ref last — a crash mid-way leaves content-addressed
       // objects without a ref (recovery: ref-behind / re-record), never a ref
       // naming objects that do not exist.
       const entries: TreeEntry[] = [];
       const missing: string[] = [];
-      for (const file of args.files) {
+      for (const file of files) {
         if (file.bytes === null) {
           // D06: a disappearance is recorded as a fact in the message, not
           // invented as empty content.

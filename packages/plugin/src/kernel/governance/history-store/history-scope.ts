@@ -36,6 +36,30 @@ export interface HistoryScope {
 export const DEFAULT_HISTORY_EXCLUDES = [".obsidian/", ".trash/"];
 
 /** Whether the scope records this vault-relative path. Deterministic, total. */
+/**
+ * The scope every consumer MUST record through: the human's chosen scope with
+ * the default excludes and the guarded territories composed in, and every
+ * root normalized. This function existing (and being tested) is what makes
+ * the settings copy true — "the defaults and the guarded territories are
+ * always excluded" — rather than an aspiration: a consumer reading
+ * settings.historyScope raw would track .obsidian and record guarded
+ * content, so the raw settings shape never reaches isTracked directly.
+ *
+ * Root normalization also closes an under-exclusion: an exclude entered as
+ * `./Private` or with backslashes would silently never match its target —
+ * the UNSAFE direction — so roots are normalized with the same rules as
+ * paths, and entries that normalize away are dropped.
+ */
+export function effectiveScope(user: HistoryScope, territories: readonly string[]): HistoryScope {
+  const norm = (roots: readonly string[]) =>
+    roots.map((r) => normalize(r)).filter((r): r is string => r !== null && r !== "" && r !== ".");
+  return {
+    mode: user.mode,
+    include: norm(user.include),
+    exclude: [...norm(user.exclude), ...DEFAULT_HISTORY_EXCLUDES, ...territories],
+  };
+}
+
 export function isTracked(scope: HistoryScope, path: string): boolean {
   const p = normalize(path);
   if (p === null) return false; // escapes the vault — never tracked
@@ -57,6 +81,15 @@ export function boundaryDisclosure(
   const untracked: string[] = [];
   for (const p of paths) (isTracked(scope, p) ? tracked : untracked).push(p);
   return { tracked, untracked, crossesBoundary: tracked.length > 0 && untracked.length > 0 };
+}
+
+/**
+ * Normalize a vault-relative path; null when it escapes upward. Exported so
+ * the snapshot recorder applies the SAME discipline to tree paths — a tree
+ * entry this function would refuse is a tree stock git refuses to parse.
+ */
+export function normalizeVaultPath(path: string): string | null {
+  return normalize(path);
 }
 
 /** Normalize a vault-relative path; null when it escapes upward. */

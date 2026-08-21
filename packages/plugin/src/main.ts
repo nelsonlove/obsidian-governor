@@ -211,7 +211,11 @@ export default class VaultMcpPlugin extends Plugin {
       this.settings.captureMaxBytes = DEFAULT_SETTINGS.captureMaxBytes;
     }
     // History fails toward NOT recording: only an explicit true enables, and a
-    // corrupt scope resets to the default shape rather than guessing.
+    // corrupt scope disables recording AND resets to explicit-with-nothing —
+    // the shape that records zero paths. The first draft reset to the
+    // whole-vault DEFAULT, which is the MOST-recording shape: a user whose
+    // explicit include list survived a corrupted mode field would silently
+    // have gone from "record Notes/" to "record everything".
     this.settings.historyEnabled = this.settings.historyEnabled === true;
     const hs = this.settings.historyScope;
     if (
@@ -221,7 +225,8 @@ export default class VaultMcpPlugin extends Plugin {
       !Array.isArray(hs.exclude) ||
       ![...hs.include, ...hs.exclude].every((x) => typeof x === "string")
     ) {
-      this.settings.historyScope = structuredClone(DEFAULT_SETTINGS.historyScope);
+      this.settings.historyScope = { mode: "explicit", include: [], exclude: [] };
+      this.settings.historyEnabled = false;
     }
     // 0.12.0 module-id rename (`governance` → `acceptance`): adopt a legacy
     // `modules.governance` row under the new id when no `modules.acceptance`
