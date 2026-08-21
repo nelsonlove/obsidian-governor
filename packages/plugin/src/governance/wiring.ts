@@ -123,10 +123,11 @@ import {
   type ReviewController,
   type RevisingItem,
 } from "./pane.js";
+import { isExcludedTerritory } from "./territories.js";
 
-// Top-level areas the plugin must never review or touch (guarded territories / hold zones — they
-// are archival, not live governed content).
-const EXCLUDED_PREFIXES = ["obsidian-old/", "80-89", "_keep/", "holds/"];
+// Guarded territories moved to ./territories.ts when observation capture became
+// the second consumer — one list, so the pane and capture can never disagree
+// about what is off-limits.
 
 const LOCAL_USER = "local-human";
 const RECENT_WRITE_WINDOW_MS = 15_000;
@@ -461,7 +462,7 @@ async function journalSignature(plugin: Plugin): Promise<string> {
 
 // ── governed-note enumeration (module-scope helpers) ─────────────────────────
 function isExcluded(path: string): boolean {
-  return EXCLUDED_PREFIXES.some((p) => path.startsWith(p));
+  return isExcludedTerritory(path);
 }
 function governedMarkdownFiles(plugin: Plugin): TFile[] {
   return plugin.app.vault.getMarkdownFiles().filter((f) => !isExcluded(f.path));
