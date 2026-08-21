@@ -56,6 +56,7 @@
 // than a proposal — see its section.
 
 import type { Distribution } from "./action.js";
+import { NOTE_READ_V1 } from "./actions/note-read.js";
 import { compatibilityAction, type CompatibilitySpec } from "./compatibility.js";
 import type { ActionDefinition } from "./action.js";
 import type { SurfaceBinding } from "./surface-binding.js";
@@ -63,6 +64,14 @@ import type { SurfaceBinding } from "./surface-binding.js";
 export interface McpSurfaceRow {
   /** Exact MCP tool name — this is the surface identity. */
   tool: string;
+  /**
+   * A NATIVE action id this surface binds instead of a derived one.
+   *
+   * The migration counter. Every row without this is still `compat.*`: a contract derived from the registration, claiming only what the adapter could see from outside. A row WITH it has had its contract authored, and can therefore claim things a derived one may not — replayable observations, proposal support, a stated change class.
+   *
+   * Moving a row here is the migration, one surface at a time, in the risk order D18 asks for.
+   */
+  nativeAction?: { id: string; version: number };
   /** `annotations.readOnlyHint === true`, as literally declared at the
    * registration site. Verified against source by the drift test. */
   readOnly: boolean;
@@ -92,7 +101,8 @@ export interface McpSurfaceRow {
 const CORE_FS: McpSurfaceRow[] = [
   { tool: "obsidian_list_notes", readOnly: true, module: "core", distribution: "public-default", paths: ["subdir"], postcondition: "Return the visible Markdown notes under an optional subfolder, paginated." },
   { tool: "obsidian_list_folders", readOnly: true, module: "core", distribution: "public-default", paths: ["subdir"], postcondition: "Return the immediate child folders of a path with recursive note counts." },
-  { tool: "obsidian_read_note", readOnly: true, module: "core", distribution: "public-default", paths: ["path"], postcondition: "Return one visible note's full content and its current revision token." },
+  // FIRST NATIVE MIGRATION. Its contract is authored in `actions/note-read.ts` rather than derived, which is what lets its observations be captured at all — see the four capture gates.
+  { tool: "obsidian_read_note", readOnly: true, module: "core", distribution: "public-default", paths: ["path"], nativeAction: { id: NOTE_READ_V1.id, version: NOTE_READ_V1.version }, postcondition: "Return one visible note's full content and its current revision token." },
   { tool: "obsidian_read_notes", readOnly: true, module: "core", distribution: "public-default", paths: ["paths"], postcondition: "Return several visible notes' content in one call, tolerating per-item failure." },
   { tool: "obsidian_search_notes", readOnly: true, module: "core", distribution: "public-default", postcondition: "Return case-insensitive full-text matches from visible notes only." },
   { tool: "obsidian_find_by_tag", readOnly: true, module: "core", distribution: "public-default", postcondition: "Return visible notes carrying a frontmatter or inline tag." },
@@ -430,9 +440,21 @@ function specOf(row: McpSurfaceRow): CompatibilitySpec {
   };
 }
 
-/** The compatibility action for every declared MCP surface. */
+/** Every native action a surface binds. */
+const NATIVE_ACTIONS: ActionDefinition[] = [NOTE_READ_V1];
+
+/** The action for every declared MCP surface: derived, unless the row names a native one. */
 export function mcpCompatibilityActions(): ActionDefinition[] {
-  return [...MCP_SURFACE_INVENTORY, EXTERNAL_PUBLISHER_ROW].map((row) => compatibilityAction(specOf(row)));
+  const derived = [...MCP_SURFACE_INVENTORY, EXTERNAL_PUBLISHER_ROW]
+    .filter((row) => !row.nativeAction)
+    .map((row) => compatibilityAction(specOf(row)));
+  return [...NATIVE_ACTIONS, ...derived];
+}
+
+/** How many surfaces still run on a derived contract — the migration debt in one number, so it can be watched rather than estimated. */
+export function migrationDebt(): { native: number; derived: number } {
+  const native = MCP_SURFACE_INVENTORY.filter((r) => r.nativeAction).length;
+  return { native, derived: MCP_SURFACE_INVENTORY.length - native };
 }
 
 /** The MCP binding for every declared surface. */
@@ -440,8 +462,8 @@ export function mcpSurfaceBindings(): SurfaceBinding[] {
   return [...MCP_SURFACE_INVENTORY, EXTERNAL_PUBLISHER_ROW].map((row) => ({
     kind: "mcp" as const,
     id: row.tool,
-    action: `compat.${row.tool}`,
-    actionVersion: 1,
+    action: row.nativeAction ? row.nativeAction.id : `compat.${row.tool}`,
+    actionVersion: row.nativeAction ? row.nativeAction.version : 1,
     ...(row.unguardedRegistration ? { note: row.unguardedRegistration } : {}),
   }));
 }

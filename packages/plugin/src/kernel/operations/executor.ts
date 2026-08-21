@@ -94,8 +94,21 @@ export class AuthoritySurfaceError extends OperationRefusedError {
 }
 
 export interface OperationRequest {
-  action: string;
-  actionVersion: number;
+  /**
+   * The action, when the caller knows it.
+   *
+   * OMIT IT and the executor resolves the action from the surface's binding.
+   * That is the better call for a surface adapter: a door knows which door it
+   * is, not which contract currently sits behind it. The first draft had
+   * `makeGuarded` construct `compat.<tool>` itself, which meant migrating one
+   * surface to a native contract silently broke every call through it — the
+   * adapter was encoding a naming convention it had no business knowing.
+   *
+   * When supplied, it is verified against the binding rather than trusted, so
+   * a caller still cannot borrow another surface's contract.
+   */
+  action?: string;
+  actionVersion?: number;
   /**
    * The surface invoking this action.
    *
@@ -285,7 +298,10 @@ export function createOperationExecutor(opts: OperationExecutorOpts): OperationE
       const operation: OperationV1 = {
         schema: "governor.operation/v1",
         id: newId(),
-        action: { id: request.action, version: request.actionVersion },
+        // What the caller claimed, replaced by the binding's answer once one
+        // resolves. On a refusal there is no binding, so the claim is the only
+        // thing there is to record — and recording it is the point.
+        action: { id: request.action ?? "(unclaimed)", version: request.actionVersion ?? 0 },
         // The caller's claim, used only until a binding resolves and replaces
         // it. `mcp` is the conservative default for an unresolved surface: it
         // is agent-reachable, so a refusal record never under-states what was
@@ -315,18 +331,25 @@ export function createOperationExecutor(opts: OperationExecutorOpts): OperationE
         recovery: null,
       };
 
+      const claimed = request.action ? `${request.action}@${request.actionVersion ?? "?"}` : "(unclaimed)";
       const refuse = (error: OperationRefusedError): never => {
         close(operation, "refused");
         throw error;
       };
 
-      const action = opts.registry.get(request.action, request.actionVersion);
-      if (!action) refuse(new UnregisteredActionError(request.action, request.actionVersion));
-
       const binding = opts.registry.binding(request.surface.id);
-      if (!binding || binding.action !== action!.id || binding.actionVersion !== action!.version) {
-        refuse(new UnboundSurfaceError(request.surface.id, `${request.action}@${request.actionVersion}`));
+      if (!binding) refuse(new UnboundSurfaceError(request.surface.id, claimed));
+
+      // A claimed action is CHECKED against the binding, never trusted — a
+      // caller may not borrow another surface's contract. An unclaimed one is
+      // simply resolved from it.
+      if (request.action !== undefined && (binding!.action !== request.action || binding!.actionVersion !== (request.actionVersion ?? binding!.actionVersion))) {
+        refuse(new UnboundSurfaceError(request.surface.id, claimed));
       }
+
+      const action = opts.registry.get(binding!.action, binding!.actionVersion);
+      if (!action) refuse(new UnregisteredActionError(binding!.action, binding!.actionVersion));
+      operation.action = { id: action!.id, version: action!.version };
 
       // From here the REGISTRY's kind is the truth, and the caller's claim is
       // discarded. The envelope is corrected too, so a record never carries a

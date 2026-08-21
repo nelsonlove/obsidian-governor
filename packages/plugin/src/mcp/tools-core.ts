@@ -56,6 +56,10 @@ export interface ServerCtx {
      * explicit `false` disables it, so a caller that never wired the setting
      * fails toward protection. Read live by the per-connection probe. */
     enforceRecordImmutability?: boolean;
+  /** Capture the exact bytes a native read returned. Default off — see main.ts. */
+  captureObservations?: boolean;
+  /** Stopgap ceiling on total captured bytes, pending real retention. */
+  captureMaxBytes?: number;
   };
   /** The configured controlled-vocabulary sources (tools-vocab.ts). Optional:
    * absent means the defaults; absent in tests that don't exercise it. */

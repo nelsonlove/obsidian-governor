@@ -43,6 +43,11 @@ import { uuidv7, formatLocalTimestamp } from "./write-notes-compose.js";
 import { makeRegistry, DEFAULT_SCHEMES } from "../kernel/scheme/registry.js";
 import { buildMcpActionRegistry } from "../kernel/operations/mcp-registry.js";
 import { createOperationExecutor } from "../kernel/operations/executor.js";
+import { createCapture } from "../kernel/observations/capture.js";
+import { createObservationStore } from "../kernel/observations/store.js";
+import { createLocalBlobStore } from "../governance/observations/local-store.js";
+import { vaultSlug } from "../paths.js";
+import { collectPaths } from "../guard.js";
 
 export interface BuildOpts {
   /** Code Mode: expose the search/describe/call meta-tool surface instead of the full tool set. */
@@ -131,12 +136,41 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   // it per connection would turn a build failure into a runtime outage.
   const actions = buildMcpActionRegistry(externalToolSnapshot(ctx));
   for (const p of actions.problems) console.error("[governor] action registry:", p);
+  // ── observation capture (WP2) ───────────────────────────────────────────────
+  //
+  // DEFAULT OFF. `enabled` is read live, per call, so turning the setting on
+  // takes effect without a reconnect — and turning it off stops capture
+  // immediately rather than at the end of a session.
+  //
+  // Payloads land OUTSIDE the vault, in `~/.claude/governor/observations/<slug>/`,
+  // so Obsidian Sync never carries note text a user did not choose to sync.
+  //
+  // Playback authorization reuses the SAME allowlist the read boundary already
+  // enforces. That is deliberate: a reviewer must not be able to replay their
+  // way around a path scope, and re-deriving "may this person see this note"
+  // from a second rule would be two chances to disagree.
+  const observationStore = createObservationStore({
+    blobs: createLocalBlobStore({ vaultSlug: vaultSlug(ctx.vaultName ?? "vault") }),
+    canReplay: () => ctx.getSettings().captureObservations === true,
+    canRead: ({ source }) => visiblePaths([source], ctx.getSettings()).length > 0,
+  });
+  const observationCapture = createCapture({
+    store: observationStore,
+    enabled: () => ctx.getSettings().captureObservations === true,
+    maxBytes: ctx.getSettings().captureMaxBytes ?? 50 * 1024 * 1024,
+  });
+
   const executor = createOperationExecutor({
     registry: actions.registry,
     actor: () => {
       const a = actor();
       return { binding: `${a.connection}`, clientClaim: a.client ?? null };
     },
+    capture: observationCapture,
+    // The paths a call NAMES, via the same walker the guard and the journal
+    // already use — so what a payload is attributed to is the same set the
+    // allowlist decided over, rather than a second opinion about it.
+    sourcesOf: (req) => collectPaths((req.inputs ?? {}) as Record<string, unknown>),
   });
 
   const guardedOpts = {

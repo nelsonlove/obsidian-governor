@@ -45,6 +45,7 @@ import {
   EXTERNAL_PUBLISHER_ROW,
   mcpCompatibilityActions,
   mcpSurfaceBindings,
+  migrationDebt,
 } from "../src/kernel/operations/inventory-mcp.ts";
 import { createActionRegistry } from "../src/kernel/operations/registry.ts";
 import { COMPAT_PREFIX, isCompatibilityAction } from "../src/kernel/operations/compatibility.ts";
@@ -281,19 +282,29 @@ describe("inventory — builds a valid action registry", () => {
     );
   });
 
-  test("every action from this inventory is a compatibility action", () => {
-    // Gate 0 declares nothing natively. When that stops being true, this test
-    // is the reminder to move the action out of the compatibility inventory
-    // rather than leaving a native contract in a table of derived ones.
+  test("every action is either derived or explicitly native — nothing in between", () => {
+    // This test used to assert that EVERYTHING was derived, as a reminder to
+    // update it the moment the migration started. It has. `note.read` is now
+    // authored, so the invariant becomes: a native action is one a row
+    // deliberately named, and everything else is still conservative.
+    const native = new Set(MCP_SURFACE_INVENTORY.filter((r) => r.nativeAction).map((r) => r.nativeAction.id));
     for (const action of registry.actions()) {
-      assert.ok(isCompatibilityAction(action), `${action.id} is in the compatibility inventory but is not derived`);
-      assert.equal(action.native, false);
-      assert.ok(action.id.startsWith(COMPAT_PREFIX));
+      if (native.has(action.id)) {
+        assert.equal(action.native, true, `${action.id} is bound as native but does not declare itself native`);
+        assert.ok(!isCompatibilityAction(action), "a native action must not carry the compat prefix");
+      } else {
+        assert.ok(isCompatibilityAction(action), `${action.id} is neither native-bound nor derived`);
+        assert.equal(action.native, false);
+        assert.ok(action.id.startsWith(COMPAT_PREFIX));
+      }
     }
   });
 
-  test("no compatibility action claims durable observations or mandate eligibility", () => {
-    for (const action of registry.actions()) {
+  test("no DERIVED action claims durable observations or mandate eligibility", () => {
+    // Unchanged in substance: the ceiling on what a derived contract may claim
+    // is the whole point of the compatibility adapter. A native action is
+    // exempt because its contract was authored rather than guessed.
+    for (const action of registry.actions().filter(isCompatibilityAction)) {
       assert.equal(action.observations.defaultCapture, "ephemeral", `${action.id} must not claim durable capture`);
       assert.equal(action.observations.supportsProposal, false, `${action.id} must not claim proposal support`);
       assert.equal(action.authority.automaticAdmission, "never", `${action.id} must not claim mandate eligibility`);
@@ -307,10 +318,13 @@ describe("inventory — builds a valid action registry", () => {
     }
   });
 
-  test("the migration debt is countable: every action is compat.*, and that number is the work left", () => {
-    const compat = registry.actions().filter(isCompatibilityAction).length;
-    assert.equal(compat, registry.actions().length);
-    assert.equal(compat, MCP_SURFACE_INVENTORY.length + 1, "the +1 is the external-publisher mechanism");
+  test("the migration debt is countable, and it has started coming down", () => {
+    const { native, derived } = migrationDebt();
+    assert.equal(native + derived, MCP_SURFACE_INVENTORY.length);
+    assert.ok(native >= 1, "at least one surface has an authored contract");
+    // Pinned so the number is a fact someone reads rather than a vibe. Raising
+    // it means updating this line, which is the point.
+    assert.equal(native, 1, "one native surface so far: obsidian_read_note");
   });
 });
 

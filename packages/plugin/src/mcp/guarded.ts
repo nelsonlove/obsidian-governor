@@ -41,7 +41,6 @@ import {
   resolveSchemeArgs,
   type SchemeRegistry,
 } from "../kernel/scheme/registry.js";
-import { compatibilityActionId } from "../kernel/operations/compatibility.js";
 import { OperationRefusedError, type OperationExecutor } from "../kernel/operations/executor.js";
 
 /** Guard/queue-level failure envelope: matches the `Error [code]: message` shape guardCall already emits. */
@@ -436,8 +435,11 @@ export function makeGuarded(opts: GuardedOpts) {
     try {
       const { result } = await opts.executor.run(
         {
-          action: compatibilityActionId(toolName),
-          actionVersion: 1,
+          // No action id. The executor resolves it from this surface's
+          // binding — a door knows which door it is, not which contract
+          // currently sits behind it. Constructing `compat.<tool>` here meant
+          // migrating one surface to a native contract silently broke every
+          // call through it.
           surface: { kind: "mcp", id: toolName },
           inputs: args ?? {},
         },
