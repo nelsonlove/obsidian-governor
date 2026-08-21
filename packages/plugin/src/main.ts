@@ -11,6 +11,13 @@ import { findClaudeBinary, claudeIsRegistered, claudeRegister, claudeRemove, cla
 import { ExternalToolRegistry, type VaultMcpApi } from "./mcp/external-tools.js";
 import { Kernel, WriteQueue, WriteJournal, IdempotencyStore, LockStore, UidIndex, loadInstallId, migrateLegacyModuleIds, DEFAULT_VOCABULARIES, type VocabInstanceSettings, type ModuleSettings } from "./kernel/index.js";
 import { createSessionStore } from "./kernel/governance/sessions/session-store.js";
+import { createProposalStore } from "./kernel/governance/proposals/proposal-store.js";
+import { openGitRepository } from "./governance/history-store/git-repository.js";
+import { historyDir } from "./governance/history-store/local-data-root.js";
+import { effectiveScope, isTracked } from "./kernel/governance/history-store/history-scope.js";
+import { proposalRef } from "./kernel/governance/history-store/refs.js";
+import { EXCLUDED_PREFIXES } from "./governance/territories.js";
+import type { HistoryRepository } from "./kernel/governance/history-store/repository.js";
 import { obsidianProbe, obsidianServerIdentity, obsidianUidSource } from "./kernel/obsidian-probe.js";
 import { DEFAULT_SCHEMES, type SchemeInstanceConfig } from "./kernel/scheme/registry.js";
 import { DEFAULT_PROTECTED_PROPERTIES, setDeclaredProtectedProperties } from "@vault-mcp/core";
@@ -518,6 +525,40 @@ export default class VaultMcpPlugin extends Plugin {
     // could otherwise both take the `write` branch, silently losing one
     // `opened` event. Same mutex shape the history store's CAS uses.
     let sessionIoChain: Promise<unknown> = Promise.resolve();
+    // Proposals share the sessions' IO shape: append-only JSONL beside the
+    // acceptance log, serialized through its own chain. Identifiers and
+    // digests only — never note bodies (those live in the history store).
+    const proposalsFile = `${pluginDir}/governance/proposals.jsonl`;
+    let proposalIoChain: Promise<unknown> = Promise.resolve();
+    const proposalStore = createProposalStore({
+      appendLine: (line) => {
+        const task = async () => {
+          const dir = `${pluginDir}/governance`;
+          if (!(await sessionAdapter.exists(dir))) await sessionAdapter.mkdir(dir);
+          if (await sessionAdapter.exists(proposalsFile)) await sessionAdapter.append(proposalsFile, line + "\n");
+          else await sessionAdapter.write(proposalsFile, line + "\n");
+        };
+        const next = proposalIoChain.then(task, task);
+        proposalIoChain = next.catch(() => undefined);
+        return next;
+      },
+      readLines: async () => {
+        if (!(await sessionAdapter.exists(proposalsFile))) return [];
+        const raw = await sessionAdapter.read(proposalsFile);
+        return raw.split("\n").filter(Boolean);
+      },
+    });
+
+    // The history repository, opened LAZILY on first recording: an idle vault
+    // with history off never touches the gitdir. One instance per plugin —
+    // the single-writer assumption the CAS mutex documents.
+    let historyRepoPromise: Promise<HistoryRepository> | null = null;
+    const lazyHistoryRepo = () =>
+      (historyRepoPromise ??= openGitRepository({
+        gitdir: historyDir(vaultSlug(vaultName)),
+        worktree: (this.app.vault.adapter as unknown as { basePath: string }).basePath,
+      }));
+
     const sessionStore = createSessionStore({
       appendLine: (line) => {
         const task = async () => {
@@ -566,6 +607,45 @@ export default class VaultMcpPlugin extends Plugin {
         replicaId: install,
         vaultId: vaultName,
         journalHead: () => journalHeadMarker(),
+      },
+      proposals: {
+        open: (proposal: import("./kernel/governance/proposals/proposal.js").ProposalV1, now: number) => proposalStore.open(proposal, now),
+        uidOf: (path: string) => {
+          const uid = (this.app.metadataCache.getCache(path)?.frontmatter as Record<string, unknown> | undefined)?.uid;
+          return typeof uid === "string" && uid.length > 0 ? uid : null;
+        },
+        vaultId: vaultName,
+        // Record the proposal's base and proposed snapshots in the history
+        // store (WP4 consumed at last), returning the recording ref — the
+        // evidence admission-time verification replays base bytes from,
+        // because the write itself destroys them (the review's HIGH finding:
+        // without this, every overwrite proposal was permanently
+        // unverifiable). Null when the path is outside the effective history
+        // scope: an untracked path is ungoverned by the new system, and the
+        // producer skips the proposal rather than opening a dead one.
+        record: async (proposalId: string, path: string, baseBytes: Uint8Array | null, proposedBytes: Uint8Array) => {
+          const scope = effectiveScope(this.settings.historyScope, EXCLUDED_PREFIXES);
+          if (!isTracked(scope, path)) return null;
+          const repo = await lazyHistoryRepo();
+          const ref = proposalRef(proposalId);
+          // Base first (recorded-missing for a creation), proposed chained on
+          // it — the ref chain IS the diff, and stock git can read both.
+          const base = await repo.recordSnapshot({
+            ref,
+            files: [{ path, bytes: baseBytes }],
+            message: `base for proposal ${proposalId}`,
+            timestamp: Math.floor(Date.now() / 1000),
+            expectedRef: null,
+          });
+          await repo.recordSnapshot({
+            ref,
+            files: [{ path, bytes: proposedBytes }],
+            message: `proposed for proposal ${proposalId}`,
+            timestamp: Math.floor(Date.now() / 1000),
+            expectedRef: base.oid,
+          });
+          return ref;
+        },
       },
       getExternalTools: () => this.externalRegistry.entries(),
       getVocabularies: () => this.settings.vocabularies,
