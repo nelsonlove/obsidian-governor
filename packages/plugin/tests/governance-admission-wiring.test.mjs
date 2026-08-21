@@ -250,6 +250,26 @@ describe("admission wiring — the full path against the real repository", () =>
     assert.equal(h.vault.get(notePath), "proposed\n", "nothing was written");
   });
 
+  test("two CONCURRENT admits of one subject: exactly one claim chains; the loser refuses already_admitted", async () => {
+    // The wiring's pre-check runs outside the service's serialized chain, so
+    // two genuinely concurrent trusted clicks could both pass it. The check
+    // INSIDE the chain (re-review residual) is what makes the ledger clean:
+    // the loser's serialized turn sees the winner standing and refuses.
+    const proposal = await h.produce("Notes/Race.md", "base\n", "proposed\n");
+    const [a, b] = await Promise.all([
+      h.admission.admitWithGesture(proposal.id, "gesture-race-a"),
+      h.admission.admitWithGesture(proposal.id, "gesture-race-b"),
+    ]);
+    const oks = [a, b].filter((o) => o.ok);
+    const refused = [a, b].filter((o) => !o.ok);
+    assert.equal(oks.length, 1, "exactly one admission");
+    assert.equal(refused.length, 1);
+    assert.equal(refused[0].code, "already_admitted");
+    // And the standing chain holds exactly ONE commit for this subject.
+    const head = await h.repo.readCommit(await h.repo.resolveRef(standingRef()));
+    assert.match(head.message, new RegExp(`^admission ${oks[0].claimId}`));
+  });
+
   test("revert writes the recorded base back as a NEW change and supersedes the proposal", async () => {
     const proposal = await h.produce("Notes/Revert.md", "the base\n", "the proposal\n");
     const outcome = await h.admission.revertToBase(proposal.id, "gesture-test-ref");

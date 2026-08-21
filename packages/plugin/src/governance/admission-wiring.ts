@@ -182,7 +182,12 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
     async admitWithGesture(proposalId, gestureRef) {
       // Visible to the catch below: the degraded discriminator is standing
       // MOVEMENT during this call, so the pre-call head must survive the try.
+      // `preHeadKnown` is the re-review's transient-fault sentinel: a FAILED
+      // pre-read is "unknown", not "absent" — and an unknown starting point
+      // suppresses the degraded-success branch entirely, because movement
+      // cannot be asserted from a point nobody saw.
       let preHead: string | null = null;
+      let preHeadKnown = false;
       try {
         const proposal = await deps.proposals.get(proposalId);
         if (!proposal) return { ok: false, code: "proposal_unknown", detail: `no proposal ${proposalId}` };
@@ -193,7 +198,12 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
         // left the pane offering Admit again, and the second gesture passed
         // every policy row). The refusal also retries the projection catch-up
         // so the pane self-heals instead of offering the button forever.
-        preHead = await currentStanding().catch(() => null);
+        try {
+          preHead = await currentStanding();
+          preHeadKnown = true;
+        } catch {
+          preHead = null;
+        }
         if (preHead !== null) {
           const headClaim = await claims.byId(preHead);
           if (headClaim && headClaim.subjectDigest.value === proposal.subjectDigest.value) {
@@ -252,7 +262,7 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
         // that would attribute a failed act to a prior admission.
         try {
           const head = await currentStanding();
-          if (head !== null && head !== preHead) {
+          if (preHeadKnown && head !== null && head !== preHead) {
             const claim = await claims.byId(head);
             const proposal = await deps.proposals.get(proposalId);
             if (claim && proposal && claim.subjectDigest.value === proposal.subjectDigest.value) {

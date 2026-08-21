@@ -107,6 +107,20 @@ export function createAdmissionService(deps: AdmissionDeps): AdmissionService {
         // 2. Durable claim, before any authority moves. If we crash after
         //    this line, the claim is unattached evidence: retriable, harmless.
         const expected = await deps.currentStanding();
+        // Duplicate-admission check INSIDE the serialized chain (the wiring's
+        // own pre-check runs outside it, so two genuinely concurrent trusted
+        // clicks could both pass it): if what currently stands already covers
+        // this exact subject, a second admission would chain a duplicate
+        // commit recording nothing new. Refused, truthfully.
+        if (expected !== null) {
+          const standingClaim = await deps.claims.byId(expected);
+          if (standingClaim && standingClaim.subjectDigest.value === request.proposal.subjectDigest.value) {
+            throw new AdmissionRefusedError(
+              "already_admitted",
+              `this exact subject already stands as claim ${standingClaim.id}; a second admission would record nothing new`
+            );
+          }
+        }
         const claim = buildAdmissionClaim({
           subjectDigest: request.proposal.subjectDigest,
           proposalId: request.proposal.id,

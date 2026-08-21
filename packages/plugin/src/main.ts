@@ -610,10 +610,12 @@ export default class VaultMcpPlugin extends Plugin {
         },
         appendSettlement: (record) => {
           // Serialized like its sibling stores, and the exists?append:write
-          // pair kept inside the chain: the acceptance log has a SECOND
-          // in-process appender (wiring.ts's appendLog), and the first-ever
-          // settlement racing the first-ever accept record could otherwise
-          // clobber a line through the write branch.
+          // pair kept inside the chain — which strictly orders settlement
+          // and claims appends against EACH OTHER. Honest bound (re-review):
+          // wiring.ts's appendLog writes the same file OFF this chain, so the
+          // first-ever-settlement vs first-ever-accept-record race on a
+          // not-yet-existing file is narrowed, not closed; both writers are
+          // human-gesture-paced, so the practical window is nil.
           const task = async () => {
             const line = JSON.stringify(record) + "\n";
             if (await sessionAdapter.exists(acceptanceLogFile)) await sessionAdapter.append(acceptanceLogFile, line);
