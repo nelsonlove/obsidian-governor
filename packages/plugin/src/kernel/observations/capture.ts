@@ -116,7 +116,14 @@ export function createCapture(opts: CaptureOpts): Capture {
       // the policy returns `ephemeral` and there is nothing to build.
       const decision = decideCapture({
         action: input.action,
-        session: input.sessionId ? { id: input.sessionId, governed: true } : null,
+        // HAVING a session is not BEING governed. Every connection now opens
+        // a replica-local session (WP5), so a non-null id merely means "a
+        // connection exists" — while `governed` in D16's sense means working
+        // in a proposing or mandated posture, which arrives with WP6/WP9.
+        // Passing true here would silently promote every future
+        // evidence-default action to full-payload retention the moment it
+        // shipped, on the strength of nothing but a connection.
+        session: input.sessionId ? { id: input.sessionId, governed: false } : null,
         // A read whose action declares a durable default is returning
         // substantive content by contract. Sessions arrive in WP5; until then
         // the action's own declaration is the whole signal.

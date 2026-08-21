@@ -221,18 +221,23 @@ describe("operation executor — the operation envelope", () => {
     assert.equal(operation.phase, "closed");
   });
 
-  test("actor binding comes from Governor, never from the caller's inputs", async () => {
+  test("actor binding comes from Governor — a caller naming itself is REFUSED (WP5)", async () => {
+    // WP1 shipped the weak half of "ignored or refused": the claim had no
+    // effect. WP5 chose the strong half — refusal — because silently ignoring
+    // a field the caller plainly meant teaches them it worked. The invariant
+    // this test always pinned is unchanged: identity comes from the
+    // transport, never from arguments.
     const executor = fixtureExecutor();
-    const { operation } = await executor.run(
-      {
-        action: "note.read",
-        actionVersion: 1,
-        surface: MCP,
-        // A caller trying to name itself. It must have no effect.
-        inputs: { path: "A.md", actor: "somebody-else", signer: "forged" },
-      },
-      async () => "x"
+    await assert.rejects(
+      () =>
+        executor.run(
+          { action: "note.read", actionVersion: 1, surface: MCP, inputs: { path: "A.md", actor: "somebody-else", signer: "forged" } },
+          async () => "x"
+        ),
+      (e) => e.code === "reserved_identity_input"
     );
+    // And a clean call still gets its actor from Governor.
+    const { operation } = await executor.run({ action: "note.read", actionVersion: 1, surface: MCP, inputs: { path: "A.md" } }, async () => "x");
     assert.equal(operation.actor.binding, "conn-1");
     assert.equal(operation.actor.clientClaim, "claude-code/1.0.0");
   });

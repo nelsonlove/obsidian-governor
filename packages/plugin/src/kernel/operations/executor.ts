@@ -36,6 +36,7 @@ import type { SurfaceKind } from "./action.js";
 import { isAgentReachable } from "./surface-binding.js";
 import type { ActionRegistry } from "./registry.js";
 import type { Capture } from "../observations/capture.js";
+import { RESERVED_IDENTITY_INPUTS } from "./action.js";
 import {
   OPERATION_PHASES,
   nonAuthoritativeDigest,
@@ -57,6 +58,29 @@ export class OperationRefusedError extends Error {
   ) {
     super(message);
     this.name = new.target.name;
+  }
+}
+
+/**
+ * The caller's arguments carried an identity field. Identity is established
+ * by the transport and the session — never claimed through tool arguments
+ * (WP5: "actor fields ignored or refused when supplied by a client").
+ *
+ * Where each half of that disjunction actually holds: on the MCP wire, the
+ * SDK's zod schemas STRIP undeclared keys before the guard ever sees the
+ * arguments, so a client sending `actor: "forged"` is silently IGNORED there
+ * — safely, since identity is transport-derived regardless. THIS check is
+ * the refusal half, and it binds the surfaces zod does not front: internal
+ * calls, future native invocation paths, and any surface whose schema passes
+ * arguments through. Defense in depth at the one choke point every surface
+ * shares, not the wire behavior of today's MCP tools.
+ */
+export class ReservedIdentityInputError extends OperationRefusedError {
+  constructor(keys: string[]) {
+    super(
+      "reserved_identity_input",
+      `argument${keys.length > 1 ? "s" : ""} ${keys.join(", ")} claim${keys.length > 1 ? "" : "s"} identity, which is established by the transport, never by a caller. Remove the field${keys.length > 1 ? "s" : ""}.`
+    );
   }
 }
 
@@ -136,6 +160,8 @@ export interface OperationExecutorOpts {
   /** Governor-derived actor binding. Resolved PER CALL: a client's identity
    * only exists after its handshake, well after the executor is built. */
   actor: () => OperationActor;
+  /** The connection's durable session id (WP5), when sessions are wired. */
+  sessionId?: () => string | null;
   now?: () => number;
   newId?: () => string;
   /**
@@ -325,7 +351,7 @@ export function createOperationExecutor(opts: OperationExecutorOpts): OperationE
         // Derived, never taken from inputs. A caller that sends `actor` or
         // `signer` is ignored here and refused at the registry.
         actor: opts.actor(),
-        sessionId: request.sessionId ?? null,
+        sessionId: request.sessionId ?? opts.sessionId?.() ?? null,
         mandateId: request.mandateId ?? null,
         normalizedInputDigest: nonAuthoritativeDigest(normalizeInputs(request.inputs)),
         effectiveScopeDigest: request.effectiveScopeDigest ?? nonAuthoritativeDigest(""),
@@ -351,6 +377,14 @@ export function createOperationExecutor(opts: OperationExecutorOpts): OperationE
         close(operation, "refused");
         throw error;
       };
+
+      // Identity claims in arguments refuse FIRST — before the surface or
+      // action is even resolved, because the refusal is about the caller's
+      // posture, not about what they were calling.
+      const reservedSupplied = RESERVED_IDENTITY_INPUTS.filter((k) =>
+        Object.prototype.hasOwnProperty.call(request.inputs ?? {}, k)
+      );
+      if (reservedSupplied.length > 0) refuse(new ReservedIdentityInputError([...reservedSupplied]));
 
       const binding = opts.registry.binding(request.surface.id);
       if (!binding) refuse(new UnboundSurfaceError(request.surface.id, claimed));
