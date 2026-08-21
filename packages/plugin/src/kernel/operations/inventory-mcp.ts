@@ -52,7 +52,8 @@
 //
 // Two rows depart from a literal reading of D07 and say so in place:
 // `obsidian_delete_note` and the `fileclass` module. Both depart in the
-// conservative direction.
+// conservative direction, and the fileclass one is now Nelson's ruling rather
+// than a proposal — see its section.
 
 import type { Distribution } from "./action.js";
 import { compatibilityAction, type CompatibilitySpec } from "./compatibility.js";
@@ -307,12 +308,17 @@ const SURVEY: McpSurfaceRow[] = [
 ];
 
 // ── module: fileclass ────────────────────────────────────────────────────────
+// PRIVATE — Nelson's ruling, 2026-08-21. Decided, not merely assumed.
+//
 // D07 names "Fileclass inspection and named representation proposals" as
-// public-optional. This implementation proxies an external CLI binary through
-// execFile, which threat-model control #9 keeps out of the public surface.
-// Recorded as a genuine tension and resolved conservatively: the whole module
-// is private until either the CLI dependency is replaced by the plugin's own
-// API or the execFile boundary is separately reviewed for Community release.
+// public-optional, and this implementation proxies an external CLI binary
+// through execFile, which threat-model control #9 keeps out of the public
+// surface. Two adopted rules disagreed. The conservative reading was put to
+// Nelson with the tension stated, and private is what he chose.
+//
+// Promotion is therefore a decision to revisit, not an oversight to fix. It
+// needs one of: the CLI dependency replaced by the Fileclass plugin's own API,
+// or the execFile boundary separately reviewed for Community release.
 
 const FILECLASS: McpSurfaceRow[] = [
   { tool: "fileclass_list", readOnly: true, module: "fileclass", distribution: "private", refusesUnderScope: true, postcondition: "List every fileClass.", gate: "Fileclass plugin loaded AND the fileclass CLI binary resolves" },
