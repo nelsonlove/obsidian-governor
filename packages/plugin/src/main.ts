@@ -1,4 +1,4 @@
-import { Plugin, FileSystemAdapter, Modal, Notice, type Component } from "obsidian";
+import { Plugin, FileSystemAdapter, Modal, Notice, TFile, type Component } from "obsidian";
 import * as fs from "node:fs";
 import { UnixSocketListener } from "./socket-transport.js";
 import { buildMcpServer } from "./mcp/server.js";
@@ -12,6 +12,7 @@ import { ExternalToolRegistry, type VaultMcpApi } from "./mcp/external-tools.js"
 import { Kernel, WriteQueue, WriteJournal, IdempotencyStore, LockStore, UidIndex, loadInstallId, migrateLegacyModuleIds, DEFAULT_VOCABULARIES, type VocabInstanceSettings, type ModuleSettings } from "./kernel/index.js";
 import { createSessionStore } from "./kernel/governance/sessions/session-store.js";
 import { createProposalStore } from "./kernel/governance/proposals/proposal-store.js";
+import { buildAdmission, type AdmissionUiDeps } from "./governance/admission-wiring.js";
 import { openGitRepository } from "./governance/history-store/git-repository.js";
 import { historyDir } from "./governance/history-store/local-data-root.js";
 import { effectiveScope, isTracked } from "./kernel/governance/history-store/history-scope.js";
@@ -144,6 +145,11 @@ interface VaultMcpSettings {
    */
   devToolRunner: boolean;
 }
+// WP6b-2: the admission UI-deps factory, keyed off the plugin instance in a
+// module-local WeakMap (the wiring.ts pattern) — NOT a plugin property, so
+// renderer JS walking `app.plugins` finds no admit-capable function (§9).
+const admissionFactories = new WeakMap<Plugin, () => AdmissionUiDeps>();
+
 const DEFAULT_SETTINGS: VaultMcpSettings = {
   setupAcknowledged: false,
   readOnly: false,
@@ -559,6 +565,58 @@ export default class VaultMcpPlugin extends Plugin {
         worktree: (this.app.vault.adapter as unknown as { basePath: string }).basePath,
       }));
 
+    // The admission machinery factory (WP6b-2): claims IO, settlement append
+    // into the acceptance log, note IO, all closure-held. Built per mount by
+    // wireGovernance's call-site; the standing capability itself is
+    // constructed inside buildAdmission from the lazy history repo.
+    const claimsFile = `${pluginDir}/governance/admission-claims.jsonl`;
+    let claimIoChain: Promise<unknown> = Promise.resolve();
+    const claimIo = {
+      appendLine: (line: string) => {
+        const task = async () => {
+          const dir = `${pluginDir}/governance`;
+          if (!(await sessionAdapter.exists(dir))) await sessionAdapter.mkdir(dir);
+          if (await sessionAdapter.exists(claimsFile)) await sessionAdapter.append(claimsFile, line + "\n");
+          else await sessionAdapter.write(claimsFile, line + "\n");
+        };
+        const next = claimIoChain.then(task, task);
+        claimIoChain = next.catch(() => undefined);
+        return next;
+      },
+      readLines: async () => {
+        if (!(await sessionAdapter.exists(claimsFile))) return [];
+        return (await sessionAdapter.read(claimsFile)).split("\n").filter(Boolean);
+      },
+    };
+    const acceptanceLogFile = `${pluginDir}/governance/acceptance-log.jsonl`;
+    admissionFactories.set(this, () =>
+      buildAdmission({
+        repo: lazyHistoryRepo,
+        claimIo,
+        proposals: proposalStore,
+        readNoteBytes: async (path) => {
+          if (!(await sessionAdapter.exists(path))) return null;
+          return new TextEncoder().encode(await sessionAdapter.read(path));
+        },
+        writeNoteBytes: async (path, bytes) => {
+          // Through the VAULT API, not the raw adapter: vault.modify fires the
+          // modify event, so the written-back bytes surface through the
+          // ordinary review machinery (classifier → queue) instead of landing
+          // silently. A revert is a change like any other — D06.
+          const file = this.app.vault.getAbstractFileByPath(path);
+          const text = new TextDecoder().decode(bytes);
+          if (file instanceof TFile) await this.app.vault.modify(file, text);
+          else await this.app.vault.create(path, text);
+        },
+        appendSettlement: async (record) => {
+          const line = JSON.stringify(record) + "\n";
+          if (await sessionAdapter.exists(acceptanceLogFile)) await sessionAdapter.append(acceptanceLogFile, line);
+          else await sessionAdapter.write(acceptanceLogFile, line);
+        },
+        refreshProjections: async () => nudgeGovernanceQueue(this),
+      })
+    );
+
     const sessionStore = createSessionStore({
       appendLine: (line) => {
         const task = async () => {
@@ -857,6 +915,8 @@ export default class VaultMcpPlugin extends Plugin {
       try {
         this.governanceComponent = await wireGovernance(this, {
           getConfig: () => (this.settings.modules?.acceptance?.config ?? {}) as Record<string, unknown>,
+          // Built fresh per mount, handed as an argument (§9: never a property).
+          admission: admissionFactories.get(this)?.(),
         });
       } catch (e) {
         console.error("[governor] governance pane wiring failed", e);

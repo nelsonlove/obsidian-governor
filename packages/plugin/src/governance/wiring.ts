@@ -147,6 +147,12 @@ const QUEUE_DELETE_TIMER = "\u0000queue-delete";
  * display prefs are derived. Plain data — confers no accept capability. */
 export interface GovernanceWireDeps {
   getConfig: () => Record<string, unknown>;
+  /**
+   * The governed-proposals surface (WP6b-2), built in main.ts's closure scope
+   * and handed through as an ARGUMENT — never a plugin/view property (§9).
+   * Absent ⇒ the pane simply has no governed-proposals section.
+   */
+  admission?: import("./admission-wiring.js").AdmissionUiDeps;
 }
 
 // ── module-private per-plugin state (WeakMaps, keyed by the plugin instance) ──
@@ -641,8 +647,12 @@ function acceptanceStatusFor(plugin: Plugin, path: string): string | null {
 // The controller handed to the view. Carries accept/revert/adopt/setClassEnabled callables —
 // passed straight into the view constructor (which stows it in a module-private WeakMap) and never
 // stored on the plugin. Built fresh per view instantiation.
-function buildController(plugin: Plugin): ReviewController {
+function buildController(plugin: Plugin, admission?: import("./admission-wiring.js").AdmissionUiDeps): ReviewController {
   return {
+    // WP6b-2: the governed-proposals surface. Read + two gesture-gated acts,
+    // reachable only through the pane rows below — the same reachability
+    // class as accept/revert/adopt above.
+    admission,
     getPending: () => getCachedPending(plugin),
     getBaselineContent: (path) => getStore(plugin).get(path)?.content ?? null,
     readCurrent: (path) => readNote(plugin, path),
@@ -1206,7 +1216,7 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
   // not unregister (an Obsidian build without viewRegistry.unregisterView) we REUSE the existing
   // registration — its factory reads live WeakMap state, so the pane still works.
   try {
-    plugin.registerView(VIEW_TYPE_GOVERNANCE, (leaf) => new GovernanceReviewView(leaf, buildController(plugin)));
+    plugin.registerView(VIEW_TYPE_GOVERNANCE, (leaf) => new GovernanceReviewView(leaf, buildController(plugin, deps.admission)));
   } catch (e) {
     console.warn("governor acceptance: review view type already registered — reusing it", e);
   }

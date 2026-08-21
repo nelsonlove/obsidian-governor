@@ -34,7 +34,8 @@ import { ItemView, Notice, Modal, TFile, type WorkspaceLeaf, type App } from "ob
 import { AcceptGateError, type AcceptOpts } from "../kernel/governance/accept.js";
 import { type PendingItem, groupByAgent } from "../kernel/governance/queue.js";
 import { diffNote, toHunks, type DiffLine, type HunkCollapsed } from "../kernel/governance/diff.js";
-import { isRealGesture, runGuardedAdopt } from "../kernel/governance/gesture.js";
+import { isRealGesture, runGuardedAdopt, runGuardedDisposition } from "../kernel/governance/gesture.js";
+import { mintGestureRef } from "./admission-wiring.js";
 import { dispositionsFor, dispositionById, acceptEffectFor, type DispositionId } from "../kernel/governance/dispositions.js";
 import type { AcceptResult } from "../kernel/governance/accept.js";
 import type { ProposedItem } from "../kernel/governance/proposed.js";
@@ -108,6 +109,8 @@ export interface ReviewController {
   // delta (pending items are deduped out — their queue row already carries Accept), built
   // from the metadata cache like getRevising and respecting the same excluded roots.
   getProposed(): ProposedItem[];
+  /** WP6b-2: the governed-proposals surface (list + gesture-gated admit/revert). Absent ⇒ no section. */
+  admission?: import("./admission-wiring.js").AdmissionUiDeps;
   // The configured accepted-by identity (governance config `acceptedBy`) — display data so
   // the Accept controls can SURFACE what will be stamped before the one click.
   acceptedBy(): string;
@@ -585,6 +588,11 @@ export class GovernanceReviewView extends ItemView {
       // queue rows do — the convergence that makes the pane's Accept the ONE accept across
       // both lifecycles. Pending proposed notes are deduped into the queue only.
       this.renderProposed(root, deps);
+      // WP6b-2: proposals produced by the NATIVE write path — subject digests,
+      // recorded snapshots, admission through the AdmissionService. Rendered
+      // async (the store is durable, not cached); failures leave the section
+      // absent rather than breaking the pane.
+      void this.renderGovernedProposals(root, deps);
       // The Revising section (#101): notes with acceptance-status: revising, whether or not
       // they are in the pending queue — the frontmatter-lifecycle visibility that makes this
       // pane a superset of the retired js-engine panel.
@@ -592,6 +600,111 @@ export class GovernanceReviewView extends ItemView {
       // The auto-accept allowlist section — HUMAN-ONLY-MUTABLE, gesture-gated. Rendered via the
       // shared renderAllowlist (one implementation, shared with the settings tab).
       renderAllowlist(root, deps);
+    }
+  }
+
+  // The governed-proposals section (WP6b-2). Both row actions run the FULL
+  // authority-class perimeter — addEventListener-wired (never onclick, so a
+  // captured property cannot be invoked), isRealGesture-gated, confirm-modal
+  // for Admit — because admission ADVANCES STANDING: it is the §9 authority
+  // act, and §15's required test family ("synthetic click and captured-menu
+  // callback attacks remain unable to admit") pins this chain headlessly.
+  // The gestureRef is minted HERE, inside the click handler: it exists only
+  // if a real click happened.
+  private async renderGovernedProposals(root: HTMLElement, deps: ReviewController): Promise<void> {
+    if (!deps.admission) return;
+    let items: import("../kernel/governance/proposals/proposal.js").ProposalV1[] = [];
+    try {
+      items = await deps.admission.pending();
+    } catch {
+      return;
+    }
+    if (items.length === 0) return;
+    const section = root.createDiv({ cls: "governance-governed" });
+    section.createDiv({ cls: "governance-proposed-title", text: `Governed proposals (${items.length})` });
+    section.createDiv({
+      cls: "governance-proposed-desc",
+      text:
+        "Changes recorded by the native write path, each with exact base and proposed snapshots. " +
+        "Admit re-reads the note NOW, re-runs verification over the exact subject, and advances standing only if nothing drifted. " +
+        "A change since the proposal aborts admission rather than silently deciding something else.",
+    });
+    for (const item of items) {
+      const row = section.createDiv({ cls: "governance-proposed-row" });
+      const main = row.createDiv({ cls: "governance-row-main" });
+      main.createDiv({ cls: "governance-row-title", text: item.subject.path ?? item.subject.noteId });
+      main.createDiv({
+        cls: "governance-row-path",
+        text: `${item.subjectDigest.value.slice(0, 12)}… · ${item.subject.changeClasses.join("+")} · ${new Date(item.createdAt).toLocaleString()}`,
+      });
+      const controls = row.createDiv({ cls: "governance-proposed-controls" });
+
+      const admitBtn = controls.createEl("button", { cls: "mod-cta governance-admit", text: "Admit" });
+      admitBtn.addEventListener("click", (evt) => {
+        void runGuardedDisposition(
+          evt,
+          () =>
+            new Promise<boolean>((resolve) =>
+              new ConfirmModal(
+                this.app,
+                {
+                  title: "Admit this change?",
+                  body:
+                    `Admission re-verifies the exact subject (${item.subjectDigest.value.slice(0, 12)}…) against the note as it stands right now, ` +
+                    "then advances standing. A note changed since the proposal will refuse.",
+                  items: [item.subject.path ?? item.subject.noteId],
+                  confirmText: "Admit",
+                },
+                resolve
+              ).open()
+            ),
+          async () => {
+            // Minted inside the gesture: a real click happened or this line never ran.
+            const gestureRef = mintGestureRef(Date.now());
+            const outcome = await deps.admission!.admitWithGesture(item.id, gestureRef);
+            if (outcome.ok) {
+              // The never-say rules: name the subject, predicate, verifier,
+              // and coverage; never "Accepted" because a write succeeded;
+              // degraded is SAID when the record is catching up.
+              new Notice(
+                `Admitted ${outcome.receipt.subjectDigest.slice(0, 12)}… — verified by ${outcome.receipt.verifier} ` +
+                  `(${outcome.receipt.predicates.join(", ")}; coverage ${outcome.receipt.coverage}).` +
+                  (outcome.degraded ? " journal: DEGRADED — the admission stands; its settlement record is catching up." : ""),
+                10000
+              );
+            } else {
+              new Notice(`Not admitted [${outcome.code}]: ${outcome.detail} — the subject remains proposed.`, 10000);
+            }
+            void this.rerender();
+          }
+        );
+      });
+
+      const revertBtn = controls.createEl("button", { cls: "governance-revert", text: "Revert to base" });
+      revertBtn.addEventListener("click", (evt) => {
+        void runGuardedDisposition(
+          evt,
+          () =>
+            new Promise<boolean>((resolve) =>
+              new ConfirmModal(
+                this.app,
+                {
+                  title: "Revert to the recorded base?",
+                  body: "Writes the recorded base bytes back as a NEW change (new history; the rejected result stays preserved in the recording). The proposal is superseded.",
+                  items: [item.subject.path ?? item.subject.noteId],
+                  confirmText: "Revert",
+                },
+                resolve
+              ).open()
+            ),
+          async () => {
+            const gestureRef = mintGestureRef(Date.now());
+            const outcome = await deps.admission!.revertToBase(item.id, gestureRef);
+            new Notice(outcome.ok ? `Reverted; proposal ${outcome.supersededProposalId.slice(0, 8)}… superseded.` : `Not reverted [${outcome.code}]: ${outcome.detail}`, 8000);
+            void this.rerender();
+          }
+        );
+      });
     }
   }
 
