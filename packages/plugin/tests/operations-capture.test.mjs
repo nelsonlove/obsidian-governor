@@ -1,0 +1,235 @@
+/**
+ * operations-capture.test.mjs — WP2's vertical slice, Gate 0.
+ *
+ * The point where the observation substrate stops being contracts and starts
+ * writing note text to disk. Everything here is about the conditions under
+ * which that happens, because the failure that matters is not "capture broke"
+ * — it is "capture happened when nobody asked for it".
+ *
+ * Three gates, and a read is captured only if ALL of them agree:
+ *
+ *   1. the human turned it on. Default off, per vault.
+ *   2. the ACTION says its observations are worth keeping. A compatibility
+ *      action never does — a derived contract cannot claim replayability, so
+ *      the 123 pre-existing tools capture nothing even with the setting on.
+ *   3. there is room under the size cap.
+ *
+ * The last one exists because retention does not: until a real retention pass
+ * lands, an uncapped store grows forever, and "it filled the disk" is a worse
+ * outcome than "it stopped recording and said so".
+ */
+
+import { test, describe } from "node:test";
+import assert from "node:assert/strict";
+
+import { createActionRegistry } from "../src/kernel/operations/registry.ts";
+import { createOperationExecutor } from "../src/kernel/operations/executor.ts";
+import { createObservationStore } from "../src/kernel/observations/store.ts";
+import { createCapture } from "../src/kernel/observations/capture.ts";
+import { NOTE_READ_V1 } from "../src/kernel/operations/actions/note-read.ts";
+import { compatibilityAction } from "../src/kernel/operations/compatibility.ts";
+
+// ── fixtures ─────────────────────────────────────────────────────────────────
+
+function blobs() {
+  const map = new Map();
+  return {
+    map,
+    async put(k, d) { map.set(k, d); },
+    async get(k) { return map.has(k) ? map.get(k) : null; },
+    async has(k) { return map.has(k); },
+    async remove(k) { map.delete(k); },
+    async keys() { return [...map.keys()]; },
+  };
+}
+
+/** A registry holding the native read plus one compatibility tool. */
+function registry() {
+  const r = createActionRegistry();
+  r.register(NOTE_READ_V1);
+  r.register(
+    compatibilityAction({
+      surface: "obsidian_doctor",
+      postcondition: "Report bridge health.",
+      owner: "core",
+      distribution: "public-default",
+      readOnly: true,
+    })
+  );
+  r.bind({ kind: "mcp", id: "obsidian_read_note", action: NOTE_READ_V1.id, actionVersion: NOTE_READ_V1.version });
+  r.bind({ kind: "mcp", id: "obsidian_doctor", action: "compat.obsidian_doctor", actionVersion: 1 });
+  r.validate();
+  return r;
+}
+
+function harness({ enabled = true, maxBytes = 1_000_000 } = {}) {
+  const b = blobs();
+  const store = createObservationStore({ blobs: b, canReplay: () => true, canRead: () => true });
+  const observations = [];
+  const capture = createCapture({
+    store,
+    enabled: () => enabled,
+    maxBytes,
+    now: () => 1_700_000_000_000,
+    newId: (() => { let n = 0; return () => `obs-${++n}`; })(),
+    onObservation: (o) => observations.push(o),
+  });
+  const executor = createOperationExecutor({
+    registry: registry(),
+    actor: () => ({ binding: "conn-1", clientClaim: "claude-code" }),
+    capture,
+    // The surface knows the action's argument shape; the executor does not.
+    sourcesOf: (req) => (req.inputs?.path ? [req.inputs.path] : []),
+  });
+  return { executor, store, blobs: b, observations, capture };
+}
+
+const READ = { action: NOTE_READ_V1.id, actionVersion: NOTE_READ_V1.version, surface: { id: "obsidian_read_note" } };
+const DOCTOR = { action: "compat.obsidian_doctor", actionVersion: 1, surface: { id: "obsidian_doctor" } };
+
+// ── gate 1: the human turned it on ───────────────────────────────────────────
+
+describe("capture — off by default means nothing is written", () => {
+  test("with capture disabled, no payload reaches the store", async () => {
+    const { executor, blobs: b, observations } = harness({ enabled: false });
+    await executor.run({ ...READ, inputs: { path: "A.md" } }, async () => ({ content: "the note text" }));
+    assert.equal(b.map.size, 0, "nothing on disk");
+    assert.deepEqual(observations, [], "and no observation record either");
+  });
+
+  test("the operation still succeeds — capture is evidence, not a precondition", async () => {
+    const { executor } = harness({ enabled: false });
+    const { result, operation } = await executor.run({ ...READ, inputs: {} }, async () => "ok");
+    assert.equal(result, "ok");
+    assert.equal(operation.outcome, "completed");
+  });
+
+  test("the operation records that capture was off, rather than looking like nothing was readable", async () => {
+    // "Absence is not emptiness": an empty observation list must be
+    // distinguishable from a read that had nothing to capture.
+    const { executor } = harness({ enabled: false });
+    const { operation } = await executor.run({ ...READ, inputs: {} }, async () => "ok");
+    assert.deepEqual(operation.observations, []);
+    assert.match(operation.captureNote ?? "", /disabled/i);
+  });
+});
+
+// ── gate 2: the action says so ───────────────────────────────────────────────
+
+describe("capture — a compatibility action captures nothing, even when enabled", () => {
+  test("a derived contract cannot claim replayability, so it is not captured", async () => {
+    // This is what keeps the 123 pre-existing tools out of the store on day
+    // one. They are not native, so they have no observation contract worth
+    // acting on, and inventing one would be exactly the overclaim the
+    // compatibility adapter exists to prevent.
+    const { executor, blobs: b } = harness({ enabled: true });
+    await executor.run({ ...DOCTOR, inputs: {} }, async () => ({ status: "ok" }));
+    assert.equal(b.map.size, 0);
+  });
+
+  test("the NATIVE read is captured when enabled", async () => {
+    const { executor, blobs: b, observations } = harness({ enabled: true });
+    await executor.run({ ...READ, inputs: { path: "A.md" } }, async () => ({ content: "the note text" }));
+    assert.equal(b.map.size, 1, "the payload is stored");
+    assert.equal(observations.length, 1);
+    assert.equal(observations[0].level, "replayable");
+  });
+
+  test("the operation names the observation it produced", async () => {
+    const { executor, observations } = harness({ enabled: true });
+    const { operation } = await executor.run({ ...READ, inputs: { path: "A.md" } }, async () => ({ content: "x" }));
+    assert.deepEqual(operation.observations, [observations[0].id]);
+  });
+
+  test("what is stored is what was returned — byte for byte", async () => {
+    const { executor, store, observations } = harness({ enabled: true });
+    const payload = { content: "# Heading\n\nbody text", rev: 7 };
+    await executor.run({ ...READ, inputs: { path: "A.md" } }, async () => payload);
+    const played = await store.playback(observations[0].result.payloadObject, { reader: "human-1" });
+    assert.deepEqual(played.payload, payload);
+    assert.equal(played.historical, true);
+  });
+});
+
+// ── gate 3: the size cap ─────────────────────────────────────────────────────
+
+describe("capture — the cap stops the store growing forever", () => {
+  test("a payload over the cap is refused, and the refusal is recorded", async () => {
+    // Retention does not exist yet. Until it does, an uncapped store grows
+    // without bound, and "it filled the disk" is a worse outcome than "it
+    // stopped recording and said so".
+    const { executor, blobs: b } = harness({ enabled: true, maxBytes: 50 });
+    const { operation } = await executor.run(
+      { ...READ, inputs: { path: "A.md" } },
+      async () => ({ content: "x".repeat(500) })
+    );
+    assert.equal(b.map.size, 0, "nothing stored");
+    assert.deepEqual(operation.observations, []);
+    assert.match(operation.captureNote ?? "", /cap/i);
+  });
+
+  test("the read still succeeds — a full store must never cost a caller their result", async () => {
+    const { executor } = harness({ enabled: true, maxBytes: 10 });
+    const { result } = await executor.run({ ...READ, inputs: {} }, async () => ({ content: "x".repeat(500) }));
+    assert.deepEqual(result, { content: "x".repeat(500) });
+  });
+
+  test("the cap counts the whole store, not one payload", async () => {
+    const { executor, blobs: b } = harness({ enabled: true, maxBytes: 120 });
+    for (const n of ["a", "b", "c", "d", "e"]) {
+      await executor.run({ ...READ, inputs: { path: `${n}.md` } }, async () => ({ content: n.repeat(30) }));
+    }
+    const total = [...b.map.values()].reduce((sum, v) => sum + v.length, 0);
+    assert.ok(total <= 120 + 60, `store stayed near the cap, got ${total}`);
+    assert.ok(b.map.size < 5, "not every read was stored once the cap was reached");
+  });
+});
+
+// ── a capture failure never costs the caller ─────────────────────────────────
+
+describe("capture — failure degrades observability, never the operation", () => {
+  test("a throwing store does not fail the read", async () => {
+    // Same rule the write journal already follows.
+    const b = blobs();
+    b.put = async () => { throw new Error("disk on fire"); };
+    const store = createObservationStore({ blobs: b, canReplay: () => true, canRead: () => true });
+    const capture = createCapture({ store, enabled: () => true, maxBytes: 1e6 });
+    const executor = createOperationExecutor({
+      registry: registry(),
+      actor: () => ({ binding: "c", clientClaim: null }),
+      capture,
+      sourcesOf: () => ["A.md"],
+    });
+    const { result, operation } = await executor.run({ ...READ, inputs: {} }, async () => ({ content: "kept" }));
+    assert.deepEqual(result, { content: "kept" });
+    assert.match(operation.captureNote ?? "", /failed/i);
+  });
+});
+
+// ── the native action's own contract ─────────────────────────────────────────
+
+describe("capture — the native read declares what it can back", () => {
+  test("note.read is native, replayable, and may support a proposal", () => {
+    assert.equal(NOTE_READ_V1.native, true);
+    assert.equal(NOTE_READ_V1.observations.defaultCapture, "replayable");
+    assert.equal(NOTE_READ_V1.observations.supportsProposal, true);
+  });
+
+  test("it is a read: no change classes, no effects, not Governor-only", () => {
+    assert.deepEqual(NOTE_READ_V1.changeClasses, []);
+    assert.deepEqual(NOTE_READ_V1.effects.direct, []);
+    assert.equal(NOTE_READ_V1.authority.governorOnly, false);
+  });
+});
+
+describe("capture — provenance is a precondition, not a nicety", () => {
+  test("a read with no recorded source is NOT stored", async () => {
+    // Found by a test, not by design. The store refuses a source-less payload
+    // at playback, so capturing one writes note text nobody can ever read
+    // back — the whole privacy cost of retention with none of the benefit.
+    const { executor, blobs: b } = harness({ enabled: true });
+    const { operation } = await executor.run({ ...READ, inputs: {} }, async () => ({ content: "orphan" }));
+    assert.equal(b.map.size, 0);
+    assert.match(operation.captureNote ?? "", /provenance|source/i);
+  });
+});

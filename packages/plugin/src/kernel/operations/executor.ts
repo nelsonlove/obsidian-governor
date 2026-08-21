@@ -35,6 +35,7 @@
 import type { SurfaceKind } from "./action.js";
 import { isAgentReachable } from "./surface-binding.js";
 import type { ActionRegistry } from "./registry.js";
+import type { Capture } from "../observations/capture.js";
 import {
   OPERATION_PHASES,
   nonAuthoritativeDigest,
@@ -131,6 +132,18 @@ export interface OperationExecutorOpts {
    * operation or costs a caller their result.
    */
   onClose?: (operation: OperationV1) => void;
+  /**
+   * Observation capture. Absent means no capture at all — the configuration
+   * every existing test uses, and the one a bare embed gets.
+   *
+   * Capture runs AFTER the handler, on its result, and can never fail the
+   * operation: a full disk or a throwing store degrades observability and is
+   * reported on the envelope, exactly as the write journal already behaves.
+   */
+  capture?: Capture | null;
+  /** Vault paths a read covered, derived by the surface that knows the
+   * action's argument shape. Used for playback authorization. */
+  sourcesOf?: (request: OperationRequest) => string[];
 }
 
 /** Lets a handler record the phases only it can witness. */
@@ -340,6 +353,30 @@ export function createOperationExecutor(opts: OperationExecutorOpts): OperationE
         // queue, attempting an effect. The executor never assumes them from a
         // declared mode.
         const result = await handler((phase) => mark(operation, phase));
+
+        // Capture AFTER the handler, on what it actually returned, and only
+        // for a successful read — capturing a refusal envelope would store an
+        // error message as if it were vault content.
+        if (opts.capture && outcomeOf(result) === "completed") {
+          mark(operation, "observed");
+          const captured = await opts.capture.capture({
+            action: action!,
+            operationId: operation.id,
+            actorBinding: operation.actor.binding,
+            sessionId: operation.sessionId,
+            mandateId: operation.mandateId,
+            normalizedRequestDigest: operation.normalizedInputDigest,
+            effectiveScopeDigest: operation.effectiveScopeDigest,
+            sources: opts.sourcesOf?.(request) ?? [],
+            payload: result,
+          });
+          if (captured.observation) operation.observations.push(captured.observation.id);
+          // The reason is recorded even on success-with-no-capture, so an empty
+          // observation list can be told apart from a read that had nothing to
+          // record.
+          if (captured.note) operation.captureNote = captured.note;
+        }
+
         close(operation, outcomeOf(result));
         return { result, operation };
       } catch (e) {
