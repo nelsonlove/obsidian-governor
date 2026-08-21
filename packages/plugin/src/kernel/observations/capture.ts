@@ -5,7 +5,7 @@
 // which that happens, because the failure that matters is not "capture broke"
 // — it is "capture happened when nobody asked for it".
 //
-// Three gates, and a read is captured only if all three agree:
+// Five gates, and a read is captured only if ALL of them agree:
 //
 //   1. the human turned it on. Default off, per vault. Capturing note bodies
 //      is a privacy decision, and it is not one a plugin should make for
@@ -14,7 +14,12 @@
 //      action never does, so the 123 pre-existing tools capture nothing even
 //      with the setting on — they are not native, and inventing an observation
 //      contract for them would be the overclaim the adapter exists to prevent.
-//   3. there is room under the size cap.
+//   3. the read's provenance is known — a payload whose source is unrecorded
+//      can never be authorized for replay, so storing it is pure cost.
+//   4. no source lies in a guarded territory. Reads there are legal and must
+//      stay legal; CAPTURE is what turns a read into a durable copy somewhere
+//      else, which is exactly what a guarded territory forbids (issue #322).
+//   5. there is room under the size cap.
 //
 // The cap exists because retention does not, yet. Until a real retention pass
 // lands, an uncapped store grows forever, and "it filled the disk" is a worse
@@ -60,6 +65,13 @@ export interface CaptureOpts {
   maxBytes: number;
   /** Field names removed before anything is written. */
   redactKeys?: string[];
+  /**
+   * Whether a source path lies in a guarded territory (governance/territories).
+   * A payload with ANY guarded source is refused whole — a mixed read is not
+   * split, because the payload is one object and partial retention of it would
+   * still retain the guarded part.
+   */
+  excludedSource?: (path: string) => boolean;
   now?: () => number;
   newId?: () => string;
   onObservation?: (o: ObservationV1) => void;
@@ -114,7 +126,7 @@ export function createCapture(opts: CaptureOpts): Capture {
         return { observation: null, note: `ephemeral by policy: ${decision.reason}` };
       }
 
-      // Gate 4, and it was found by a test rather than by design. Without a
+      // Gate 3, and it was found by a test rather than by design. Without a
       // recorded source the store cannot authorize a replay — it refuses a
       // source-less payload outright — so capturing one writes note text to
       // disk that nobody can ever read back. That is the worst combination
@@ -128,12 +140,32 @@ export function createCapture(opts: CaptureOpts): Capture {
         };
       }
 
+      // Gate 4. The territory list forbids RETENTION, not reading: the read
+      // itself already happened and stays legal. What may not happen is this
+      // module writing a durable copy of guarded content outside the territory
+      // — so any guarded source refuses the whole payload, before redaction or
+      // the size cap ever see it.
+      if (opts.excludedSource) {
+        const guarded = input.sources.filter(opts.excludedSource);
+        if (guarded.length > 0) {
+          // This note carries the guarded PATHS (not bodies) on the in-memory
+          // operation envelope — same posture the write journal takes for
+          // paths today. If a durable operations sink is ever wired, whether
+          // guarded paths may flow into it is a decision to make THEN, on
+          // purpose, not to inherit from this string.
+          return {
+            observation: null,
+            note: `source in a guarded territory (${guarded.join(", ")}); guarded content is never retained outside its territory`,
+          };
+        }
+      }
+
       try {
         const { payload, redactions } = redactForCapture(input.payload, { redactKeys: opts.redactKeys ?? [] });
         const serialized = JSON.stringify(payload);
         const size = serialized ? serialized.length : 0;
 
-        // Gate 3. Checked BEFORE writing, so the cap is a limit rather than a
+        // Gate 5. Checked BEFORE writing, so the cap is a limit rather than a
         // description of what already happened.
         if (storedBytes === null) {
           seeding ??= opts.store.totalBytes();

@@ -39,6 +39,27 @@ import type { BlobStore } from "../../kernel/observations/store.js";
  * Validated rather than trusted, for the same reason the digest is: a store
  * addressed by a caller-supplied string is a traversal surface, and "the
  * caller always passes a real slug" is an assumption, not a control.
+ *
+ * WHY THIS LOCATION, AND NOT THE VAULT (asked on #322; the answer is the
+ * adopted design, not an accident):
+ *
+ * D16 requires replayable payloads in "content-addressed local storage", and
+ * the normative docs sharpen where: payloads are "stored locally in
+ * Governor-owned, content-addressed operational storage outside the ordinary
+ * Obsidian Sync file set" (observations-and-replay), and "replayable
+ * observations stay in replica-local protected storage by default because
+ * they can contain the exact note text or metadata returned to a client"
+ * (git-and-sync). This vault IS synced — so a store inside it, including
+ * inside `.obsidian/plugins/governor/`, risks shipping captured note bodies
+ * to every replica, which is the exact outcome the design forbids by
+ * default. Exporting payloads is designed as a separate, explicit,
+ * disclosed action — not a side effect of where the files happen to sit.
+ *
+ * The real cost of this choice is also real: this directory is outside the
+ * vault backup. That is a retention/recovery question (D16's "retention
+ * controls", still to be built), and the answer to it is a deliberate
+ * export/backup step for this store — not moving note-body copies into a
+ * synced tree.
  */
 const SLUG = /^[a-z0-9][a-z0-9._-]*$/;
 
