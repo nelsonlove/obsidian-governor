@@ -60,6 +60,8 @@ export interface ServerCtx {
   captureObservations?: boolean;
   /** Stopgap ceiling on total captured bytes, pending real retention. */
   captureMaxBytes?: number;
+  historyEnabled?: boolean;
+  historyScope?: { mode: "whole-vault" | "explicit"; include: string[]; exclude: string[] };
   };
   /** The configured controlled-vocabulary sources (tools-vocab.ts). Optional:
    * absent means the defaults; absent in tests that don't exercise it. */

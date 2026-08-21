@@ -774,6 +774,77 @@ export class VaultMcpSettingTab extends PluginSettingTab {
           })
       );
 
+    // ── local history (WP4, D10) ────────────────────────────────────────────
+    //
+    // DEFAULT OFF. Git retains HISTORICAL bytes: once recorded, an edit or a
+    // deletion in the vault does not remove what history holds. D10 makes
+    // enabling that a disclosed human decision, and makes the scope a human
+    // choice separate from any connection allowlist.
+    containerEl.createEl("h4", { text: "Local history" });
+    new Setting(containerEl)
+      .setName("Record vault history")
+      .setDesc(
+        "Off by default. When on, Governor keeps a Git history of your notes at ~/.claude/governor/history/ — outside your vault, never synced. " +
+          "History RETAINS old bytes: editing or deleting a note later does not remove what was already recorded. " +
+          "Guarded territories are never recorded regardless of the scope below. Nothing is recorded until proposals ship; choosing the scope now means the first recorded byte already respects it."
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.historyEnabled === true).onChange(async (value) => {
+          this.plugin.settings.historyEnabled = value;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("History scope")
+      .setDesc(
+        "Whole vault records everything except the exclusions; explicit roots records only the folders you list below. Connection allowlists never change this — what one agent may see and what history records are different decisions."
+      )
+      .addDropdown((dd) =>
+        dd
+          .addOption("whole-vault", "Whole vault (minus exclusions)")
+          .addOption("explicit", "Only explicit roots")
+          .setValue(this.plugin.settings.historyScope.mode)
+          .onChange(async (value) => {
+            this.plugin.settings.historyScope.mode = value === "explicit" ? "explicit" : "whole-vault";
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Included roots")
+      .setDesc("One folder per line. Used only when the scope is explicit. A root names the folder and everything under it.")
+      .addTextArea((t) =>
+        t
+          .setPlaceholder("Notes\nProjects")
+          .setValue(this.plugin.settings.historyScope.include.join("\n"))
+          .onChange(async (value) => {
+            this.plugin.settings.historyScope.include = value
+              .split("\n")
+              .map((x) => x.trim())
+              .filter(Boolean);
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Excluded roots")
+      .setDesc(
+        "One prefix per line, always subtracted in either mode. The defaults (.obsidian, .trash) and the guarded territories are always excluded — listing more here narrows history further."
+      )
+      .addTextArea((t) =>
+        t
+          .setPlaceholder("Private notes/")
+          .setValue(this.plugin.settings.historyScope.exclude.join("\n"))
+          .onChange(async (value) => {
+            this.plugin.settings.historyScope.exclude = value
+              .split("\n")
+              .map((x) => x.trim())
+              .filter(Boolean);
+            await this.plugin.saveSettings();
+          })
+      );
+
     // Developer affordances. The tool-runner defaults ON because it grants no
     // capability beyond the MCP surface itself: it invokes the same guarded
     // captured tools a code-mode connection gets (read-only mode, allowlist,
