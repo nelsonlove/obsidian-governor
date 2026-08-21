@@ -19,7 +19,7 @@
 // live Obsidian classes.
 
 import { z } from "zod";
-import { guardCall, type GuardSettings } from "../guard.js";
+import { guardCall, collectPaths, type GuardSettings } from "../guard.js";
 import {
   IdempotencyMismatchError,
   RecordImmutableError,
@@ -443,7 +443,8 @@ export function makeGuarded(opts: GuardedOpts) {
           surface: { kind: "mcp", id: toolName },
           inputs: args ?? {},
         },
-        (mark) => runGuarded(opts, def, handler, name, args, extra, mark)
+        (mark, ctx) =>
+          runGuarded(opts, def, handler, name, args, extra, mark, ctx.setSources)
       );
       return result;
     } catch (e) {
@@ -466,7 +467,7 @@ export function makeGuarded(opts: GuardedOpts) {
  * no-op when no executor is present.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function runGuarded(opts: GuardedOpts, def: any, handler: any, name: string | undefined, args: any, extra: any, mark: (phase: "queued" | "attempted") => void) {
+async function runGuarded(opts: GuardedOpts, def: any, handler: any, name: string | undefined, args: any, extra: any, mark: (phase: "queued" | "attempted") => void, setSources: (paths: string[]) => void = () => {}) {
   const isMutating = def?.annotations?.readOnlyHint === false;
   // Steps 1/1b/3 (uid resolution, scheme resolution, read-only+allowlist)
   // live in resolveAndGuard so obsidian_write_notes can share the IDENTICAL
@@ -474,6 +475,12 @@ async function runGuarded(opts: GuardedOpts, def: any, handler: any, name: strin
   const resolved = resolveAndGuard(args ?? {}, isMutating, opts);
   if ("blocked" in resolved) return codedError(resolved.blocked.code, resolved.blocked.message);
   const callArgs = resolved.args;
+  // Provenance is recorded from the RESOLVED arguments, never the raw ones. A
+  // caller may address a note as `uid:019f…` or `jd:06.11`; attributing a
+  // captured payload to that literal string would record a source that is not
+  // a path, and playback authorization — which asks whether the reader can see
+  // the source PATH — would then refuse the payload forever.
+  setSources(collectPaths(callArgs as Record<string, unknown>));
   // Kernel arguments are always PEELED OFF, kernel or not, so no handler ever
   // sees one. What differs without a kernel is whether they can be honored:
   //

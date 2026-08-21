@@ -151,7 +151,20 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   // from a second rule would be two chances to disagree.
   const observationStore = createObservationStore({
     blobs: createLocalBlobStore({ vaultSlug: vaultSlug(ctx.vaultName ?? "vault") }),
-    canReplay: () => ctx.getSettings().captureObservations === true,
+    // Deliberately NOT the capture toggle.
+    //
+    // The first draft gated playback on `captureObservations`, which meant
+    // turning recording OFF also destroyed access to everything already
+    // recorded — the opposite of what someone flipping that switch wants. They
+    // are stopping new collection, not disowning the evidence they collected.
+    //
+    // What this gate is FOR is per-reader coarse refusal, and there is no
+    // reader identity yet: until sessions (WP5) land, every caller on the
+    // socket is the same principal, and the socket is already the trust
+    // boundary for live reads. So the honest answer today is "yes, and the
+    // allowlist does the scoping" — see canRead directly below. When sessions
+    // exist, this becomes a real per-reader question.
+    canReplay: () => true,
     canRead: ({ source }) => visiblePaths([source], ctx.getSettings()).length > 0,
   });
   const observationCapture = createCapture({
@@ -170,6 +183,9 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
     // The paths a call NAMES, via the same walker the guard and the journal
     // already use — so what a payload is attributed to is the same set the
     // allowlist decided over, rather than a second opinion about it.
+    // Fallback only. The guard reports the RESOLVED paths through the handler
+    // context, which is what actually gets recorded; this covers the case of a
+    // handler that returns before resolution happens.
     sourcesOf: (req) => collectPaths((req.inputs ?? {}) as Record<string, unknown>),
   });
 

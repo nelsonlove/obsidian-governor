@@ -162,10 +162,25 @@ export interface OperationExecutorOpts {
 /** Lets a handler record the phases only it can witness. */
 export type MarkPhase = (phase: OperationPhase) => void;
 
+/**
+ * What a handler can tell the executor that the executor cannot see itself.
+ *
+ * `setSources` exists because the executor is handed the caller's RAW
+ * arguments, and a caller may address a note as `uid:019f…` or `jd:06.11`.
+ * Those are resolved to real paths deep inside the guard, after the executor
+ * has already built the operation — so attributing a captured payload from the
+ * raw arguments would record its provenance as the literal string `uid:019f…`,
+ * and playback authorization would then check whether THAT is a visible path.
+ * It is not one, so the payload would be permanently unreadable.
+ */
+export interface HandlerContext {
+  setSources: (paths: string[]) => void;
+}
+
 export interface OperationExecutor {
   run<T>(
     request: OperationRequest,
-    handler: (mark: MarkPhase) => Promise<T>
+    handler: (mark: MarkPhase, ctx: HandlerContext) => Promise<T>
   ): Promise<{ result: T; operation: OperationV1 }>;
 }
 
@@ -375,7 +390,13 @@ export function createOperationExecutor(opts: OperationExecutorOpts): OperationE
         // The handler marks the phases only IT can witness — reaching the
         // queue, attempting an effect. The executor never assumes them from a
         // declared mode.
-        const result = await handler((phase) => mark(operation, phase));
+        // Sources the HANDLER resolved, which beat anything derived from the
+        // raw request — see HandlerContext.
+        let resolvedSources: string[] | null = null;
+        const result = await handler(
+          (phase) => mark(operation, phase),
+          { setSources: (paths) => { resolvedSources = paths; } }
+        );
 
         // Capture AFTER the handler, on what it actually returned, and only
         // for a successful read — capturing a refusal envelope would store an
@@ -390,7 +411,7 @@ export function createOperationExecutor(opts: OperationExecutorOpts): OperationE
             mandateId: operation.mandateId,
             normalizedRequestDigest: operation.normalizedInputDigest,
             effectiveScopeDigest: operation.effectiveScopeDigest,
-            sources: opts.sourcesOf?.(request) ?? [],
+            sources: resolvedSources ?? opts.sourcesOf?.(request) ?? [],
             payload: result,
           });
           if (captured.observation) operation.observations.push(captured.observation.id);

@@ -482,6 +482,8 @@ export default class VaultMcpPlugin extends Plugin {
         schemes: this.settings.schemes,
         modules: this.settings.modules,
         cliPolicy: this.settings.cliPolicy,
+        captureObservations: this.settings.captureObservations,
+        captureMaxBytes: this.settings.captureMaxBytes,
       }),
       serverIdentity,
       getExternalTools: () => this.externalRegistry.entries(),

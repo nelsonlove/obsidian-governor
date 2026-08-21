@@ -75,8 +75,26 @@ let seq = 0;
 export function createCapture(opts: CaptureOpts): Capture {
   const now = opts.now ?? (() => Date.now());
   const newId = opts.newId ?? (() => `obs-${Date.now().toString(36)}-${++seq}`);
-  /** Running total, so the cap does not need a directory walk per read. */
-  let storedBytes = 0;
+  /**
+   * Running total, seeded ONCE from what is actually on disk.
+   *
+   * The first draft started this at zero, which quietly turned a store-wide cap
+   * into a per-connection one: the capture path is built per connection, so
+   * every reconnect got another capful. A 50 MB cap across twenty sessions is a
+   * gigabyte, and the setting would have been describing something other than
+   * what it did.
+   *
+   * Seeded lazily rather than at construction so an unused connection never
+   * pays for the walk.
+   */
+  let storedBytes: number | null = null;
+  /**
+   * The seed happens exactly once even under concurrency. Two overlapping
+   * captures that each saw `null`, each walked the disk, and each assigned the
+   * result would have the later assignment silently erase the earlier one's
+   * increment — so the walk is memoized as a promise both await.
+   */
+  let seeding: Promise<number> | null = null;
 
   return {
     async capture(input) {
@@ -117,16 +135,29 @@ export function createCapture(opts: CaptureOpts): Capture {
 
         // Gate 3. Checked BEFORE writing, so the cap is a limit rather than a
         // description of what already happened.
+        if (storedBytes === null) {
+          seeding ??= opts.store.totalBytes();
+          const seeded = await seeding;
+          // First resolver wins; a concurrent capture that already incremented
+          // past the seed must not be rewound to it.
+          if (storedBytes === null) storedBytes = seeded;
+        }
         if (storedBytes + size > opts.maxBytes) {
           return {
             observation: null,
-            note: `size cap reached (${storedBytes}/${opts.maxBytes} bytes); capture stopped rather than growing without bound`,
+            note: `size cap reached (${storedBytes}/${opts.maxBytes} bytes on disk); capture stopped rather than growing without bound`,
           };
         }
 
         const payloadObject =
           decision.level === "replayable" ? await opts.store.put(payload, { sources: input.sources }) : null;
-        storedBytes += size;
+        // The counter is deliberately approximate. A deduplicated put adds no
+        // disk yet still increments (reads high); this increment measures the
+        // payload while the stored envelope also carries provenance (reads low
+        // by that small overhead). Neither drift compounds: the next
+        // connection reseeds from the disk truth, and the cap is a stopgap
+        // against unbounded growth, not an accounting system.
+        storedBytes = (storedBytes ?? 0) + size;
 
         const observation = buildObservation({
           id: newId(),

@@ -40,6 +40,7 @@ function blobs() {
     async has(k) { return map.has(k); },
     async remove(k) { map.delete(k); },
     async keys() { return [...map.keys()]; },
+    async totalBytes() { return [...map.values()].reduce((n, v) => n + v.length, 0); },
   };
 }
 
@@ -174,7 +175,7 @@ describe("capture — the cap stops the store growing forever", () => {
     assert.deepEqual(result, { content: "x".repeat(500) });
   });
 
-  test("the cap counts the whole store, not one payload", async () => {
+  test("the cap accumulates across calls on one connection", async () => {
     const { executor, blobs: b } = harness({ enabled: true, maxBytes: 120 });
     for (const n of ["a", "b", "c", "d", "e"]) {
       await executor.run({ ...READ, inputs: { path: `${n}.md` } }, async () => ({ content: n.repeat(30) }));
@@ -182,6 +183,79 @@ describe("capture — the cap stops the store growing forever", () => {
     const total = [...b.map.values()].reduce((sum, v) => sum + v.length, 0);
     assert.ok(total <= 120 + 60, `store stayed near the cap, got ${total}`);
     assert.ok(b.map.size < 5, "not every read was stored once the cap was reached");
+  });
+
+  test("the cap survives a reconnect — it bounds the STORE, not the session", async () => {
+    // The bug this pins: `storedBytes` is a counter inside createCapture, and
+    // createCapture is called per CONNECTION. Starting it at zero quietly
+    // turned a store-wide cap into a per-connection one, so every reconnect
+    // got another capful — twenty sessions against a 50 MB cap is a gigabyte,
+    // and the setting would have been describing something it did not do.
+    const b = blobs();
+    const reg = registry();
+    // Connection 1 fills the store.
+    const connect = () => {
+      const store = createObservationStore({ blobs: b, canReplay: () => true, canRead: () => true });
+      const capture = createCapture({ store, enabled: () => true, maxBytes: 200 });
+      return createOperationExecutor({
+        registry: reg,
+        actor: () => ({ binding: "c", clientClaim: null }),
+        capture,
+        sourcesOf: (req) => (req.inputs?.path ? [req.inputs.path] : []),
+      });
+    };
+    const first = connect();
+    for (const n of ["a", "b", "c"]) {
+      await first.run({ ...READ, inputs: { path: `${n}.md` } }, async () => ({ content: n.repeat(60) }));
+    }
+    const afterFirst = [...b.map.values()].reduce((sum, v) => sum + v.length, 0);
+    assert.ok(afterFirst > 0, "the first connection stored something to fill the store");
+
+    // Connection 2 is a brand-new capture over the SAME store.
+    const second = connect();
+    const { operation } = await second.run(
+      { ...READ, inputs: { path: "z.md" } },
+      async () => ({ content: "z".repeat(60) })
+    );
+    const afterSecond = [...b.map.values()].reduce((sum, v) => sum + v.length, 0);
+    assert.ok(afterSecond <= 200 + 120, `store stayed near the cap across connections, got ${afterSecond}`);
+    assert.deepEqual(operation.observations, [], "the reconnected session did not get a fresh allowance");
+    assert.match(operation.captureNote ?? "", /cap/i);
+  });
+});
+
+describe("capture — provenance comes from the handler, not the raw request", () => {
+  test("a handler that resolves an address reports the RESOLVED path", async () => {
+    // Callers may address a note as `uid:019f…` or `jd:06.11`, and the guard
+    // resolves that to a real path deep inside the call — AFTER the executor
+    // has already been handed the raw arguments. Recording provenance from the
+    // raw request would store the literal string `uid:019f…` as the source, and
+    // playback authorization asks whether the reader can see the source PATH.
+    // `uid:019f…` is not a path, so the payload would be unreadable forever.
+    const { executor, store, observations } = harness({ enabled: true });
+    const { operation } = await executor.run(
+      { ...READ, inputs: { path: "uid:019f-abc" } },
+      async (_mark, ctx) => {
+        ctx.setSources(["Notes/Real Note.md"]);
+        return { content: "resolved body" };
+      }
+    );
+    assert.equal(observations.length, 1, "it was captured");
+    assert.deepEqual(
+      observations[0].sourceState.map((s) => s.path ?? s),
+      ["Notes/Real Note.md"],
+      "the resolved path is the recorded source, not the uid: address"
+    );
+    // And it is actually replayable, which is the whole point.
+    const played = await store.playback(observations[0].result.payloadObject, { reader: "human-1" });
+    assert.deepEqual(played.payload, { content: "resolved body" });
+    assert.equal(operation.observations.length, 1);
+  });
+
+  test("a handler that reports nothing falls back to the surface's sourcesOf", async () => {
+    const { executor, observations } = harness({ enabled: true });
+    await executor.run({ ...READ, inputs: { path: "Plain.md" } }, async () => ({ content: "x" }));
+    assert.equal(observations.length, 1);
   });
 });
 
