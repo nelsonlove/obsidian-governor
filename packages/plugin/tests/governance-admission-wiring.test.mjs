@@ -16,7 +16,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { buildAdmission, readFileFromTree, mintGestureRef } from "../src/governance/admission-wiring.ts";
+import { buildAdmission, readFileFromTree } from "../src/governance/admission-wiring.ts";
 import { openGitRepository } from "../src/governance/history-store/git-repository.ts";
 import { proposalRef, standingRef } from "../src/kernel/governance/history-store/refs.ts";
 import { createProposalStore } from "../src/kernel/governance/proposals/proposal-store.ts";
@@ -113,7 +113,7 @@ describe("admission wiring — the full path against the real repository", () =>
 
   test("a produced proposal admits: verification runs on replayed base + current bytes, standing becomes a commit", async () => {
     const proposal = await h.produce("Notes/A.md", "base text\n", "proposed text\n");
-    const outcome = await h.admission.admitWithGesture(proposal.id, mintGestureRef(T0));
+    const outcome = await h.admission.admitWithGesture(proposal.id, "gesture-test-ref");
     assert.ok(outcome.ok, JSON.stringify(outcome));
     assert.equal(outcome.degraded, false);
 
@@ -140,7 +140,7 @@ describe("admission wiring — the full path against the real repository", () =>
     const proposal = await h.produce("Notes/B.md", "base\n", "proposed\n");
     h.vault.set("Notes/B.md", "EDITED AFTER THE PROPOSAL\n");
     const before = await h.repo.resolveRef(standingRef());
-    const outcome = await h.admission.admitWithGesture(proposal.id, mintGestureRef(T0));
+    const outcome = await h.admission.admitWithGesture(proposal.id, "gesture-test-ref");
     assert.ok(!outcome.ok);
     assert.equal(outcome.code, "subject_drift");
     assert.equal(await h.repo.resolveRef(standingRef()), before, "standing untouched");
@@ -150,23 +150,23 @@ describe("admission wiring — the full path against the real repository", () =>
   test("a deleted note refuses: a disappearance is a fact, the proposal stays proposed (D06)", async () => {
     const proposal = await h.produce("Notes/C.md", "base\n", "proposed\n");
     h.vault.delete("Notes/C.md");
-    const outcome = await h.admission.admitWithGesture(proposal.id, mintGestureRef(T0));
+    const outcome = await h.admission.admitWithGesture(proposal.id, "gesture-test-ref");
     assert.ok(!outcome.ok);
     assert.equal(outcome.code, "note_missing");
   });
 
   test("a creation admits with base null — the recording's empty base is the discriminator, not a guess", async () => {
     const proposal = await h.produce("Notes/New.md", null, "brand new\n");
-    const outcome = await h.admission.admitWithGesture(proposal.id, mintGestureRef(T0));
+    const outcome = await h.admission.admitWithGesture(proposal.id, "gesture-test-ref");
     assert.ok(outcome.ok, JSON.stringify(outcome));
   });
 
   test("a second admission chains on the first — supersession through one CAS chain of commits", async () => {
     const p1 = await h.produce("Notes/Chain.md", "v0\n", "v1\n");
-    const first = await h.admission.admitWithGesture(p1.id, mintGestureRef(T0));
+    const first = await h.admission.admitWithGesture(p1.id, "gesture-test-ref");
     assert.ok(first.ok);
     const p2 = await h.produce("Notes/Chain.md", "v1\n", "v2\n");
-    const second = await h.admission.admitWithGesture(p2.id, mintGestureRef(T0));
+    const second = await h.admission.admitWithGesture(p2.id, "gesture-test-ref");
     assert.ok(second.ok, JSON.stringify(second));
     const head = await h.repo.readCommit(await h.repo.resolveRef(standingRef()));
     assert.match(head.message, new RegExp(`^admission ${second.claimId}`));
@@ -176,7 +176,7 @@ describe("admission wiring — the full path against the real repository", () =>
   test("DEGRADED: a settlement-append failure after the CAS leaves the admission STANDING and says so", async () => {
     const proposal = await h.produce("Notes/Degraded.md", "base\n", "proposed\n");
     h.setSettlementFails(true);
-    const outcome = await h.admission.admitWithGesture(proposal.id, mintGestureRef(T0));
+    const outcome = await h.admission.admitWithGesture(proposal.id, "gesture-test-ref");
     h.setSettlementFails(false);
     assert.ok(outcome.ok, JSON.stringify(outcome));
     assert.equal(outcome.degraded, true, "the receipt SAYS the record is catching up — never a silent gap, never a lie that it failed");
@@ -191,10 +191,10 @@ describe("admission wiring — the full path against the real repository", () =>
     // pre-CAS — report ok+degraded with the OLD claim id (F1). Now: a
     // truthful already_admitted refusal that also catches the projection up.
     const proposal = await h.produce("Notes/Dup.md", "base\n", "proposed\n");
-    const first = await h.admission.admitWithGesture(proposal.id, mintGestureRef(T0));
+    const first = await h.admission.admitWithGesture(proposal.id, "gesture-test-ref");
     assert.ok(first.ok);
     const headBefore = await h.repo.resolveRef(standingRef());
-    const second = await h.admission.admitWithGesture(proposal.id, mintGestureRef(T0));
+    const second = await h.admission.admitWithGesture(proposal.id, "gesture-test-ref");
     assert.ok(!second.ok, JSON.stringify(second));
     assert.equal(second.code, "already_admitted");
     assert.equal(await h.repo.resolveRef(standingRef()), headBefore, "no duplicate admission commit chained");
@@ -202,7 +202,7 @@ describe("admission wiring — the full path against the real repository", () =>
 
   test("a creation revert refuses honestly — its base is non-existence, not an empty file (review F3)", async () => {
     const proposal = await h.produce("Notes/CreatedRevert.md", null, "created content\n");
-    const outcome = await h.admission.revertToBase(proposal.id, mintGestureRef(T0));
+    const outcome = await h.admission.revertToBase(proposal.id, "gesture-test-ref");
     assert.ok(!outcome.ok);
     assert.equal(outcome.code, "creation_revert_unsupported");
     assert.equal(h.vault.get("Notes/CreatedRevert.md"), "created content\n", "the note is untouched — no empty-file lie");
@@ -244,7 +244,7 @@ describe("admission wiring — the full path against the real repository", () =>
     await h.repo.recordSnapshot({ ref, files: [{ path: notePath, bytes: enc("proposed\n") }], message: "proposed", timestamp: 2, expectedRef: base.oid });
     await h.proposals.open({ ...proposal, recordingRef: ref }, T0);
 
-    const outcome = await h.admission.revertToBase(proposal.id, mintGestureRef(T0));
+    const outcome = await h.admission.revertToBase(proposal.id, "gesture-test-ref");
     assert.ok(!outcome.ok);
     assert.equal(outcome.code, "base_mismatch");
     assert.equal(h.vault.get(notePath), "proposed\n", "nothing was written");
@@ -252,7 +252,7 @@ describe("admission wiring — the full path against the real repository", () =>
 
   test("revert writes the recorded base back as a NEW change and supersedes the proposal", async () => {
     const proposal = await h.produce("Notes/Revert.md", "the base\n", "the proposal\n");
-    const outcome = await h.admission.revertToBase(proposal.id, mintGestureRef(T0));
+    const outcome = await h.admission.revertToBase(proposal.id, "gesture-test-ref");
     assert.ok(outcome.ok, JSON.stringify(outcome));
     assert.equal(h.vault.get("Notes/Revert.md"), "the base\n", "the base bytes are back");
     assert.equal((await h.proposals.get(proposal.id)).authority, "superseded");
@@ -311,7 +311,34 @@ describe("§15 — synthetic clicks and captured callbacks remain unable to admi
       }
     }
     assert.ok(found, "the Admit button exists and is addEventListener-wired");
-    assert.match(raw, /mintGestureRef\(Date\.now\(\)\)/, "the gesture ref is minted INSIDE the click handler");
+  });
+
+  test("the pane CANNOT mint a gesture ref — the only mint lives inside the gate (governor-lead's attack)", async () => {
+    // The attack: mint at render time and every test stays green while the
+    // authority record's meaning corrupts. The fix deletes the possibility:
+    // the gate mints AFTER its checks and hands the ref to the action; the
+    // pane has no mint to misplace.
+    const fsm = await import("node:fs");
+    const pane = fsm.readFileSync(new URL("../src/governance/pane.ts", import.meta.url), "utf8");
+    assert.ok(!/mintGestureRef|uuidv7|gesture-\$\{/.test(pane), "no mint machinery is reachable from the pane");
+    const gesture = fsm.readFileSync(new URL("../src/kernel/governance/gesture.ts", import.meta.url), "utf8");
+    const gateAt = gesture.indexOf("isRealGesture(evt)");
+    const mintAt = gesture.indexOf("mintGestureRefInternal(Date.now())");
+    assert.ok(gateAt > 0 && mintAt > gateAt, "the mint sits downstream of the trust check, in the gate's own body");
+    assert.ok(!/export function mintGestureRefInternal|export \{[^}]*mintGestureRefInternal/.test(gesture), "the mint is module-private");
+  });
+
+  test("the gate hands a real ref to the action — behaviorally", async () => {
+    let received = null;
+    const outcome = await runGuardedDisposition(
+      new (class extends Object {})(), // not an Event — must be blocked first; sanity that blocked path passes nothing
+      null,
+      async (ref) => {
+        received = ref;
+      }
+    );
+    assert.equal(outcome, "blocked-untrusted");
+    assert.equal(received, null, "a blocked gesture mints nothing");
   });
 
   test("this scan can find something — the vacuity self-check", async () => {

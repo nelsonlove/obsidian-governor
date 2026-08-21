@@ -35,7 +35,6 @@ import { RefCasError, type ObjectId } from "../kernel/governance/history-store/t
 import type { HistoryRepository } from "../kernel/governance/history-store/repository.js";
 import { createDefaultPredicateRegistry } from "../kernel/governance/verification/predicates.js";
 import { verifySubject } from "../kernel/governance/verification/verify.js";
-import { uuidv7 } from "../kernel/uuidv7.js";
 import type { ProposalStore } from "../kernel/governance/proposals/proposal-store.js";
 import type { ProposalV1 } from "../kernel/governance/proposals/proposal.js";
 
@@ -338,7 +337,3 @@ export async function readFileFromTree(repo: HistoryRepository, treeOid: ObjectI
   return repo.readBlob(file.oid);
 }
 
-/** Minted inside the pane's click handler, and only there. */
-export function mintGestureRef(nowMs: number): string {
-  return `gesture-${uuidv7(nowMs)}`;
-}

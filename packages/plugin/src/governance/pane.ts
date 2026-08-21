@@ -35,7 +35,7 @@ import { AcceptGateError, type AcceptOpts } from "../kernel/governance/accept.js
 import { type PendingItem, groupByAgent } from "../kernel/governance/queue.js";
 import { diffNote, toHunks, type DiffLine, type HunkCollapsed } from "../kernel/governance/diff.js";
 import { isRealGesture, runGuardedAdopt, runGuardedDisposition } from "../kernel/governance/gesture.js";
-import { mintGestureRef } from "./admission-wiring.js";
+
 import { dispositionsFor, dispositionById, acceptEffectFor, type DispositionId } from "../kernel/governance/dispositions.js";
 import type { AcceptResult } from "../kernel/governance/accept.js";
 import type { ProposedItem } from "../kernel/governance/proposed.js";
@@ -658,9 +658,10 @@ export class GovernanceReviewView extends ItemView {
                 resolve
               ).open()
             ),
-          async () => {
-            // Minted inside the gesture: a real click happened or this line never ran.
-            const gestureRef = mintGestureRef(Date.now());
+          async (gestureRef) => {
+            // The ref arrives FROM the gate — the only mint is inside
+            // runGuardedDisposition, downstream of isRealGesture and the
+            // confirm. This callback cannot fabricate one.
             const outcome = await deps.admission!.admitWithGesture(item.id, gestureRef);
             if (outcome.ok) {
               // The never-say rules: name the subject, predicate, verifier,
@@ -697,8 +698,7 @@ export class GovernanceReviewView extends ItemView {
                 resolve
               ).open()
             ),
-          async () => {
-            const gestureRef = mintGestureRef(Date.now());
+          async (gestureRef) => {
             const outcome = await deps.admission!.revertToBase(item.id, gestureRef);
             new Notice(outcome.ok ? `Reverted; proposal ${outcome.supersededProposalId.slice(0, 8)}… superseded.` : `Not reverted [${outcome.code}]: ${outcome.detail}`, 8000);
             void this.rerender();
