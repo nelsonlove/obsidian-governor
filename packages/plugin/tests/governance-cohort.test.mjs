@@ -108,16 +108,55 @@ describe("freeze — the moment a query stops being a query", () => {
     assert.throws(() => freezeCohort({ items: [], resolvedScope: SCOPE, recoveryUnit: "item" }));
   });
 
-  test("member ids ride in the subject's canonical order", () => {
+  test("memberProposalIds[i] corresponds to subject.items[i] — the correlation, not just the sort", () => {
+    // The first version compared the item list against a sorted copy of
+    // itself — self-referential (review finding). The crux is that position
+    // i's member id is THE proposal whose subject sits at position i.
     const z = proposalFor({ notePath: "Notes/z.md" });
     const a = proposalFor({ notePath: "Notes/a.md" });
     const frozen = freezeCohort({ items: [z, a], resolvedScope: SCOPE, recoveryUnit: "item" });
-    assert.equal(frozen.memberProposalIds.length, 2);
-    assert.deepEqual(
-      frozen.subject.items.map((i) => i.noteId),
-      [...frozen.subject.items.map((i) => i.noteId)].sort(),
-      "items are in canonical noteId order"
+    for (let i = 0; i < frozen.subject.items.length; i++) {
+      const source = [z, a].find((p) => p.subject.noteId === frozen.subject.items[i].noteId);
+      assert.equal(frozen.memberProposalIds[i], source.id, `position ${i} names the right proposal`);
+    }
+  });
+
+  test("a mismatched (original, frozen) pair refuses to exclude — arithmetic over trust", () => {
+    const a = proposalFor({ notePath: "Notes/a.md" });
+    const b = proposalFor({ notePath: "Notes/b.md" });
+    const c = proposalFor({ notePath: "Notes/c.md" });
+    const input = { items: [a, b], resolvedScope: SCOPE, recoveryUnit: "item" };
+    const frozen = freezeCohort(input);
+    assert.throws(
+      () => excludeAndRefreeze({ items: [a, c], resolvedScope: SCOPE, recoveryUnit: "item" }, frozen, [b.id]),
+      SubjectInvalidError,
+      "a successor must derive from the decision presented, not from whatever the caller claims"
     );
+  });
+
+  test("the frozen structure refuses casual mutation; WP7b's real guard is recomputation", () => {
+    const a = proposalFor({ notePath: "Notes/a.md" });
+    const frozen = freezeCohort({ items: [a], resolvedScope: SCOPE, recoveryUnit: "item" });
+    assert.ok(Object.isFrozen(frozen.subject));
+    assert.ok(Object.isFrozen(frozen.subject.items));
+    assert.throws(() => {
+      frozen.subject.items.pop();
+    });
+  });
+
+  test("non-proposed and revision-requested members refuse to freeze — no unresolved escalation rides a gesture", () => {
+    const a = proposalFor({ notePath: "Notes/a.md" });
+    const admitted = { ...proposalFor({ notePath: "Notes/b.md" }), authority: "admitted" };
+    const revising = { ...proposalFor({ notePath: "Notes/c.md" }), development: "revision-requested" };
+    assert.throws(() => freezeCohort({ items: [a, admitted], resolvedScope: SCOPE, recoveryUnit: "item" }));
+    assert.throws(() => freezeCohort({ items: [a, revising], resolvedScope: SCOPE, recoveryUnit: "item" }));
+  });
+
+  test("mixed verifier policies refuse — one gesture must not cover items verified to different standards", () => {
+    const a = proposalFor({ notePath: "Notes/a.md" });
+    const b = proposalFor({ notePath: "Notes/b.md" });
+    const otherPolicy = { ...b, subject: { ...b.subject, predicates: [{ id: "other-pred", version: "9" }] } };
+    assert.throws(() => freezeCohort({ items: [a, otherPolicy], resolvedScope: SCOPE, recoveryUnit: "item" }));
   });
 
   test("exclusion produces a SUCCESSOR digest carrying the exclusion in its subject", () => {

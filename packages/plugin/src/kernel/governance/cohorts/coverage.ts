@@ -12,6 +12,7 @@
 // outcome can never be borrowed by a cohort it did not cover.
 
 import { verifySubject } from "../verification/verify.js";
+import { subjectDigest } from "../contracts/subject-v1.js";
 import type { PredicateRegistry } from "../verification/registry.js";
 import type { VerificationEvidence, VerificationRecord } from "../verification/predicate.js";
 import type { FrozenCohort } from "./freeze.js";
@@ -64,7 +65,11 @@ export async function verifyCohortCoverage(
       records = [
         {
           predicate: { id: "coverage", version: "0" },
-          subjectDigest: item.proposed,
+          // Addressed to the SUBJECT digest, per the record's own contract —
+          // the first draft used the proposed CONTENT digest, which would
+          // make a downstream policy read "the subject changed" instead of
+          // "evidence could not be resolved" (review finding).
+          subjectDigest: subjectDigest(item),
           passed: false,
           detail: `evidence could not be resolved: ${e instanceof Error ? e.message : String(e)}`,
           evaluatedAt: now,
@@ -77,7 +82,10 @@ export async function verifyCohortCoverage(
   const failedNoteIds = items.filter((i) => !i.passed).map((i) => i.noteId);
   return {
     cohortDigest: frozen.digest.value,
-    passed: items.length === frozen.subject.items.length && failedNoteIds.length === 0,
+    // The loop pushes exactly once per item and every throw is caught, so a
+    // length comparison here would be a guard that guards nothing — the one
+    // real condition is that no item failed.
+    passed: failedNoteIds.length === 0,
     items,
     failedNoteIds,
   };

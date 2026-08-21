@@ -64,21 +64,43 @@ export function selectProposals(proposals: readonly ProposalV1[], selector: Coho
 
 /**
  * Grouping eligibility (change-classes.md): items may enter ONE cohort only
- * when they share the exact class combination, the same transformation, and
- * compatible bases. Returns the reason the group is ineligible, or null.
- * Checked at freeze time — a selector may legally select an ineligible mix;
- * FREEZING it is what's refused.
+ * when they share the exact class combination, the same transformation AND
+ * verifier policy (the predicates list — one gesture must not cover items
+ * verified to different standards), the same mandate, and no unresolved
+ * error or escalation (only proposed-and-not-revising members freeze).
+ * Returns the reason the group is ineligible, or null. Checked at freeze
+ * time — a selector may legally select an ineligible mix; FREEZING it is
+ * what's refused.
+ *
+ * Base-state COMPATIBILITY is deliberately not checked here: it is a
+ * verification-level fact (content-diff@1 re-checks each item's base bytes
+ * against its recording at coverage time), and a freeze-time check would
+ * duplicate a weaker version of the same comparison. Named so the omission
+ * reads as a decision, not a gap.
  */
 export function groupIneligibilityOf(items: readonly ProposalV1[]): string | null {
   if (items.length === 0) return "an empty cohort decides nothing";
   const classKey = (p: ProposalV1) => [...p.subject.changeClasses].sort().join("+");
+  const predicateKey = (p: ProposalV1) => p.subject.predicates.map((x) => `${x.id}@${x.version}`).join(",");
   const first = items[0];
   for (const p of items) {
+    // No unresolved error or escalation: an admitted/superseded member has
+    // left the decision space, and a revision-requested one carries an open
+    // human objection — neither may ride a cohort gesture.
+    if (p.authority !== "proposed") {
+      return `member ${p.id} is ${p.authority}; only proposed items freeze`;
+    }
+    if (p.development === "revision-requested") {
+      return `member ${p.id} has an open revision request; resolve it before grouping`;
+    }
     if (classKey(p) !== classKey(first)) {
       return `mixed class combinations (${classKey(first)} vs ${classKey(p)}); a cohort shares ONE exact combination`;
     }
     if (p.subject.transformation.id !== first.subject.transformation.id || p.subject.transformation.version !== first.subject.transformation.version) {
-      return "mixed transformations; a cohort shares one transformation and verifier policy";
+      return "mixed transformations; a cohort shares one transformation";
+    }
+    if (predicateKey(p) !== predicateKey(first)) {
+      return "mixed verifier policies; one gesture must not cover items verified to different standards";
     }
     if (p.subject.mandateId !== first.subject.mandateId) {
       return "mixed mandates; a cohort shares one mandate (or none)";
