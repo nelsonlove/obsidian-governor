@@ -35,6 +35,7 @@
 import type { SurfaceKind } from "./action.js";
 import { isAgentReachable } from "./surface-binding.js";
 import type { ActionRegistry } from "./registry.js";
+import type { Capture } from "../observations/capture.js";
 import {
   OPERATION_PHASES,
   nonAuthoritativeDigest,
@@ -93,8 +94,21 @@ export class AuthoritySurfaceError extends OperationRefusedError {
 }
 
 export interface OperationRequest {
-  action: string;
-  actionVersion: number;
+  /**
+   * The action, when the caller knows it.
+   *
+   * OMIT IT and the executor resolves the action from the surface's binding.
+   * That is the better call for a surface adapter: a door knows which door it
+   * is, not which contract currently sits behind it. The first draft had
+   * `makeGuarded` construct `compat.<tool>` itself, which meant migrating one
+   * surface to a native contract silently broke every call through it — the
+   * adapter was encoding a naming convention it had no business knowing.
+   *
+   * When supplied, it is verified against the binding rather than trusted, so
+   * a caller still cannot borrow another surface's contract.
+   */
+  action?: string;
+  actionVersion?: number;
   /**
    * The surface invoking this action.
    *
@@ -131,15 +145,42 @@ export interface OperationExecutorOpts {
    * operation or costs a caller their result.
    */
   onClose?: (operation: OperationV1) => void;
+  /**
+   * Observation capture. Absent means no capture at all — the configuration
+   * every existing test uses, and the one a bare embed gets.
+   *
+   * Capture runs AFTER the handler, on its result, and can never fail the
+   * operation: a full disk or a throwing store degrades observability and is
+   * reported on the envelope, exactly as the write journal already behaves.
+   */
+  capture?: Capture | null;
+  /** Vault paths a read covered, derived by the surface that knows the
+   * action's argument shape. Used for playback authorization. */
+  sourcesOf?: (request: OperationRequest) => string[];
 }
 
 /** Lets a handler record the phases only it can witness. */
 export type MarkPhase = (phase: OperationPhase) => void;
 
+/**
+ * What a handler can tell the executor that the executor cannot see itself.
+ *
+ * `setSources` exists because the executor is handed the caller's RAW
+ * arguments, and a caller may address a note as `uid:019f…` or `jd:06.11`.
+ * Those are resolved to real paths deep inside the guard, after the executor
+ * has already built the operation — so attributing a captured payload from the
+ * raw arguments would record its provenance as the literal string `uid:019f…`,
+ * and playback authorization would then check whether THAT is a visible path.
+ * It is not one, so the payload would be permanently unreadable.
+ */
+export interface HandlerContext {
+  setSources: (paths: string[]) => void;
+}
+
 export interface OperationExecutor {
   run<T>(
     request: OperationRequest,
-    handler: (mark: MarkPhase) => Promise<T>
+    handler: (mark: MarkPhase, ctx: HandlerContext) => Promise<T>
   ): Promise<{ result: T; operation: OperationV1 }>;
 }
 
@@ -272,7 +313,10 @@ export function createOperationExecutor(opts: OperationExecutorOpts): OperationE
       const operation: OperationV1 = {
         schema: "governor.operation/v1",
         id: newId(),
-        action: { id: request.action, version: request.actionVersion },
+        // What the caller claimed, replaced by the binding's answer once one
+        // resolves. On a refusal there is no binding, so the claim is the only
+        // thing there is to record — and recording it is the point.
+        action: { id: request.action ?? "(unclaimed)", version: request.actionVersion ?? 0 },
         // The caller's claim, used only until a binding resolves and replaces
         // it. `mcp` is the conservative default for an unresolved surface: it
         // is agent-reachable, so a refusal record never under-states what was
@@ -302,18 +346,25 @@ export function createOperationExecutor(opts: OperationExecutorOpts): OperationE
         recovery: null,
       };
 
+      const claimed = request.action ? `${request.action}@${request.actionVersion ?? "?"}` : "(unclaimed)";
       const refuse = (error: OperationRefusedError): never => {
         close(operation, "refused");
         throw error;
       };
 
-      const action = opts.registry.get(request.action, request.actionVersion);
-      if (!action) refuse(new UnregisteredActionError(request.action, request.actionVersion));
-
       const binding = opts.registry.binding(request.surface.id);
-      if (!binding || binding.action !== action!.id || binding.actionVersion !== action!.version) {
-        refuse(new UnboundSurfaceError(request.surface.id, `${request.action}@${request.actionVersion}`));
+      if (!binding) refuse(new UnboundSurfaceError(request.surface.id, claimed));
+
+      // A claimed action is CHECKED against the binding, never trusted — a
+      // caller may not borrow another surface's contract. An unclaimed one is
+      // simply resolved from it.
+      if (request.action !== undefined && (binding!.action !== request.action || binding!.actionVersion !== (request.actionVersion ?? binding!.actionVersion))) {
+        refuse(new UnboundSurfaceError(request.surface.id, claimed));
       }
+
+      const action = opts.registry.get(binding!.action, binding!.actionVersion);
+      if (!action) refuse(new UnregisteredActionError(binding!.action, binding!.actionVersion));
+      operation.action = { id: action!.id, version: action!.version };
 
       // From here the REGISTRY's kind is the truth, and the caller's claim is
       // discarded. The envelope is corrected too, so a record never carries a
@@ -339,7 +390,37 @@ export function createOperationExecutor(opts: OperationExecutorOpts): OperationE
         // The handler marks the phases only IT can witness — reaching the
         // queue, attempting an effect. The executor never assumes them from a
         // declared mode.
-        const result = await handler((phase) => mark(operation, phase));
+        // Sources the HANDLER resolved, which beat anything derived from the
+        // raw request — see HandlerContext.
+        let resolvedSources: string[] | null = null;
+        const result = await handler(
+          (phase) => mark(operation, phase),
+          { setSources: (paths) => { resolvedSources = paths; } }
+        );
+
+        // Capture AFTER the handler, on what it actually returned, and only
+        // for a successful read — capturing a refusal envelope would store an
+        // error message as if it were vault content.
+        if (opts.capture && outcomeOf(result) === "completed") {
+          mark(operation, "observed");
+          const captured = await opts.capture.capture({
+            action: action!,
+            operationId: operation.id,
+            actorBinding: operation.actor.binding,
+            sessionId: operation.sessionId,
+            mandateId: operation.mandateId,
+            normalizedRequestDigest: operation.normalizedInputDigest,
+            effectiveScopeDigest: operation.effectiveScopeDigest,
+            sources: resolvedSources ?? opts.sourcesOf?.(request) ?? [],
+            payload: result,
+          });
+          if (captured.observation) operation.observations.push(captured.observation.id);
+          // The reason is recorded even on success-with-no-capture, so an empty
+          // observation list can be told apart from a read that had nothing to
+          // record.
+          if (captured.note) operation.captureNote = captured.note;
+        }
+
         close(operation, outcomeOf(result));
         return { result, operation };
       } catch (e) {

@@ -38,6 +38,15 @@ import { payloadDigest } from "./observation.js";
 /** The bytes behind the store. Injected, so the kernel stays free of both
  * `obsidian` and any particular filesystem. */
 export interface BlobStore {
+  /**
+   * Total bytes currently stored.
+   *
+   * Needed because the size cap must bound the STORE, not one connection. The
+   * capture path is built per connection, so an in-memory counter starting at
+   * zero would let each new session write another capful — a 50 MB cap across
+   * twenty reconnects is a gigabyte.
+   */
+  totalBytes(): Promise<number>;
   put(key: string, data: string): Promise<void>;
   get(key: string): Promise<string | null>;
   has(key: string): Promise<boolean>;
@@ -172,6 +181,8 @@ export interface PruneReport {
 }
 
 export interface ObservationStore {
+  /** Total bytes on disk, for the capture size cap. */
+  totalBytes(): Promise<number>;
   /** Store a payload; returns its content address. */
   put(payload: unknown, meta?: { sources?: string[] }): Promise<string>;
   playback(ref: string, ctx: PlaybackContext): Promise<PlaybackResult>;
@@ -224,6 +235,10 @@ export function createObservationStore(opts: ObservationStoreOpts): ObservationS
   }
 
   return {
+    async totalBytes() {
+      return opts.blobs.totalBytes();
+    },
+
     async put(payload, meta) {
       const ref = payloadDigest(payload);
       const sources = meta?.sources ?? [];
