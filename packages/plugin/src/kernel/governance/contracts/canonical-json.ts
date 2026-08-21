@@ -75,7 +75,14 @@ function write(v: unknown, at: string): string {
       break;
   }
   if (Array.isArray(v)) {
-    return `[${v.map((item, i) => write(item, `${at}/${i}`)).join(",")}]`;
+    const parts: string[] = [];
+    for (let i = 0; i < v.length; i++) {
+      // A hole is not an element: `.map` would skip it and `join` would render
+      // it as nothing, emitting invalid JSON. Refuse, per this module's bar.
+      if (!(i in v)) throw new NoncanonicalValueError(`${at}/${i}`, "sparse array hole has no canonical form");
+      parts.push(write(v[i], `${at}/${i}`));
+    }
+    return `[${parts.join(",")}]`;
   }
   if (typeof v === "object") {
     const proto = Object.getPrototypeOf(v);

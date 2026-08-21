@@ -91,6 +91,17 @@ export interface CohortSubjectV1 {
 
 // ── builders ─────────────────────────────────────────────────────────────────
 
+/**
+ * Rebuild a digest as exactly `{algorithm, value}`. Digest inputs arrive from
+ * fallible producers, and an extra property riding on one would land in the
+ * canonical bytes — two producers describing the same content would then
+ * compute different subject digests, which is the precise failure this
+ * contract exists to prevent. Nothing passes through by reference.
+ */
+function cleanDigest(d: Sha256Digest): Sha256Digest {
+  return { algorithm: "sha256", value: d.value };
+}
+
 export type ProposalItemInput = Omit<ProposalItemSubjectV1, "schema">;
 
 /**
@@ -124,7 +135,7 @@ export function buildProposalItemSubject(input: ProposalItemInput): ProposalItem
   const attachments = [...input.attachments].map((a) => {
     requireNonEmptyString(a?.id, "attachments[].id");
     if (!isSha256Digest(a.digest)) throw new SubjectInvalidError(`attachment ${a.id}: digest is not a sha256 digest`);
-    return { id: a.id, digest: a.digest };
+    return { id: a.id, digest: cleanDigest(a.digest) };
   });
   attachments.sort((a, b) => cmp(a.id, b.id));
   rejectAdjacentDuplicates(attachments, (a) => a.id, "attachment id");
@@ -135,7 +146,7 @@ export function buildProposalItemSubject(input: ProposalItemInput): ProposalItem
     if (s.digest !== null && !isSha256Digest(s.digest)) {
       throw new SubjectInvalidError(`side effect ${s.kind}:${s.target}: digest is not a sha256 digest`);
     }
-    return { kind: s.kind, target: s.target, digest: s.digest };
+    return { kind: s.kind, target: s.target, digest: s.digest === null ? null : cleanDigest(s.digest) };
   });
   sideEffects.sort((a, b) => cmp(a.kind, b.kind) || cmp(a.target, b.target) || cmp(a.digest?.value ?? "", b.digest?.value ?? ""));
 
@@ -155,7 +166,7 @@ export function buildProposalItemSubject(input: ProposalItemInput): ProposalItem
     if (o.capture !== "evidence" && o.capture !== "replayable") {
       throw new SubjectInvalidError(`observation ${o.id}: capture level '${String(o.capture)}' cannot support a proposal`);
     }
-    return { id: o.id, digest: o.digest, capture: o.capture };
+    return { id: o.id, digest: cleanDigest(o.digest), capture: o.capture };
   });
   observations.sort((a, b) => cmp(a.id, b.id) || cmp(a.digest.value, b.digest.value));
 
@@ -165,8 +176,8 @@ export function buildProposalItemSubject(input: ProposalItemInput): ProposalItem
     noteId: input.noteId,
     path: input.path,
     pathSemanticallyRelevant: input.pathSemanticallyRelevant,
-    base: input.base,
-    proposed: input.proposed,
+    base: input.base === null ? null : cleanDigest(input.base),
+    proposed: cleanDigest(input.proposed),
     attachments,
     sideEffects,
     changeClasses: sortClasses(input.changeClasses),
@@ -201,20 +212,41 @@ export function buildCohortSubject(input: CohortInput): CohortSubjectV1 {
   if (input.recoveryUnit !== "item" && input.recoveryUnit !== "cohort") {
     throw new SubjectInvalidError(`recoveryUnit must be "item" or "cohort", got ${String(input.recoveryUnit)}`);
   }
-  for (const it of input.items) {
-    if (it.schema !== PROPOSAL_ITEM_SCHEMA) throw new SubjectUnsupportedVersionError(String(it.schema));
-  }
 
-  const items = [...input.items].sort(
-    (a, b) => cmp(a.noteId, b.noteId) || cmp(a.proposed.value, b.proposed.value) || cmpNullFirst(a.path, b.path)
+  // Items are REBUILT, not trusted. A TypeScript type does not bind a runtime
+  // caller — an item parsed from JSON or hand-assembled would otherwise skip
+  // every item-level rule (the review's proof: an ephemeral observation rode
+  // straight through the cohort path). Rebuilding re-runs the full item
+  // validation and re-sorts, and costs nothing for an already-canonical item.
+  const items = input.items.map((it) => {
+    if (it.schema !== PROPOSAL_ITEM_SCHEMA) throw new SubjectUnsupportedVersionError(String(it.schema));
+    const { schema, ...rest } = it;
+    void schema;
+    return buildProposalItemSubject(rest);
+  });
+
+  // The guide's sort keys (noteId, proposed, path) are not total: two items
+  // from different vaults can tie on all three, and a stable sort would then
+  // preserve INPUT order — same item set, different canonical bytes, which is
+  // the exact failure D13 defines this contract against. D13 requires "stable
+  // identity plus deterministic tie-breaker", so vaultId closes the order.
+  // No committed fixture digest changes: valid single-vault inputs never tie.
+  items.sort(
+    (a, b) =>
+      cmp(a.noteId, b.noteId) || cmp(a.proposed.value, b.proposed.value) || cmpNullFirst(a.path, b.path) || cmp(a.vaultId, b.vaultId)
   );
-  for (let i = 1; i < items.length; i++) {
-    // Identity is the note within the vault: one frozen cohort holds at most
-    // one proposed state per note. Two entries for one note — even with
-    // different proposed digests — mean the selection was wrong or raced.
-    if (items[i].vaultId === items[i - 1].vaultId && items[i].noteId === items[i - 1].noteId) {
-      throw new SubjectDuplicateError(`note ${items[i].noteId} appears more than once in the cohort`);
+
+  // Identity is the note within the vault: one frozen cohort holds at most one
+  // proposed state per note. Checked over a set rather than adjacency —
+  // duplicates of one vault's note can interleave with another vault's items
+  // under the sort above, and the adjacency scan missed exactly that case.
+  const seen = new Set<string>();
+  for (const it of items) {
+    const key = `${it.vaultId}\u0000${it.noteId}`;
+    if (seen.has(key)) {
+      throw new SubjectDuplicateError(`note ${it.noteId} (vault ${it.vaultId}) appears more than once in the cohort`);
     }
+    seen.add(key);
   }
 
   const include = [...input.resolvedScope.include].sort(cmp);

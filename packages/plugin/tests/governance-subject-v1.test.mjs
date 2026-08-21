@@ -125,6 +125,11 @@ describe("canonical JSON — the refused domain", () => {
     refuse({ a: undefined });
   });
 
+  test("a sparse array is refused, not emitted as invalid JSON — review finding 5", () => {
+    // eslint-disable-next-line no-sparse-arrays
+    refuse([1, , 3]);
+  });
+
   test("non-plain objects are refused rather than serialized on a guess", () => {
     refuse(new Date(0));
     refuse(new Map());
@@ -337,6 +342,54 @@ describe("cohort subject — canonical form", () => {
       () => buildCohortSubject(cohortInput({ excludedProposalIds: ["p1", "p1"] })),
       (e) => e.code === "subject_duplicate"
     );
+  });
+
+  test("a NON-ADJACENT duplicate is refused — review finding 1", () => {
+    // Sorting by noteId/proposed/path can interleave one vault's duplicate
+    // pair with another vault's item: [v1/nA d-low, v2/nA d-mid, v1/nA d-high]
+    // sorts with the two v1 copies apart, and an adjacency scan misses them.
+    // The check is a set over (vaultId, noteId), so position cannot matter.
+    const ds = ["p1", "p2", "p3"].map((t) => d(t)).sort((a, b) => (a.value < b.value ? -1 : 1));
+    const items = [
+      item("nA", { vaultId: "v1", proposed: ds[0] }),
+      item("nA", { vaultId: "v2", proposed: ds[1] }),
+      item("nA", { vaultId: "v1", proposed: ds[2] }),
+    ];
+    assert.throws(() => buildCohortSubject(cohortInput({ items })), (e) => e.code === "subject_duplicate");
+  });
+
+  test("the item order is TOTAL — same set, any input order, identical digest (review finding 2)", () => {
+    // Two items tying on (noteId, proposed, path) but from different vaults
+    // used to fall through to input order under the stable sort — same item
+    // set, two different canonical byte streams. vaultId is the deterministic
+    // tie-breaker D13 requires.
+    const a = item("nA", { vaultId: "v1", proposed: d("same"), path: null, base: null });
+    const b = item("nA", { vaultId: "v2", proposed: d("same"), path: null, base: null });
+    const one = subjectDigest(buildCohortSubject(cohortInput({ items: [a, b] })));
+    const two = subjectDigest(buildCohortSubject(cohortInput({ items: [b, a] })));
+    assert.deepEqual(one, two);
+  });
+
+  test("cohort items are REVALIDATED, not trusted — review finding 3", () => {
+    // A runtime caller can hand the cohort builder anything: a JSON-parsed
+    // item skips the item builder entirely. Rebuilding inside the cohort
+    // builder re-runs every item rule — here, D16's ephemeral rejection.
+    const smuggled = {
+      ...item("nA"),
+      observations: [{ id: "o", digest: d("x"), capture: "ephemeral" }],
+    };
+    assert.throws(() => buildCohortSubject(cohortInput({ items: [smuggled] })), (e) => e.code === "subject_invalid");
+  });
+
+  test("extra properties on a digest never reach canonical bytes — review finding 4", () => {
+    const dirty = { algorithm: "sha256", value: d("x").value, extra: "leak" };
+    const s = buildProposalItemSubject(itemInput({ proposed: dirty, base: dirty, attachments: [{ id: "a", digest: dirty }] }));
+    const bytes = canonicalize(s);
+    assert.ok(!bytes.includes("extra"), "the leaked key is stripped by rebuild");
+    assert.ok(!bytes.includes("leak"));
+    // And through the cohort path too, where items are rebuilt:
+    const c = buildCohortSubject(cohortInput({ items: [{ ...s, proposed: dirty }] }));
+    assert.ok(!canonicalize(c).includes("leak"));
   });
 
   test("EXCLUSIONS CHANGE THE DIGEST — leaving an item out is a different decision", () => {
