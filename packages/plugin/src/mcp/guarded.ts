@@ -242,7 +242,7 @@ export interface GuardedOpts {
    * no longer exists. Absent ⇒ no session machinery (tests, bare embeds);
    * the check is skipped, exactly like the kernel itself.
    */
-  sessionLive?: () => { live: boolean; status: string; sessionId: string | null };
+  sessionLive?: () => Promise<{ live: boolean; status: string; sessionId: string | null }> | { live: boolean; status: string; sessionId: string | null };
   /**
    * The shared operation executor (WP1). Every guarded call runs inside one
    * operation, so action identity, actor binding and phase history are the
@@ -476,6 +476,11 @@ export function makeGuarded(opts: GuardedOpts) {
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function runGuarded(opts: GuardedOpts, def: any, handler: any, name: string | undefined, args: any, extra: any, mark: (phase: "queued" | "attempted") => void, setSources: (paths: string[]) => void = () => {}) {
+  // READS never enter the queue, so they are not session-liveness-checked:
+  // the WP5 deliverable names dequeue and admission time, and both are
+  // mutation phases. The visible consequence — an expired session can read
+  // until its connection drops, and its journal/capture attribution keeps
+  // naming the expired id — is accepted and stated rather than hidden.
   const isMutating = def?.annotations?.readOnlyHint === false;
   // Steps 1/1b/3 (uid resolution, scheme resolution, read-only+allowlist)
   // live in resolveAndGuard so obsidian_write_notes can share the IDENTICAL
@@ -538,7 +543,7 @@ async function runGuarded(opts: GuardedOpts, def: any, handler: any, name: strin
         ...(intent !== undefined ? { intent } : {}),
         ...(addressedAs.length > 0 ? { addressedAs } : {}),
       },
-      () => {
+      async () => {
         // Inside the queued closure: this runs at DEQUEUE, after the kernel's
         // own revision, record and lock checks have passed. Anything that
         // refuses before this point never attempted an effect.
@@ -547,7 +552,7 @@ async function runGuarded(opts: GuardedOpts, def: any, handler: any, name: strin
         // mutation can wait in the queue across its session's expiry or
         // revocation, and executing it then would act under an authority
         // context that no longer exists (WP5).
-        const live = opts.sessionLive?.();
+        const live = await opts.sessionLive?.();
         if (live && !live.live) {
           return codedError(
             "session_not_live",

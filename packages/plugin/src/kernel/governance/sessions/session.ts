@@ -33,7 +33,14 @@ export interface SessionV1 {
   vaultId: string;
   /** The install id of THIS replica — sessions never span replicas (D01). */
   replicaId: string;
-  /** The transport-established actor. Never client-claimed. */
+  /**
+   * The transport-established actor. Never client-claimed. `clientClaim` is
+   * what was known AT OPEN — for a real MCP connection that is null, because
+   * the client's initialize handshake happens after the server (and session)
+   * is built. The journal actor resolves the live client per call; the two
+   * records deliberately answer different questions ("who opened this" vs
+   * "who was speaking when this landed").
+   */
   actor: { connection: string; clientClaim: string | null };
   /**
    * Where the vault stood when the session opened — the journal's head

@@ -203,6 +203,62 @@ describe("session store — the fold survives garbage", () => {
   });
 });
 
+// ── the dequeue check, behaviorally ──────────────────────────────────────────
+
+describe("session liveness at dequeue — behavioral, not just a source pin", async () => {
+  const { z } = await import("zod");
+  const { makeGuarded, withKernelArgs } = await import("../src/mcp/guarded.ts");
+  const { Kernel, WriteQueue, WriteJournal, IdempotencyStore, LockStore } = await import("../src/kernel/index.ts");
+
+  function fakeAdapter() {
+    const files = new Map();
+    return {
+      async exists(p) { return files.has(p); },
+      async mkdir() {},
+      async write(p, d) { files.set(p, d); },
+      async append(p, d) { files.set(p, (files.get(p) ?? "") + d); },
+    };
+  }
+  const RW_DEF = { title: "w", description: "", annotations: { readOnlyHint: false } };
+  const ACTOR = { transport: "mcp", connection: "c-1" };
+
+  function fixture(liveness) {
+    const kernel = new Kernel(new WriteQueue(1000), new WriteJournal(fakeAdapter(), "dir/journal"), null, new IdempotencyStore(), new LockStore());
+    const seen = [];
+    const guarded = makeGuarded({ getSettings: () => ({ readOnly: false, allowlist: [] }), kernel, actor: () => ACTOR, sessionLive: liveness });
+    const wrapped = guarded(withKernelArgs({ ...RW_DEF, inputSchema: { path: z.string() } }), async (args) => {
+      seen.push(args);
+      return { content: [{ type: "text", text: "ok" }] };
+    }, "obsidian_write_note");
+    return { seen, call: (args) => wrapped(args, {}) };
+  }
+
+  test("a mutation whose session died refuses at dequeue with session_not_live — the handler never runs", async () => {
+    // Async liveness, as the production path is: the check consults the
+    // durable store, where a human's revocation lands.
+    const { seen, call } = fixture(async () => ({ live: false, status: "revoked", sessionId: "s-1" }));
+    const res = await call({ path: "A.md" });
+    assert.ok(res.isError, "refused");
+    assert.match(res.content[0].text, /session_not_live/);
+    assert.match(res.content[0].text, /revoked/);
+    assert.equal(seen.length, 0, "the handler never executed");
+  });
+
+  test("a live session's mutation proceeds untouched", async () => {
+    const { seen, call } = fixture(async () => ({ live: true, status: "open", sessionId: "s-1" }));
+    const res = await call({ path: "A.md" });
+    assert.ok(!res.isError);
+    assert.equal(seen.length, 1);
+  });
+
+  test("no session machinery at all means no check — tests and embeds keep working", async () => {
+    const { seen, call } = fixture(undefined);
+    const res = await call({ path: "A.md" });
+    assert.ok(!res.isError);
+    assert.equal(seen.length, 1);
+  });
+});
+
 // ── the wiring, pinned at the source ─────────────────────────────────────────
 
 describe("session wiring — pinned, because unwired machinery is the known failure mode", async () => {
@@ -221,5 +277,14 @@ describe("session wiring — pinned, because unwired machinery is the known fail
     const main = fs.readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");
     assert.match(main, /createSessionStore\(/);
     assert.match(main, /sessions\.jsonl/);
+    assert.match(main, /journalHead: \(\) => journalHeadMarker\(\)/, "the base-state head marker is real, not a null stub");
+  });
+
+  test("the dequeue liveness check consults the STORE — revocation must reach a live connection", () => {
+    // The first draft checked only the closure-captured session object, whose
+    // status nothing ever mutates — a store-level revoke would never have
+    // reached it, and only wall-clock expiry could refuse.
+    const server = fs.readFileSync(new URL("../src/mcp/server.ts", import.meta.url), "utf8");
+    assert.match(server, /await ctx\.sessions\.get\(session\.id\)/, "sessionLive re-reads the folded store state");
   });
 });

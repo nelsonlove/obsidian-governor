@@ -140,6 +140,61 @@ describe("reconcile — what an origin means for standing", () => {
   });
 });
 
+// ── production wiring: the origin is actually produced and persisted ─────────
+
+describe("origin wiring — produced in the modify listener, persisted on the advance record", async () => {
+  const fs = await import("node:fs");
+
+  test("wiring.ts evaluates classifyChange (one evaluation), with syncEvidence hard false", () => {
+    const wiring = fs.readFileSync(new URL("../src/governance/wiring.ts", import.meta.url), "utf8");
+    assert.match(wiring, /classifyChange\(/, "the modify listener produces the origin record");
+    assert.match(wiring, /syncEvidence: false/, "no local signal may claim sync attribution");
+    assert.ok(!/classifyModify\(/.test(wiring), "the listener no longer calls the bare modify classifier — one evaluation, two consumers");
+  });
+
+  test("the silent-advance audit record carries the origin", async () => {
+    const { silentAdvanceRecord } = await import("../src/kernel/governance/accept.ts");
+    const rec = silentAdvanceRecord({
+      ts: "2026-08-21T00:00:00Z",
+      path: "A.md",
+      reason: "human-edit",
+      fromHash: null,
+      toHash: "abc",
+      origin: { origin: "local-human-observed", confidence: "observed" },
+    });
+    assert.deepEqual(rec.origin, { origin: "local-human-observed", confidence: "observed" });
+    // and without one, the field is absent — pre-WP5 log lines stay valid
+    assert.ok(!("origin" in silentAdvanceRecord({ ts: "t", path: "p", reason: "human-edit", fromHash: null, toHash: "x" })));
+  });
+});
+
+// ── a session is not a governed posture ──────────────────────────────────────
+
+describe("capture policy — having a session is not being governed", async () => {
+  test("a bare session id does NOT promote an evidence-default action to replayable", async () => {
+    // Every connection opens a session now (WP5). If that alone counted as
+    // "governed", the first future evidence-default native action would
+    // silently jump to full-payload retention on the strength of nothing but
+    // a connection. Governed means a proposing or mandated posture (WP6/WP9).
+    const { decideCapture } = await import("../src/kernel/observations/capture-policy.ts");
+    const evidenceAction = {
+      id: "x.read", version: 1,
+      observations: { defaultCapture: "evidence", supportsProposal: false },
+    };
+    const withSession = decideCapture({ action: evidenceAction, session: { id: "s-1", governed: false }, substantive: true });
+    assert.equal(withSession.level, "evidence", "session presence alone must not promote");
+    const governed = decideCapture({ action: evidenceAction, session: { id: "s-1", governed: true }, substantive: true });
+    assert.equal(governed.level, "replayable", "a genuinely governed session still promotes");
+  });
+
+  test("capture.ts passes governed: false until postures exist — pinned at the source", async () => {
+    const fs = await import("node:fs");
+    const capture = fs.readFileSync(new URL("../src/kernel/observations/capture.ts", import.meta.url), "utf8");
+    assert.match(capture, /governed: false/, "a connection's session must not claim a governed posture");
+    assert.ok(!/governed: true/.test(capture));
+  });
+});
+
 // ── executor: identity is never claimed through arguments ────────────────────
 
 describe("reserved identity inputs — refused at the executor (WP5)", () => {

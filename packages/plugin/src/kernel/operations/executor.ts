@@ -64,9 +64,16 @@ export class OperationRefusedError extends Error {
 /**
  * The caller's arguments carried an identity field. Identity is established
  * by the transport and the session — never claimed through tool arguments
- * (WP5: "actor fields ignored or refused when supplied by a client"; refusal
- * is the honest half of that disjunction, because silently ignoring a field
- * the caller plainly meant teaches them it worked).
+ * (WP5: "actor fields ignored or refused when supplied by a client").
+ *
+ * Where each half of that disjunction actually holds: on the MCP wire, the
+ * SDK's zod schemas STRIP undeclared keys before the guard ever sees the
+ * arguments, so a client sending `actor: "forged"` is silently IGNORED there
+ * — safely, since identity is transport-derived regardless. THIS check is
+ * the refusal half, and it binds the surfaces zod does not front: internal
+ * calls, future native invocation paths, and any surface whose schema passes
+ * arguments through. Defense in depth at the one choke point every surface
+ * shares, not the wire behavior of today's MCP tools.
  */
 export class ReservedIdentityInputError extends OperationRefusedError {
   constructor(keys: string[]) {

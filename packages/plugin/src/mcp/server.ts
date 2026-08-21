@@ -150,12 +150,27 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
     };
   }
 
-  /** Liveness for the dequeue check; marks expiry durably when first observed. */
-  const sessionLive = () => {
+  /**
+   * Liveness for the dequeue check. The STORE is consulted, not only the
+   * closure-captured session object — revocation lands in the store (a human
+   * act against the durable record), and a check that never re-read it would
+   * let a revoked session's queued mutations keep executing, with only
+   * wall-clock expiry ever able to refuse. Store errors degrade to the
+   * in-memory view rather than blocking the queue.
+   */
+  const sessionLive = async () => {
     if (!session) return { live: true, status: "open", sessionId: null };
     const now = Date.now();
-    const live = isLive(session, now);
-    const status = livenessOf(session, now);
+    let current = session;
+    if (ctx.sessions) {
+      try {
+        current = (await ctx.sessions.get(session.id)) ?? session;
+      } catch {
+        /* degrade to the in-memory view */
+      }
+    }
+    const live = isLive(current, now);
+    const status = livenessOf(current, now);
     if (!live && status === "expired" && ctx.sessions) {
       ctx.sessions.markExpired(session.id, now).catch(() => undefined);
     }

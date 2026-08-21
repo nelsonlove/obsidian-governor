@@ -80,6 +80,8 @@ export interface SilentAdvanceRecord {
   reason: "human-edit" | "self-baseline";
   fromHash: string | null; // prior baseline hash, or null if there was no baseline
   toHash: string;          // hash the baseline advanced to
+  /** The D12 origin record backing this advance (WP5). Optional: pre-WP5 log lines lack it. */
+  origin?: { origin: string; confidence: string };
 }
 
 // #101 — the request-changes / withdraw human dispositions log to the SAME
@@ -130,6 +132,7 @@ export function silentAdvanceRecord(args: {
   reason: SilentAdvanceRecord["reason"];
   fromHash: string | null;
   toHash: string;
+  origin?: { origin: string; confidence: string };
 }): SilentAdvanceRecord {
   return {
     event: "silent-advance",
@@ -138,6 +141,7 @@ export function silentAdvanceRecord(args: {
     reason: args.reason,
     fromHash: args.fromHash,
     toHash: args.toHash,
+    ...(args.origin ? { origin: args.origin } : {}),
   };
 }
 

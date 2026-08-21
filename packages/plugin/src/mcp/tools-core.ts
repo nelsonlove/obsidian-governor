@@ -88,6 +88,8 @@ export interface ServerCtx {
    */
   sessions?: {
     open(session: import("../kernel/governance/sessions/session.js").SessionV1, now: number): Promise<void>;
+    /** Folded current state, so liveness checks see store-level revocation. */
+    get(sessionId: string): Promise<import("../kernel/governance/sessions/session.js").SessionV1 | null>;
     close(sessionId: string, now: number): Promise<void>;
     markExpired(sessionId: string, now: number): Promise<void>;
     replicaId: string;
