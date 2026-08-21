@@ -45,6 +45,11 @@ import { buildMcpActionRegistry } from "../kernel/operations/mcp-registry.js";
 import { createOperationExecutor } from "../kernel/operations/executor.js";
 import { createCapture } from "../kernel/observations/capture.js";
 import { openSession, isLive, livenessOf, type SessionV1 } from "../kernel/governance/sessions/session.js";
+import { deriveClasses, requireClassesCovered } from "../kernel/governance/proposals/class-firewall.js";
+import { buildProposalSubjectFromOperation } from "../kernel/governance/proposals/proposal-builder.js";
+import { openProposal } from "../kernel/governance/proposals/proposal.js";
+import { NOTE_WRITE_V1 } from "../kernel/operations/actions/note-write.js";
+import { digestBytes } from "../kernel/governance/contracts/digest.js";
 import { canonicalize } from "../kernel/governance/contracts/canonical-json.js";
 import { digestUtf8 } from "../kernel/governance/contracts/digest.js";
 import { isExcludedTerritory } from "../governance/territories.js";
@@ -193,6 +198,14 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   // Named so obsidian_write_notes' pre-compose resolve (below) can share the
   // IDENTICAL uid/scheme resolution + read-only/allowlist check `guarded`
   // itself applies — not a second copy of it.
+  // The write-facts slot (WP6b-1): the backend reports each successful
+  // writeNote's exact base/proposed bytes here, and the executor's propose
+  // hook takes them immediately after the SAME operation completes. Safe
+  // without a queue of its own because the kernel serializes mutations
+  // process-wide — at most one write executes at a time, and the take happens
+  // before the next can start.
+  let writeFacts: { path: string; baseBytes: Uint8Array | null; proposedBytes: Uint8Array; created: boolean } | null = null;
+
   // ── the operation seam (WP1) ────────────────────────────────────────────────
   //
   // One registry and one executor per CONNECTION, matching the lifetime of the
@@ -256,6 +269,54 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
       return { binding: `${a.connection}`, clientClaim: a.client ?? null };
     },
     sessionId: () => session?.id ?? null,
+    // Proposal production (WP6b-1). The executor decides WHEN (a completed
+    // operation); this decides WHETHER: the surface's action is the native
+    // write, the human turned history on, the store is wired, and the backend
+    // reported the write's exact bytes. Failures degrade — the write stands.
+    propose: async (operation) => {
+      const facts = writeFacts;
+      writeFacts = null; // taken exactly once, for exactly this operation
+      if (!facts) return;
+      if (operation.action.id !== NOTE_WRITE_V1.id) return;
+      const st = ctx.getSettings();
+      if (st.historyEnabled !== true || !ctx.proposals) return;
+
+      // Class firewall (classification rule 5): the class is DERIVED from the
+      // diff and the declaration must cover it. On this surface the derivation
+      // can only say content — the path is fixed by the contract (a move is a
+      // different action) and an authority-key transition was already refused
+      // by the backend's accept guard before any bytes landed, so a diff that
+      // reaches here cannot carry those classes.
+      const derived = deriveClasses({
+        baseBytes: facts.baseBytes,
+        proposedBytes: facts.proposedBytes,
+        pathChanged: false,
+        touchesAuthorityKeys: false,
+      });
+      requireClassesCovered(NOTE_WRITE_V1.changeClasses, derived);
+      if (derived.length === 0) return; // a byte-identical rewrite proposes nothing
+
+      const uid = ctx.proposals.uidOf(facts.path);
+      const subject = buildProposalSubjectFromOperation({
+        vaultId: ctx.proposals.vaultId,
+        // The vault's uid is the stable identity; a note without one gets the
+        // honest path-derived fallback, named as such — never invented.
+        noteId: uid ?? `path:${facts.path}`,
+        path: facts.path,
+        pathSemanticallyRelevant: false,
+        base: facts.baseBytes === null ? null : digestBytes(facts.baseBytes),
+        proposed: digestBytes(facts.proposedBytes),
+        changeClasses: derived,
+        transformation: { id: NOTE_WRITE_V1.id, version: String(NOTE_WRITE_V1.version) },
+        predicates: [{ id: "content-diff", version: "1" }],
+        producingOperation: { id: operation.id, action: operation.action.id, actionVersion: operation.action.version },
+        observations: [], // a write's subject needs no read observation; capture is uncoupled (D16)
+        sessionId: operation.sessionId ?? "no-session",
+        mandateId: null,
+      });
+      const proposal = openProposal({ subject, sessionId: operation.sessionId ?? "no-session" }, Date.now());
+      await ctx.proposals.open(proposal, Date.now());
+    },
     capture: observationCapture,
     // The paths a call NAMES, via the same walker the guard and the journal
     // already use — so what a payload is attributed to is the same set the
@@ -317,7 +378,9 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   const visible = (paths: string[]) => visiblePaths(paths, ctx.getSettings());
   // Hoisted so obsidian_write_notes can drive the same backend writeNote through
   // its own per-item guarded dispatch (see the write-notes block below).
-  const backend = new ObsidianBackend(app, visible);
+  const backend = new ObsidianBackend(app, visible, (facts) => {
+    writeFacts = facts;
+  });
   registerFsTools(server, backend, {
     decodeHtml: false,
     rev: (p) => probe.rev(p),

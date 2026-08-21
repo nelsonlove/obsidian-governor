@@ -162,6 +162,13 @@ export interface OperationExecutorOpts {
   actor: () => OperationActor;
   /** The connection's durable session id (WP5), when sessions are wired. */
   sessionId?: () => string | null;
+  /**
+   * Proposal production (WP6b): called after a COMPLETED operation, before
+   * close. Like capture, a throw degrades observability and never costs the
+   * caller their result — but unlike capture, what it records is the start
+   * of the authority path, so the wiring gates it on the history setting.
+   */
+  propose?: (operation: OperationV1, result: unknown) => Promise<void> | void;
   now?: () => number;
   newId?: () => string;
   /**
@@ -453,6 +460,18 @@ export function createOperationExecutor(opts: OperationExecutorOpts): OperationE
           // observation list can be told apart from a read that had nothing to
           // record.
           if (captured.note) operation.captureNote = captured.note;
+        }
+
+        // Proposal production, same posture as capture: after the handler, on
+        // a completed operation only, never the caller's problem. What it
+        // starts is the authority path — the wiring decides WHETHER (settings,
+        // native action, write facts present); the executor only decides WHEN.
+        if (opts.propose && outcomeOf(result) === "completed") {
+          try {
+            await opts.propose(operation, result);
+          } catch (e) {
+            console.error("[governor] proposal production failed (the write itself stands)", e);
+          }
         }
 
         close(operation, outcomeOf(result));

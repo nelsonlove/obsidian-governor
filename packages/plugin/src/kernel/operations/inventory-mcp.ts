@@ -57,6 +57,7 @@
 
 import type { Distribution } from "./action.js";
 import { NOTE_READ_V1 } from "./actions/note-read.js";
+import { NOTE_WRITE_V1 } from "./actions/note-write.js";
 import { compatibilityAction, type CompatibilitySpec } from "./compatibility.js";
 import type { ActionDefinition } from "./action.js";
 import type { SurfaceBinding } from "./surface-binding.js";
@@ -113,7 +114,7 @@ const CORE_FS: McpSurfaceRow[] = [
   { tool: "obsidian_force_reindex", readOnly: true, module: "core", distribution: "public-default", postcondition: "Rebuild the backend index; a no-op against Obsidian's live metadata cache." },
   { tool: "obsidian_manage_frontmatter", readOnly: false, module: "core", distribution: "public-optional", paths: ["path"], discovered: "none", postcondition: "Get, set or delete one top-level frontmatter field on a visible note." },
   { tool: "obsidian_patch_note", readOnly: false, module: "core", distribution: "public-optional", paths: ["path"], discovered: "none", postcondition: "Insert or replace content at a named heading or block anchor." },
-  { tool: "obsidian_write_note", readOnly: false, module: "core", distribution: "public-optional", paths: ["path"], discovered: "none", postcondition: "Create or overwrite one visible note with exact content." },
+  { tool: "obsidian_write_note", readOnly: false, module: "core", distribution: "public-optional", paths: ["path"], discovered: "none", nativeAction: { id: NOTE_WRITE_V1.id, version: NOTE_WRITE_V1.version }, postcondition: "Create or overwrite one visible note with exact content." },
   { tool: "obsidian_append_note", readOnly: false, module: "core", distribution: "public-optional", paths: ["path"], discovered: "none", postcondition: "Append markdown to a note's end, creating it if absent." },
   { tool: "obsidian_move_note", readOnly: false, module: "core", distribution: "public-optional", paths: ["from", "to"], postcondition: "Move or rename one note through Obsidian's link-aware file manager." },
   // D07 lists no deletion capability in the public profile, and the threat
@@ -441,7 +442,7 @@ function specOf(row: McpSurfaceRow): CompatibilitySpec {
 }
 
 /** Every native action a surface binds. */
-const NATIVE_ACTIONS: ActionDefinition[] = [NOTE_READ_V1];
+const NATIVE_ACTIONS: ActionDefinition[] = [NOTE_READ_V1, NOTE_WRITE_V1];
 
 /** The action for every declared MCP surface: derived, unless the row names a native one. */
 export function mcpCompatibilityActions(): ActionDefinition[] {

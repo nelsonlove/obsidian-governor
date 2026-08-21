@@ -11,6 +11,7 @@ import { findClaudeBinary, claudeIsRegistered, claudeRegister, claudeRemove, cla
 import { ExternalToolRegistry, type VaultMcpApi } from "./mcp/external-tools.js";
 import { Kernel, WriteQueue, WriteJournal, IdempotencyStore, LockStore, UidIndex, loadInstallId, migrateLegacyModuleIds, DEFAULT_VOCABULARIES, type VocabInstanceSettings, type ModuleSettings } from "./kernel/index.js";
 import { createSessionStore } from "./kernel/governance/sessions/session-store.js";
+import { createProposalStore } from "./kernel/governance/proposals/proposal-store.js";
 import { obsidianProbe, obsidianServerIdentity, obsidianUidSource } from "./kernel/obsidian-probe.js";
 import { DEFAULT_SCHEMES, type SchemeInstanceConfig } from "./kernel/scheme/registry.js";
 import { DEFAULT_PROTECTED_PROPERTIES, setDeclaredProtectedProperties } from "@vault-mcp/core";
@@ -518,6 +519,30 @@ export default class VaultMcpPlugin extends Plugin {
     // could otherwise both take the `write` branch, silently losing one
     // `opened` event. Same mutex shape the history store's CAS uses.
     let sessionIoChain: Promise<unknown> = Promise.resolve();
+    // Proposals share the sessions' IO shape: append-only JSONL beside the
+    // acceptance log, serialized through its own chain. Identifiers and
+    // digests only — never note bodies (those live in the history store).
+    const proposalsFile = `${pluginDir}/governance/proposals.jsonl`;
+    let proposalIoChain: Promise<unknown> = Promise.resolve();
+    const proposalStore = createProposalStore({
+      appendLine: (line) => {
+        const task = async () => {
+          const dir = `${pluginDir}/governance`;
+          if (!(await sessionAdapter.exists(dir))) await sessionAdapter.mkdir(dir);
+          if (await sessionAdapter.exists(proposalsFile)) await sessionAdapter.append(proposalsFile, line + "\n");
+          else await sessionAdapter.write(proposalsFile, line + "\n");
+        };
+        const next = proposalIoChain.then(task, task);
+        proposalIoChain = next.catch(() => undefined);
+        return next;
+      },
+      readLines: async () => {
+        if (!(await sessionAdapter.exists(proposalsFile))) return [];
+        const raw = await sessionAdapter.read(proposalsFile);
+        return raw.split("\n").filter(Boolean);
+      },
+    });
+
     const sessionStore = createSessionStore({
       appendLine: (line) => {
         const task = async () => {
@@ -566,6 +591,14 @@ export default class VaultMcpPlugin extends Plugin {
         replicaId: install,
         vaultId: vaultName,
         journalHead: () => journalHeadMarker(),
+      },
+      proposals: {
+        open: (proposal: import("./kernel/governance/proposals/proposal.js").ProposalV1, now: number) => proposalStore.open(proposal, now),
+        uidOf: (path: string) => {
+          const uid = (this.app.metadataCache.getCache(path)?.frontmatter as Record<string, unknown> | undefined)?.uid;
+          return typeof uid === "string" && uid.length > 0 ? uid : null;
+        },
+        vaultId: vaultName,
       },
       getExternalTools: () => this.externalRegistry.entries(),
       getVocabularies: () => this.settings.vocabularies,
