@@ -373,6 +373,12 @@ describe("standing isolation — nothing outside the sanctioned modules touches 
     const offenders = [];
     const allowed = [
       path.join("kernel", "governance", "history-store", "refs.ts"), // defines it
+      // THE deliberate WP6b-2 addition: the one production module that builds
+      // the standingAdvance capability (closure-held, handed to the
+      // AdmissionService as a constructor argument). Anything else joining
+      // this list is a design decision someone makes on purpose, per the
+      // original comment.
+      path.join("governance", "admission-wiring.ts"),
     ];
     const walk = (dir) => {
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {

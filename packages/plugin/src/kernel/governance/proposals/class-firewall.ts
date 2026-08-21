@@ -65,6 +65,14 @@ export function deriveClasses(facts: DiffFacts): ChangeClass[] {
 
 /**
  * The firewall: every DERIVED class must be covered by the DECLARATION.
+ *
+ * #307 forward-note (per governor-lead): a KERNEL-performed acceptance
+ * demotion — removing accepted keys as part of a governed structural move,
+ * per Nelson's ruling — produces exactly the authority-shaped diff this
+ * firewall skips for agent writes. When the structural-move action is built,
+ * its declaration includes "authority" and the diff routes through the
+ * authority path; "skip the proposal" is the right answer only for a
+ * declaration that DOESN'T cover the derivation.
  * A declaration may exceed the derivation (widening buys a stricter path);
  * a derivation exceeding the declaration is the narrowing attack and
  * refuses. An empty derivation with a non-empty declaration passes — the

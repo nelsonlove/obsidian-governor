@@ -348,11 +348,21 @@ describe("governance module: THE TRIPWIRE — source reachability (accept surfac
     // accept/revert handlers gate directly on isRealGesture — including the Proposed
     // section's converged Accept and Request-changes (#221/#164).
     const lines = paneRaw.split("\n");
-    for (const el of ["acceptBtn", "revertBtn", "proposedAcceptBtn", "proposedRequestBtn"]) {
+    // runGuardedDisposition IS the shared gesture gate (gesture.ts: "THE ONE
+    // SHARED GESTURE GATE"; its first line is the isRealGesture check), so a
+    // handler routing through it is gated — the tripwire accepts the shared
+    // gate by name, same as it always accepted runGuardedAdopt (its wrapper).
+    // admitBtn is on the list because ADMISSION advances standing — the §9
+    // authority act — and the WP6b-2 revert button shares revertBtn's name.
+    for (const el of ["acceptBtn", "revertBtn", "proposedAcceptBtn", "proposedRequestBtn", "admitBtn"]) {
       let found = false;
       for (let i = 0; i < lines.length; i++) {
         if (new RegExp(`${el}\\.addEventListener\\(`).test(lines[i])) {
-          assert.match(lines.slice(i, i + 5).join("\n"), /isRealGesture/, `${el} handler must gate on isRealGesture`);
+          assert.match(
+            lines.slice(i, i + 5).join("\n"),
+            /isRealGesture|runGuardedDisposition|runGuardedAdopt/,
+            `${el} handler must gate on isRealGesture (directly or via the shared gate)`
+          );
           found = true;
         }
       }
