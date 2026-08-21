@@ -44,9 +44,10 @@ async function harness() {
   const settlements = [];
   let settlementFails = false;
 
+  const claimIo = memoryIo();
   const admission = buildAdmission({
     repo: async () => repo,
-    claimIo: memoryIo(),
+    claimIo,
     proposals,
     readNoteBytes: async (p) => (vault.has(p) ? enc(vault.get(p)) : null),
     writeNoteBytes: async (p, bytes) => void vault.set(p, dec(bytes)),
@@ -101,7 +102,7 @@ async function harness() {
   }
 
   const cleanup = () => fs.rmSync(root, { recursive: true, force: true });
-  return { repo, vault, proposals, settlements, admission, produce, cleanup, setSettlementFails: (v) => (settlementFails = v) };
+  return { repo, vault, proposals, settlements, admission, produce, cleanup, claimIo, setSettlementFails: (v) => (settlementFails = v) };
 }
 
 describe("admission wiring — the full path against the real repository", () => {
@@ -268,6 +269,88 @@ describe("admission wiring — the full path against the real repository", () =>
     // And the standing chain holds exactly ONE commit for this subject.
     const head = await h.repo.readCommit(await h.repo.resolveRef(standingRef()));
     assert.match(head.message, new RegExp(`^admission ${oks[0].claimId}`));
+  });
+
+  test("a TRANSIENT standing-read fault cannot resurrect the false-degraded misreport — the sentinel pin", async () => {
+    // Governor-lead's sixth-of-the-family finding: the sentinel existed
+    // because a review found the quadruple-fault path, but nothing exercised
+    // a THROWING standing reader — their mutation (preHeadKnown = true in
+    // the catch) survived the suite. This is the full quadruple fault:
+    // (1) the projection update failed at the first admission, so the pane
+    // still offers Admit; (2) the pre-check's standing read faults
+    // transiently; (3) the service's own standing read faults; (4) the
+    // catch's read recovers and sees the OLD claim standing for this exact
+    // subject. Under the mutation the catch reports ok+degraded with the
+    // old claim id — a false admission report; with the sentinel, an
+    // unknown starting point suppresses the branch and the answer is a
+    // plain failure. (First attempt at this pin was itself vacuous — empty
+    // claim store, branch unreachable; the vacuity rule applied to my own
+    // test.)
+    const local = await harness();
+    try {
+      // (1) first admission whose projection update FAILS — proposals proxy
+      // throws on markAdmitted once, so authority stays "proposed".
+      let projectionFaults = 1;
+      const flakyProposals = new Proxy(local.proposals, {
+        get(target, prop) {
+          if (prop === "markAdmitted") {
+            return async (...args) => {
+              if (projectionFaults > 0) {
+                projectionFaults--;
+                throw new Error("projection update failed");
+              }
+              return target.markAdmitted(...args);
+            };
+          }
+          const v = target[prop];
+          return typeof v === "function" ? v.bind(target) : v;
+        },
+      });
+      const admissionA = buildAdmission({
+        repo: async () => local.repo,
+        claimIo: local.claimIo,
+        proposals: flakyProposals,
+        readNoteBytes: async (p) => (local.vault.has(p) ? enc(local.vault.get(p)) : null),
+        writeNoteBytes: async () => {},
+        appendSettlement: async () => {},
+        now: () => T0,
+      });
+      const p1 = await local.produce("Notes/Sentinel.md", "base\n", "proposed\n");
+      const first = await admissionA.admitWithGesture(p1.id, "gesture-s1");
+      assert.ok(first.ok, JSON.stringify(first));
+      assert.equal((await local.proposals.get(p1.id)).authority, "proposed", "premise: the projection is stale");
+
+      // (2)+(3) two transient ref-read faults, (4) recovery for the catch.
+      let failures = 2;
+      const faultingRepo = new Proxy(local.repo, {
+        get(target, prop) {
+          if (prop === "resolveRef") {
+            return async (...args) => {
+              if (failures > 0) {
+                failures--;
+                throw new Error("transient IO fault");
+              }
+              return target.resolveRef(...args);
+            };
+          }
+          const v = target[prop];
+          return typeof v === "function" ? v.bind(target) : v;
+        },
+      });
+      const faulting = buildAdmission({
+        repo: async () => faultingRepo,
+        claimIo: local.claimIo,
+        proposals: local.proposals,
+        readNoteBytes: async (p) => (local.vault.has(p) ? enc(local.vault.get(p)) : null),
+        writeNoteBytes: async () => {},
+        appendSettlement: async () => {},
+        now: () => T0,
+      });
+      const outcome = await faulting.admitWithGesture(p1.id, "gesture-s2");
+      assert.ok(!outcome.ok, `the false admission report: ${JSON.stringify(outcome)}`);
+    } finally {
+      local.cleanup();
+    }
   });
 
   test("revert writes the recorded base back as a NEW change and supersedes the proposal", async () => {
