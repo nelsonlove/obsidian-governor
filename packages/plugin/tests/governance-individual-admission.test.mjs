@@ -77,11 +77,13 @@ function harness() {
   // The standing ref, as the WIRING would build it: a single mutable cell
   // behind a CAS closure. The service receives the closure and nothing else.
   let standing = null;
+  const standingLog = []; // claim ids, newest first — the chain the resolver walks
   const casCalls = [];
   const standingAdvance = async (expected, next) => {
     casCalls.push({ expected, next });
     if (standing !== expected) throw new RefCasError("refs/governor/standing", expected, standing);
     standing = next;
+    standingLog.unshift(next);
   };
 
   const claims = createClaimStore(memoryIo());
@@ -104,7 +106,7 @@ function harness() {
     now: () => T0 + 10 + ++tick,
     rand: () => RAND(9),
   });
-  const resolver = createStandingResolver({ claims, currentStanding: async () => standing });
+  const resolver = createStandingResolver({ claims, standingChain: async () => [...standingLog] });
   return { registry, claims, service, resolver, settlements, casCalls, standing: () => standing, setEvidence };
 }
 
@@ -340,22 +342,117 @@ describe("proposal fold — a crafted opened event cannot skip the transition fu
   });
 });
 
-describe("standing resolver — the head is the truth for its own subject", () => {
-  test("a head naming an older same-subject claim answers admitted with THAT claim", async () => {
-    // Unreachable through the service (CAS always advances to the new claim),
-    // but the resolver answers from what IS. The first draft could say
-    // "superseded ... by an older version of itself".
+describe("standing resolver — the chain walk (#334)", () => {
+  const { } = {};
+  async function chainFixture() {
     const { buildAdmissionClaim, createClaimStore } = await import("../src/kernel/governance/admission/settlement.ts");
     const io = memoryIo();
     const claims = createClaimStore(io);
-    const older = buildAdmissionClaim({ subjectDigest: d("S"), proposalId: "p1", gestureRef: "g", verification: [], expectedStanding: null, now: T0, rand: RAND(1) });
-    const newer = buildAdmissionClaim({ subjectDigest: d("S"), proposalId: "p2", gestureRef: "g", verification: [], expectedStanding: older.id, now: T0 + 5, rand: RAND(2) });
-    await claims.append(older);
-    await claims.append(newer);
-    const resolver = createStandingResolver({ claims, currentStanding: async () => older.id });
-    const answer = await resolver.forSubject(d("S").value);
-    assert.equal(answer.state, "admitted");
-    assert.equal(answer.claim.id, older.id, "the head IS the standing claim");
+    const chain = []; // newest first
+    const admitClaim = async (noteId, digest, seed) => {
+      const claim = buildAdmissionClaim({
+        subjectDigest: digest,
+        proposalId: `p-${seed}`,
+        gestureRef: "g",
+        verification: [],
+        expectedStanding: chain[0] ?? null,
+        coveredNotes: [{ vaultId: "v", noteId, subjectDigest: digest.value }],
+        now: T0 + seed,
+        rand: RAND(seed),
+      });
+      await claims.append(claim);
+      chain.unshift(claim.id);
+      return claim;
+    };
+    const resolver = createStandingResolver({ claims, standingChain: async () => [...chain] });
+    return { claims, chain, admitClaim, resolver };
+  }
+
+  test("governor-lead's reproduction: admitting note B does NOT supersede note A", async () => {
+    const f = await chainFixture();
+    const a = await f.admitClaim("note-A", d("subject-A"), 1);
+    assert.equal((await f.resolver.forSubject(d("subject-A").value)).state, "admitted");
+    await f.admitClaim("note-B", d("subject-B"), 2);
+    const answerB = await f.resolver.forSubject(d("subject-B").value);
+    assert.equal(answerB.state, "admitted");
+    const answerA = await f.resolver.forSubject(d("subject-A").value);
+    assert.equal(answerA.state, "admitted", "nothing replaced A; B's admission is about B");
+    assert.equal(answerA.claim.id, a.id);
+  });
+
+  test("TRUE supersession: the same note re-admitted with a new digest supersedes the old subject", async () => {
+    const f = await chainFixture();
+    const v1 = await f.admitClaim("note-A", d("A-v1"), 1);
+    const v2 = await f.admitClaim("note-A", d("A-v2"), 2);
+    const old = await f.resolver.forSubject(d("A-v1").value);
+    assert.equal(old.state, "superseded");
+    assert.equal(old.claim.id, v1.id);
+    assert.equal(old.by.id, v2.id, "superseded BY the same note's newer claim");
+    assert.equal((await f.resolver.forSubject(d("A-v2").value)).state, "admitted");
+  });
+
+  test("the 600-member shape: a cohort-style claim's members survive an unrelated later admission", async () => {
+    const { buildAdmissionClaim, createClaimStore } = await import("../src/kernel/governance/admission/settlement.ts");
+    const io = memoryIo();
+    const claims = createClaimStore(io);
+    const members = Array.from({ length: 50 }, (_, i) => ({ vaultId: "v", noteId: `member-${i}`, subjectDigest: d(`m-${i}`).value }));
+    const cohortClaim = buildAdmissionClaim({
+      subjectDigest: d("the-cohort"),
+      proposalId: "p-cohort",
+      gestureRef: "g",
+      verification: [],
+      expectedStanding: null,
+      coveredNotes: members,
+      now: T0,
+      rand: RAND(3),
+    });
+    const single = buildAdmissionClaim({
+      subjectDigest: d("unrelated"),
+      proposalId: "p-single",
+      gestureRef: "g",
+      verification: [],
+      expectedStanding: cohortClaim.id,
+      coveredNotes: [{ vaultId: "v", noteId: "someone-else", subjectDigest: d("unrelated").value }],
+      now: T0 + 1,
+      rand: RAND(4),
+    });
+    await claims.append(cohortClaim);
+    await claims.append(single);
+    const resolver = createStandingResolver({ claims, standingChain: async () => [single.id, cohortClaim.id] });
+    for (const m of [members[0], members[25], members[49]]) {
+      const answer = await resolver.forSubject(m.subjectDigest);
+      assert.equal(answer.state, "admitted", `${m.noteId} must not flip on an unrelated click`);
+    }
+    // and a member RE-admitted individually IS superseded — note-wise, precisely
+    const reAdmit = buildAdmissionClaim({
+      subjectDigest: d("m-25-v2"),
+      proposalId: "p-re",
+      gestureRef: "g",
+      verification: [],
+      expectedStanding: single.id,
+      coveredNotes: [{ vaultId: "v", noteId: "member-25", subjectDigest: d("m-25-v2").value }],
+      now: T0 + 2,
+      rand: RAND(5),
+    });
+    await claims.append(reAdmit);
+    const resolver2 = createStandingResolver({ claims, standingChain: async () => [reAdmit.id, single.id, cohortClaim.id] });
+    const flipped = await resolver2.forSubject(members[25].subjectDigest);
+    assert.equal(flipped.state, "superseded");
+    assert.equal(flipped.by.id, reAdmit.id);
+    assert.equal((await resolver2.forSubject(members[0].subjectDigest)).state, "admitted", "the other 49 stand untouched");
+  });
+
+  test("unattached claims answer ungoverned; a chained-but-unreadable claim answers unresolvable", async () => {
+    const { buildAdmissionClaim, createClaimStore } = await import("../src/kernel/governance/admission/settlement.ts");
+    const claims = createClaimStore(memoryIo());
+    const orphan = buildAdmissionClaim({ subjectDigest: d("orphan"), proposalId: "p", gestureRef: "g", verification: [], expectedStanding: null, coveredNotes: [{ vaultId: "v", noteId: "n", subjectDigest: d("orphan").value }], now: T0, rand: RAND(6) });
+    await claims.append(orphan);
+    const resolver = createStandingResolver({ claims, standingChain: async () => [] });
+    const answer = await resolver.forSubject(d("orphan").value);
+    assert.equal(answer.state, "ungoverned");
+    assert.match(answer.detail, /unattached/);
+    const ghost = createStandingResolver({ claims, standingChain: async () => ["ghost-id"] });
+    assert.equal((await ghost.forSubject(d("orphan").value)).state, "unresolvable");
   });
 });
 

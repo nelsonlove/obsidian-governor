@@ -29,6 +29,23 @@ export interface AdmissionClaimV1 {
   admittedAt: number;
   /** The standing ref value this admission expected to succeed (null = first admission). */
   expectedStanding: string | null;
+  /**
+   * The note identities this claim's subject covers — DERIVED from the
+   * subject at build time, never supplied beside it (#334's shaping note: a
+   * suppliable list would be a second, softer answer to "what did this click
+   * admit?" arriving by a quieter door, the caller-supplied-verification
+   * shape again). One entry for an item claim; every member for a cohort
+   * claim (WP7b), pinned equal to the manifest. The resolver's chain walk
+   * decides supersession NOTE-WISE from these: a subject is superseded only
+   * by a newer claim covering the SAME note, never by an unrelated
+   * admission.
+   *
+   * Schema note: added to /v1 in place — zero claims have ever been written
+   * outside tests (the feature has been default-off since birth), so there
+   * is no deployed data to migrate; older in-test claims without the field
+   * degrade to subjectDigest-only matching.
+   */
+  coveredNotes: Array<{ vaultId: string; noteId: string; subjectDigest: string }>;
 }
 
 export interface ClaimIo {
@@ -49,6 +66,8 @@ export function buildAdmissionClaim(args: {
   gestureRef: string;
   verification: VerificationRecord[];
   expectedStanding: string | null;
+  /** The note identities the subject covers — the SERVICE derives these from the subject itself. */
+  coveredNotes: Array<{ vaultId: string; noteId: string; subjectDigest: string }>;
   now: number;
   rand?: Uint8Array;
 }): AdmissionClaimV1 {
@@ -64,6 +83,7 @@ export function buildAdmissionClaim(args: {
     verification: args.verification.filter((r) => r.passed).map((r) => ({ predicate: r.predicate, passed: true as const })),
     admittedAt: args.now,
     expectedStanding: args.expectedStanding,
+    coveredNotes: args.coveredNotes.map((n) => ({ vaultId: n.vaultId, noteId: n.noteId, subjectDigest: n.subjectDigest })),
   };
 }
 
