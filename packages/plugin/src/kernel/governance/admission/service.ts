@@ -127,6 +127,11 @@ export function createAdmissionService(deps: AdmissionDeps): AdmissionService {
           gestureRef: request.authority.kind === "human-gesture" ? request.authority.gestureRef : "",
           verification: outcome.records,
           expectedStanding: expected,
+          // DERIVED from the subject, in the same breath as the digest — no
+          // caller field exists for it (#334's shaping rule).
+          coveredNotes: [
+            { vaultId: request.subject.vaultId, noteId: request.subject.noteId, subjectDigest: request.proposal.subjectDigest.value },
+          ],
           now,
           rand: deps.rand?.(),
         });
