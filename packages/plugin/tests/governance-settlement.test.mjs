@@ -70,6 +70,7 @@ describe("settlement decisions — the two asymmetric rules", () => {
     gestureRef: "g",
     verification: [],
     expectedStanding: null,
+    coveredNotes: [{ vaultId: "v", noteId: "n", subjectDigest: d("x").value }],
     now: T0,
     rand: RAND,
   });
@@ -186,7 +187,7 @@ describe("admission crash windows — claim always lands before the ref moves", 
 describe("standing resolver — a ref naming a missing claim is unresolvable, not empty", () => {
   test("forSubject answers unresolvable; current() throws rather than returning null", async () => {
     const claims = createClaimStore(memoryIo());
-    const resolver = createStandingResolver({ claims, currentStanding: async () => "ghost-claim-id" });
+    const resolver = createStandingResolver({ claims, standingChain: async () => ["ghost-claim-id"] });
     const answer = await resolver.forSubject(d("anything").value);
     assert.equal(answer.state, "unresolvable");
     assert.match(answer.detail, /critical health failure/);
@@ -196,7 +197,7 @@ describe("standing resolver — a ref naming a missing claim is unresolvable, no
   test("claim-store garbage does not corrupt neighbors", async () => {
     const io = memoryIo();
     const claims = createClaimStore(io);
-    const claim = buildAdmissionClaim({ subjectDigest: d("x"), proposalId: "p", gestureRef: "g", verification: [], expectedStanding: null, now: T0, rand: RAND });
+    const claim = buildAdmissionClaim({ subjectDigest: d("x"), proposalId: "p", gestureRef: "g", verification: [], expectedStanding: null, coveredNotes: [{ vaultId: "v", noteId: "n", subjectDigest: d("x").value }], now: T0, rand: RAND });
     await claims.append(claim);
     io.lines.push("{corrupt json");
     const rebooted = createClaimStore(io);
