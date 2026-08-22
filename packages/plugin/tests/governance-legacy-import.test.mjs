@@ -260,12 +260,41 @@ describe("single standing writer — the disabled writer REFUSES", () => {
       });
     const files = walk(path.join(HERE, "..", "src"));
     assert.ok(files.length > 50, "the glob genuinely walked the tree");
-    const offenders = files.filter((f) => {
-      if (f.endsWith(path.join("kernel", "governance", "baseline-store.ts"))) return false;
-      const text = fs.readFileSync(f, "utf8");
-      return /async setBaseline\(|async rekey\(/.test(text);
-    });
-    assert.deepEqual(offenders, [], "no unguarded baseline-writer implementation exists outside the store");
+    // Two scans, and each assertion message states EXACTLY what its pattern
+    // covers (the ninth-instance rule: a message that states the property
+    // while the pattern checks a spelling is the family's purest shape —
+    // governor-lead's planted `advanceBaselineBlob` passed the name scan
+    // while producing byte-identical blobs).
+    const isStore = (f) => f.endsWith(path.join("kernel", "governance", "baseline-store.ts"));
+    const nameOffenders = files.filter((f) => !isStore(f) && /async setBaseline\(|async rekey\(/.test(fs.readFileSync(f, "utf8")));
+    assert.deepEqual(nameOffenders, [], "no implementation NAMED setBaseline/rekey exists outside the store (name spellings only — the shape scan below covers renamed writers)");
+
+    // What makes something a WRITER is producing the store's blob-path shape
+    // — `<baseDir>/<contentHash(path)>.json` — under any method name. Both
+    // template and concatenation spellings; legitimate only in the store.
+    const shapePattern = /\$\{[^}]*contentHash\([^)]*\)[^}]*\}\.json|contentHash\([^)]*\)\s*\+\s*["'`]\.json/;
+    const shapeOffenders = files.filter((f) => !isStore(f) && shapePattern.test(fs.readFileSync(f, "utf8")));
+    assert.deepEqual(shapeOffenders, [], "no file outside the store constructs the baseline blob path shape (covers renamed writers; a writer with BOTH a novel name and a novel path construction remains a declared blind spot needing an author inside a reviewed file)");
+    // And the shape scan is anchored: the store itself DOES use the shape.
+    assert.ok(shapePattern.test(fs.readFileSync(files.find(isStore), "utf8")), "the store's own fileFor uses the shape the scan looks for — else the scan hunts a phantom");
+  });
+
+  test("VACUITY: the shape scan catches governor-lead's planted renamed writer", () => {
+    // The exact plant from the #338 review: a writer under a different NAME
+    // producing byte-identical blobs into the same directory. The name scan
+    // cannot see it; the shape scan must.
+    const planted =
+      "export class Rogue {\n" +
+      "  async advanceBaselineBlob(baseDir, notePath, content) {\n" +
+      "    await this.fs.write(`${baseDir}/${contentHash(notePath)}.json`, JSON.stringify({ path: notePath, content }));\n" +
+      "  }\n" +
+      "}\n";
+    assert.ok(!/async setBaseline\(|async rekey\(/.test(planted), "the name scan is blind to the renamed writer — which is why the shape scan exists");
+    const shapePattern = /\$\{[^}]*contentHash\([^)]*\)[^}]*\}\.json|contentHash\([^)]*\)\s*\+\s*["'`]\.json/;
+    assert.ok(shapePattern.test(planted), "the shape scan flags the plant");
+    // And the concatenation spelling too.
+    const plantedConcat = 'await fsx.write(baseDir + "/" + contentHash(p) + ".json", data);';
+    assert.ok(shapePattern.test(plantedConcat), "the concatenation spelling is also flagged");
   });
 
   test("VACUITY: the source scan catches a planted unguarded writer", () => {
