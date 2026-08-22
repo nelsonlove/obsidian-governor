@@ -561,3 +561,46 @@ describe("the guard-load ordering is PINNED — the five-character regression is
     assert.ok(!scan(guardFirst), "installing the guard BEFORE the load is caught — ordering, not mere presence");
   });
 });
+
+describe("the migration section's own fixes are pinned — eleventh-instance closeout", () => {
+  test("renderMigrationSection branches on authority state, and the confirm phase is caught (source pins + vacuity)", () => {
+    // Governor-lead rendered "Roll back cutover…" pre-cutover and the suite
+    // stayed green — the section needs Obsidian's DOM, so like main.ts it
+    // gets the source-read idiom: the branch, the early return, and the
+    // confirm-phase try are pinned as source facts with mutants for each.
+    const raw = fs.readFileSync(path.join(HERE, "..", "src", "governance", "wiring.ts"), "utf8");
+    const at = raw.indexOf("function renderMigrationSection(");
+    assert.notEqual(at, -1);
+    const body = raw.slice(at, raw.indexOf("\nfunction ", at + 10) === -1 ? raw.length : raw.indexOf("\nfunction ", at + 10));
+
+    const scanBranch = (b) => {
+      const branchAt = b.indexOf("if (migration.isCutOver())");
+      const rollAt = b.indexOf('"Roll back cutover…"');
+      const retAt = b.indexOf("return;", branchAt);
+      const importAt = b.indexOf('"Import legacy evidence"');
+      const cutAt = b.indexOf('"Cut over…"');
+      // Rollback lives INSIDE the cut-over branch (before its early return);
+      // Import and Cut over live AFTER it — i.e. only pre-cutover.
+      return branchAt !== -1 && rollAt > branchAt && retAt > rollAt && importAt > retAt && cutAt > importAt;
+    };
+    assert.ok(scanBranch(body), "rollback renders only post-cutover; import and cut-over only pre-cutover");
+    // Vacuity: governor-lead's exact mutant — rollback rendered unconditionally
+    // (moved after the branch's early return) — fails the scan.
+    const beforeBranch = body.slice(0, body.indexOf("if (migration.isCutOver())"));
+    const mutant = beforeBranch + '  const rollBtn = row.createEl("button", { text: "Roll back cutover…" });\n' + body.slice(body.indexOf("if (migration.isCutOver())"));
+    assert.ok(!scanBranch(mutant), "a pre-cutover rollback render is caught");
+
+    // The confirm phase (report-preparing import) is caught: a try opens
+    // before the importLegacyEvidence call inside the cutover button's
+    // confirm callback, so a throw answers not-confirmed instead of dying
+    // as an unhandled rejection.
+    const confirmAt = body.indexOf("confirmCutover(plugin.app, report)");
+    assert.notEqual(confirmAt, -1);
+    const confirmRegion = body.slice(body.indexOf('"Cut over…"'), confirmAt);
+    const tryPattern = /try\s*\{[\s\S]{0,800}?importLegacyEvidence\(\)/;
+    assert.ok(tryPattern.test(confirmRegion), "the confirm-phase import runs inside a try");
+    // Vacuity: stripping the try is visible.
+    const stripped = confirmRegion.replace(/try\s*\{/, "{");
+    assert.ok(!tryPattern.test(stripped), "removing the try is caught");
+  });
+});
