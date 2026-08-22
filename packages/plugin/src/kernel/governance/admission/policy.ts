@@ -206,16 +206,22 @@ export function requireCohortAdmissible(request: CohortAdmissionRequest, coverag
     if (proposal.producedOutcome !== "completed") {
       throw new AdmissionRefusedError("result_not_settled", `member ${item.noteId}'s producing operation was '${proposal.producedOutcome}'`);
     }
-    // The item table's rule at cohort scale: an open human objection blocks
-    // the member, and one blocked member blocks the decision (whole-abort).
-    // A revision request flips no note bytes, so drift and coverage both
-    // pass over it — this row is the ONLY thing that can see it.
-    if (proposal.development === "revision-requested") {
-      throw new AdmissionRefusedError("revision_open", `a revision was requested on member ${item.noteId}; the revised result is a new subject`, [item.noteId]);
-    }
     if (item.mandateId !== null) {
       throw new AdmissionRefusedError("mandate_not_supported", `member ${item.noteId} claims a mandate, which cannot be validated before WP9`);
     }
+  }
+  // The item table's rule at cohort scale: an open human objection blocks the
+  // member, and one blocked member blocks the decision (whole-abort). A
+  // revision request flips no note bytes, so drift and coverage both pass
+  // over it — this row is the ONLY thing that can see it. ALL objected
+  // members are collected and named in ONE refusal, so split-by-finding
+  // excludes them in one successor rather than one gated click each.
+  const revisionOpen = frozenSubject.items
+    .map((item) => byIdentity.get(`${item.vaultId}\u0000${item.noteId}`))
+    .filter((p): p is ProposalV1 => p !== undefined && p.development === "revision-requested")
+    .map((p) => p.subject.noteId);
+  if (revisionOpen.length > 0) {
+    throw new AdmissionRefusedError("revision_open", `a revision was requested on ${revisionOpen.length} member(s): ${revisionOpen.join(", ")}; the revised results are new subjects`, revisionOpen);
   }
 
   // Coverage: the service's own run, exact and total, addressed to THIS digest.

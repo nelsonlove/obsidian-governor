@@ -31,7 +31,7 @@ import { verifyCohortCoverage } from "../kernel/governance/cohorts/coverage.js";
 import { selectProposals, type CohortSelector } from "../kernel/governance/cohorts/cohort.js";
 import { createClaimStore, type ClaimIo } from "../kernel/governance/admission/settlement.js";
 import { AdmissionRefusedError } from "../kernel/governance/admission/policy.js";
-import { buildProposalItemSubject } from "../kernel/governance/contracts/subject-v1.js";
+import { buildProposalItemSubject, subjectDigest } from "../kernel/governance/contracts/subject-v1.js";
 import { digestBytes } from "../kernel/governance/contracts/digest.js";
 import { standingRef } from "../kernel/governance/history-store/refs.js";
 import { RefCasError, type ObjectId } from "../kernel/governance/history-store/types.js";
@@ -303,7 +303,11 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
         }
         if (preHead !== null) {
           const headClaim = await claims.byId(preHead);
-          if (headClaim && headClaim.subjectDigest.value === frozen.digest.value) {
+          // Compared against the RECOMPUTED cohort digest, never the caller's
+          // precomputed frozen.digest (freeze.ts's own obligation): a
+          // mis-correlated frozen/members pair must not stamp never-admitted
+          // members "admitted" under a claim that does not cover them.
+          if (headClaim && headClaim.subjectDigest.value === subjectDigest(frozen.subject).value) {
             for (const m of fresh) {
               try {
                 await deps.proposals.setVerification(m.id, "passed", now());

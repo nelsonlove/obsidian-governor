@@ -280,6 +280,13 @@ describe("§15 — the cohort gesture is gated identically", () => {
       "await deps.admission.admitCohortWithGesture(split.frozen, split.members, gestureRef);"
     );
     assert.ok(!scanOneAdmissionPerGate(mutantDirect), "a second direct admission is caught");
+    // Third spelling: admitting the successor's members one by one through
+    // the ITEM path under the original ref — no cohort call, same violation.
+    const mutantItemPath = body.replace(
+      "this.pendingSuccessor = { frozen: split.frozen, members: split.members, excludedNoteIds: failedNoteIds };",
+      "for (const m of split.members) await deps.admission.admitWithGesture(m.id, gestureRef);"
+    );
+    assert.ok(!scanOneAdmissionPerGate(mutantItemPath), "an item-path smuggle is caught");
   });
 
   test("vacuity: the pins match real wiring sites", () => {
@@ -307,11 +314,21 @@ function extractMethodBody(source, signature) {
   assert.fail("unbalanced braces extracting " + signature);
 }
 
-/** One gate run admits at most once: exactly one admitCohortWithGesture call, no recursive decideCohort. */
+/**
+ * One gate run admits at most once: exactly one admitCohortWithGesture call,
+ * no recursive decideCohort, and no ITEM-path admission smuggled in (the
+ * spelling "admitWithGesture(" is not a substring of the cohort call's name,
+ * so the real body counts 0). A helper-method indirection remains a declared
+ * blind spot of any single-method text scan — recorded, not closed.
+ */
 function scanOneAdmissionPerGate(body) {
   const admits = (body.match(/admitCohortWithGesture\(/g) ?? []).length;
   const recursions = (body.match(/decideCohort\(/g) ?? []).length;
-  return admits === 1 && recursions === 0;
+  // NOT admits-subtracted: "admitCohortWithGesture(" does not contain the
+  // substring "admitWithGesture(" (Cohort sits between), so this counts
+  // exactly the genuine item-path calls.
+  const itemAdmits = (body.match(/admitWithGesture\(/g) ?? []).length;
+  return admits === 1 && recursions === 0 && itemAdmits === 0;
 }
 
 // ── Regressions from the independent review of PR #336 ──────────────────────
