@@ -622,6 +622,12 @@ export class GovernanceReviewView extends ItemView {
     if (items.length === 0) return;
     const section = root.createDiv({ cls: "governance-governed" });
     section.createDiv({ cls: "governance-proposed-title", text: `Governed proposals (${items.length})` });
+    // WP7b: select → freeze → decide. The selector is a folder-root filter
+    // over the pending list (intersection semantics live in the kernel); the
+    // freeze happens on click, the eligibility verdict comes back verbatim,
+    // and ONE Admit covers the frozen digest. Split-by-finding: a failure
+    // naming members offers exclude-and-refreeze as a second gesture.
+    if (items.length > 1) this.renderCohortControls(section, deps);
     section.createDiv({
       cls: "governance-proposed-desc",
       text:
@@ -706,6 +712,117 @@ export class GovernanceReviewView extends ItemView {
         );
       });
     }
+  }
+
+  /**
+   * The successor decision from a split-by-finding, awaiting ITS OWN
+   * gesture. UI state only — frozen manifests and proposal records are
+   * data; admitting still requires the full gate. One gestureRef covers
+   * exactly one claim: the successor is a DIFFERENT decision (different
+   * digest, exclusions in its manifest) and gets its own gate run, never
+   * the original click's ref (that reuse would be the "second, softer
+   * answer" shape in the authority record).
+   */
+  private pendingSuccessor: {
+    frozen: import("../kernel/governance/cohorts/freeze.js").FrozenCohort;
+    members: import("../kernel/governance/proposals/proposal.js").ProposalV1[];
+    excludedNoteIds: string[];
+  } | null = null;
+
+  private renderCohortControls(section: HTMLElement, deps: ReviewController): void {
+    const row = section.createDiv({ cls: "governance-cohort-controls" });
+    const folderInput = row.createEl("input", { type: "text", placeholder: "folder filter (optional)", cls: "governance-cohort-folder" });
+    const groupBtn = row.createEl("button", { cls: "mod-cta governance-group-admit", text: "Group & admit…" });
+    groupBtn.addEventListener("click", (evt) => {
+      void runGuardedDisposition(evt, null, async (gestureRef) => {
+        this.pendingSuccessor = null;
+        const selector = folderInput.value.trim() ? { folder: folderInput.value.trim() } : {};
+        const sel = await deps.admission!.freezeSelection(selector, "item");
+        if (!sel.ok) {
+          new Notice(`Cannot group: ${sel.reason}`, 10000);
+          return;
+        }
+        await this.decideCohort(deps, sel.frozen, sel.members, gestureRef);
+      });
+    });
+    if (this.pendingSuccessor) {
+      const suc = this.pendingSuccessor;
+      const sucBtn = row.createEl("button", {
+        cls: "mod-cta governance-group-admit-successor",
+        text: `Admit successor (${suc.frozen.subject.items.length}, excludes ${suc.excludedNoteIds.length})…`,
+      });
+      sucBtn.addEventListener("click", (evt) => {
+        void runGuardedDisposition(evt, null, async (gestureRef) => {
+          await this.decideCohort(deps, suc.frozen, suc.members, gestureRef);
+        });
+      });
+    }
+  }
+
+  /** One confirm → one admit for a frozen cohort; split-by-finding on failure. */
+  private async decideCohort(
+    deps: ReviewController,
+    frozen: import("../kernel/governance/cohorts/freeze.js").FrozenCohort,
+    members: import("../kernel/governance/proposals/proposal.js").ProposalV1[],
+    gestureRef: string
+  ): Promise<void> {
+    const confirmed = await new Promise<boolean>((resolve) =>
+      new ConfirmModal(
+        this.app,
+        {
+          title: `Admit this cohort of ${frozen.subject.items.length}?`,
+          body:
+            `One decision covers the exact frozen manifest (${frozen.digest.value.slice(0, 12)}…). ` +
+            "Every member is re-read and re-verified NOW; any member changed since freezing aborts the whole decision.",
+          items: frozen.subject.items.map((i) => i.path ?? i.noteId),
+          confirmText: `Admit ${frozen.subject.items.length} items`,
+        },
+        resolve
+      ).open()
+    );
+    if (!confirmed) return;
+    const outcome = await deps.admission!.admitCohortWithGesture(frozen, members, gestureRef);
+    if (outcome.ok || outcome.code === "already_admitted") {
+      // A decided cohort clears any staged successor: after the successor
+      // itself admits (or turns out already admitted) its button must not
+      // persist offering a decision that no longer exists.
+      this.pendingSuccessor = null;
+    }
+    if (outcome.ok) {
+      new Notice(
+        `Admitted cohort ${outcome.receipt.subjectDigest.slice(0, 12)}… (${outcome.receipt.memberCount} members) — verified by ${outcome.receipt.verifier} ` +
+          `(${outcome.receipt.predicates.join(", ")}; coverage ${outcome.receipt.coverage}).` +
+          (outcome.degraded ? " journal: DEGRADED — the admission stands; its settlement record was NOT written." : ""),
+        12000
+      );
+      void this.rerender();
+      return;
+    }
+    // Split by finding: a refusal that NAMES members STAGES the successor
+    // decision — exclusions in its own manifest, new digest — behind a NEW
+    // fully-gated button. It is a different decision, so it gets its own
+    // gesture; the original ref covered the original digest and nothing
+    // else.
+    const failedNoteIds = outcome.failedNoteIds ?? [];
+    if (failedNoteIds.length > 0 && failedNoteIds.length < frozen.subject.items.length) {
+      const failedSet = new Set(failedNoteIds);
+      const excludeIds = frozen.subject.items
+        .map((item, i) => (failedSet.has(item.noteId) ? frozen.memberProposalIds[i] : null))
+        .filter((x): x is string => x !== null);
+      const split = await deps.admission!.refreezeWithout(frozen, members, excludeIds, "item");
+      if (split.ok) {
+        this.pendingSuccessor = { frozen: split.frozen, members: split.members, excludedNoteIds: failedNoteIds };
+        new Notice(
+          `Not admitted [${outcome.code}]: ${failedNoteIds.length} member(s) failed (${failedNoteIds.join(", ")}). ` +
+            `A successor decision excluding them is staged (digest ${split.frozen.digest.value.slice(0, 12)}…) — admit it with its own click. The excluded remain proposed.`,
+          12000
+        );
+        void this.rerender();
+        return;
+      }
+    }
+    new Notice(`Not admitted [${outcome.code}]: ${outcome.detail} — the cohort remains proposed.`, 12000);
+    void this.rerender();
   }
 
   // The Proposed section (#221/#164) — notes whose frontmatter says `acceptance-status:
