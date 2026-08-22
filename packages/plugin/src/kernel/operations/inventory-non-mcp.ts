@@ -100,6 +100,13 @@ export const WIRING_EXPORTS = [
   "nudgeGovernanceQueue",
   "wireGovernance",
   "renderGovernanceSettings",
+  // WP8 (each confirmed accept-closure-free): setLegacyWriteGuard REGISTERS a
+  // boolean predicate (main.ts's cutover check) consulted by the
+  // BaselineStore — it holds no accept callable and can only REMOVE write
+  // capability, never grant it; baselinesOf is a read-only view of the loaded
+  // baseline records for the migration import (no store handle escapes).
+  "setLegacyWriteGuard",
+  "baselinesOf",
 ] as const;
 
 export interface AuthorityRow {
