@@ -89,7 +89,7 @@ function memoryBlobFs() {
       return files.get(p);
     },
     write: async (p, d) => void files.set(p, d),
-    exists: async (p) => files.has(p) || true,
+    exists: async () => true, // dirs always "exist" for this double; mkdir is a no-op
     mkdir: async () => {},
     list: async (dir) => [...files.keys()].filter((k) => k.startsWith(dir + "/")),
     remove: async (p) => void files.delete(p),
@@ -418,7 +418,7 @@ describe("selective re-acceptance only — the migration cannot mint standing", 
     // migration module that could construct claims or advance standing.
     // Pinned structurally: neither migration module imports from admission/,
     // the history store, or the claim builder.
-    for (const rel of ["kernel/governance/migration/legacy-import.ts", "kernel/governance/migration/cutover.ts"]) {
+    for (const rel of ["kernel/governance/migration/legacy-import.ts", "kernel/governance/migration/cutover.ts", "governance/migration-wiring.ts"]) {
       const text = fs.readFileSync(path.join(HERE, "..", "src", rel), "utf8");
       for (const forbidden of ["admission/", "settlement", "buildAdmissionClaim", "standingAdvance", "history-store"]) {
         assert.ok(!text.includes(forbidden), `${rel} must not reach ${forbidden}`);
@@ -427,5 +427,105 @@ describe("selective re-acceptance only — the migration cannot mint standing", 
     // Vacuity: the scan detects a planted import.
     const planted = 'import { buildAdmissionClaim } from "../admission/settlement.js";';
     assert.ok(["admission/", "settlement", "buildAdmissionClaim"].some((f) => planted.includes(f)));
+  });
+});
+
+// ── Regressions from the independent review of PR #338 ──────────────────────
+
+describe("review regressions — duplicate lines, concurrency, fail-open, half-write", () => {
+  test("two byte-identical acceptance-log lines are TWO records — identity includes the source line", async () => {
+    const dupLine = JSON.stringify({ action: "accept", path: "Notes/dup.md", ts: "2026-06-01T00:00:00Z", by: "human" });
+    const plan = planLegacyImport(
+      { baselines: [], acceptanceLogLines: [dupLine, dupLine], pendingIndexRaw: null, sources: { baselinesDir: "b", acceptanceLog: "log", pendingIndex: "p" } },
+      T0
+    );
+    assert.equal(plan.records.length, 2);
+    assert.notEqual(plan.records[0].importKey, plan.records[1].importKey, "line-position distinguishes identical payloads");
+    const io = memoryIo();
+    const store = createLegacyEvidenceStore(io);
+    const { appended, skippedExisting } = await store.importRecords(plan.records);
+    assert.equal(appended, 2, "nothing silently dropped inside a single first run");
+    assert.equal(skippedExisting, 0);
+    // And the RE-RUN still dedupes both — idempotency survives the richer key.
+    const again = await store.importRecords(planLegacyImport({ baselines: [], acceptanceLogLines: [dupLine, dupLine], pendingIndexRaw: null, sources: { baselinesDir: "b", acceptanceLog: "log", pendingIndex: "p" } }, T0 + 5).records);
+    assert.equal(again.appended, 0);
+  });
+
+  test("two CONCURRENT imports of the same plan do not double-append — the store serializes", async () => {
+    const lines = [];
+    const slowIo = {
+      appendLine: async (l) => {
+        await new Promise((r) => setTimeout(r, 2));
+        lines.push(l);
+      },
+      readLines: async () => {
+        await new Promise((r) => setTimeout(r, 2));
+        return [...lines];
+      },
+    };
+    const store = createLegacyEvidenceStore(slowIo);
+    const plan = planLegacyImport(legacyFixture(), T0);
+    const [a, b] = await Promise.all([store.importRecords(plan.records), store.importRecords(plan.records)]);
+    assert.equal(lines.length, plan.records.length, "the store holds each record ONCE despite overlapping runs");
+    assert.equal(a.appended + b.appended, plan.records.length);
+    assert.equal(a.skippedExisting + b.skippedExisting, plan.records.length);
+  });
+
+  test("an exists-throw on the cutover state fails toward FEWER writers, not open", async () => {
+    const fsio = memoryFsIo();
+    const throwingIo = {
+      ...fsio,
+      exists: async (p) => {
+        if (p.endsWith("cutover.json")) throw new Error("adapter stall (injected)");
+        return fsio.exists(p);
+      },
+    };
+    const migration = buildMigration({
+      io: throwingIo,
+      paths: { govDir: "gov", acceptanceLog: "gov/a.jsonl", pendingIndex: "gov/p.json", baselinesDir: "gov/baselines", legacyEvidence: "gov/e.jsonl", cutoverState: "gov/cutover.json" },
+      baselines: () => [],
+      now: () => T0,
+    });
+    await migration.loadState();
+    assert.equal(migration.isCutOver(), true, "an unreadable flag must not silently run two standing writers");
+    const status = await migration.status().catch(() => null);
+    if (status) assert.equal(status.corrupt, true);
+  });
+
+  test("rollback REFUSES while the state file is corrupt — ambiguity is repaired, never laundered", async () => {
+    const fsio = memoryFsIo();
+    fsio.files.set("gov/cutover.json", "{ not json");
+    const migration = buildMigration({
+      io: fsio,
+      paths: { govDir: "gov", acceptanceLog: "gov/a.jsonl", pendingIndex: "gov/p.json", baselinesDir: "gov/baselines", legacyEvidence: "gov/e.jsonl", cutoverState: "gov/cutover.json" },
+      baselines: () => [],
+      now: () => T0,
+    });
+    await migration.loadState();
+    await assert.rejects(() => migration.rollback("gesture-r"), (e) => e instanceof CutoverRefusedError && e.code === "state_corrupt");
+    assert.equal(fsio.files.get("gov/cutover.json"), "{ not json", "the unparseable file is untouched — whatever it records survives for the human");
+  });
+
+  test("SOURCE: performAccept and performRevert refuse at ENTRY, before any stamp — pinned with vacuity", () => {
+    // The half-write finding: acceptNote stamps `acceptance-status: accepted`
+    // FIRST and advances the baseline second, so a post-cutover Accept that
+    // only the store guard stopped left a permanent stamp with no baseline
+    // and no admission. The refusal must precede the acceptNote/revertNote
+    // call. Declared for what it is: a source-order pin (the wiring imports
+    // `obsidian`, so the behavior is not headless-runnable here).
+    const raw = fs.readFileSync(path.join(HERE, "..", "src", "governance", "wiring.ts"), "utf8");
+    for (const [fn, delegate] of [["performAccept", "acceptNote("], ["performRevert", "revertNote("]]) {
+      const at = raw.indexOf(`async function ${fn}(`);
+      assert.notEqual(at, -1, `${fn} exists`);
+      const body = raw.slice(at, raw.indexOf("\nasync function", at + 10));
+      const guardAt = body.indexOf("legacyRetired(plugin)");
+      const callAt = body.indexOf(delegate);
+      assert.ok(guardAt !== -1 && callAt !== -1, `${fn} carries both the guard and the delegate call`);
+      assert.ok(guardAt < callAt, `${fn} refuses BEFORE ${delegate} — no half-write window`);
+    }
+    // Vacuity: swapping the order is visible to this scan.
+    const swapped = "async function performAccept(x) {\n  return await acceptNote(deps, path);\n  if (legacyRetired(plugin)) throw new Error();\n}\nasync function next() {}";
+    const body = swapped.slice(0, swapped.indexOf("\nasync function next"));
+    assert.ok(body.indexOf("legacyRetired(plugin)") > body.indexOf("acceptNote("), "the scan distinguishes guard-after-call");
   });
 });

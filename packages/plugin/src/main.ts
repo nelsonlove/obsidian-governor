@@ -619,7 +619,13 @@ export default class VaultMcpPlugin extends Plugin {
       now: () => Date.now(),
     });
     migrations.set(this, migration);
-    void migration.loadState().catch((e) => console.error("[governor] migration state load failed", e));
+    // AWAITED, not fire-and-forget: until the persisted state is read,
+    // isCutOver() would answer from the default (not cut over), so on a
+    // vault that HAS cut over a legacy write could slip through the load
+    // window — and a swallowed load failure would leave two standing
+    // writers permanently (review finding). A loadState failure itself
+    // reads as corrupt inside the store and fails toward fewer writers.
+    await migration.loadState();
     setLegacyWriteGuard(this, () => !migration.isCutOver());
 
     admissionFactories.set(this, () =>

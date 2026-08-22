@@ -69,8 +69,14 @@ export interface LegacyImportPlan {
   report: LegacyImportReport;
 }
 
-function keyOf(kind: string, payload: Record<string, unknown>): string {
-  return contentHash(`${kind}\n${JSON.stringify(payload)}`);
+function keyOf(kind: string, payload: Record<string, unknown>, line?: number): string {
+  // For acceptance-log records the SOURCE LINE is part of identity: two
+  // byte-identical log lines (a crash-retry duplicate append, two identical
+  // raw lines) are two legacy records, and a payload-only key would plan two
+  // and store one — silently dropping evidence inside a single first run
+  // (review finding, demonstrated). Baselines and the pending index are
+  // path-/file-keyed and carry no line.
+  return contentHash(`${kind}\n${line ?? ""}\n${JSON.stringify(payload)}`);
 }
 
 function classifyLogRecord(rec: Record<string, unknown>): keyof LegacyImportReport["acceptanceEvents"] | "total" {
@@ -129,7 +135,7 @@ export function planLegacyImport(surfaces: LegacyImportSurfaces, importedAt: num
       v: 1,
       record: "legacy-import",
       kind: "legacy-acceptance-event",
-      importKey: keyOf("legacy-acceptance-event", payload),
+      importKey: keyOf("legacy-acceptance-event", payload, i + 1),
       source: { file: surfaces.sources.acceptanceLog, line: i + 1 },
       importedAt,
       payload,
@@ -190,6 +196,19 @@ export interface LegacyEvidenceStore {
 }
 
 export function createLegacyEvidenceStore(io: LegacyEvidenceIo): LegacyEvidenceStore {
+  // Imports SERIALIZE: importRecords snapshots the existing keys and then
+  // appends across awaits, so two overlapping runs (a double-click, or the
+  // cutover's internal re-import racing a manual one) would each see the
+  // pre-state and both append everything — a permanent double-store the
+  // dedupe can never undo (review finding, demonstrated). Same chain shape
+  // as the admission service.
+  let chain: Promise<unknown> = Promise.resolve();
+  function serialized<T>(task: () => Promise<T>): Promise<T> {
+    const next = chain.then(task, task);
+    chain = next.catch(() => undefined);
+    return next;
+  }
+
   async function existingKeys(): Promise<Set<string>> {
     const keys = new Set<string>();
     for (const line of await io.readLines()) {
@@ -205,7 +224,8 @@ export function createLegacyEvidenceStore(io: LegacyEvidenceIo): LegacyEvidenceS
   }
 
   return {
-    async importRecords(records) {
+    importRecords(records) {
+      return serialized(async () => {
       const keys = await existingKeys();
       let appended = 0;
       let skippedExisting = 0;
@@ -219,6 +239,7 @@ export function createLegacyEvidenceStore(io: LegacyEvidenceIo): LegacyEvidenceS
         appended++;
       }
       return { appended, skippedExisting };
+      });
     },
     async all() {
       const out: LegacyImportRecordV1[] = [];

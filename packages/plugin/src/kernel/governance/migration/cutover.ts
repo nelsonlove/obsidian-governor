@@ -32,8 +32,10 @@ export interface CutoverStateV1 {
   gestureRef: string | null;
   /** The import report presented at confirmation — what the human saw. */
   importReport: LegacyImportReport | null;
-  /** Set when a rollback un-cut the vault; the history of flips is append-recorded by the caller's audit surface. */
+  /** Set when a rollback un-cut the vault. */
   rolledBackAt: number | null;
+  /** The gesture that authorised the rollback — recorded like the cutover's own (review finding: a validated-then-discarded ref records the act nowhere). */
+  rollbackGestureRef?: string | null;
 }
 
 export const CUTOVER_DEFAULT: CutoverStateV1 = { v: 1, cutOver: false, at: null, gestureRef: null, importReport: null, rolledBackAt: null };
@@ -89,7 +91,7 @@ export async function rollbackCutover(store: CutoverStore, gestureRef: string, n
   if (!gestureRef) throw new CutoverRefusedError("authority_missing", "the rollback is a human act; it requires the gesture reference minted by the gate");
   const cur = await store.read();
   if (!cur.cutOver) throw new CutoverRefusedError("not_cut_over", "the cutover has not run; there is nothing to roll back");
-  const next: CutoverStateV1 = { ...cur, cutOver: false, rolledBackAt: now };
+  const next: CutoverStateV1 = { ...cur, cutOver: false, rolledBackAt: now, rollbackGestureRef: gestureRef };
   await store.write(next);
   return next;
 }

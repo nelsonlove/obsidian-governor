@@ -490,8 +490,15 @@ export function wireAdoptButton(
   onDone: () => void | Promise<void>,
 ): void {
   btn.addEventListener("click", async (evt) => {
-    const outcome = await runGuardedAdopt(evt, confirm, adopt);
-    if (outcome === "done") await onDone();
+    try {
+      const outcome = await runGuardedAdopt(evt, confirm, adopt);
+      if (outcome === "done") await onDone();
+    } catch (e) {
+      // A stale-rendered button after the WP8 cutover reaches the store
+      // guard's typed refusal — surfaced as a Notice, never an unhandled
+      // rejection with no user feedback (review finding).
+      new Notice(`Adopt failed: ${e instanceof Error ? e.message : String(e)}`, 10000);
+    }
   });
 }
 

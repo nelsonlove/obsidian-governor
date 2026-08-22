@@ -84,6 +84,7 @@ import {
 import { buildProposedList, type ProposedItem } from "../kernel/governance/proposed.js";
 import { insertRevisionRequest, withdrawRevisionRequests } from "../kernel/governance/revision.js";
 import { runGuardedDisposition } from "../kernel/governance/gesture.js";
+import { LegacyWriterDisabledError } from "../kernel/governance/migration/cutover.js";
 import { contentHash } from "../kernel/governance/hash.js";
 import {
   AUTHORIZED_CLASSES,
@@ -541,6 +542,13 @@ async function performAccept(plugin: Plugin, path: string, opts?: AcceptOpts): P
   // pre-click typing record cannot ride a reconcile that fires MID-accept (a slow stamp +
   // re-read can outlast the 1200ms debounce), and in `finally`, because a partially-failed
   // accept (stamp landed, baseline advance threw) has still written.
+  // WP8: refused at ENTRY, before the frontmatter stamp — acceptNote stamps
+  // the accepted family FIRST and advances the baseline second, so letting
+  // the store guard be the only stop leaves a note permanently stamped
+  // `acceptance-status: accepted` with no baseline advance and no admission
+  // (a half-write on a human-authority surface; review finding). The typed
+  // error reaches the pane's existing accept-failure Notice paths.
+  if (legacyRetired(plugin)) throw new LegacyWriterDisabledError("accept (legacy acceptance)");
   humanInputMap(plugin).delete(path);
   try {
     return await acceptNote(buildAcceptDeps(plugin), path, opts);
@@ -550,6 +558,10 @@ async function performAccept(plugin: Plugin, path: string, opts?: AcceptOpts): P
   }
 }
 async function performRevert(plugin: Plugin, path: string): Promise<void> {
+  // WP8: revert-to-legacy-baseline exercises the legacy authority record —
+  // retired with the rest of the accept class (the new path's revert is the
+  // admission surface's revertToBase).
+  if (legacyRetired(plugin)) throw new LegacyWriterDisabledError("revert (legacy baseline restore)");
   await revertNote(buildAcceptDeps(plugin), path);
   await refresh(plugin);
 }
@@ -1610,24 +1622,31 @@ function renderMigrationSection(containerEl: HTMLElement, plugin: Plugin): void 
   if (!migration) return;
   containerEl.createEl("h4", { text: "Authority migration (WP8)" });
   const statusEl = containerEl.createEl("p", { cls: "setting-item-description", text: "Reading migration status…" });
-  void migration.status().then((st) => {
-    statusEl.setText(
-      `Cutover: ${st.cutOver ? `DONE (admission is the only standing authority)` : "not run (legacy acceptance is authoritative)"}` +
-        (st.corrupt ? " — STATE FILE CORRUPT: legacy writes refuse until repaired or the flow re-runs." : "") +
-        ` Evidence records imported: ${st.evidenceRecords}.`
-    );
-  });
+  void migration
+    .status()
+    .then((st) => {
+      statusEl.setText(
+        `Cutover: ${st.cutOver ? `DONE (admission is the only standing authority)` : "not run (legacy acceptance is authoritative)"}` +
+          (st.corrupt ? " — STATE FILE CORRUPT: legacy writes refuse until repaired or the flow re-runs." : "") +
+          ` Evidence records imported: ${st.evidenceRecords}.`
+      );
+    })
+    .catch((e) => statusEl.setText(`Migration status could not be read: ${e instanceof Error ? e.message : String(e)}`));
 
   const row = containerEl.createDiv({ cls: "governance-migration-controls" });
   const importBtn = row.createEl("button", { text: "Import legacy evidence" });
   importBtn.addEventListener("click", (evt) => {
     void runGuardedDisposition(evt, null, async () => {
-      const { report, appended, skippedExisting } = await migration.importLegacyEvidence();
-      new Notice(
-        `Legacy import: ${appended} appended, ${skippedExisting} already present (idempotent). ` +
-          `${report.baselines} baseline(s); ${report.acceptanceEvents.humanAccepts} human accept(s), ${report.acceptanceEvents.silentAdvances} silent advance(s) — imported as evidence, never as acceptance.`,
-        12000
-      );
+      try {
+        const { report, appended, skippedExisting } = await migration.importLegacyEvidence();
+        new Notice(
+          `Legacy import: ${appended} appended, ${skippedExisting} already present (idempotent). ` +
+            `${report.baselines} baseline(s); ${report.acceptanceEvents.humanAccepts} human accept(s), ${report.acceptanceEvents.silentAdvances} silent advance(s) — imported as evidence, never as acceptance.`,
+          12000
+        );
+      } catch (e) {
+        new Notice(`Legacy import failed: ${e instanceof Error ? e.message : String(e)} — nothing partial is authoritative (the store is append-only evidence).`, 12000);
+      }
     });
   });
 

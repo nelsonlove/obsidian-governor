@@ -21,7 +21,7 @@
 // surface to display.
 
 import { planLegacyImport, createLegacyEvidenceStore, type LegacyImportReport, type LegacyEvidenceStore } from "../kernel/governance/migration/legacy-import.js";
-import { performCutover, rollbackCutover, CUTOVER_DEFAULT, type CutoverStateV1, type CutoverStore } from "../kernel/governance/migration/cutover.js";
+import { performCutover, rollbackCutover, CutoverRefusedError, CUTOVER_DEFAULT, type CutoverStateV1, type CutoverStore } from "../kernel/governance/migration/cutover.js";
 import type { Baseline } from "../kernel/governance/baseline-store.js";
 
 export interface MigrationIo {
@@ -86,11 +86,17 @@ export function buildMigration(deps: MigrationDeps): Migration {
 
   const cutoverStore: CutoverStore = {
     async read() {
-      if (!(await deps.io.exists(deps.paths.cutoverState))) {
-        corrupt = false;
-        return CUTOVER_DEFAULT;
-      }
+      // The exists probe rides INSIDE the try: an adapter that throws on the
+      // probe (iCloud stall, unmounted dir) is the same ambiguity as an
+      // unparseable file, and it must fail toward FEWER writers — the first
+      // draft let an exists-throw escape, which left the vault permanently
+      // reading not-cut-over: two standing writers, silently (review
+      // finding). Absence is the only state that means "never cut over".
       try {
+        if (!(await deps.io.exists(deps.paths.cutoverState))) {
+          corrupt = false;
+          return CUTOVER_DEFAULT;
+        }
         const parsed = JSON.parse(await deps.io.read(deps.paths.cutoverState)) as CutoverStateV1;
         if (parsed && parsed.v === 1 && typeof parsed.cutOver === "boolean") {
           corrupt = false;
@@ -147,6 +153,19 @@ export function buildMigration(deps: MigrationDeps): Migration {
       return next;
     },
     async rollback(gestureRef) {
+      // A corrupt flag file is repaired by a human looking at it, never
+      // laundered by a rollback: the corrupt read reports cutOver:true so
+      // the guard refuses writes, and rolling THAT back would overwrite
+      // whatever the unparseable file recorded — possibly a genuine cutover
+      // with its confirmed report — with a state claiming none ever ran
+      // (review finding).
+      await cutoverStore.read();
+      if (corrupt) {
+        throw new CutoverRefusedError(
+          "state_corrupt",
+          `the cutover state file (${deps.paths.cutoverState}) is unreadable — repair or remove it by hand before rolling back; refusing to overwrite what it may record`
+        );
+      }
       const next = await rollbackCutover(cutoverStore, gestureRef, deps.now());
       cached = next;
       return next;
