@@ -23,11 +23,13 @@
 // in any window leaves a ref pointing at evidence that does not exist,
 // because the claim lands BEFORE the ref moves.
 
-import { AdmissionRefusedError, requireAdmissible, type AdmissionRequest } from "./policy.js";
+import { AdmissionRefusedError, requireAdmissible, requireCohortAdmissible, type AdmissionRequest, type CohortAdmissionRequest } from "./policy.js";
 import { buildAdmissionClaim, type AdmissionClaimV1, type ClaimStore } from "./settlement.js";
 import { RefCasError } from "../history-store/types.js";
-import type { ProposalItemSubjectV1 } from "../contracts/subject-v1.js";
+import { subjectDigest, type CohortSubjectV1, type ProposalItemSubjectV1 } from "../contracts/subject-v1.js";
 import type { VerificationOutcome } from "../verification/verify.js";
+import type { CohortCoverageOutcome } from "../cohorts/coverage.js";
+import type { ProposalV1 } from "../proposals/proposal.js";
 
 /**
  * The capability: CAS over the standing ref, pre-bound to the ref name by
@@ -50,6 +52,14 @@ export interface AdmissionDeps {
    * that hole closed structurally.
    */
   verify: (subject: ProposalItemSubjectV1) => Promise<VerificationOutcome>;
+  /**
+   * Run full coverage over a frozen cohort, NOW — the cohort-shaped verify
+   * capability (WP7b). Same rule as `verify`: the service resolves
+   * verification itself; the request has no field a verdict could ride in.
+   * Optional: a wiring that admits only items never provides it, and
+   * admitCohort refuses without it rather than guessing.
+   */
+  verifyCohort?: (frozenSubject: CohortSubjectV1, cohortDigest: string, memberProposals: readonly ProposalV1[]) => Promise<CohortCoverageOutcome>;
   /** Current standing claim id, read fresh — the CAS expectation. */
   currentStanding: () => Promise<string | null>;
   /** Step 4: append the settlement record. Failures here are retried by recovery, not silently dropped. */
@@ -72,6 +82,13 @@ export interface AdmissionService {
    * blindly, because the new standing may change the human's answer).
    */
   admit(request: AdmissionRequest): Promise<AdmissionResult>;
+  /**
+   * Admit a frozen cohort under ONE gesture: one claim whose subjectDigest
+   * is the cohort digest and whose coveredNotes are DERIVED from the frozen
+   * manifest (pinned — no caller field), one CAS. Same ordering, same
+   * refusal discipline, same serialization as admit.
+   */
+  admitCohort(request: CohortAdmissionRequest): Promise<AdmissionResult>;
 }
 
 export function createAdmissionService(deps: AdmissionDeps): AdmissionService {
@@ -86,7 +103,61 @@ export function createAdmissionService(deps: AdmissionDeps): AdmissionService {
     return next;
   }
 
+  function deriveCohortCoveredNotes(frozenSubject: CohortSubjectV1): Array<{ vaultId: string; noteId: string; subjectDigest: string }> {
+    // DERIVED from the manifest, in the same breath as the digest — the #334
+    // shaping rule at cohort scale. subjectDigest(item) here is the same
+    // computation the per-item resolver compares against.
+    return frozenSubject.items.map((item) => ({ vaultId: item.vaultId, noteId: item.noteId, subjectDigest: subjectDigest(item).value }));
+  }
+
   return {
+    admitCohort(request) {
+      return serialized(async () => {
+        const now = deps.now();
+        if (!deps.verifyCohort) {
+          throw new AdmissionRefusedError("verification_unavailable", "no cohort verification capability is wired; a check that cannot run has not passed");
+        }
+        const cohortDigest = subjectDigest(request.frozenSubject);
+        // The member proposals ride the REQUEST into the capability, so the
+        // evidence correlation is per-call by construction — a shared map
+        // populated outside this serialized chain raced across concurrent
+        // admissions (review finding: caller A's cleanup emptied it before
+        // caller B's coverage ran, refusing healthy members).
+        const coverage = await deps.verifyCohort(request.frozenSubject, cohortDigest.value, request.memberProposals);
+        requireCohortAdmissible(request, coverage, now);
+
+        // Duplicate check inside the serialized chain, cohort-shaped: if what
+        // stands already covers this exact cohort digest, refuse truthfully.
+        const expected = await deps.currentStanding();
+        if (expected !== null) {
+          const standingClaim = await deps.claims.byId(expected);
+          if (standingClaim && standingClaim.subjectDigest.value === cohortDigest.value) {
+            throw new AdmissionRefusedError("already_admitted", `this exact cohort already stands as claim ${standingClaim.id}`);
+          }
+        }
+
+        const claim = buildAdmissionClaim({
+          subjectDigest: cohortDigest,
+          proposalId: request.memberProposals.map((p) => p.id).join(","),
+          gestureRef: request.authority.kind === "human-gesture" ? request.authority.gestureRef : "",
+          verification: coverage.items.flatMap((i) => i.records),
+          expectedStanding: expected,
+          coveredNotes: deriveCohortCoveredNotes(request.frozenSubject),
+          now,
+          rand: deps.rand?.(),
+        });
+        await deps.claims.append(claim);
+        await deps.standingAdvance(expected, claim.id);
+        await deps.recordSettlement({ claimId: claim.id, subjectDigest: claim.subjectDigest.value, at: now });
+        try {
+          await deps.refreshProjections?.();
+        } catch (e) {
+          console.error("[governor] projection refresh after cohort admission failed (rebuildable)", e);
+        }
+        return { claim };
+      });
+    },
+
     admit(request) {
       return serialized(async () => {
         const now = deps.now();
