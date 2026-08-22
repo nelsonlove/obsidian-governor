@@ -529,3 +529,35 @@ describe("review regressions — duplicate lines, concurrency, fail-open, half-w
     assert.ok(body.indexOf("legacyRetired(plugin)") > body.indexOf("acceptNote("), "the scan distinguishes guard-after-call");
   });
 });
+
+describe("the guard-load ordering is PINNED — the five-character regression is visible", () => {
+  test("main.ts AWAITS migration.loadState() before installing the write guard (source pin + vacuity)", () => {
+    // Governor-lead mutation-verified the gap: reverting the await to a
+    // void-fire left the whole suite green, because main.ts imports
+    // `obsidian` and cannot load headlessly, and no scan covered the line —
+    // so the exact fail-open defect the review found (a cut-over vault
+    // permitting legacy writes during the load window; a swallowed load
+    // failure running two standing writers permanently) could return by
+    // deleting five characters, silently, on the invariant the entire
+    // cutover rests on. Tenth of the family: the code was right, the pin
+    // was absent. Same source-read idiom as governance-module.test.mjs.
+    const raw = fs.readFileSync(path.join(HERE, "..", "src", "main.ts"), "utf8");
+    const scan = (source) => {
+      const awaitAt = source.indexOf("await migration.loadState()");
+      const voidAt = source.indexOf("void migration.loadState()");
+      const guardAt = source.indexOf("setLegacyWriteGuard(");
+      return awaitAt !== -1 && voidAt === -1 && guardAt !== -1 && awaitAt < guardAt;
+    };
+    assert.ok(scan(raw), "main.ts awaits loadState, never void-fires it, and does so before setLegacyWriteGuard");
+
+    // Vacuity — the scan fails EACH regression it exists to catch:
+    const voidMutant = raw.replace("await migration.loadState()", "void migration.loadState()");
+    assert.notEqual(voidMutant, raw, "the mutation site exists");
+    assert.ok(!scan(voidMutant), "the five-character void regression is caught");
+    const deleted = raw.replace(/await migration\.loadState\(\);/, "");
+    assert.notEqual(deleted, raw, "the deletion site exists");
+    assert.ok(!scan(deleted), "removing the load entirely is caught");
+    const guardFirst = "setLegacyWriteGuard(x);\nawait migration.loadState();";
+    assert.ok(!scan(guardFirst), "installing the guard BEFORE the load is caught — ordering, not mere presence");
+  });
+});
