@@ -26,6 +26,9 @@
 // exactly-one-winner property carries the claim-level one.
 
 import { createAdmissionService, type AdmissionService } from "../kernel/governance/admission/service.js";
+import { freezeCohort, excludeAndRefreeze, type FrozenCohort, type FreezeInput } from "../kernel/governance/cohorts/freeze.js";
+import { verifyCohortCoverage } from "../kernel/governance/cohorts/coverage.js";
+import { selectProposals, type CohortSelector } from "../kernel/governance/cohorts/cohort.js";
 import { createClaimStore, type ClaimIo } from "../kernel/governance/admission/settlement.js";
 import { AdmissionRefusedError } from "../kernel/governance/admission/policy.js";
 import { buildProposalItemSubject } from "../kernel/governance/contracts/subject-v1.js";
@@ -42,6 +45,19 @@ export interface AdmissionUiDeps {
   /** Pending new-style proposals, for the pane's list. */
   pending(): Promise<ProposalV1[]>;
   /**
+   * Freeze a selection of pending proposals into an immutable decision
+   * subject (WP7b). Pure selection + freeze — confers nothing; the refusal
+   * reason (mixed classes, open revisions…) comes back verbatim for the UI.
+   */
+  freezeSelection(selector: CohortSelector, recoveryUnit: "item" | "cohort"): Promise<{ ok: true; frozen: FrozenCohort; members: ProposalV1[] } | { ok: false; reason: string }>;
+  /**
+   * Admit a frozen cohort under one gesture. Same reachability contract as
+   * admitWithGesture; the gestureRef arrives from the gate.
+   */
+  admitCohortWithGesture(frozen: FrozenCohort, members: ProposalV1[], gestureRef: string): Promise<CohortAdmitOutcome>;
+  /** Split by finding: exclude members and produce the successor decision. */
+  refreezeWithout(frozen: FrozenCohort, members: ProposalV1[], excludeProposalIds: string[], recoveryUnit: "item" | "cohort"): Promise<{ ok: true; frozen: FrozenCohort; members: ProposalV1[] } | { ok: false; reason: string }>;
+  /**
    * Admit one proposal. `gestureRef` is minted by the CLICK HANDLER — this
    * function is reachable only through the pane's gesture chain, and the
    * unreachability (closure-held deps, addEventListener wiring, isRealGesture)
@@ -55,6 +71,15 @@ export interface AdmissionUiDeps {
    */
   revertToBase(proposalId: string, gestureRef: string): Promise<RevertOutcome>;
 }
+
+export type CohortAdmitOutcome =
+  | {
+      ok: true;
+      claimId: string;
+      degraded: boolean;
+      receipt: { subjectDigest: string; memberCount: number; predicates: string[]; verifier: string; coverage: "exact-and-total" };
+    }
+  | { ok: false; code: string; detail: string; failedNoteIds?: string[] };
 
 export type AdmitOutcome =
   | {
@@ -147,6 +172,23 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
     claims,
     standingAdvance,
     currentStanding,
+    verifyCohort: async (frozenSubject, cohortDigest) => {
+      // The cohort-shaped verify capability: full coverage, evidence per item
+      // resolved by Governor from the recording refs and the current vault —
+      // the same sources the item path uses, exact and total.
+      const shaped = { subject: frozenSubject, digest: { algorithm: "sha256" as const, value: cohortDigest }, memberProposalIds: [] as string[] };
+      return verifyCohortCoverage(
+        registry,
+        shaped as import("../kernel/governance/cohorts/freeze.js").FrozenCohort,
+        async (item) => {
+          const proposedBytes = item.path === null ? null : await deps.readNoteBytes(item.path);
+          const proposal = itemProposals.get(`${item.vaultId}\u0000${item.noteId}`) ?? null;
+          const baseBytes = proposal ? await baseBytesOf(proposal) : null;
+          return { baseBytes, proposedBytes };
+        },
+        now()
+      );
+    },
     verify: async (subject) => {
       // Evidence resolved by GOVERNOR at admission time: proposed bytes are
       // the CURRENT note (what the human is looking at), base bytes replay
@@ -173,10 +215,122 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
   // the exact subject object admitWithGesture passes — no ambient state, no
   // id-keyed map that could cross admissions.
   const subjectProposal = new WeakMap<object, ProposalV1>();
+  // The cohort path correlates per NOTE IDENTITY, set for the duration of one
+  // admitCohortWithGesture call — safe because the service serializes and the
+  // map is rebuilt per call.
+  const itemProposals = new Map<string, ProposalV1>();
 
   return {
     async pending() {
       return deps.proposals.pending();
+    },
+
+    async freezeSelection(selector, recoveryUnit) {
+      try {
+        const pending = await deps.proposals.pending();
+        const selected = selectProposals(pending, selector);
+        if (selected.length === 0) return { ok: false, reason: "the selection matches no pending proposals" };
+        const frozen = freezeCohort({ items: selected, resolvedScope: { include: [], exclude: [] }, recoveryUnit });
+        return { ok: true, frozen, members: selected };
+      } catch (e) {
+        return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+      }
+    },
+
+    async refreezeWithout(frozen, members, excludeProposalIds, recoveryUnit) {
+      try {
+        const input: FreezeInput = {
+          items: members,
+          resolvedScope: frozen.subject.resolvedScope,
+          recoveryUnit,
+          excludedProposalIds: [...frozen.subject.excludedProposalIds],
+        };
+        const successor = excludeAndRefreeze(input, frozen, excludeProposalIds);
+        const keep = new Set(successor.memberProposalIds);
+        return { ok: true, frozen: successor, members: members.filter((m) => keep.has(m.id)) };
+      } catch (e) {
+        return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+      }
+    },
+
+    async admitCohortWithGesture(frozen, members, gestureRef) {
+      try {
+        // RE-OBSERVE EVERY MEMBER at click time and rebuild the decision:
+        // click-time item subjects carry the CURRENT bytes' digests, the
+        // cohort subject is rebuilt from them, and the recomputed digest is
+        // compared against what the gesture covered — any drifted member,
+        // any tampered structure, aborts WHOLE with the item(s) named.
+        const clickItems = [];
+        const drifted: string[] = [];
+        itemProposals.clear();
+        for (let i = 0; i < frozen.subject.items.length; i++) {
+          const item = frozen.subject.items[i];
+          const proposal = members[i];
+          if (!proposal || proposal.subject.noteId !== item.noteId) {
+            return { ok: false, code: "subject_drift", detail: `member list does not match the frozen manifest at position ${i}` };
+          }
+          if (item.path === null) return { ok: false, code: "path_missing", detail: `member ${item.noteId} has no path to re-observe` };
+          const current = await deps.readNoteBytes(item.path);
+          if (current === null) {
+            drifted.push(item.noteId);
+            clickItems.push(item);
+            continue;
+          }
+          const clickDigest = digestBytes(current);
+          if (clickDigest.value !== item.proposed.value) drifted.push(item.noteId);
+          const { schema, ...rest } = item;
+          void schema;
+          clickItems.push(buildProposalItemSubject({ ...rest, proposed: clickDigest }));
+          itemProposals.set(`${item.vaultId}\u0000${item.noteId}`, proposal);
+        }
+        if (drifted.length > 0) {
+          return {
+            ok: false,
+            code: "subject_drift",
+            detail: `${drifted.length} member(s) changed since the decision was frozen: ${drifted.join(", ")} — the whole cohort aborts; split by finding or re-freeze`,
+            failedNoteIds: drifted,
+          };
+        }
+
+        const { claim } = await service.admitCohort({
+          frozenSubject: frozen.subject,
+          gestureCoveredDigest: frozen.digest.value,
+          memberProposals: members,
+          authority: { kind: "human-gesture", gestureRef },
+        });
+
+        // Projections: every member catches up; failures degrade (D05).
+        for (const m of members) {
+          try {
+            await deps.proposals.setVerification(m.id, "passed", now());
+            await deps.proposals.markAdmitted(m.id, claim.id, now());
+          } catch (e) {
+            console.error("[governor] member projection update after cohort admission failed (rebuildable)", e);
+          }
+        }
+
+        return {
+          ok: true,
+          claimId: claim.id,
+          degraded: false,
+          receipt: {
+            subjectDigest: claim.subjectDigest.value,
+            memberCount: frozen.subject.items.length,
+            predicates: [...new Set(frozen.subject.items.flatMap((i) => i.predicates.map((p) => `${p.id}@${p.version}`)))],
+            verifier: "governor cohort coverage (deterministic, run at admission, exact and total)",
+            coverage: "exact-and-total",
+          },
+        };
+      } catch (e) {
+        if (e instanceof AdmissionRefusedError) {
+          const failed = /coverage failed for \d+ member\(s\): ([^—]+)/.exec(e.message);
+          return { ok: false, code: e.code, detail: e.message, ...(failed ? { failedNoteIds: failed[1].trim().split(", ") } : {}) };
+        }
+        if (e instanceof RefCasError) return { ok: false, code: e.code, detail: "standing moved during this admission; re-open and decide again" };
+        return { ok: false, code: "admission_error", detail: e instanceof Error ? e.message : String(e) };
+      } finally {
+        itemProposals.clear();
+      }
     },
 
     async admitWithGesture(proposalId, gestureRef) {

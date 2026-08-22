@@ -8,9 +8,10 @@
 // records, the authority reference, the clock) and answers. Gathering the
 // facts honestly is the service's job; deciding is this module's.
 
-import { subjectDigest, type ProposalItemSubjectV1 } from "../contracts/subject-v1.js";
+import { subjectDigest, type CohortSubjectV1, type ProposalItemSubjectV1 } from "../contracts/subject-v1.js";
 import type { ProposalV1 } from "../proposals/proposal.js";
 import type { VerificationRecord } from "../verification/predicate.js";
+import type { CohortCoverageOutcome } from "../cohorts/coverage.js";
 
 /** How this admission is authorized. WP6 knows gestures; mandates are WP9. */
 export type AdmissionAuthority =
@@ -145,4 +146,82 @@ export function requireAdmissible(request: AdmissionRequest, verification: Verif
   }
 
   void now; // expiry checks arrive with mandates; the parameter is the seam
+}
+
+export interface CohortAdmissionRequest {
+  /** The frozen decision subject, as presented to the human. */
+  frozenSubject: CohortSubjectV1;
+  /** The digest the GESTURE covered — what the human saw and confirmed. */
+  gestureCoveredDigest: string;
+  /** The member proposals, in the subject's canonical item order. */
+  memberProposals: ProposalV1[];
+  authority: AdmissionAuthority;
+}
+
+/**
+ * The cohort refusal table (WP7b). The frozen structure is RECOMPUTED, never
+ * trusted (freeze.ts's stated obligation): tampering makes the precomputed
+ * digest stale, and recomputation is what turns tampering into a refusal.
+ * Coverage arrives from the SERVICE's own run (the WP6a lesson at birth);
+ * one failed item fails the gesture whole, with the items named —
+ * review-and-safety's abort rule at cohort scale.
+ */
+export function requireCohortAdmissible(request: CohortAdmissionRequest, coverage: CohortCoverageOutcome, now: number): void {
+  const { frozenSubject, memberProposals, authority } = request;
+
+  // The RECOMPUTED digest must be what the gesture covered. A tampered
+  // structure, a drifted member (re-observed digests are rebuilt into the
+  // click-time subject by the wiring), or a stale presentation all land here.
+  const recomputed = subjectDigest(frozenSubject);
+  if (recomputed.value !== request.gestureCoveredDigest) {
+    throw new AdmissionRefusedError(
+      "subject_drift",
+      `the cohort recomputes to ${recomputed.value.slice(0, 12)}… but the gesture covered ${request.gestureCoveredDigest.slice(0, 12)}…; the decision changed between presentation and click`
+    );
+  }
+
+  if (memberProposals.length !== frozenSubject.items.length) {
+    throw new AdmissionRefusedError("subject_drift", "the member list does not match the frozen manifest");
+  }
+  for (let i = 0; i < frozenSubject.items.length; i++) {
+    const item = frozenSubject.items[i];
+    const proposal = memberProposals[i];
+    if (proposal.subject.vaultId !== item.vaultId || proposal.subject.noteId !== item.noteId) {
+      throw new AdmissionRefusedError("subject_drift", `member ${i} does not correspond to the frozen item ${item.noteId}`);
+    }
+    if (proposal.authority !== "proposed") {
+      throw new AdmissionRefusedError("proposal_not_proposed", `member ${item.noteId} is ${proposal.authority}; only proposed items admit`);
+    }
+    if (proposal.producedOutcome !== "completed") {
+      throw new AdmissionRefusedError("result_not_settled", `member ${item.noteId}'s producing operation was '${proposal.producedOutcome}'`);
+    }
+    if (item.mandateId !== null) {
+      throw new AdmissionRefusedError("mandate_not_supported", `member ${item.noteId} claims a mandate, which cannot be validated before WP9`);
+    }
+  }
+
+  // Coverage: the service's own run, exact and total, addressed to THIS digest.
+  if (coverage.cohortDigest !== recomputed.value) {
+    throw new AdmissionRefusedError("verification_stale", "the coverage outcome addresses a different cohort digest");
+  }
+  if (!coverage.passed) {
+    throw new AdmissionRefusedError(
+      "verification_failed",
+      `coverage failed for ${coverage.failedNoteIds.length} member(s): ${coverage.failedNoteIds.join(", ")} — exclude-and-refreeze (split by finding) or resolve them; a failed item is never silently dropped or admitted`
+    );
+  }
+
+  if (authority.kind === "mandate") {
+    throw new AdmissionRefusedError("mandate_not_supported", "mandated admission does not exist until WP9");
+  }
+  if (!authority.gestureRef) {
+    throw new AdmissionRefusedError("authority_missing", "cohort admission requires the gesture reference minted by the accept surface");
+  }
+
+  // Cross-item base compatibility (change-classes' "compatible base state")
+  // in its CROSS-item sense — all bases sampled from one consistent
+  // world-state — is session-base territory (D01) and lands with the
+  // session-base predicate, not here: per-item base agreement is what
+  // coverage just proved. Named so the omission reads as a decision.
+  void now;
 }
