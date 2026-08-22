@@ -40,6 +40,15 @@ export interface AdmissionClaimV1 {
    * by a newer claim covering the SAME note, never by an unrelated
    * admission.
    *
+   * DECIDED (#335 review, finding 2): forSubject is a PER-ITEM question.
+   * A cohort claim's own subjectDigest (the cohort manifest digest) has no
+   * note identity, so querying it answers admitted-and-never-superseded —
+   * which is coherent because a cohort decision is not a note: cohort
+   * standing is a projection over its members' per-item answers, and
+   * "was this exact cohort decision ever replaced" is a chain-history
+   * question, not a standing one. WP7b builds its cohort projection over
+   * member answers; it does not query cohort digests through forSubject.
+   *
    * Schema note: added to /v1 in place — zero claims have ever been written
    * outside tests (the feature has been default-off since birth), so there
    * is no deployed data to migrate; older in-test claims without the field
@@ -89,11 +98,18 @@ export function buildAdmissionClaim(args: {
 
 export function createClaimStore(io: ClaimIo): ClaimStore {
   let lines: string[] | null = null;
+  // The PARSED array is cached beside the lines (#335 review: per-call
+  // re-parsing made a chain walk O(chain × store) — 415 ms per query at
+  // cohort scale, ~4 minutes for a 600-member pane refresh). Both caches
+  // advance together in append, through the same seed-before-append
+  // ordering that closed the double-count bug.
+  let parsedCache: AdmissionClaimV1[] | null = null;
   async function allLines(): Promise<string[]> {
     if (lines === null) lines = await io.readLines();
     return lines;
   }
   async function parsed(): Promise<AdmissionClaimV1[]> {
+    if (parsedCache !== null) return parsedCache;
     const out: AdmissionClaimV1[] = [];
     for (const line of await allLines()) {
       try {
@@ -103,6 +119,7 @@ export function createClaimStore(io: ClaimIo): ClaimStore {
         /* a corrupt tail must not take down prior claims */
       }
     }
+    parsedCache = out;
     return out;
   }
   return {
@@ -110,9 +127,11 @@ export function createClaimStore(io: ClaimIo): ClaimStore {
       // Cache seeded BEFORE the append: a cold cache read AFTER appendLine
       // already contains the new line, and pushing it again double-counts.
       const cached = await allLines();
+      const cachedParsed = await parsed();
       const line = JSON.stringify(claim);
       await io.appendLine(line);
       cached.push(line);
+      cachedParsed.push(claim);
     },
     async byId(id) {
       return (await parsed()).find((c) => c.id === id) ?? null;

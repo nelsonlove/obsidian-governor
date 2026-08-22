@@ -343,7 +343,6 @@ describe("proposal fold — a crafted opened event cannot skip the transition fu
 });
 
 describe("standing resolver — the chain walk (#334)", () => {
-  const { } = {};
   async function chainFixture() {
     const { buildAdmissionClaim, createClaimStore } = await import("../src/kernel/governance/admission/settlement.ts");
     const io = memoryIo();
