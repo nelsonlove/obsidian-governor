@@ -172,17 +172,27 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
     claims,
     standingAdvance,
     currentStanding,
-    verifyCohort: async (frozenSubject, cohortDigest) => {
+    verifyCohort: async (frozenSubject, cohortDigest, memberProposals) => {
       // The cohort-shaped verify capability: full coverage, evidence per item
       // resolved by Governor from the recording refs and the current vault —
-      // the same sources the item path uses, exact and total.
-      const shaped = { subject: frozenSubject, digest: { algorithm: "sha256" as const, value: cohortDigest }, memberProposalIds: [] as string[] };
+      // the same sources the item path uses, exact and total. The member
+      // proposals arrive ON THE CALL, so the item↔proposal correlation is a
+      // local map per invocation — no state shared across admissions (the
+      // shared-map draft raced: one call's cleanup emptied another's
+      // correlation before its serialized coverage ran, refusing healthy
+      // members and feeding split-by-finding corrupted evidence).
+      const byIdentity = new Map(memberProposals.map((p) => [`${p.subject.vaultId}\u0000${p.subject.noteId}`, p]));
+      const shaped = {
+        subject: frozenSubject,
+        digest: { algorithm: "sha256" as const, value: cohortDigest },
+        memberProposalIds: frozenSubject.items.map((item) => byIdentity.get(`${item.vaultId}\u0000${item.noteId}`)?.id ?? ""),
+      };
       return verifyCohortCoverage(
         registry,
         shaped as import("../kernel/governance/cohorts/freeze.js").FrozenCohort,
         async (item) => {
           const proposedBytes = item.path === null ? null : await deps.readNoteBytes(item.path);
-          const proposal = itemProposals.get(`${item.vaultId}\u0000${item.noteId}`) ?? null;
+          const proposal = byIdentity.get(`${item.vaultId}\u0000${item.noteId}`) ?? null;
           const baseBytes = proposal ? await baseBytesOf(proposal) : null;
           return { baseBytes, proposedBytes };
         },
@@ -215,10 +225,16 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
   // the exact subject object admitWithGesture passes — no ambient state, no
   // id-keyed map that could cross admissions.
   const subjectProposal = new WeakMap<object, ProposalV1>();
-  // The cohort path correlates per NOTE IDENTITY, set for the duration of one
-  // admitCohortWithGesture call — safe because the service serializes and the
-  // map is rebuilt per call.
-  const itemProposals = new Map<string, ProposalV1>();
+
+  function cohortReceipt(subjectDigest: string, frozen: FrozenCohort) {
+    return {
+      subjectDigest,
+      memberCount: frozen.subject.items.length,
+      predicates: [...new Set(frozen.subject.items.flatMap((i) => i.predicates.map((p) => `${p.id}@${p.version}`)))],
+      verifier: "governor cohort coverage (deterministic, run at admission, exact and total)",
+      coverage: "exact-and-total" as const,
+    };
+  }
 
   return {
     async pending() {
@@ -231,7 +247,11 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
         const selected = selectProposals(pending, selector);
         if (selected.length === 0) return { ok: false, reason: "the selection matches no pending proposals" };
         const frozen = freezeCohort({ items: selected, resolvedScope: { include: [], exclude: [] }, recoveryUnit });
-        return { ok: true, frozen, members: selected };
+        // Members are returned in the SUBJECT's canonical item order (the
+        // freeze sorts items by noteId; selection order is arbitrary), so
+        // members[i] corresponds to frozen.subject.items[i] for every caller.
+        const byId = new Map<string, ProposalV1>(selected.map((m) => [m.id, m]));
+        return { ok: true, frozen, members: frozen.memberProposalIds.map((id) => byId.get(id)!) };
       } catch (e) {
         return { ok: false, reason: e instanceof Error ? e.message : String(e) };
       }
@@ -246,42 +266,71 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
           excludedProposalIds: [...frozen.subject.excludedProposalIds],
         };
         const successor = excludeAndRefreeze(input, frozen, excludeProposalIds);
-        const keep = new Set(successor.memberProposalIds);
-        return { ok: true, frozen: successor, members: members.filter((m) => keep.has(m.id)) };
+        const byId = new Map<string, ProposalV1>(members.map((m) => [m.id, m]));
+        return { ok: true, frozen: successor, members: successor.memberProposalIds.map((id) => byId.get(id)!) };
       } catch (e) {
         return { ok: false, reason: e instanceof Error ? e.message : String(e) };
       }
     },
 
     async admitCohortWithGesture(frozen, members, gestureRef) {
+      // The degraded discriminator is standing MOVEMENT during this call —
+      // the item path's rule, applied at cohort scale. A failed pre-read is
+      // "unknown", which suppresses the degraded-success branch entirely.
+      let preHead: string | null = null;
+      let preHeadKnown = false;
       try {
-        // RE-OBSERVE EVERY MEMBER at click time and rebuild the decision:
-        // click-time item subjects carry the CURRENT bytes' digests, the
-        // cohort subject is rebuilt from them, and the recomputed digest is
-        // compared against what the gesture covered — any drifted member,
-        // any tampered structure, aborts WHOLE with the item(s) named.
-        const clickItems = [];
+        // RE-FETCH EVERY MEMBER at click time: the caller's array is a
+        // freeze-time snapshot, and an authority/development flip that
+        // changes no note bytes (a revision request, a concurrent admission)
+        // is invisible to byte drift — only fresh facts can see it. The
+        // policy's member table then judges the CURRENT proposals.
+        const fresh: ProposalV1[] = [];
+        for (const m of members) {
+          const cur = await deps.proposals.get(m.id);
+          if (!cur) return { ok: false, code: "proposal_unknown", detail: `member proposal ${m.id} no longer exists` };
+          fresh.push(cur);
+        }
+        const byIdentity = new Map(fresh.map((m) => [`${m.subject.vaultId}\u0000${m.subject.noteId}`, m]));
+
+        // Already standing? Refuse TRUTHFULLY and retry the projection
+        // catch-up so the pane self-heals (the item path's F2 rule).
+        try {
+          preHead = await currentStanding();
+          preHeadKnown = true;
+        } catch {
+          preHead = null;
+        }
+        if (preHead !== null) {
+          const headClaim = await claims.byId(preHead);
+          if (headClaim && headClaim.subjectDigest.value === frozen.digest.value) {
+            for (const m of fresh) {
+              try {
+                await deps.proposals.setVerification(m.id, "passed", now());
+                await deps.proposals.markAdmitted(m.id, headClaim.id, now());
+              } catch {
+                /* projection remains behind; the refusal still tells the truth */
+              }
+            }
+            return { ok: false, code: "already_admitted", detail: `this exact cohort already stands as claim ${headClaim.id}; nothing further to admit` };
+          }
+        }
+
+        // RE-OBSERVE EVERY MEMBER: correlated to the frozen manifest by NOTE
+        // IDENTITY (the manifest is canonically sorted; caller order is not
+        // trusted) — any drifted member, any identity gap, aborts WHOLE with
+        // the item(s) named.
         const drifted: string[] = [];
-        itemProposals.clear();
-        for (let i = 0; i < frozen.subject.items.length; i++) {
-          const item = frozen.subject.items[i];
-          const proposal = members[i];
-          if (!proposal || proposal.subject.noteId !== item.noteId) {
-            return { ok: false, code: "subject_drift", detail: `member list does not match the frozen manifest at position ${i}` };
+        for (const item of frozen.subject.items) {
+          const proposal = byIdentity.get(`${item.vaultId}\u0000${item.noteId}`);
+          if (!proposal) {
+            return { ok: false, code: "subject_drift", detail: `frozen item ${item.noteId} has no corresponding member proposal` };
           }
           if (item.path === null) return { ok: false, code: "path_missing", detail: `member ${item.noteId} has no path to re-observe` };
           const current = await deps.readNoteBytes(item.path);
-          if (current === null) {
+          if (current === null || digestBytes(current).value !== item.proposed.value) {
             drifted.push(item.noteId);
-            clickItems.push(item);
-            continue;
           }
-          const clickDigest = digestBytes(current);
-          if (clickDigest.value !== item.proposed.value) drifted.push(item.noteId);
-          const { schema, ...rest } = item;
-          void schema;
-          clickItems.push(buildProposalItemSubject({ ...rest, proposed: clickDigest }));
-          itemProposals.set(`${item.vaultId}\u0000${item.noteId}`, proposal);
         }
         if (drifted.length > 0) {
           return {
@@ -295,12 +344,12 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
         const { claim } = await service.admitCohort({
           frozenSubject: frozen.subject,
           gestureCoveredDigest: frozen.digest.value,
-          memberProposals: members,
+          memberProposals: fresh,
           authority: { kind: "human-gesture", gestureRef },
         });
 
         // Projections: every member catches up; failures degrade (D05).
-        for (const m of members) {
+        for (const m of fresh) {
           try {
             await deps.proposals.setVerification(m.id, "passed", now());
             await deps.proposals.markAdmitted(m.id, claim.id, now());
@@ -313,23 +362,39 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
           ok: true,
           claimId: claim.id,
           degraded: false,
-          receipt: {
-            subjectDigest: claim.subjectDigest.value,
-            memberCount: frozen.subject.items.length,
-            predicates: [...new Set(frozen.subject.items.flatMap((i) => i.predicates.map((p) => `${p.id}@${p.version}`)))],
-            verifier: "governor cohort coverage (deterministic, run at admission, exact and total)",
-            coverage: "exact-and-total",
-          },
+          receipt: cohortReceipt(claim.subjectDigest.value, frozen),
         };
       } catch (e) {
         if (e instanceof AdmissionRefusedError) {
-          const failed = /coverage failed for \d+ member\(s\): ([^—]+)/.exec(e.message);
-          return { ok: false, code: e.code, detail: e.message, ...(failed ? { failedNoteIds: failed[1].trim().split(", ") } : {}) };
+          return { ok: false, code: e.code, detail: e.message, ...(e.failedNoteIds && e.failedNoteIds.length > 0 ? { failedNoteIds: [...e.failedNoteIds] } : {}) };
         }
         if (e instanceof RefCasError) return { ok: false, code: e.code, detail: "standing moved during this admission; re-open and decide again" };
+        // A throw AFTER the CAS is the degraded window: the admission may
+        // stand while the settlement record is missing. Same movement
+        // discrimination as the item path: standing must have advanced
+        // DURING THIS CALL to a claim covering THIS cohort digest — then the
+        // truth is a degraded success, the projections still catch up, and
+        // the receipt says the settlement record was not written.
+        try {
+          const head = await currentStanding();
+          if (preHeadKnown && head !== null && head !== preHead) {
+            const claim = await claims.byId(head);
+            if (claim && claim.subjectDigest.value === frozen.digest.value) {
+              for (const m of members) {
+                try {
+                  await deps.proposals.setVerification(m.id, "passed", now());
+                  await deps.proposals.markAdmitted(m.id, claim.id, now());
+                } catch {
+                  /* rebuildable */
+                }
+              }
+              return { ok: true, claimId: head, degraded: true, receipt: cohortReceipt(claim.subjectDigest.value, frozen) };
+            }
+          }
+        } catch {
+          /* fall through to the plain failure */
+        }
         return { ok: false, code: "admission_error", detail: e instanceof Error ? e.message : String(e) };
-      } finally {
-        itemProposals.clear();
       }
     },
 

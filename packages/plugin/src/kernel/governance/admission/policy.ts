@@ -28,7 +28,9 @@ export type AdmissionAuthority =
 export class AdmissionRefusedError extends Error {
   constructor(
     readonly code: string,
-    detail: string
+    detail: string,
+    /** Member noteIds a cohort refusal names — STRUCTURED, so split-by-finding never parses prose (a noteId containing ", " or "—" would corrupt a regex extraction). */
+    readonly failedNoteIds?: string[]
   ) {
     super(`admission refused [${code}]: ${detail}`);
     this.name = "AdmissionRefusedError";
@@ -180,20 +182,36 @@ export function requireCohortAdmissible(request: CohortAdmissionRequest, coverag
     );
   }
 
+  // Members correlate to frozen items by NOTE IDENTITY, never by position:
+  // buildCohortSubject sorts items canonically by noteId while callers hold
+  // members in selection order, so a positional check would refuse legitimate
+  // cohorts whenever real-vault noteIds don't happen to ascend in selection
+  // order (review finding — every early test's uid-001…uid-00N ascended, so
+  // position and canon always agreed and the suite couldn't see it).
   if (memberProposals.length !== frozenSubject.items.length) {
     throw new AdmissionRefusedError("subject_drift", "the member list does not match the frozen manifest");
   }
-  for (let i = 0; i < frozenSubject.items.length; i++) {
-    const item = frozenSubject.items[i];
-    const proposal = memberProposals[i];
-    if (proposal.subject.vaultId !== item.vaultId || proposal.subject.noteId !== item.noteId) {
-      throw new AdmissionRefusedError("subject_drift", `member ${i} does not correspond to the frozen item ${item.noteId}`);
+  const byIdentity = new Map(memberProposals.map((p) => [`${p.subject.vaultId}\u0000${p.subject.noteId}`, p]));
+  if (byIdentity.size !== memberProposals.length) {
+    throw new AdmissionRefusedError("subject_drift", "the member list carries duplicate note identities");
+  }
+  for (const item of frozenSubject.items) {
+    const proposal = byIdentity.get(`${item.vaultId}\u0000${item.noteId}`);
+    if (!proposal) {
+      throw new AdmissionRefusedError("subject_drift", `frozen item ${item.noteId} has no corresponding member proposal`);
     }
     if (proposal.authority !== "proposed") {
       throw new AdmissionRefusedError("proposal_not_proposed", `member ${item.noteId} is ${proposal.authority}; only proposed items admit`);
     }
     if (proposal.producedOutcome !== "completed") {
       throw new AdmissionRefusedError("result_not_settled", `member ${item.noteId}'s producing operation was '${proposal.producedOutcome}'`);
+    }
+    // The item table's rule at cohort scale: an open human objection blocks
+    // the member, and one blocked member blocks the decision (whole-abort).
+    // A revision request flips no note bytes, so drift and coverage both
+    // pass over it — this row is the ONLY thing that can see it.
+    if (proposal.development === "revision-requested") {
+      throw new AdmissionRefusedError("revision_open", `a revision was requested on member ${item.noteId}; the revised result is a new subject`, [item.noteId]);
     }
     if (item.mandateId !== null) {
       throw new AdmissionRefusedError("mandate_not_supported", `member ${item.noteId} claims a mandate, which cannot be validated before WP9`);

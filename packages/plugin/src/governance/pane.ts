@@ -782,6 +782,12 @@ export class GovernanceReviewView extends ItemView {
     );
     if (!confirmed) return;
     const outcome = await deps.admission!.admitCohortWithGesture(frozen, members, gestureRef);
+    if (outcome.ok || outcome.code === "already_admitted") {
+      // A decided cohort clears any staged successor: after the successor
+      // itself admits (or turns out already admitted) its button must not
+      // persist offering a decision that no longer exists.
+      this.pendingSuccessor = null;
+    }
     if (outcome.ok) {
       new Notice(
         `Admitted cohort ${outcome.receipt.subjectDigest.slice(0, 12)}… (${outcome.receipt.memberCount} members) — verified by ${outcome.receipt.verifier} ` +

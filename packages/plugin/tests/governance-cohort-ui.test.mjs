@@ -39,7 +39,7 @@ function memoryIo() {
   return { lines, appendLine: async (l) => void lines.push(l), readLines: async () => [...lines] };
 }
 
-async function harness() {
+async function harness(opts = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "governor-cohort-ui-"));
   const repo = await openGitRepository({ gitdir: path.join(root, "gitdir"), worktree: path.join(root, "vault") });
   const vault = new Map();
@@ -51,13 +51,14 @@ async function harness() {
     proposals,
     readNoteBytes: async (p) => (vault.has(p) ? enc(vault.get(p)) : null),
     writeNoteBytes: async (p, bytes) => void vault.set(p, new TextDecoder().decode(bytes)),
-    appendSettlement: async () => {},
+    appendSettlement: opts.appendSettlement ?? (async () => {}),
     now: () => T0,
   });
   let seq = 0;
   const noteIds = new Map(); // path → stable noteId: re-producing a note keeps its IDENTITY
-  async function produce(notePath, baseText, proposedText) {
+  async function produce(notePath, baseText, proposedText, noteId = null) {
     seq++;
+    if (noteId !== null) noteIds.set(notePath, noteId);
     if (!noteIds.has(notePath)) noteIds.set(notePath, `uid-${String(noteIds.size + 1).padStart(3, "0")}`);
     if (baseText !== null) vault.set(notePath, baseText);
     vault.set(notePath, proposedText);
@@ -249,14 +250,172 @@ describe("§15 — the cohort gesture is gated identically", () => {
       assert.ok(found, `${el} exists and is addEventListener-wired`);
     }
     // The successor is its OWN decision: the split path stages it and never
-    // reuses the original gestureRef for a second claim.
+    // admits a second claim inside the original click's action. The pin is a
+    // STRUCTURAL scan of decideCohort's body, not a literal-text match (a
+    // violation spelled through parameters would dodge any literal): within
+    // one decideCohort run there is exactly ONE admitCohortWithGesture call
+    // and NO recursive decideCohort call, so a second claim can only be
+    // reached through a second gate run (the staged successor's own button).
     assert.match(raw, /pendingSuccessor/, "the successor is staged, not auto-admitted");
-    assert.ok(!/admitCohortWithGesture\(split\.frozen, split\.members, gestureRef\)/.test(raw), "the original ref never covers the successor's claim");
+    const body = extractMethodBody(raw, "async decideCohort");
+    assert.ok(scanOneAdmissionPerGate(body), "decideCohort admits at most once per gesture");
+  });
+
+  test("vacuity: the one-admission-per-gate scan CATCHES the violation it exists to catch", () => {
+    const raw = fs.readFileSync(path.join(HERE, "..", "src", "governance", "pane.ts"), "utf8");
+    const body = extractMethodBody(raw, "async decideCohort");
+    assert.ok(scanOneAdmissionPerGate(body), "the real body passes");
+    // The exact regression the review demonstrated: auto-admitting the split
+    // successor under the ORIGINAL click's ref, spelled through parameters so
+    // no literal-text pin could see it. The scan must fail this mutant.
+    const mutantRecurse = body.replace(
+      "this.pendingSuccessor = { frozen: split.frozen, members: split.members, excludedNoteIds: failedNoteIds };",
+      "this.pendingSuccessor = null; await this.decideCohort(deps, split.frozen, split.members, gestureRef);"
+    );
+    assert.notEqual(mutantRecurse, body, "the mutation site exists");
+    assert.ok(!scanOneAdmissionPerGate(mutantRecurse), "a recursive second decision is caught");
+    // The other spelling: a second direct admission call in the same body.
+    const mutantDirect = body.replace(
+      "this.pendingSuccessor = { frozen: split.frozen, members: split.members, excludedNoteIds: failedNoteIds };",
+      "await deps.admission.admitCohortWithGesture(split.frozen, split.members, gestureRef);"
+    );
+    assert.ok(!scanOneAdmissionPerGate(mutantDirect), "a second direct admission is caught");
   });
 
   test("vacuity: the pins match real wiring sites", () => {
     const raw = fs.readFileSync(path.join(HERE, "..", "src", "governance", "pane.ts"), "utf8");
     assert.ok(/groupBtn\.addEventListener\(/.test(raw));
     assert.ok(/sucBtn\.addEventListener\(/.test(raw));
+  });
+});
+
+// ── Scan helpers for the one-admission-per-gate pin ─────────────────────────
+
+/** Extract a method's brace-balanced body from source, starting at its signature. */
+function extractMethodBody(source, signature) {
+  const at = source.indexOf(signature);
+  assert.notEqual(at, -1, `${signature} exists in pane.ts`);
+  const open = source.indexOf("{", at);
+  let depth = 0;
+  for (let i = open; i < source.length; i++) {
+    if (source[i] === "{") depth++;
+    else if (source[i] === "}") {
+      depth--;
+      if (depth === 0) return source.slice(open, i + 1);
+    }
+  }
+  assert.fail("unbalanced braces extracting " + signature);
+}
+
+/** One gate run admits at most once: exactly one admitCohortWithGesture call, no recursive decideCohort. */
+function scanOneAdmissionPerGate(body) {
+  const admits = (body.match(/admitCohortWithGesture\(/g) ?? []).length;
+  const recursions = (body.match(/decideCohort\(/g) ?? []).length;
+  return admits === 1 && recursions === 0;
+}
+
+// ── Regressions from the independent review of PR #336 ──────────────────────
+
+describe("review regressions — correlation, staleness, concurrency, degradation", () => {
+  test("a cohort whose noteIds do NOT ascend in selection order admits fine — identity correlation, never positional", async () => {
+    const h = await harness();
+    try {
+      // Selection order zeta, mmm, alpha; canonical item order alpha, mmm, zeta.
+      await h.produce("Mixed/one.md", "b1\n", "p1\n", "uid-zeta");
+      await h.produce("Mixed/two.md", "b2\n", "p2\n", "uid-mmm");
+      await h.produce("Mixed/three.md", "b3\n", "p3\n", "uid-alpha");
+      const sel = await h.admission.freezeSelection({ folder: "Mixed" }, "item");
+      assert.ok(sel.ok, sel.reason);
+      assert.notDeepEqual(
+        sel.frozen.subject.items.map((i) => i.noteId),
+        ["uid-zeta", "uid-mmm", "uid-alpha"],
+        "canonical order genuinely differs from selection order — else this test is vacuous"
+      );
+      const outcome = await h.admission.admitCohortWithGesture(sel.frozen, sel.members, "gesture-mixed");
+      assert.ok(outcome.ok, JSON.stringify(outcome));
+      assert.equal(outcome.receipt.memberCount, 3);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  test("an open revision request on ONE member refuses the WHOLE cohort at click time — bytes unchanged, facts fresh", async () => {
+    const h = await harness();
+    try {
+      const a = await h.produce("Rev/a.md", "ba\n", "pa\n");
+      const b = await h.produce("Rev/b.md", "bb\n", "pb\n");
+      const sel = await h.admission.freezeSelection({ folder: "Rev" }, "item");
+      assert.ok(sel.ok);
+      // Between freeze and click, a human requests revision on b. No note
+      // bytes change, so drift and coverage both pass — only fresh proposal
+      // facts can see the objection.
+      await h.proposals.requestRevision(b.id, T0 + 100);
+      const before = await h.repo.resolveRef(standingRef());
+      const outcome = await h.admission.admitCohortWithGesture(sel.frozen, sel.members, "gesture-rev");
+      assert.ok(!outcome.ok, "the cohort must not admit over an open human objection");
+      assert.equal(outcome.code, "revision_open");
+      assert.deepEqual(outcome.failedNoteIds, [b.subject.noteId], "the objected member is NAMED, structurally");
+      assert.equal(await h.repo.resolveRef(standingRef()), before, "standing untouched");
+      assert.equal((await h.proposals.get(a.id)).authority, "proposed");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  test("two CONCURRENT disjoint cohort admissions both succeed — no shared evidence state to race", async () => {
+    const h = await harness();
+    try {
+      for (let i = 0; i < 3; i++) await h.produce(`ConA/n-${i}.md`, `a${i}\n`, `pa${i}\n`);
+      for (let i = 0; i < 3; i++) await h.produce(`ConB/n-${i}.md`, `b${i}\n`, `pb${i}\n`);
+      const selA = await h.admission.freezeSelection({ folder: "ConA" }, "item");
+      const selB = await h.admission.freezeSelection({ folder: "ConB" }, "item");
+      assert.ok(selA.ok && selB.ok);
+      const [oa, ob] = await Promise.all([
+        h.admission.admitCohortWithGesture(selA.frozen, selA.members, "gesture-con-a"),
+        h.admission.admitCohortWithGesture(selB.frozen, selB.members, "gesture-con-b"),
+      ]);
+      assert.ok(oa.ok, JSON.stringify(oa));
+      assert.ok(ob.ok, JSON.stringify(ob));
+      assert.notEqual(oa.claimId, ob.claimId);
+      const claims = createClaimStore(h.claimIo);
+      assert.equal((await claims.all()).length, 2);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  test("a settlement-append failure AFTER the CAS reports a DEGRADED success — the admission stands and projections advance", async () => {
+    let failNext = false;
+    const h = await harness({
+      appendSettlement: async () => {
+        if (failNext) {
+          failNext = false;
+          throw new Error("disk full (injected)");
+        }
+      },
+    });
+    try {
+      for (let i = 0; i < 2; i++) await h.produce(`Deg/n-${i}.md`, `d${i}\n`, `pd${i}\n`);
+      const sel = await h.admission.freezeSelection({ folder: "Deg" }, "item");
+      assert.ok(sel.ok);
+      failNext = true;
+      const outcome = await h.admission.admitCohortWithGesture(sel.frozen, sel.members, "gesture-deg");
+      assert.ok(outcome.ok, "the CAS landed — reporting failure would misdescribe standing authority: " + JSON.stringify(outcome));
+      assert.equal(outcome.degraded, true, "the receipt says the settlement record is missing");
+      // The claim genuinely stands and every member projection caught up.
+      const head = await h.repo.resolveRef(standingRef());
+      assert.notEqual(head, null);
+      for (const m of sel.members) {
+        assert.equal((await h.proposals.get(m.id)).authority, "admitted", "projections advanced despite the degraded receipt");
+      }
+      // And the degraded path did not fabricate success out of thin air:
+      // vacuity — the same harness admits NON-degraded when nothing fails.
+      for (let i = 0; i < 2; i++) await h.produce(`Deg2/n-${i}.md`, `e${i}\n`, `pe${i}\n`);
+      const sel2 = await h.admission.freezeSelection({ folder: "Deg2" }, "item");
+      const clean = await h.admission.admitCohortWithGesture(sel2.frozen, sel2.members, "gesture-deg-2");
+      assert.ok(clean.ok && clean.degraded === false, "an unfaulted admission is NOT degraded");
+    } finally {
+      h.cleanup();
+    }
   });
 });

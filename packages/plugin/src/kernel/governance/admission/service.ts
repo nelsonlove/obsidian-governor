@@ -29,6 +29,7 @@ import { RefCasError } from "../history-store/types.js";
 import { subjectDigest, type CohortSubjectV1, type ProposalItemSubjectV1 } from "../contracts/subject-v1.js";
 import type { VerificationOutcome } from "../verification/verify.js";
 import type { CohortCoverageOutcome } from "../cohorts/coverage.js";
+import type { ProposalV1 } from "../proposals/proposal.js";
 
 /**
  * The capability: CAS over the standing ref, pre-bound to the ref name by
@@ -58,7 +59,7 @@ export interface AdmissionDeps {
    * Optional: a wiring that admits only items never provides it, and
    * admitCohort refuses without it rather than guessing.
    */
-  verifyCohort?: (frozenSubject: CohortSubjectV1, cohortDigest: string) => Promise<CohortCoverageOutcome>;
+  verifyCohort?: (frozenSubject: CohortSubjectV1, cohortDigest: string, memberProposals: readonly ProposalV1[]) => Promise<CohortCoverageOutcome>;
   /** Current standing claim id, read fresh — the CAS expectation. */
   currentStanding: () => Promise<string | null>;
   /** Step 4: append the settlement record. Failures here are retried by recovery, not silently dropped. */
@@ -117,7 +118,12 @@ export function createAdmissionService(deps: AdmissionDeps): AdmissionService {
           throw new AdmissionRefusedError("verification_unavailable", "no cohort verification capability is wired; a check that cannot run has not passed");
         }
         const cohortDigest = subjectDigest(request.frozenSubject);
-        const coverage = await deps.verifyCohort(request.frozenSubject, cohortDigest.value);
+        // The member proposals ride the REQUEST into the capability, so the
+        // evidence correlation is per-call by construction — a shared map
+        // populated outside this serialized chain raced across concurrent
+        // admissions (review finding: caller A's cleanup emptied it before
+        // caller B's coverage ran, refusing healthy members).
+        const coverage = await deps.verifyCohort(request.frozenSubject, cohortDigest.value, request.memberProposals);
         requireCohortAdmissible(request, coverage, now);
 
         // Duplicate check inside the serialized chain, cohort-shaped: if what
