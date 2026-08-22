@@ -1634,6 +1634,30 @@ function renderMigrationSection(containerEl: HTMLElement, plugin: Plugin): void 
     .catch((e) => statusEl.setText(`Migration status could not be read: ${e instanceof Error ? e.message : String(e)}`));
 
   const row = containerEl.createDiv({ cls: "governance-migration-controls" });
+  // Import and Cut over render only while legacy is authoritative; after the
+  // cutover the import's only remaining input is the settlement records the
+  // ADMISSION path keeps appending to the shared acceptance log, which it
+  // would relabel as legacy evidence — duplicative labeling, not authority,
+  // but noise an auditor then has to reconcile (re-review finding). Rollback
+  // renders only once there is a cutover to roll back.
+  if (migration.isCutOver()) {
+    const rollBtn = row.createEl("button", { text: "Roll back cutover…" });
+    rollBtn.addEventListener("click", (evt) => {
+      void runGuardedDisposition(
+        evt,
+        () => confirmRollbackCutover(plugin.app),
+        async (gestureRef) => {
+          try {
+            await migration.rollback(gestureRef);
+            new Notice("Cutover rolled back: legacy acceptance is authoritative again.", 12000);
+          } catch (e) {
+            new Notice(`Rollback did not run: ${e instanceof Error ? e.message : String(e)}`, 12000);
+          }
+        }
+      );
+    });
+    return;
+  }
   const importBtn = row.createEl("button", { text: "Import legacy evidence" });
   importBtn.addEventListener("click", (evt) => {
     void runGuardedDisposition(evt, null, async () => {
@@ -1655,11 +1679,21 @@ function renderMigrationSection(containerEl: HTMLElement, plugin: Plugin): void 
     void runGuardedDisposition(
       evt,
       async () => {
-        // The report the human confirms is a fresh dry pass over the same
+        // The report the human confirms is a fresh pass over the same
         // surfaces; the cutover itself re-runs the import (idempotent), so
-        // what was confirmed is what is imported.
-        const { report } = await migration.importLegacyEvidence();
-        return confirmCutover(plugin.app, report);
+        // what was confirmed is what is imported. A throw HERE (an
+        // unreadable acceptance log) surfaces as a Notice and answers
+        // not-confirmed — the confirm phase runs outside the gate's action,
+        // so without this catch it died as an unhandled rejection with no
+        // user feedback (re-review finding; legacy stays authoritative
+        // either way).
+        try {
+          const { report } = await migration.importLegacyEvidence();
+          return await confirmCutover(plugin.app, report);
+        } catch (e) {
+          new Notice(`Cutover could not prepare its report: ${e instanceof Error ? e.message : String(e)} — nothing changed; legacy remains authoritative.`, 12000);
+          return false;
+        }
       },
       async (gestureRef) => {
         try {
@@ -1672,19 +1706,4 @@ function renderMigrationSection(containerEl: HTMLElement, plugin: Plugin): void 
     );
   });
 
-  const rollBtn = row.createEl("button", { text: "Roll back cutover…" });
-  rollBtn.addEventListener("click", (evt) => {
-    void runGuardedDisposition(
-      evt,
-      () => confirmRollbackCutover(plugin.app),
-      async (gestureRef) => {
-        try {
-          await migration.rollback(gestureRef);
-          new Notice("Cutover rolled back: legacy acceptance is authoritative again.", 12000);
-        } catch (e) {
-          new Notice(`Rollback did not run: ${e instanceof Error ? e.message : String(e)}`, 12000);
-        }
-      }
-    );
-  });
 }
