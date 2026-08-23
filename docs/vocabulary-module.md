@@ -105,4 +105,3 @@ Per-note, `tag_out_of_scope` and `allowedTags_unregistered` also surface through
 `obsidian_validate_terms` via the optional `noteFindings` seam on `VocabularyProvider` (provider-
 specific whole-note checks, called by `noteVocabFindings`); `tag_unregistered` rides the
 ordinary token path. Report-first throughout — no write-time refusal; curation is human.
-</content>

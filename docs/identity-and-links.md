@@ -121,4 +121,3 @@ For the identity tools specifically: `obsidian_resolve_uid`, `obsidian_check_lin
 `obsidian_repoint_link` are all filtered as above — a uid carried only outside your allowlist
 reads as unresolved, an ambiguity names only paths you could have named yourself, and totals
 count only what your session can see.
-</content>

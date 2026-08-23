@@ -56,7 +56,7 @@ Read:
 
 1. [Contributing](../CONTRIBUTING.md)
 2. [Architecture](architecture.md)
-3. [Developer guide](developer-guide.md)
+3. [Developer guide](developer-guide.md), with its two companions: the [design decision register](design-decision-register.md) (D01–D18, settled — never reopened in feature work) and the [coding-agent development guide](coding-agent-development-guide.md) (the work-package process; Gate 1 complete)
 4. [Action registry](action-registry.md)
 5. [Capability projection](capability-manifest.md)
 6. [Observations and replay](observations-and-replay.md)

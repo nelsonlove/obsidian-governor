@@ -117,7 +117,7 @@ Failure is a conflict and changes nothing. Multi-target operations must document
 
 ### `idempotency_key`
 
-Retry safety for calls that returned or remain in flight. Identity includes key, action id/version, normalized arguments, and revision precondition. Reuse with a different identity is refused.
+Retry safety for calls that returned or remain in flight. Identity includes key, action id/version, normalized arguments, and revision precondition. Reuse with a different identity is refused. (The shipped kernel-v0 identity is `(key, operation, arguments, if_rev)` — see [kernel-v0](kernel-v0.md); folding the action version into identity arrives with the registry-native execution path.)
 
 Keys have a bounded lifetime and clear on plugin restart. An uncertain timeout is not retained as a completed identity.
 

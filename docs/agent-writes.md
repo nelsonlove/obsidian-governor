@@ -141,7 +141,7 @@ A **read-only** view of the notes currently pending human review, so a well-beha
 
 The descriptive fields (`status`, `agent`, `op`, `when`, `writeCount`) are the governance
 module's own, passed through verbatim when present and well-typed. See
-[the review channel](README.md#how-the-pieces-fit--the-assent-review-channel) for how this
+[the review workflow](review-sop.md) (legacy name annotation: the channel was designed under the framework's former name) for how this
 closes the loop back to the human.
 
 > **Migration note (#261).** Before the #164 decommission this index was published by the
