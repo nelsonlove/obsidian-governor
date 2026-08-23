@@ -1,5 +1,8 @@
 # The dev tool-runner — "Run tool…"
 
+> **Deep reference for the shipped implementation.** Canonical concepts and the target design live in the [documentation corpus](README.md); what is shipped versus target is owned by [status-and-compatibility.md](status-and-compatibility.md).
+
+
 An in-Obsidian way to invoke the plugin's own tool surface by hand (#217): **one** palette
 command — registered as "Run tool…", shown in the palette prefixed with the plugin's
 display name ("Governor: Run tool…") — over the whole surface, not one command per tool — ~70 commands would spam the

@@ -1,168 +1,154 @@
-# Governor kernel — documentation
+# Governor documentation
 
-This directory documents the **Governor kernel**: the governed write substrate that
-turns the plugin's `obsidian_*` tools from "an agent editing files" into "an agent
-proposing changes that a human reviews and accepts." It is the plugin-side half of the
-[Governor](#how-the-pieces-fit--the-governor-review-channel) review channel.
+This documentation is deliberately layered. You should be able to learn the public product without inheriting the private operator system, while a developer or agent integrator can still reach the exact contracts they need.
 
-The top-level [`README.md`](../README.md) is the user-facing overview (install, the tool
-surface, the socket/bridge architecture, the path allowlist). These docs go deeper on the
-**kernel** and the **acceptance model** it exists to protect.
+> [!note]
+> This corpus describes the coherent target product; it is not, by itself, a claim that a particular Governor build implements every described behavior. What IS shipped is owned by one section: [Current release state](status-and-compatibility.md#current-release-state--0170-2026-08-23) (Gate 1 shipped in 0.17.0, inert by default; the authority cutover has not run). [Documentation basis](documentation-basis.md) explains the evidence classes.
 
-> These docs track **`main`** (the kernel shipped in v0.7.0; current release **0.12.0**),
-> plugin package `packages/plugin/`. The last full line-by-line verification pass ran at
-> pre-ship head `bc1a8a1`; file references are given so each claim is checkable against
-> current source.
+## Choose your path
 
-## Read in this order
+### I am new to Obsidian and AI assistants
 
-| Doc | What it covers |
-| --- | --- |
-| **[overview.md](overview.md)** | **Start here.** The whole-system map as of 0.12.0: transport, guard + kernel, the acceptance perimeter, the acceptance module, one paragraph per capability module, the dev tool-runner, CLI tools, conformance, external-tool trust, and the module defaults table — with links into everything below. |
-| **[acceptance-model.md](acceptance-model.md)** | **The heart of the design.** Acceptance is human-only — "the accept verb goes in no API." The accept-forbidden guard at the shared write primitive, on every write surface that routes through it (including the CLI proxy), and its documented residuals (tracked publicly; not yet all closed). |
-| [kernel-v0.md](kernel-v0.md) | Kernel v0 primitives: the serialized write queue, the append-only write journal, `if_rev` optimistic concurrency, idempotency keys, advisory scope locks, and server/install identity. |
-| [identity-and-links.md](identity-and-links.md) | The identity substrate: the uid index, `uid:` addressing that survives rename/move, link healing, `obsidian_check_links`, `obsidian_repoint_link`, and read-boundary containment. |
-| [agent-writes.md](agent-writes.md) | The agent-facing write/review surface: **B1** `obsidian_write_notes` (batch write + opt-in `stamp`), **B2** agent change-`intent`, and **B3** `obsidian_pending_review`. |
-| [modules.md](modules.md) | The module system: the `ModuleRegistry` + mount, settings-toggleable capability modules, the read-only mount gate, and the accept/baseline tripwire. |
-| [scope-provider.md](scope-provider.md) | The scope provider module: Johnny Decimal `jd:` addressing and read-only allocation (compute, not reserve). |
-| [vocabulary.md](vocabulary.md) | The vocabulary provider module: read-only validation of tags, properties, types, and glossary terms. |
-| [skills.md](skills.md) | The skills module: compiling vault notes into a Claude Code plugin — the flat output, multi-valued `parent:` (first primary, rest attachments), opt-in `preload:` (context provisioning, not access control) with its cap, and the `no-skills:` tools-level lockout. |
-| [provenance.md](provenance.md) | The provenance module: derived-content freshness — what `derived-from` + `generated` detect, the two-tier deleted-source detection (missing plain paths always; glob deletions via the opt-in `derived-source-count` witness), and the honest limits of an mtime-based check. |
-| [crosssession.md](crosssession.md) | The cross-session channel module: coordination-log discovery by frontmatter, delta reads, read-receipt attestation, and posting refused while stale (`stale_read`). |
-| [triage.md](triage.md) | The inbox-triage module: the disposition substrate (#221) and its second instance (#241 phase-3 shape) — three built-in primitives plus human-declared disposition rows over inbox notes, Base-backed queues, one dry-run-by-default guarded tool, no pane. |
-| [bases.md](bases.md) | The Bases module: `base_list` / `base_query`, the detached-leaf capture design (public API only, no expression re-implementation), timeout/serialization/allowlist behavior, caps, and the triage named-queues consumer. |
-| [tool-runner.md](tool-runner.md) | The in-Obsidian dev tool-runner: one palette command, schema-rendered args, the write-confirm step, the result modal, and the captured-registry pipeline it shares with Code Mode's `obsidian_call_tool`. |
-| [conformance.md](conformance.md) | The TS conformance engine: rule packs, the ratchet (baseline-diffed findings), the ported legacy checks, and the headless CLI. |
-| [reference.md](reference.md) | The precise operational contracts: addressing (`uid:`/schemes), write queue & journal semantics, `if_rev`/idempotency, advisory claims, the path allowlist and its oracles, external-tool trust, Code Mode. |
+Read in this order:
 
-## How the pieces fit — the Governor review channel
+1. [Getting started](getting-started.md)
+2. [User guide](user-guide.md)
+3. [Vocabulary](vocabulary.md)
+4. [Review and safety](review-and-safety.md)
+5. [Sessions, mandates, and cohorts](sessions-mandates-and-cohorts.md)
+6. [Git, Sync, and portability](git-and-sync.md)
+7. [Troubleshooting](troubleshooting.md)
 
-The kernel exists to make agent writes **reviewable** without making them **unsupervised**.
-The end-to-end shape:
+You do not need the architecture or operation-contract documents.
 
-```
-   agent (Claude Code)                    Governor kernel                     human
-   ───────────────────                    ────────────────                     ─────
-   obsidian_write_note(s) ─┐
-   append / patch / move ──┼─▶ serialized write queue ─▶ note written ─┐
-   manage_frontmatter ─────┤        (one at a time)                    │
-   obsidian_cli ───────────┘                │                          │
-                                            ▼                          ▼
-                     accept-forbidden guard ⟶ REJECTS any write     write journal
-                     ("proposed" is fine;      that introduces        (op/actor/rev/
-                      "accepted" is refused)    acceptance             session/intent)
-                                            │                          │
-   obsidian_pending_review ◀────────────────┼──────────────────────────┘
-   (read: what's under review)              │                          │
-                                            ▼                          ▼
-                                    Acceptance review pane ◀── reads journal + baseline
-                                    (the acceptance module,    publishes pending-index.json
-                                     folded #164)
-                                            │
-                                            ▼
-                                    human accepts / reverts  ◀── the SOLE accept authority
-```
+### I already use Obsidian
 
-- **Governed agent writes** flow through the kernel: one serialized queue, one journal
-  record per operation, optimistic concurrency, idempotent retries.
-- **Agents can stamp identity** (a created-seeded UUIDv7 `uid`, `created`/`modified`,
-  canonical frontmatter order) and **attach an advisory `intent`** ("why I'm making this
-  change") that rides the journal record — but stamping itself **never writes acceptance**
-  (it defaults and preserves `acceptance-status`, never mints or elevates it); the guard against
-  acceptance arriving by other routes is the shared write primitive, and its known gaps are
-  tracked (see the top-level [README's Honest limits](../README.md#honest-limits)).
-- **Agents can see what's pending** via `obsidian_pending_review`, so a well-behaved agent
-  avoids stepping on a note a human is about to review.
-- **The human keeps the sole accept veto — by design, and by enforcement on the surfaces the
-  guard covers.** Acceptance is a gesture made in the
-  **[acceptance module](#the-acceptance-module)** — never through a tool, agent,
-  or CLI call the guard sees. The kernel enforces this structurally where it's wired in (see
-  [acceptance-model.md](acceptance-model.md) for the mechanism and its named, tracked
-  residuals).
+Start with:
 
-### The acceptance module
+1. [Capability directory](capabilities.md)
+2. [Settings](settings.md)
+3. [Review and safety](review-and-safety.md)
+4. [Change classes](change-classes.md)
+5. [Module directory](modules.md)
+6. [Privacy](../PRIVACY.md)
 
-**One brand (Nelson's ruling, 0.12.0 — supersedes the 2026-08-19 keep-the-ids ruling):**
-**Governor** is the product, the project, and the framework — the one name for all three
-(*Assent*, the framework's former name, is legacy vocabulary). The plugin **id** is
-`governor`, migrated from `vault-mcp` in 0.12.0 with a self-migrating data folder, a
-grace-period compat surface at the old `~/.claude/vault-mcp/` state dir, and a re-register
-under the `governor` server name (`mcp__governor__*` tool prefixes); *vault-mcp* in prose
-refers to the retired historical id. The capability that guards acceptance is the
-**acceptance module** (module id `acceptance`, migrated from `governance` with a one-time
-settings-key shim). Two things deliberately keep the old word as historical spelling: the
-shipped always-on tool names `governance_revisions` / `governance_submit_revision` (renaming
-shipped tool names breaks agent sessions for zero semantic gain) and the source dirs
-`src/governance/` + `src/kernel/governance/` (moving dirs churns every import for zero
-user-visible gain). *Stewardship* is legacy vocabulary for the pre-fold standalone plugin
-(decommissioned 2026-08-18, #164).
+The capability directory explains outcomes and consequences rather than listing low-level tools.
 
-The fold this section once anticipated has long since landed (#83, 0.8.3) and been built
-out through the acceptance convergence (#230): the acceptance module IS the review surface
-— it reads the write journal and its own baseline store, renders the review pane (pending /
-Proposed / Revising sections, Queue ⇄ History toggle), and is where a human accepts,
-reverts, adopts, or requests changes. The accept veto is protected by *in-realm
-unreachability* (no commands, gesture-gated handlers, module-scope closures) — see
-[acceptance-model.md](acceptance-model.md). The read-only `obsidian_pending_review`,
-`governance_revisions`, and the agent-facing `governance_submit_revision` are the module's
-only transport-visible surfaces; none exposes an accept verb.
+### I am connecting or designing an agent
 
-## README lives in the vault too
+Read:
 
-`README.md` is symlinked into the Obsidian vault (`00.89 obsidian-governor/Build/vault-mcp README.md`),
-where vault machinery (the Linter, fileclass stamps) may add YAML frontmatter to it. A git
-**clean filter** (`scripts/strip-frontmatter.sh`, bound via `.gitattributes`) strips any
-leading frontmatter block when git reads the file, so the committed blob never carries it and
-`git status`/`diff` treat the working file as unmodified however much frontmatter the vault
-side adds. One-time setup per clone:
+1. [Agent guide](agent-guide.md)
+2. [Operation contract](operation-contract.md)
+3. [Observations and replay](observations-and-replay.md)
+4. [Sessions, mandates, and cohorts](sessions-mandates-and-cohorts.md)
+5. [Change classes](change-classes.md)
+6. [Standing and attestations](standing-and-attestations.md)
+7. [Receipts and errors](receipts-and-errors.md)
+8. [Threat model](threat-model.md)
+9. [Status and compatibility](status-and-compatibility.md)
 
-```bash
-git config filter.stripfm.clean "sh scripts/strip-frontmatter.sh"
-```
+These documents are normative for agent behavior. An agent may accept a bounded delegation, but acceptance and admission remain outside every agent surface.
 
-A clone without that config still works — committed content is already clean. Body edits
-made from the vault side DO show as ordinary git diffs (by design: inbound suggestions to
-review, commit, or discard).
+### I am contributing to Governor
 
-## Release history note
+Read:
 
-Tags begin at `0.4.x` and jump to `0.7.0`: **0.5.0 and 0.6.0 were built and deployed
-locally during development but never tagged or released**, so the tag history and
-`versions.json` deliberately omit them (documented here per #102 rather than backfilling
-tags for builds whose exact bytes are unrecoverable).
+1. [Contributing](../CONTRIBUTING.md)
+2. [Architecture](architecture.md)
+3. [Developer guide](developer-guide.md)
+4. [Action registry](action-registry.md)
+5. [Capability projection](capability-manifest.md)
+6. [Observations and replay](observations-and-replay.md)
+7. [Module directory](modules.md)
+8. [Standing and attestations](standing-and-attestations.md)
+9. [Git, Sync, and portability](git-and-sync.md)
+10. [Testing and release](testing-and-release.md)
+11. [Migration and deprecation](migration-and-deprecation.md)
 
-## Status & verification
+### I am reviewing security or privacy
 
-- **Shipped.** The kernel is on **`main`** — PR #65 merged and released as **v0.7.0**
-  (GitHub release, BRAT-installable); current release **0.8.0** adds the command-policy
-  guards, root-exclusion, the kernel-test flake fix (#96), and the Phase-1 conformance
-  engine. `main` is trunk; all work branches off it.
-- **Tests.** The workspace suite is green on `main` at each merge (the merge policy requires
-  an independent review and a green suite — `tsc --noEmit` and the production esbuild run as
-  part of it). *(Reproduce: `npm install && npm test --workspaces` from the repo root; the
-  plugin suite needs `@vault-mcp/core` built first — the monorepo wiring handles this.)*
-- **Deployed.** The kernel through the module-host mount, B1/B2, the CLI accept-guard,
-  `jd:` addressing, and B3 `obsidian_pending_review` are deployed (0.8.0 released and
-  installed); the pending-index publisher lives in the folded governance module since #261
-  (the retired standalone's publisher died with #164). Live-verification passes
-  are recorded per-PR in the project's build records rather than restated here.
-- **Known-open perimeter issues** (tracked publicly, milestone `0.8.1 — perimeter`): the
-  standalone `packages/server` fs-failover surface now **does** enforce the accept-forbidden
-  guard — it is applied in `VaultImpl`, the shared primitive both that surface and the
-  `FilesystemBackend` delegate to — but **#104 remains open**: the guard decides frontmatter
-  values over a hand-rolled YAML subset, so constructs the vault's real YAML honors but the
-  subset does not model are still a gap; `moveNote`'s backlink rewrite is an unguarded
-  content write; and a live-vault read-back confirming the guard recognizes everything
-  Obsidian honors is still owed. Of the tools tracked by **#105**, only `obsidian_run_command`
-  is gated. `obsidian_create_note_from_template` is **not**: #79 gated the `obsidian_cli`
-  twin (`create template=`) in `tools-cli.ts`, while the MCP tool lives in
-  `tools-integrations.ts` and calls Templater directly, reaching neither that guard nor
-  `obsidian-backend`'s. `fileclass_insert_fields` is not gated either. The acceptance model's guarantees below are stated for the **plugin's guarded write
-  surfaces**; these issues are the honest boundary of that claim until closed. **Separately** (#92): that same `packages/server`
-  fs-failover surface has no write journal and no serialized write queue either — those
-  live in the plugin's kernel, which `packages/server` does not and must not depend on. FS-mode
-  writes are refused by default (`Error [fs_writes_disabled]`) and require an explicit,
-  documented opt-in (`VAULT_MCP_FS_ALLOW_WRITES=true`); when enabled, writes made in FS mode
-  are **not** journaled or serialized against concurrent connections until Obsidian
-  reconnects. "Every write is journaled" is true of the **plugin's kernel-guarded path**
-  only, never of this fallback.
+Read:
+
+1. [Security](../SECURITY.md)
+2. [Privacy](../PRIVACY.md)
+3. [Threat model](threat-model.md)
+4. [Data flow](data-flow.md)
+5. [Operation contract](operation-contract.md)
+6. [Observations and replay](observations-and-replay.md)
+7. [Standing and attestations](standing-and-attestations.md)
+8. [Git, Sync, and portability](git-and-sync.md)
+9. [Reviewer notes](../submission/reviewer-notes.md)
+
+### I operate the fuller private system
+
+Read the public documents first, then:
+
+1. [Operator guide](operator-guide.md)
+2. [Advanced capability packs](advanced-capability-packs.md)
+3. [Status and compatibility](status-and-compatibility.md)
+4. [Migration and deprecation](migration-and-deprecation.md)
+
+The operator layer may widen authority. It does not redefine the public safety contract.
+
+### I am preparing or reviewing a Community Plugin submission
+
+Use the [submission packet](../submission/community-plugin-submission.md), then review:
+
+- [Listing copy](../submission/listing-copy.md)
+- [Reviewer notes](../submission/reviewer-notes.md)
+- [Release checklist](../submission/release-checklist.md)
+- [Documentation basis](documentation-basis.md)
+
+## Shipped-implementation deep references
+
+The documents above own the concepts and the target design. The shipped implementation also carries a set of deep references — older, detailed, and accurate about behavior that exists today. Each one banners its role and defers to the owners above on any conflict.
+
+- [Kernel v0](kernel-v0.md) — the transport-hardening kernel: write queue, journal, if_rev/idempotency, locks, uid index and addressing, record immutability
+- [Tool reference](reference.md) and [Tool runner](tool-runner.md) — the full shipped tool surface
+- [Agent writes](agent-writes.md) — how agent writes behave under the shipped guard
+- [Acceptance model](acceptance-model.md) — **the legacy acceptance system**, still the live authority until the cutover runs (see its banner)
+- [Review SOP](review-sop.md) — the shipped review workflow
+- [Module system](module-system.md) — how capability modules register and gate (the mechanism; the [module directory](modules.md) is the inventory)
+- Module deep references: [conformance](conformance.md), [triage](triage.md), [cross-session](crosssession.md), [provenance](provenance.md), [Bases](bases.md), [skills](skills.md), [vocabulary provider](vocabulary-module.md), [scope provider](scope-provider.md), [identity and links](identity-and-links.md)
+- [WP8 cutover runbook](../packages/plugin/docs/wp8-cutover-runbook.md) — the operator's one-page procedure for the authority cutover
+
+## Documentation layers
+
+| Layer | Audience | Status |
+|---|---|---|
+| Public product | Ordinary Governor users | The normal Community Plugin promise |
+| Optional public | Users who deliberately enable additional governed modules | Still inside the documented public boundary |
+| Private operator | A supported private deployment with broader capability packs | Not a default Community Plugin promise |
+| Developer and agent | Implementers and integrators | Normative technical contracts |
+| Submission | Maintainers and Obsidian reviewers | Publication evidence and official requirement mapping |
+
+## Which document owns what
+
+| Subject | Authority |
+|---|---|
+| Product promise and quick orientation | [Root README](../README.md) |
+| Public terms and state axes | [Vocabulary](vocabulary.md) |
+| Action identity, execution, effects, and eligible surfaces | [Action registry](action-registry.md) and [Operation contract](operation-contract.md) |
+| Capabilities and public eligibility | [Capability directory](capabilities.md) and generated [Capability projection](capability-manifest.md) |
+| Setting defaults and consequences | [Settings](settings.md) |
+| Acceptance and review behavior | [Review and safety](review-and-safety.md) |
+| Change classification | [Change classes](change-classes.md) |
+| Session, delegation, mandates, and cohorts | [Sessions, mandates, and cohorts](sessions-mandates-and-cohorts.md) |
+| Standing, identity claims, and signed evidence | [Standing and attestations](standing-and-attestations.md) |
+| Git history, Obsidian Sync, and portability | [Git, Sync, and portability](git-and-sync.md) |
+| Module inventory and module contracts | [Module directory](modules.md) |
+| Security assumptions and residual risk | [Threat model](threat-model.md) |
+| Data categories and retention | [Privacy](../PRIVACY.md) and [Data flow](data-flow.md) |
+| Agent behavior | [Agent guide](agent-guide.md) |
+| Operation lifecycle, concurrency, and retry behavior | [Operation contract](operation-contract.md) |
+| Observation capture, replay, and read evidence | [Observations and replay](observations-and-replay.md) |
+| Receipts and errors | [Receipts and errors](receipts-and-errors.md) |
+| Runtime structure | [Architecture](architecture.md) |
+| Shipped, optional, private, deprecated, or excluded status | [Status and compatibility](status-and-compatibility.md) |
+| Cutover and predecessor retirement | [Migration and deprecation](migration-and-deprecation.md) |
+| Evidence and external standards | [Documentation basis](documentation-basis.md) |
+
+## Reading principle
+
+The README summarizes; it does not silently create a second contract. When two documents appear to disagree, follow the owner in the table above and record the contradiction in [Status and compatibility](status-and-compatibility.md) rather than choosing the most convenient wording.

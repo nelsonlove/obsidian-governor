@@ -1,5 +1,8 @@
 # The agent write & review surface (B1 / B2 / B3)
 
+> **Deep reference for the shipped implementation.** Canonical concepts and the target design live in the [documentation corpus](README.md); what is shipped versus target is owned by [status-and-compatibility.md](status-and-compatibility.md).
+
+
 Three slices that make an agent's writes **legible to a human reviewer** without giving the
 agent any accept authority: a batch writer that can stamp identity conventions (B1), an
 advisory "why" that rides the journal (B2), and a read-only view of what's under review (B3).

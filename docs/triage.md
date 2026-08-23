@@ -1,5 +1,8 @@
 # Inbox triage — the disposition substrate's second instance (#221, phase 3 shape per #241)
 
+> **Deep reference for the shipped implementation.** Canonical concepts and the target design live in the [documentation corpus](README.md); what is shipped versus target is owned by [status-and-compatibility.md](status-and-compatibility.md).
+
+
 The successor to the vault's retired `dispose-inbox-item` QuickAdd flow,
 shipped as a default-disabled capability module (`triage`) with exactly two
 tools — a read-only queue view and one guarded mutating disposition verb.

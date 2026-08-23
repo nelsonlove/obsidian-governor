@@ -1,6 +1,9 @@
 # Cross-session channels — coordination log surface (#232)
 
-The crosssession module is a [capability module](modules.md) (id `crosssession`, capabilities
+> **Deep reference for the shipped implementation.** Canonical concepts and the target design live in the [documentation corpus](README.md); what is shipped versus target is owned by [status-and-compatibility.md](status-and-compatibility.md).
+
+
+The crosssession module is a [capability module](module-system.md) (id `crosssession`, capabilities
 `["coordination"]`, **default disabled**, `mutating: true`) that gives the fleet's
 cross-session coordination-log conventions a real agent surface: **channel discovery, delta
 reads, read-receipt attestation, and posting that is refused while the poster is stale**.
