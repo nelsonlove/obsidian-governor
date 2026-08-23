@@ -293,9 +293,11 @@ export function registerProvenanceTools(
     },
     async () => {
       try {
-        const r = await reconcile(source as ProvenanceSource, cfg.notesDir);
+        const r = await reconcile(source as ProvenanceSource, cfg.notesDir, cfg.notesSource);
         return ok({
           notesDir: cfg.notesDir,
+          notesSource: cfg.notesSource,
+          unmatchedSlots: r.unmatchedSlots,
           counts: {
             installed: Object.keys(r.installed).length,
             enabled: r.enabled.length,
@@ -332,8 +334,17 @@ export function registerProvenanceTools(
     },
     async ({ write }) => {
       try {
-        const path = auditPath(cfg.notesDir);
-        const text = await regenerateAudit(source as ProvenanceSource, nowStamp(), cfg.notesDir);
+        // The destination is CONFIGURATION in jd-slots mode, never derived from
+        // the folder — deriving it would resolve onto that folder's own JD
+        // folder note and rewrite it (#257).
+        const path = cfg.notesSource === "jd-slots" ? cfg.auditNote : auditPath(cfg.notesDir);
+        const text = await regenerateAudit(
+          source as ProvenanceSource,
+          nowStamp(),
+          cfg.notesDir,
+          cfg.notesSource,
+          cfg.auditNote,
+        );
         if (!write) return ok({ dryRun: true, path, text });
         // Accept-forbidden guard: refuses a regen whose rendered frontmatter
         // would introduce/change an acceptance assertion — nothing is written.

@@ -58,7 +58,7 @@ import { registerVocabTools, type VocabSource, type VocabToolsCtx } from "./tool
 import { registerSkillsTools, type SkillsBackend, type SkillsToolsCtx } from "./tools-skills.js";
 import { DEFAULT_SKILLS_CONFIG, validateSkillsConfig } from "../kernel/skills/index.js";
 import { registerProvenanceTools, type ProvenanceToolsCtx } from "./tools-provenance.js";
-import { DEFAULT_PROVENANCE_CONFIG, validateProvenanceConfig, DEFAULT_NOTES_DIR, type ProvenanceBackend } from "../kernel/provenance/index.js";
+import { DEFAULT_PROVENANCE_CONFIG, validateProvenanceConfig, DEFAULT_NOTES_DIR, DEFAULT_AUDIT_NOTE, type ProvenanceBackend } from "../kernel/provenance/index.js";
 import { registerHealthTools, type HealthToolsCtx } from "./tools-health.js";
 import { DEFAULT_HEALTH_CONFIG, validateHealthConfig, DEFAULT_EMPTY_CHARS, type HealthSource } from "../kernel/health/index.js";
 import { registerFileclassTools, type FileclassToolsCtx } from "./tools-fileclass.js";
@@ -489,11 +489,31 @@ const SKILLS_MANIFEST: ModuleManifest = {
 const PROVENANCE_CONFIG_FIELDS: ConfigField[] = [
   {
     key: "notesDir",
-    label: "Plugin-notes directory",
+    label: "Plugin-notes root",
     type: "text",
     help:
       "Vault-relative folder holding the per-plugin notes the audit reconciles against installed/enabled plugins. " +
-      `The audit note itself is written here. Blank ⇒ the default (${DEFAULT_NOTES_DIR}).`,
+      `Blank ⇒ the default (${DEFAULT_NOTES_DIR}).`,
+  },
+  {
+    key: "notesSource",
+    label: "Notes layout",
+    type: "text",
+    help:
+      '"jd-slots" (default) — one JD slot per repo under the root, the folder note carrying `github-repo:`. ' +
+      '"flat" — one note per plugin directly in the root, each carrying `plugin.id`. ' +
+      "An explicit `plugin.id` is authoritative in both layouts; slot matching is deliberately strict and " +
+      "reports what it cannot place rather than guessing.",
+  },
+  {
+    key: "auditNote",
+    label: "Audit note path",
+    type: "text",
+    help:
+      "Vault-relative path of the audit note itself — a NOTE path including the .md filename, not a folder. " +
+      `Blank ⇒ the default (${DEFAULT_AUDIT_NOTE}). It is a path rather than a folder because naming a note ` +
+      "after its folder is the JD folder-note convention: derived from a slot root it would resolve onto that " +
+      "folder's own note and rewrite it.",
   },
 ];
 

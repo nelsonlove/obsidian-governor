@@ -7,8 +7,10 @@ import {
   AUDIT_GENERATOR,
   AUDIT_DERIVATION_MODE,
   DEFAULT_NOTES_DIR,
+  DEFAULT_NOTES_SOURCE,
   SOURCE_COUNT_FIELD,
   auditDerivedFrom,
+  type NotesSource,
 } from "./provenance-config.js";
 
 // The Python pattern, verbatim in JS: `re.DOTALL` → `[\s\S]`, `(?P<name>…)` →
@@ -49,11 +51,12 @@ export function renderAudit(
   generated: string,
   notesDir: string = DEFAULT_NOTES_DIR,
   sourceCount?: number,
+  notesSource: NotesSource = DEFAULT_NOTES_SOURCE,
 ): string {
   const lines: string[] = [
     "---",
     "derived-from:",
-    ...auditDerivedFrom(notesDir).map((e) => `  - "${e}"`),
+    ...auditDerivedFrom(notesDir, notesSource).map((e) => `  - "${e}"`),
     ...(Number.isInteger(sourceCount) && (sourceCount as number) >= 0
       ? [`${SOURCE_COUNT_FIELD}: ${sourceCount}`]
       : []),
@@ -62,12 +65,18 @@ export function renderAudit(
     `derivation-mode: ${AUDIT_DERIVATION_MODE}`,
     "---",
     "",
-    "# 08.10 Obsidian plugins — audit",
+    // The title was hardcoded to the old default folder ("08.10 Obsidian
+    // plugins"), so every audit announced a folder it had not necessarily
+    // scanned. It names what it IS now, and the scanned root is stated as data
+    // below rather than smuggled into the heading.
+    "# Plugin audit",
     "",
+    `- Notes root: \`${notesDir}\` (${notesSource})`,
     `- Installed: ${Object.keys(recon.installed).length}`,
     `- Enabled: ${recon.enabled.length}`,
     `- Noted: ${Object.keys(recon.noted).length}`,
     `- Installed but unnoted: ${recon.unnoted.length}`,
+    ...(notesSource === "jd-slots" ? [`- Repo slots matching no installed plugin: ${recon.unmatchedSlots.length}`] : []),
     "",
     "## Installed but unnoted",
     "",
@@ -79,6 +88,16 @@ export function renderAudit(
       ? recon.staleVersion.map(([id, nv, mv]) => `- \`${id}\`: note ${nv} → manifest ${mv}`)
       : ["- (none)"]),
   );
+  if (notesSource === "jd-slots") {
+    // Reported, not dropped. A slot whose `github-repo:` matches nothing
+    // installed is either a repo that is not a plugin (fine, and visible) or a
+    // naming mismatch the conservative matcher will not guess at — both are
+    // things a human should see rather than have silently omitted.
+    lines.push("", "## Repo slots matching no installed plugin", "");
+    lines.push(
+      ...(recon.unmatchedSlots.length ? recon.unmatchedSlots.map((p) => `- \`${p}\``) : ["- (none)"]),
+    );
+  }
   lines.push("", "## Notes", "", "<!-- human:start notes -->", "", "<!-- human:end -->", "");
   return lines.join("\n");
 }

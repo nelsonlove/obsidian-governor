@@ -31,12 +31,25 @@ import {
   extractSections,
   reinsertSections,
   auditDerivedFrom,
+  notesGlob,
+  DEFAULT_NOTES_DIR,
+  DEFAULT_NOTES_SOURCE,
+  DEFAULT_AUDIT_NOTE,
+  provenanceConfigOf,
+  validateProvenanceConfig,
 } from "../src/kernel/provenance/index.ts";
 import {
   registerProvenanceTools,
   guardProvenanceWrite,
 } from "../src/mcp/tools-provenance.ts";
 import { mountModules, builtinModules } from "../src/mcp/modules-mount.ts";
+
+// The pre-#257 shipped default. `jd-slots` is now the default layout, so every
+// pre-existing case below states `"flat"` EXPLICITLY: this is the same flat
+// coverage as before, re-anchored to the mode it was always testing, not
+// coverage traded away for the new one.
+const FLAT_DIR = "08.10 Obsidian plugins";
+const FLAT = "flat";
 import { collect, forbiddenToolName } from "../src/kernel/modules/index.ts";
 import { AcceptForbiddenError } from "@vault-mcp/core";
 
@@ -356,7 +369,7 @@ describe("reconcile: installed / enabled / noted / unnoted / stale version", () 
   }
 
   test("finds unnoted and stale (aaa noted at 0.9.0, installed 1.0.0; bbb unnoted)", async () => {
-    const r = await reconcile(vault());
+    const r = await reconcile(vault(), FLAT_DIR, FLAT);
     assert.deepEqual(Object.keys(r.installed).sort(), ["aaa", "bbb"]);
     assert.deepEqual(r.enabled, ["aaa"]);
     assert.deepEqual(Object.keys(r.noted), ["aaa"]);
@@ -372,7 +385,7 @@ describe("reconcile: installed / enabled / noted / unnoted / stale version", () 
         ".obsidian/plugins/bad/manifest.json": "{ not json",
       },
     });
-    const r = await reconcile(src);
+    const r = await reconcile(src, FLAT_DIR, FLAT);
     assert.deepEqual(r.enabled, []);
     assert.deepEqual(Object.keys(r.installed), ["x"]);
   });
@@ -392,7 +405,7 @@ describe("render: extract + reinsert human sections roundtrip", () => {
 
 describe("regenerateAudit: reports unnoted and preserves the human section", () => {
   test("aaa surfaces as unnoted, KEEP THIS is preserved, derivation-mode stamped", async () => {
-    const ap = auditPath();
+    const ap = auditPath(FLAT_DIR);
     const src = fakeBackend({
       globs: {
         ".obsidian/plugins/*/manifest.json": [".obsidian/plugins/aaa/manifest.json"],
@@ -406,7 +419,7 @@ describe("regenerateAudit: reports unnoted and preserves the human section", () 
           "<!-- human:start notes -->\nKEEP THIS\n<!-- human:end -->\n",
       },
     });
-    const out = await regenerateAudit(src, "2036-01-01T00:00:00");
+    const out = await regenerateAudit(src, "2036-01-01T00:00:00", FLAT_DIR, FLAT, auditPath(FLAT_DIR));
     assert.match(out, /aaa/); // unnoted plugin surfaced
     assert.match(out, /KEEP THIS/); // human section preserved
     assert.match(out, /derivation-mode: snapshot/);
@@ -419,7 +432,7 @@ describe("regenerateAudit: reports unnoted and preserves the human section", () 
     const src = fakeBackend({
       globs: {
         ".obsidian/plugins/*/manifest.json": [".obsidian/plugins/aaa/manifest.json"],
-        "08.10 Obsidian plugins/*.md": ["08.10 Obsidian plugins/A.md", auditPath()],
+        "08.10 Obsidian plugins/*.md": ["08.10 Obsidian plugins/A.md", auditPath(FLAT_DIR)],
       },
       // `.obsidian/community-plugins.json` is a plain path — resolved via stat.
       stats: { ".obsidian/community-plugins.json": { type: "file", mtime: 1 } },
@@ -428,15 +441,15 @@ describe("regenerateAudit: reports unnoted and preserves the human section", () 
         ".obsidian/community-plugins.json": JSON.stringify(["aaa"]),
       },
     });
-    const out = await regenerateAudit(src, "2036-01-01T00:00:00");
+    const out = await regenerateAudit(src, "2036-01-01T00:00:00", FLAT_DIR, FLAT, auditPath(FLAT_DIR));
     assert.match(out, /^derived-source-count: 4$/m);
     // The stamped list and the counted list are the SAME definition.
-    assert.deepEqual(auditDerivedFrom(), [
+    assert.deepEqual(auditDerivedFrom(FLAT_DIR, FLAT), [
       "08.10 Obsidian plugins/*.md",
       ".obsidian/plugins/*/manifest.json",
       ".obsidian/community-plugins.json",
     ]);
-    for (const entry of auditDerivedFrom()) assert.ok(out.includes(`  - "${entry}"`), `missing entry ${entry}`);
+    for (const entry of auditDerivedFrom(FLAT_DIR, FLAT)) assert.ok(out.includes(`  - "${entry}"`), `missing entry ${entry}`);
   });
 
   test("a FIRST regen (the audit note does not exist yet) counts itself in — it is inside its own glob", async () => {
@@ -450,7 +463,7 @@ describe("regenerateAudit: reports unnoted and preserves the human section", () 
     });
     // Resolves to 2 files now; 3 the instant the write lands. Witness the LATER
     // number, or the first deletion after a first-ever regen would be masked.
-    assert.match(await regenerateAudit(src, "2036-01-01T00:00:00"), /^derived-source-count: 3$/m);
+    assert.match(await regenerateAudit(src, "2036-01-01T00:00:00", FLAT_DIR, FLAT, auditPath(FLAT_DIR)), /^derived-source-count: 3$/m);
   });
 
   test("a regenerated audit SELF-CHECKS: it reads FRESH, and STALE once a source is deleted", async () => {
@@ -459,7 +472,7 @@ describe("regenerateAudit: reports unnoted and preserves the human section", () 
       ".obsidian/community-plugins.json": JSON.stringify(["aaa"]),
     };
     const OLD = Date.parse("2001-01-01T00:00:00Z");
-    const notePaths = ["08.10 Obsidian plugins/A.md", auditPath()];
+    const notePaths = ["08.10 Obsidian plugins/A.md", auditPath(FLAT_DIR)];
     const globs = {
       ".obsidian/plugins/*/manifest.json": [".obsidian/plugins/aaa/manifest.json"],
       "08.10 Obsidian plugins/*.md": [...notePaths],
@@ -470,23 +483,23 @@ describe("regenerateAudit: reports unnoted and preserves the human section", () 
       ...Object.fromEntries(notePaths.map((n) => [n, { type: "file", mtime: OLD }])),
     };
     const src = fakeBackend({ files, globs, stats });
-    const text = await regenerateAudit(src, "2035-01-01T00:00:00");
+    const text = await regenerateAudit(src, "2035-01-01T00:00:00", FLAT_DIR, FLAT, auditPath(FLAT_DIR));
     assert.match(text, /^derived-source-count: 4$/m);
 
     // Re-check the audit as a derived note: parse the witness back out of the
     // rendered text (the frontmatter Obsidian would hand back).
     const witness = Number(/^derived-source-count: (\d+)$/m.exec(text)[1]);
     const auditFm = {
-      "derived-from": auditDerivedFrom(),
+      "derived-from": auditDerivedFrom(FLAT_DIR, FLAT),
       generated: "2035-01-01T00:00:00",
       "derived-source-count": witness,
     };
-    const checkSrc = fakeBackend({ files, globs, stats, notes: { [auditPath()]: auditFm } });
-    assert.equal((await checkFreshness(checkSrc, auditPath())).fresh, true);
+    const checkSrc = fakeBackend({ files, globs, stats, notes: { [auditPath(FLAT_DIR)]: auditFm } });
+    assert.equal((await checkFreshness(checkSrc, auditPath(FLAT_DIR))).fresh, true);
 
     // Now DELETE one plugin note — no mtime anywhere moves.
-    globs["08.10 Obsidian plugins/*.md"] = [auditPath()];
-    const after = await checkFreshness(checkSrc, auditPath());
+    globs["08.10 Obsidian plugins/*.md"] = [auditPath(FLAT_DIR)];
+    const after = await checkFreshness(checkSrc, auditPath(FLAT_DIR));
     assert.equal(after.fresh, false, "a deleted source must make the audit STALE");
     assert.deepEqual(after.sourcesRemoved, { expected: 4, actual: 3 });
     assert.deepEqual(after.changed, [], "nothing was modified — this is the blind spot the witness closes");
@@ -502,17 +515,17 @@ describe("regenerateAudit: reports unnoted and preserves the human section", () 
         stats: { ".obsidian/community-plugins.json": { type: "file", mtime: 1 } },
         files: { ".obsidian/community-plugins.json": JSON.stringify([]) },
       });
-      const out = await regenerateAudit(src, "2036-01-01T00:00:00", notesDir);
+      const out = await regenerateAudit(src, "2036-01-01T00:00:00", notesDir, FLAT, auditPath(notesDir));
       // 2 notes (one is the audit itself) + community-plugins.json = 3; the audit
       // already resolves, so nothing is added for it.
       assert.match(out, /^derived-source-count: 3$/m, `notesDir ${JSON.stringify(notesDir)}`);
       assert.equal(auditPath(notesDir), "Meta/Plugins/Plugins.md");
-      assert.deepEqual(auditDerivedFrom(notesDir)[0], "Meta/Plugins/*.md");
+      assert.deepEqual(auditDerivedFrom(notesDir, FLAT)[0], "Meta/Plugins/*.md");
     }
   });
 
   test("auditPath derives the note name from the notes-dir basename", () => {
-    assert.equal(auditPath(), "08.10 Obsidian plugins/08.10 Obsidian plugins.md");
+    assert.equal(auditPath(FLAT_DIR), "08.10 Obsidian plugins/08.10 Obsidian plugins.md");
     assert.equal(auditPath("Meta/Plugins"), "Meta/Plugins/Plugins.md");
   });
 
@@ -523,7 +536,7 @@ describe("regenerateAudit: reports unnoted and preserves the human section", () 
       globs: { ".obsidian/plugins/*/manifest.json": [], "Meta/Plugins/*.md": [] },
       files: { ".obsidian/community-plugins.json": JSON.stringify([]) },
     });
-    const res = await tools(backend, { notesDir: "Meta/Plugins/" }).tools.get("provenance_regen").handler({ write: true });
+    const res = await tools(backend, { notesDir: "Meta/Plugins/", notesSource: FLAT, auditNote: "Meta/Plugins/Plugins.md" }).tools.get("provenance_regen").handler({ write: true });
     assert.equal(res.isError, undefined);
     assert.equal(res.structuredContent.written, "Meta/Plugins/Plugins.md");
     assert.equal(backend._written[0].path, "Meta/Plugins/Plugins.md");
@@ -627,7 +640,7 @@ describe("provenance tools: handlers answer over the injected backend", () => {
       },
       notes: { "08.10 Obsidian plugins/AAA.md": { plugin: { id: "aaa", version: "0.9.0" } } },
     });
-    const res = await tools(backend).tools.get("provenance_reconcile").handler({});
+    const res = await tools(backend, { notesDir: FLAT_DIR, notesSource: FLAT }).tools.get("provenance_reconcile").handler({});
     assert.equal(res.isError, undefined);
     assert.equal(res.structuredContent.counts.installed, 2);
     assert.deepEqual(res.structuredContent.unnoted, ["bbb"]);
@@ -642,7 +655,7 @@ describe("provenance tools: handlers answer over the injected backend", () => {
         ".obsidian/community-plugins.json": JSON.stringify(["aaa"]),
       },
     });
-    const res = await tools(backend).tools.get("provenance_regen").handler({});
+    const res = await tools(backend, { notesDir: FLAT_DIR, notesSource: FLAT, auditNote: auditPath(FLAT_DIR) }).tools.get("provenance_regen").handler({});
     assert.equal(res.structuredContent.dryRun, true);
     assert.match(res.structuredContent.text, /aaa/);
     assert.equal(backend._written.length, 0, "dry-run must not write");
@@ -656,11 +669,11 @@ describe("provenance tools: handlers answer over the injected backend", () => {
         ".obsidian/community-plugins.json": JSON.stringify(["aaa"]),
       },
     });
-    const res = await tools(backend).tools.get("provenance_regen").handler({ write: true });
+    const res = await tools(backend, { notesDir: FLAT_DIR, notesSource: FLAT, auditNote: auditPath(FLAT_DIR) }).tools.get("provenance_regen").handler({ write: true });
     assert.equal(res.isError, undefined);
-    assert.equal(res.structuredContent.written, auditPath());
+    assert.equal(res.structuredContent.written, auditPath(FLAT_DIR));
     assert.equal(backend._written.length, 1);
-    assert.equal(backend._written[0].path, auditPath());
+    assert.equal(backend._written[0].path, auditPath(FLAT_DIR));
     assert.match(backend._written[0].text, /derivation-mode: snapshot/);
   });
 });
@@ -728,16 +741,171 @@ describe("provenance module: registration through the module host", () => {
     assert.ok(!provNames.some((n) => forbiddenToolName(n)));
   });
 
-  test("collect() renders a provenance config tab: summary, one config field, three-tool directory", () => {
+  test("collect() renders a provenance config tab: summary, three config fields, three-tool directory", () => {
     const hosted = collect(builtinModules(deps({})), {}, {});
     const prov = hosted.find((h) => h.id === "provenance");
     assert.ok(prov, "provenance module not rendered");
     assert.ok(prov.summary.length > 0);
-    assert.equal(prov.fields.length, 1);
-    assert.equal(prov.fields.find((f) => f.key === "notesDir").value, "08.10 Obsidian plugins");
+    assert.equal(prov.fields.length, 3);
+    assert.equal(prov.fields.find((f) => f.key === "notesDir").value, "00-09 System/07 Repositories");
+    assert.equal(prov.fields.find((f) => f.key === "notesSource").value, "jd-slots");
+    assert.equal(
+      prov.fields.find((f) => f.key === "auditNote").value,
+      "00-09 System/07 Repositories/Plugin audit.md",
+    );
     assert.deepEqual(prov.directory.tools.map((t) => t.name).sort(), [...PROVENANCE_TOOLS].sort());
     for (const t of prov.directory.tools) {
       assert.equal(t.readOnly, READ_TOOLS.includes(t.name), `${t.name} readOnly flag`);
     }
+  });
+});
+
+// ── 1f. #257 — the jd-slots notes layout ────────────────────────────────────
+//
+// The pre-#257 audit was enabled but INERT: `notesDir` defaulted to a flat
+// folder that no longer exists, so reconcile matched nothing and reported a
+// clean vault. This block pins the layout that replaces it, and the two facts
+// that scouting the ruled default against the real vault turned up:
+//
+//   * `07 Repositories` is inside `00-09 System`, not at the vault root — a
+//     bare default would have been dead on arrival, the same shape as the bug.
+//   * the audit's destination cannot be DERIVED from a JD folder, because
+//     "note named after its folder" is the folder-note convention and the
+//     derived path lands on the folder note itself.
+
+describe("#257 jd-slots: the audit reads JD repo slots", () => {
+  const ROOT = "00-09 System/07 Repositories";
+  const slot = (name) => `${ROOT}/${name}/${name}.md`;
+
+  // Two installed plugins whose ids relate to their repo names differently:
+  // `automatic-linker` is installed under the un-prefixed id while its repo is
+  // `obsidian-automatic-linker`; `governor` matches its repo exactly.
+  function slotsVault({ extraNotes = {}, extraSlots = [] } = {}) {
+    const notes = {
+      [slot("07.20 obsidian-automatic-linker")]: { "github-repo": "nelsonlove/obsidian-automatic-linker" },
+      [slot("07.21 obsidian-governor")]: { "github-repo": "nelsonlove/governor" },
+      [slot("07.00 Inbox for 07 Repositories")]: { description: "not a repo slot" },
+      ...extraNotes,
+    };
+    return fakeBackend({
+      notes,
+      globs: {
+        ".obsidian/plugins/*/manifest.json": [
+          ".obsidian/plugins/automatic-linker/manifest.json",
+          ".obsidian/plugins/governor/manifest.json",
+        ],
+        [`${ROOT}/*/*.md`]: [...Object.keys(notes), ...extraSlots],
+      },
+      files: {
+        ".obsidian/plugins/automatic-linker/manifest.json": JSON.stringify({ id: "automatic-linker", version: "1.0.0" }),
+        ".obsidian/plugins/governor/manifest.json": JSON.stringify({ id: "governor", version: "0.18.0" }),
+        ".obsidian/community-plugins.json": JSON.stringify(["governor"]),
+      },
+    });
+  }
+
+  test("folder notes match installed plugins through `github-repo:`, prefix difference included", async () => {
+    const r = await reconcile(slotsVault(), ROOT, "jd-slots");
+    assert.deepEqual(Object.keys(r.noted).sort(), ["automatic-linker", "governor"]);
+    assert.equal(r.noted["automatic-linker"], slot("07.20 obsidian-automatic-linker"));
+    assert.deepEqual(r.unnoted, [], "both installed plugins are noted");
+  });
+
+  test("a slot with no `github-repo:` is not a finding — an inbox is not an unmatched repo", async () => {
+    const r = await reconcile(slotsVault(), ROOT, "jd-slots");
+    assert.deepEqual(r.unmatchedSlots, [], "the inbox slot is skipped, not reported");
+  });
+
+  test("a repo slot matching no installed plugin is REPORTED, never dropped", async () => {
+    const orphan = slot("07.30 obsidian-something-uninstalled");
+    const v = slotsVault({ extraNotes: { [orphan]: { "github-repo": "nelsonlove/obsidian-something-uninstalled" } } });
+    const r = await reconcile(v, ROOT, "jd-slots");
+    assert.deepEqual(r.unmatchedSlots, [orphan]);
+    // VACUITY: the check can distinguish. Without the orphan it is empty, so a
+    // green "no unmatched slots" is a fact about the vault, not about the code.
+    assert.deepEqual((await reconcile(slotsVault(), ROOT, "jd-slots")).unmatchedSlots, []);
+  });
+
+  test("matching is conservative: a NEAR-MISS repo name does not attach to a plugin", async () => {
+    const near = slot("07.31 automatic-linker-extras");
+    const v = slotsVault({ extraNotes: { [near]: { "github-repo": "nelsonlove/automatic-linker-extras" } } });
+    const r = await reconcile(v, ROOT, "jd-slots");
+    assert.equal(r.noted["automatic-linker"], slot("07.20 obsidian-automatic-linker"), "the real slot still owns the id");
+    assert.ok(r.unmatchedSlots.includes(near), "the near-miss is reported, not silently bound to a neighbour");
+  });
+
+  test("an explicit `plugin.id` wins over the repo name", async () => {
+    const odd = slot("07.32 totally-unrelated-repo-name");
+    const v = slotsVault({
+      extraNotes: { [odd]: { "github-repo": "someone/totally-unrelated-repo-name", plugin: { id: "governor" } } },
+    });
+    const r = await reconcile(v, ROOT, "jd-slots");
+    assert.equal(r.noted["governor"], odd, "the note saying what it is beats inference from a repo name");
+  });
+
+  test("only the FOLDER note represents the slot — other notes inside it are ignored", async () => {
+    const inner = `${ROOT}/07.20 obsidian-automatic-linker/project-inventory.md`;
+    const v = slotsVault({
+      extraSlots: [inner],
+      extraNotes: { [inner]: { "github-repo": "someone/governor" } },
+    });
+    const r = await reconcile(v, ROOT, "jd-slots");
+    assert.equal(r.noted["governor"], slot("07.21 obsidian-governor"), "the real folder note keeps the id");
+    assert.deepEqual(r.unmatchedSlots, [], "a non-folder note is not reported as an unmatched slot either");
+  });
+
+  test("the layout drives ONE glob, and the declared derived-from uses the same one", () => {
+    assert.equal(notesGlob(ROOT, "jd-slots"), `${ROOT}/*/*.md`);
+    assert.equal(notesGlob(ROOT, "flat"), `${ROOT}/*.md`);
+    assert.equal(auditDerivedFrom(ROOT, "jd-slots")[0], notesGlob(ROOT, "jd-slots"));
+    assert.equal(auditDerivedFrom(ROOT, "flat")[0], notesGlob(ROOT, "flat"));
+  });
+});
+
+describe("#257 the shipped defaults, and why the audit path is not derived", () => {
+  test("the notes root is inside 00-09 System — a vault-root path would be dead on arrival", () => {
+    assert.equal(DEFAULT_NOTES_DIR, "00-09 System/07 Repositories");
+    assert.ok(DEFAULT_NOTES_DIR.startsWith("00-09 System/"), "07 Repositories is an area INSIDE 00-09 System");
+    assert.equal(DEFAULT_NOTES_SOURCE, "jd-slots");
+  });
+
+  test("REGRESSION: the derived audit path lands on the JD folder note — so the default must not be derived", () => {
+    // This is the defect, demonstrated rather than described: deriving the note
+    // name from the folder is right for a flat folder and destructive for a JD
+    // one, because the folder note already has that exact name.
+    assert.equal(auditPath(DEFAULT_NOTES_DIR), `${DEFAULT_NOTES_DIR}/07 Repositories.md`);
+    assert.notEqual(
+      DEFAULT_AUDIT_NOTE,
+      auditPath(DEFAULT_NOTES_DIR),
+      "the shipped audit note must NOT be the folder note the derivation produces",
+    );
+    assert.equal(DEFAULT_AUDIT_NOTE, "00-09 System/07 Repositories/Plugin audit.md");
+  });
+
+  test("config coercion: an unknown layout degrades to the default and validate() says so", () => {
+    assert.equal(provenanceConfigOf({ notesSource: "jd_slots" }).notesSource, "jd-slots");
+    assert.ok(
+      validateProvenanceConfig({ notesSource: "jd_slots" }).some((m) => m.includes("notesSource")),
+      "a typo'd layout is reported, not silently scanning nothing",
+    );
+    assert.deepEqual(validateProvenanceConfig({ notesSource: "flat" }), []);
+  });
+
+  test("config coercion: a folder-shaped auditNote degrades, and a bare name gains .md", () => {
+    assert.equal(provenanceConfigOf({ auditNote: "Some/Folder/" }).auditNote, DEFAULT_AUDIT_NOTE);
+    assert.equal(provenanceConfigOf({ auditNote: "Some/Audit" }).auditNote, "Some/Audit.md");
+    assert.ok(validateProvenanceConfig({ auditNote: "Some/Folder/" }).some((m) => m.includes("NOTE path")));
+  });
+
+  test("regen writes to the CONFIGURED note, not the derived one", async () => {
+    const backend = fakeBackend({
+      globs: { ".obsidian/plugins/*/manifest.json": [], [`${DEFAULT_NOTES_DIR}/*/*.md`]: [] },
+      files: { ".obsidian/community-plugins.json": JSON.stringify([]) },
+    });
+    const res = await tools(backend, {}).tools.get("provenance_regen").handler({ write: true });
+    assert.equal(res.isError, undefined);
+    assert.equal(res.structuredContent.written, DEFAULT_AUDIT_NOTE);
+    assert.equal(backend._written[0].path, DEFAULT_AUDIT_NOTE);
+    assert.notEqual(backend._written[0].path, auditPath(DEFAULT_NOTES_DIR), "never the folder note");
   });
 });

@@ -5,16 +5,24 @@ import type { ProvenanceSource } from "./provenance-source.js";
 import { reconcile } from "./plugins.js";
 import { renderAudit, extractSections, reinsertSections } from "./render.js";
 import { resolveEntries } from "./sources.js";
-import { DEFAULT_NOTES_DIR, auditDerivedFrom } from "./provenance-config.js";
+import {
+  DEFAULT_NOTES_DIR,
+  DEFAULT_NOTES_SOURCE,
+  DEFAULT_AUDIT_NOTE,
+  auditDerivedFrom,
+  type NotesSource,
+} from "./provenance-config.js";
 
 /**
- * The vault-relative path of the audit note for a given notes dir.
+ * The vault-relative path of the audit note for a FLAT notes dir, derived from
+ * the folder's own basename.
  *
- * Python hardcoded `"08.10 Obsidian plugins.md"` regardless of `notes_dir`;
- * the port DERIVES the filename from the notes dir's own basename, which equals
- * the Python result for the default (`08.10 Obsidian plugins`) and generalizes
- * correctly to a non-default notes dir (the audit note is named after its
- * folder rather than mis-named after the default).
+ * RETAINED FOR `flat` MODE ONLY. Deriving a note's name from its folder is
+ * exactly the JD folder-note convention, so pointing this at a JD slot root
+ * resolves to that folder's own folder note and a regen would rewrite it in
+ * place. In `jd-slots` mode the destination is configuration
+ * ({@link ProvenanceConfig.auditNote}), never derived — see
+ * {@link DEFAULT_AUDIT_NOTE}.
  */
 export function auditPath(notesDir: string = DEFAULT_NOTES_DIR): string {
   // Trailing slashes are stripped from the DIRECTORY too, not just when deriving
@@ -43,24 +51,31 @@ export async function regenerateAudit(
   source: ProvenanceSource,
   generated: string,
   notesDir: string = DEFAULT_NOTES_DIR,
+  notesSource: NotesSource = DEFAULT_NOTES_SOURCE,
+  auditNote: string = DEFAULT_AUDIT_NOTE,
 ): Promise<string> {
-  const recon = await reconcile(source, notesDir);
+  const recon = await reconcile(source, notesDir, notesSource);
   // This deliberately re-walks two globs `reconcile` just walked. The point is
   // that the witness is resolved by the SAME function `checkFreshness` will use,
   // over the SAME entry list the frontmatter declares — reusing reconcile's
   // internals would tie the count to what the audit happens to parse (a
   // malformed manifest it skips is still a source file) and let the two drift.
-  const { files } = await resolveEntries(source, auditDerivedFrom(notesDir));
+  const { files } = await resolveEntries(source, auditDerivedFrom(notesDir, notesSource));
   // The audit note lives INSIDE its own `{notesDir}/*.md` source glob — it is a
   // source of itself. Count the set as it will be AFTER this regen lands, so a
   // first-ever regen (the note does not exist yet, so it resolves to one fewer
   // file than it will a moment later) does not witness one low and mask the next
   // deletion. Once the note exists, `files` already contains it and this is a
   // no-op.
-  const self = auditPath(notesDir);
+  // The audit note may or may not sit inside its own source glob: in `flat`
+  // mode it always does (it lives in the notes dir); with a configured
+  // `auditNote` it usually does NOT. `files.includes` decides per-run rather
+  // than either mode assuming — an assumption here is an off-by-one in the
+  // witness, which is exactly the deletion signal it exists to carry.
+  const self = notesSource === "jd-slots" ? auditNote : auditPath(notesDir);
   const sourceCount = files.includes(self) ? files.length : files.length + 1;
-  let rendered = renderAudit(recon, generated, notesDir, sourceCount);
-  const existing = await source.read(auditPath(notesDir));
+  let rendered = renderAudit(recon, generated, notesDir, sourceCount, notesSource);
+  const existing = await source.read(self);
   if (existing !== null) rendered = reinsertSections(rendered, extractSections(existing));
   return rendered;
 }
