@@ -33,3 +33,7 @@ One click in Settings → Governor → "Authority migration". After it:
 - The review pane shows the retirement notice instead of Adopt baseline / auto-accept.
 - An agent write still lands as a proposal; your Admit still works.
 - The review pane shows **no** "STANDING HEALTH CRITICAL" banner.
+
+## After the cutover: bind the chain (one click, once)
+
+The cutover marker travels with the vault (Sync, backup, restore); the standing chain does not. Until the marker is bound, a restored copy of the vault would claim "cut over" beside an empty chain and read as "nothing admitted." When the binding fix is installed, the Authority migration section shows **"This machine holds the authorized chain — bind it…"** — click it ONCE, on the machine that genuinely holds the chain (today: the only machine that ever ran the cutover). After binding, any other copy says "cut over elsewhere; chain absent here" instead of lying, and admission refuses there. Binding is never automatic, and this control cannot re-bind a marker already bound elsewhere.

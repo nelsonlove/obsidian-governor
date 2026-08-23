@@ -21,7 +21,8 @@
 // surface to display.
 
 import { planLegacyImport, createLegacyEvidenceStore, type LegacyImportReport, type LegacyEvidenceStore } from "../kernel/governance/migration/legacy-import.js";
-import { performCutover, rollbackCutover, CutoverRefusedError, CUTOVER_DEFAULT, type CutoverStateV1, type CutoverStore } from "../kernel/governance/migration/cutover.js";
+import { performCutover, rollbackCutover, bindMarker, CutoverRefusedError, CUTOVER_DEFAULT, type CutoverStateV1, type CutoverStore } from "../kernel/governance/migration/cutover.js";
+import { bindingVerdict, mintStoreIdGestured, type BindingVerdict, type StoreIdIo } from "../kernel/governance/migration/store-binding.js";
 import type { Baseline } from "../kernel/governance/baseline-store.js";
 
 export interface MigrationIo {
@@ -45,6 +46,10 @@ export interface MigrationDeps {
   /** The loaded legacy baseline store's records (content stays there; the import carries hashes). */
   baselines: () => readonly Baseline[];
   now: () => number;
+  /** The MACHINE-LOCAL store-id file (inside the history dir — rides the chain backup, never the vault). Reads never mint; only gestured acts write. */
+  storeIdIo: StoreIdIo;
+  /** Mint for a new store id (uuidv7 in production; injected so tests are deterministic). */
+  mintId: () => string;
 }
 
 export interface MigrationStatus {
@@ -66,6 +71,10 @@ export interface Migration {
   cutOver(gestureRef: string): Promise<CutoverStateV1>;
   /** Human-confirmed rollback — legacy authoritative again. Needs nothing from the disabled machinery. */
   rollback(gestureRef: string): Promise<CutoverStateV1>;
+  /** The marker↔store verdict, READ-ONLY — never mints, never writes (store-binding.ts's rule; pinned). */
+  binding(): Promise<BindingVerdict>;
+  /** The one human act resolving a pre-binding marker: mints this machine's store id (inside the gesture) and stamps the marker. */
+  bindChain(gestureRef: string): Promise<CutoverStateV1>;
 }
 
 export function buildMigration(deps: MigrationDeps): Migration {
@@ -148,7 +157,21 @@ export function buildMigration(deps: MigrationDeps): Migration {
     importLegacyEvidence: runImport,
     async cutOver(gestureRef) {
       const { report } = await runImport();
-      const next = await performCutover(cutoverStore, gestureRef, report, deps.now());
+      // The store identity is minted INSIDE this same gesture (never on a
+      // read path) and bound into the marker atomically with the cutover.
+      const storeId = await mintStoreIdGestured(deps.storeIdIo, gestureRef, deps.mintId);
+      const next = await performCutover(cutoverStore, gestureRef, report, storeId, deps.now());
+      cached = next;
+      return next;
+    },
+    async binding() {
+      const cur = await cutoverStore.read();
+      cached = cur;
+      return bindingVerdict(cur, await deps.storeIdIo.read());
+    },
+    async bindChain(gestureRef) {
+      const storeId = await mintStoreIdGestured(deps.storeIdIo, gestureRef, deps.mintId);
+      const next = await bindMarker(cutoverStore, gestureRef, storeId, deps.now());
       cached = next;
       return next;
     },

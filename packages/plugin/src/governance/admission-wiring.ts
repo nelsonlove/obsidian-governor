@@ -108,6 +108,16 @@ export interface BuildAdmissionDeps {
   /** Append one settlement line to the acceptance log. */
   appendSettlement(record: { event: "admission-settlement"; claimId: string; subjectDigest: string; ts: string }): Promise<void>;
   /** Rebuildable projections refresh (the pane nudge). Optional. */
+  /**
+   * The cutover marker↔store binding gate (store-binding.ts). When present
+   * and not ok, BOTH admit paths refuse before any work: on a machine whose
+   * local store is not the one the marker authorizes (a restore without its
+   * chain, an unbound pre-binding marker), admitting would silently grow a
+   * NEW chain beside a marker naming another — the exact split the binding
+   * exists to prevent. Refusing both ways: legacy already refuses (cutOver),
+   * and admission refuses HERE with the verdict's own honest detail.
+   */
+  bindingGate?: () => Promise<{ ok: true } | { ok: false; code: string; detail: string }>;
   refreshProjections?: () => Promise<void>;
   now?: () => number;
 }
@@ -297,6 +307,10 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
     },
 
     async admitCohortWithGesture(frozen, members, gestureRef) {
+      if (deps.bindingGate) {
+        const gate = await deps.bindingGate();
+        if (!gate.ok) return { ok: false, code: gate.code, detail: gate.detail };
+      }
       // The degraded discriminator is standing MOVEMENT during this call —
       // the item path's rule, applied at cohort scale. A failed pre-read is
       // "unknown", which suppresses the degraded-success branch entirely.
@@ -435,6 +449,10 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
       let preHead: string | null = null;
       let preHeadKnown = false;
       try {
+        if (deps.bindingGate) {
+          const gate = await deps.bindingGate();
+          if (!gate.ok) return { ok: false, code: gate.code, detail: gate.detail };
+        }
         const proposal = await deps.proposals.get(proposalId);
         if (!proposal) return { ok: false, code: "proposal_unknown", detail: `no proposal ${proposalId}` };
         if (proposal.subject.path === null) return { ok: false, code: "path_missing", detail: "this proposal has no path to re-observe" };

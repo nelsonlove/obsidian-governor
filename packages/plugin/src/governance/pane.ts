@@ -297,6 +297,22 @@ export function confirmRollbackCutover(app: App): Promise<boolean> {
   });
 }
 
+/** WP8 binding: the one human act that resolves an unbound cutover marker. */
+export function confirmBindChain(app: App): Promise<boolean> {
+  return new Promise((resolve) => {
+    new ConfirmModal(
+      app,
+      {
+        title: "Bind the cutover to THIS machine's chain?",
+        body:
+          "The cutover marker names no authorized store. Binding stamps this machine's store identity into the marker \u2014 making THIS machine the one whose admission answers are authoritative. Do this only on the machine that genuinely holds the real chain (a human is the only discriminator that does not travel with the vault). It cannot be re-bound by this control afterwards.",
+        confirmText: "Bind this machine",
+      },
+      resolve,
+    ).open();
+  });
+}
+
 export function confirmAdopt(app: App): Promise<boolean> {
   return new Promise((resolve) => {
     new ConfirmModal(

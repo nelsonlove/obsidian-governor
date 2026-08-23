@@ -36,6 +36,8 @@ export interface CutoverStateV1 {
   rolledBackAt: number | null;
   /** The gesture that authorised the rollback — recorded like the cutover's own (review finding: a validated-then-discarded ref records the act nowhere). */
   rollbackGestureRef?: string | null;
+  /** The identity of the machine-local store this marker authorizes (store-binding.ts's invariant: the marker travels with the vault, the chain does not — this field is what lets a replica or a restore say "cut over elsewhere" instead of "nothing admitted"). Absent on pre-binding markers; set only inside a gestured act. */
+  storeId?: string | null;
 }
 
 export const CUTOVER_DEFAULT: CutoverStateV1 = { v: 1, cutOver: false, at: null, gestureRef: null, importReport: null, rolledBackAt: null };
@@ -72,12 +74,37 @@ export interface CutoverStore {
  * or when already cut over. The returned state HAS been persisted — a write
  * failure throws and leaves authority with legacy (the fail direction).
  */
-export async function performCutover(store: CutoverStore, gestureRef: string, importReport: LegacyImportReport, now: number): Promise<CutoverStateV1> {
+export async function performCutover(store: CutoverStore, gestureRef: string, importReport: LegacyImportReport, storeId: string, now: number): Promise<CutoverStateV1> {
   if (!gestureRef) throw new CutoverRefusedError("authority_missing", "the cutover is a human act; it requires the gesture reference minted by the gate");
   if (!importReport) throw new CutoverRefusedError("import_missing", "no import report presented — run the legacy evidence import first, even if it reports zero records");
+  if (!storeId) throw new CutoverRefusedError("store_unbound", "the cutover binds the marker to this machine's store identity; minting that identity happens inside this same gesture (store-binding.ts) — an unbound cutover would recreate the restore-lie the binding exists to close");
   const cur = await store.read();
   if (cur.cutOver) throw new CutoverRefusedError("already_cut_over", `the cutover already ran at ${cur.at}; nothing further to cut`);
-  const next: CutoverStateV1 = { v: 1, cutOver: true, at: now, gestureRef, importReport, rolledBackAt: null };
+  const next: CutoverStateV1 = { v: 1, cutOver: true, at: now, gestureRef, importReport, rolledBackAt: null, storeId };
+  await store.write(next);
+  return next;
+}
+
+/**
+ * Bind a pre-binding-era marker (cutOver true, no storeId) to this machine's
+ * store — the ONE human act that resolves the marker-unbound state. Refuses
+ * on anything else: never a rebind (a mismatched marker is a different,
+ * bigger decision this act deliberately cannot make), never automatic.
+ */
+export async function bindMarker(store: CutoverStore, gestureRef: string, storeId: string, now: number): Promise<CutoverStateV1> {
+  if (!gestureRef) throw new CutoverRefusedError("authority_missing", "binding the chain is a human act; it requires the gesture reference minted by the gate");
+  if (!storeId) throw new CutoverRefusedError("store_unbound", "no store identity to bind");
+  const cur = await store.read();
+  if (!cur.cutOver) throw new CutoverRefusedError("not_cut_over", "no cutover marker to bind");
+  if (cur.storeId) {
+    throw new CutoverRefusedError(
+      cur.storeId === storeId ? "already_bound" : "bound_elsewhere",
+      cur.storeId === storeId
+        ? "the marker is already bound to this store"
+        : `the marker is bound to store ${cur.storeId.slice(0, 12)}… — re-binding authority to a different machine is not this control's act; restore the authorized chain instead`
+    );
+  }
+  const next: CutoverStateV1 = { ...cur, storeId };
   await store.write(next);
   return next;
 }

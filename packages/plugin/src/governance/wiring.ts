@@ -114,7 +114,7 @@ import {
   selectAcceptEligible,
   type AcceptEligibilityCtx,
 } from "../kernel/governance/menu-eligibility.js";
-import { GovernanceReviewView, VIEW_TYPE_GOVERNANCE, confirmAdopt, confirmMenuAccept, renderAllowlist, wireAdoptButton, ADOPT_BASELINE_DESC, acceptThroughGate, type ReviewController, type RevisingItem, renderLegacyRetiredNotice, confirmCutover, confirmRollbackCutover, noticeGestureBlocked } from "./pane.js";
+import { GovernanceReviewView, VIEW_TYPE_GOVERNANCE, confirmAdopt, confirmMenuAccept, renderAllowlist, wireAdoptButton, ADOPT_BASELINE_DESC, acceptThroughGate, type ReviewController, type RevisingItem, renderLegacyRetiredNotice, confirmCutover, confirmRollbackCutover, noticeGestureBlocked, confirmBindChain } from "./pane.js";
 import { isExcludedTerritory } from "./territories.js";
 
 // Guarded territories moved to ./territories.ts when observation capture became
@@ -1632,6 +1632,35 @@ function renderMigrationSection(containerEl: HTMLElement, plugin: Plugin): void 
       );
     })
     .catch((e) => statusEl.setText(`Migration status could not be read: ${e instanceof Error ? e.message : String(e)}`));
+
+  const bindingEl = containerEl.createEl("p", { cls: "setting-item-description governance-binding-status", text: "" });
+  void migration
+    .binding()
+    .then((v) => {
+      if (v.state === "bound") bindingEl.setText(`Chain binding: bound (store ${v.storeId.slice(0, 12)}\u2026).`);
+      else if (v.state === "pre-cutover") bindingEl.setText("");
+      else {
+        bindingEl.setText(`CHAIN BINDING: ${v.state === "marker-unbound" ? "UNBOUND" : "MISMATCH"} \u2014 ${v.detail}`);
+        if (v.state === "marker-unbound") {
+          const bindBtn = containerEl.createEl("button", { cls: "mod-warning governance-bind-chain", text: "This machine holds the authorized chain \u2014 bind it\u2026" });
+          bindBtn.addEventListener("click", (evt) => {
+            void runGuardedDisposition(
+              evt,
+              () => confirmBindChain(plugin.app),
+              async (gestureRef) => {
+                try {
+                  await migration.bindChain(gestureRef);
+                  new Notice("Chain bound: this machine's store is now the one the cutover marker authorizes.", 12000);
+                } catch (e) {
+                  new Notice(`Bind did not run: ${e instanceof Error ? e.message : String(e)}`, 12000);
+                }
+              }
+            ).then(noticeGestureBlocked);
+          });
+        }
+      }
+    })
+    .catch((e) => bindingEl.setText(`Chain binding could not be read: ${e instanceof Error ? e.message : String(e)}`));
 
   const row = containerEl.createDiv({ cls: "governance-migration-controls" });
   // Import and Cut over render only while legacy is authoritative; after the
