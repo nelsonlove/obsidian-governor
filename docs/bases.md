@@ -1,5 +1,8 @@
 # The Bases module — evaluated Base result sets for agents
 
+> **Deep reference for the shipped implementation.** Canonical concepts and the target design live in the [documentation corpus](README.md); what is shipped versus target is owned by [status-and-compatibility.md](status-and-compatibility.md).
+
+
 The `bases` capability module (#243, shipped in PR #248) gives agents the *evaluated* rows of
 an Obsidian **Bases** `.base` file — the same filtered, formula-computed, sorted result set
 the human sees in a Bases view — without the module re-implementing any of the Bases

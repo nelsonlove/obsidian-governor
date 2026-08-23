@@ -1,5 +1,8 @@
 # Reference — addressing, queue & journal semantics, allowlist, external tools
 
+> **Deep reference for the shipped implementation.** Canonical concepts and the target design live in the [documentation corpus](README.md); what is shipped versus target is owned by [status-and-compatibility.md](status-and-compatibility.md).
+
+
 The precise contracts behind the [README](../README.md)'s overview, moved here verbatim so the
 README can stay an introduction. Every heading keeps its original anchor. Deeper still:
 [kernel-v0.md](kernel-v0.md), [identity-and-links.md](identity-and-links.md),
@@ -65,7 +68,7 @@ Three mutating tools complete the module's write half (`mcp/tools-scheme-write.t
 - **`obsidian_refile_address`** — `{path, dry_run}` → moves the note to the folder its own address says it belongs in — the fix for `obsidian_expected_location`'s `placed: false`; already-correct reports `already_correct: true` with no move.
 - **`obsidian_renumber_address`** — `{path, to_address, scheme?, dry_run, on_occupied, displace_to_address?}` → moves the note to a specific target address `to_address`; if occupied, `on_occupied` (`"fail"` default / `"auto"` / `"manual"`) decides whether to refuse or displace the occupant (to its own scope's next free slot, or to `displace_to_address`) — the occupant's move always runs before the source note's own.
 
-These three cannot register through the [module registry](modules.md) (its gate refuses any tool whose `readOnlyHint !== true`), so — like `obsidian_move_notes`/`obsidian_repoint_link` — they register directly in `server.ts`. They share the same allowlist discipline as the read tools above: a hidden note can be neither read as "what's there" nor written to.
+These three cannot register through the [module registry](module-system.md) (its gate refuses any tool whose `readOnlyHint !== true`), so — like `obsidian_move_notes`/`obsidian_repoint_link` — they register directly in `server.ts`. They share the same allowlist discipline as the read tools above: a hidden note can be neither read as "what's there" nor written to.
 
 ## Link health
 

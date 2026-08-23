@@ -1,227 +1,182 @@
 # Governor
 
-**Let AI agents do real work in your Obsidian vault — without giving up control of it.**
+**Let AI assistants work with your Obsidian vault without giving up control of it.**
 
-*Formerly “vault-mcp” — since 0.12.0 the plugin **id** is `governor` too (the data folder self-migrates; a grace-period compat surface keeps old `vault-mcp` registrations working until you re-register). One name for the product, the project, and the framework. Like a mechanical governor: the device that lets a powerful engine run hard while keeping it inside limits you set.*
+Governor is a desktop-only Obsidian Community Plugin that gives a compatible local AI client carefully governed access to the vault open in Obsidian. You can ask the assistant to find, explain, capture, organize, validate, or maintain information. Obsidian remains the visible home of the work, and Governor controls what the assistant can see, what it can change, how results are verified, and which exact results have standing.
 
-Governor is an Obsidian plugin that connects AI agents (Claude Code, or anything that speaks
-MCP) to your vault the *governed* way: agents see your vault the way Obsidian does, every change
-they make is recorded and attributed, and one rule is enforced at the shared write primitive:
-**an agent cannot mark its own work as accepted through it. That's yours.**
+Governor was formerly called vault-mcp. The product name is now Governor; the old name appears only where migration history requires it.
 
-> **Desktop only.** Uses Node `net`/`fs` from Obsidian's renderer; `isDesktopOnly: true`.
+The name comes from the **governor in an engine**: a mechanism that regulates speed and output as the load changes. Governor does the analogous job for human-agent work. It does not choose the destination or do the work itself; it keeps the machinery within the authority, pace, and operating limits the person set.
 
-## Why this exists
+> [!important]
+> This is a proposed target-state documentation package. It describes the coherent public product that results when the associated review recommendations are implemented. It is not evidence that every behavior described here is present in a particular build. See [Documentation basis](docs/documentation-basis.md) and [Status and compatibility](docs/status-and-compatibility.md).
 
-Agents write fast. Trust builds slow.
+## The five-minute mental model
 
-Give an agent raw file access to your vault and you get mystery diffs, YAML mangled at 3 a.m.,
-and no way to answer "what changed while I slept, and why." Deny access and you're hand-copying
-text between a chat window and your notes. Every existing middle ground is a half-measure:
-read-only access (the agent can't help), git archaeology (that's not review), or prompt
-discipline ("please don't touch my frontmatter" is not a security model).
+You have two surfaces over the same notes:
 
-Governor is the whole measure: **agents propose, you decide, and the machinery — not a prompt —
-keeps it that way.**
+- **Obsidian** is where the notes live and where you inspect, edit, link, and review them.
+- **Your AI assistant** is a conversational way to work with those notes.
 
-## What you get
+Governor is the boundary between them. It starts with reading only. You decide which folders a connection may access and which classes of change it may attempt. For larger work, you can accept a bounded mandate once, let Governor verify the result, and decide an entire session or collection cohort together. Changes outside that authority remain proposals.
 
-- **Agents that see your vault like Obsidian does.** Live backlinks, link resolution, Dataview
-  queries with real types, Templater, Metadata Menu schemas — not a folder of text files parsed
-  from disk. Answers are canonical because they come from the running app.
-- **A paper trail for everything.** Every mutating operation through the plugin's guarded path
-  lands in an append-only journal: what happened, to which note, by which agent, in which
-  session — and, when the agent says so, *why*. (The optional headless FS-fallback mode is a
-  documented exception — see [Honest limits](#honest-limits).) "What did it do while I was out"
-  becomes a file you can read.
-- **Nothing gets accepted without you.** An agent may mark its work `proposed`; a guard at the
-  shared write path rejects any attempt — through any tool, any value type, any smuggling route
-  we've found (and we keep looking) — to write `accepted`. Reviewing and accepting is meant to
-  happen only in the plugin's human-only review pane (the **acceptance module**) — never through
-  the API on the surfaces the guard covers today; the surfaces it doesn't cover yet are named,
-  tracked gaps, not silent ones (see [Honest limits](#honest-limits)).
-- **Notes that don't get lost.** Address a note by its frontmatter `uid:` and the reference
-  survives every rename and move. Johnny Decimal user? `jd:06.11` works everywhere a path does.
-  Moves heal their own backlinks; a link-health report names what's drifted (and repairs nothing
-  without you).
-- **Agents that don't trample you — or each other.** One write at a time through a queue,
-  compare-and-set so nobody clobbers what they didn't read, safe retries, and advisory claims so
-  two agents working the same folder can see each other coming.
-- **A trust dial, not a trust leap.** Read-only mode. A path allowlist that sandboxes a session
-  to one part of the vault — reads included. Dangerous commands off by default. Third-party
-  tools distrusted until you say otherwise.
-- **CI for your vault.** A conformance engine checks structure and vocabulary against what your
-  vault declares, with a ratchet so pre-existing mess is baselined and only *new* drift alarms.
+Underneath those human choices, every request becomes an **operation** of one registered **action**. Governor can preserve substantive reads as replayable **observations**, then connect them to the effects, verification, proposal, and authority decision that followed. This lets review answer both “What did it do?” and “What vault information did Governor give it?” without pretending to record the assistant's private reasoning.
 
-## Five minutes in
+You do not need to memorize tools, schemas, file paths, or MCP terminology. Ask for the outcome you want:
 
-1. Install and enable the plugin, run **`Governor: Connect to Claude Code`**, restart your
-   Claude Code session.
-2. Ask the agent to do something real — "triage my inbox notes into the right projects."
-3. Watch it work with real tools instead of raw file writes — and check
-   `obsidian_pending_review`: the agent can see which notes await your review and stays off them.
-4. Open the journal (or the review pane, if the acceptance module is enabled): every change is there, attributed,
-   diffable, waiting for your verdict. Accept, revert, or shrug — your call, made once, in one
-   place.
+- “Find everything related to the house renovation and remind me where I left off.”
+- “Add this idea to my inbox, but do not reorganize anything.”
+- “Show me how you would merge these three notes before changing them.”
+- “Open the proposals that need my decision.”
+- “Check this project for broken links and inconsistent properties.”
 
-## Install
+## Four postures you can understand
 
-1. **Build** (or grab a [release](https://github.com/nelsonlove/obsidian-governor/releases) — BRAT-installable):
-   ```bash
-   npm install && npm run build      # emits main.js (bridge embedded) + manifest.json
-   ```
-2. **Copy into your vault** and enable it:
-   ```bash
-   cp main.js manifest.json <vault>/.obsidian/plugins/governor/
-   ```
-   Then Settings → Community plugins → enable **Governor**.
-3. **Connect Claude Code** — run **`Governor: Connect to Claude Code`** from the command
-   palette (one-time; it registers the bridge under the server name `governor` with
-   `--vault <this vault>` pinned; the exact line
-   is always in **Settings → Governor** if you'd rather paste it yourself).
-4. **Restart any open Claude Code session** — MCP servers load at session start.
+Governor presents four ordinary-language postures:
 
-**Upgrading from ≤0.11 (plugin id `vault-mcp`)?**
+| Posture | What happens |
+|---|---|
+| **Looking only** | The assistant can search, read, explain, navigate, and validate within its scope. Nothing in the vault changes. |
+| **Drafting a change** | The assistant can prepare a plan or preview. It shows the proposed effect without applying it. |
+| **Proposing governed changes** | The assistant may create bounded proposals. They have no standing until admitted. |
+| **Working under a mandate** | The assistant may perform the exact classes, transformation, scope, and budget you delegated. Governor verifies the results and either presents a cohort decision or admits them under the mandate. |
 
-> **Disable the old "Vault MCP" plugin FIRST — this is a prerequisite, not a cleanup step.**
-> Obsidian treats the old id and the new id as two different plugins, so both run while
-> both are enabled. Governor **refuses to migrate** while the old one is enabled (it would
-> keep writing into the folder being moved, splitting the append-only journal) and says so
-> in a sticky notice.
+These are user-facing postures, not a promise that every internal operation has only four states. Finer states remain underneath when they are needed for safety and diagnosis.
 
-With the old plugin disabled, Governor's first load adopts the old folder's data (settings,
-journal, install-id, baselines, acceptance log, receipts) into `.obsidian/plugins/governor/`
-and leaves a `MIGRATED.md` marker behind. Old `vault-mcp` Claude Code registrations keep
-working meanwhile through a compat surface at `~/.claude/vault-mcp/`. Then: re-run Connect,
-remove the old registration (`claude mcp remove vault-mcp`), remove the old plugin entry, and
-delete the old folder once you've read the marker. **If a migration notice says the adoption
-was aborted or incomplete, resolve it before using the plugin** — until it succeeds, settings
-fall back to defaults (socket on, read-only off, no allowlist).
+## Acceptance belongs to the person
 
-Running the remote [`obsidian-vault-mcp-server`](https://github.com/nelsonlove/obsidian-vault-mcp-server)
-too? Disconnect it for sessions using this plugin — they share `obsidian_*` tool names by
-design, and this one's answers are canonical.
+An assistant may propose a change, accept a delegation, negotiate a narrower mandate, revise its work after feedback, and show you exactly what changed. It cannot accept its own proposal, expand its mandate, choose its authoritative identity, or manufacture standing.
 
-## The one rule
+**Acceptance is always a human authority act.** You may exercise it over one result, one frozen cohort, or prospectively through a bounded mandate. Governor—not the authoring agent—admits an exact verified result under that authority. There is no agent-accessible accept or admit operation.
 
-**Acceptance is a human gesture, and it goes in no API.** There is no accept tool, no accept
-argument, and no way to smuggle acceptance in as data **through the shared write primitive**: it
-rejects any write that would introduce `acceptance-status: accepted` (or `accepted-by` /
-`accepted-on`), on every write surface that routes through it — including the CLI proxy — while
-leaving your own existing accepted values untouched. A handful of surfaces don't route through
-it yet; those are named, tracked gaps, not silent ones — see [Honest limits](#honest-limits).
-Accepting stays a person's gesture in the
-[acceptance module](docs/README.md#the-acceptance-module)'s review pane.
+That separation is the core guarantee: authorship does not create authority. It also avoids turning governance into hundreds of identical clicks.
 
-This is the heart of the design — documented in full, including its honest limits and the
-currently-open hardening work, in **[docs/acceptance-model.md](docs/acceptance-model.md)**.
+## Sessions and cohorts make review scale
 
-## Honest limits
+Governor groups work without making the group vague:
 
-- **Detection and recovery, not prevention.** Obsidian can't intercept disk writes; anything
-  promising otherwise is theater. The guarantee is narrower and real: nothing arriving through
-  a surface the guard covers can forge acceptance, every write on the plugin's guarded path is
-  journaled, and out-of-band changes surface as drift.
-- **The FS-fallback path is the one documented exception to "journaled."** The headless
-  filesystem-failover mode in `packages/server` — refused by default, explicit opt-in only —
-  writes with no journal and no serialized queue until Obsidian reconnects
-  ([#92](https://github.com/nelsonlove/obsidian-governor/issues/92)). Every claim above
-  about journaling is scoped to the plugin's guarded path, not this fallback.
-- **Actively hardened, in the open.** The write perimeter is under continuous adversarial
-  review; known gaps are tracked as public issues on this repo (milestone `0.8.1 — perimeter`)
-  rather than papered over. The docs bound every claim to what's actually shipped.
-- **The guard doesn't cover every surface yet — named, not papered over.** Templated note
-  creation ([#137](https://github.com/nelsonlove/obsidian-governor/issues/137),
-  [#105](https://github.com/nelsonlove/obsidian-governor/issues/105)), CLI flag-form
-  arguments ([#107](https://github.com/nelsonlove/obsidian-governor/issues/107)), and a
-  couple of lower-severity paths can currently introduce or resurrect acceptance without going
-  through the guarded primitive. Each is a public, tracked issue; the full residual list lives
-  in [docs/acceptance-model.md](docs/acceptance-model.md).
-- **The review pane is opt-in** (the acceptance module, default off — enable it in settings).
-  Governor is fully useful without it — you just read the journal
-  instead of clicking a queue.
+- a **session** is one bounded body of work;
+- a **mandate** is the authority you delegated;
+- a **cohort** is the exact frozen set being verified and considered together; and
+- a **change class** says whether the effect concerns encoding, presentation, representation, filesystem structure, content, or authority.
 
-## How it works
+You can start from “everything in this session” or “this collection,” drill down to individual notes, exclude exceptions, request one revision across the cohort, and accept the exact verified set once. Later additions are never included in an earlier decision.
 
-```
-┌─ Obsidian (renderer) ─────────┐        ┌─ Claude Code session ──────┐
-│  Governor plugin              │        │  MCP client (stdio)        │
-│   ├─ MCP server (app.* direct)│        │       │                    │
-│   └─ Unix socket  ◄───────────┼────────┼─ bridge.mjs (spawned)      │
-│      ~/.claude/governor/      │  socket│   reads discovery, proxies │
-│      <vault>.sock (chmod 600) │        │   stdio ↔ socket           │
-└───────────────────────────────┘        └────────────────────────────┘
-```
+## What every durable operation returns
 
-- The plugin runs an MCP server in Obsidian's renderer and listens on a per-vault **Unix
-  socket** (`~/.claude/governor/<vault-slug>.sock`, `chmod 600` — the only auth boundary).
-- A tiny bundled **`bridge.mjs`** (written to `~/.claude/governor/` on load, plus a
-  grace-period copy at the legacy `~/.claude/vault-mcp/`) is what Claude
-  Code spawns; it proxies stdio ↔ the socket.
-- A fresh MCP server is built **per connection**, so multiple sessions and background agents
-  share the plugin without evicting each other.
+Governor never treats “the command ran” as a sufficient answer. A durable operation ends with a receipt. Reads name the action, operation, scope, sources, capture level, and replay reference when available. A mutation additionally states:
 
-## Tools
+- whether it completed, failed, conflicted, or has an uncertain outcome;
+- which notes or scopes were affected;
+- what changed in human terms;
+- which safeguards applied;
+- how the result was verified;
+- whether anything still needs review;
+- which session, mandate, cohort, and verification apply;
+- how to recover or undo the change; and
+- where to find the journal record, when available.
 
-**On the order of 55–60 tools**: core read/write, batch writes with server-side identity
-stamping, search, navigation, `uid:`/`jd:` addressing, link health, advisory claims,
-controlled-vocabulary validation, a pending-review view, and integrations that light up when
-their backing plugin is present (Dataview, Templater, Omnisearch, Metadata Menu, the official
-Obsidian CLI). Scope and vocabulary tools come from settings-toggleable
-[capability modules](docs/modules.md). Run **`obsidian_doctor`** to see what your setup exposes.
+If an operation times out after it may have reached the vault, the receipt says **uncertain**. The assistant must re-read before retrying.
 
-Context-conscious sessions can use **Code Mode** (`--code-mode` on the bridge command): three
-meta-tools — search, describe, call — over the same registry, with every guard binding on the
-target tool exactly as on the full surface.
+## Safe by default
 
-The full tool-by-tool breakdown, and the precise semantics of addressing, the write queue and
-journal, the path allowlist, and third-party tool trust, live in
-**[docs/reference.md](docs/reference.md)**.
+A fresh installation begins in **Looking only**. Before enabling writes, you choose the accessible folders. The first write level is limited to scoped creation and end-of-note appends. Broader edits and structural work require preview and an explicit posture change.
 
-## Settings (Settings → Governor)
+Governor's normal Community Plugin surface does not expose permanent deletion, arbitrary code or generic command execution, plugin installation or removal, unconstrained configuration or CSS writing, destructive imports, unconstrained outside-vault exports, or restoration that could reinstate revoked authority.
 
-- **Claude Code connection** — status + the `claude mcp add` line + copy button.
-- **Read-only mode** — blocks all mutating tools; reads still work.
-- **Allow dangerous CLI commands** — off by default; gates code-executing/app-controlling CLI
-  commands. Command-level allow/deny policy is also settings-driven and fails closed on the
-  opaque command classes.
-- **Trusted read-only plugins** — third-party tools claiming read-only are treated as mutating
-  unless their plugin id is listed here. See [reference](docs/reference.md#external-tool-trust).
-- **Path allowlist** — one vault-relative prefix per line (empty = whole vault); sandboxes a
-  session for reads and writes alike. See [reference](docs/reference.md#the-path-allowlist).
-- **Scheme & vocabulary modules** — per-module toggles and configuration (Johnny Decimal
-  instance, excluded roots, vocabulary sources).
-- **Enforce record immutability** — on by default; refuses non-append writes to notes carrying
-  `record: true` (historical archives are extended by a dated end-of-file append, never edited,
-  moved, or deleted). See [reference](docs/reference.md#records).
-- **Disable socket** — stops the server without uninstalling the plugin.
+Private operators may add separately installed capability packs. Those packs are not part of the public default and are not covered merely because Governor itself appears in the Community directory.
 
-## Troubleshooting
+## Start in ten minutes
 
-| Symptom | Cause / fix |
-| --- | --- |
-| Claude Code says the MCP is unreachable | Obsidian isn't running, or the plugin is disabled. Open Obsidian / enable the plugin. |
-| "auto register failed, no such file or directory" | The `claude` launcher needs `node` on PATH; the plugin augments PATH with `/opt/homebrew/bin` + `/usr/local/bin`. If your `node`/`claude` live elsewhere, run the `claude mcp add` line manually in a terminal where `claude` works. |
-| Tools don't appear in a session | You registered after the session started — restart the Claude Code session (MCP loads at start). |
-| Multiple vaults open | The registration must pin `--vault <name>` (Connect does this); `obsidian_doctor` reports the bound vault. Re-run Connect or add `--vault <name>` to the existing entry. |
-| A plugin-gated tool is missing | Its backing plugin isn't loaded. Enable it; the tool appears on the next session connect. |
-| A write failed with `Error [write_timeout]` | The operation ran past the queue's 30s budget and was abandoned so the queue could continue. Re-read the target (it may be partially written), then retry with a smaller batch. |
+1. Install Governor from Obsidian's Community Plugins directory and enable it.
+2. Open **Settings → Governor**.
+3. Keep the initial posture at **Looking only**.
+4. Use **Connect a local assistant** and follow the client-specific instructions.
+5. Choose the folders this connection may access. Start with one low-consequence folder.
+6. Ask the assistant to find or explain something and have it open the source note in Obsidian.
+7. When you are comfortable, preview a small append or new note.
+8. Enable proposing governed changes, apply it, re-open the note, and read the receipt.
+9. Accept the proposal in Obsidian. Introduce mandates only after you understand individual proposals and recovery.
+
+You can stop after step 6 and keep a useful read-only system indefinitely.
+
+The detailed walkthrough is in [Getting started](docs/getting-started.md).
+
+## Five ways to use Governor
+
+### Find and orient
+
+Search notes, properties, links, views, and history; recover context after time away; open the exact note or heading used in an answer. This is read-only by default.
+
+### Capture and add
+
+Create a note in an allowed folder or append information to an existing note. Governor shows the destination, verifies the landed content, and returns a receipt.
+
+### Improve and organize
+
+Preview edits, moves, metadata cleanup, and link-aware maintenance. Structural changes show their scope and recovery route before they run.
+
+### Review and decide
+
+Use one review center for individual proposals, sessions, collection cohorts, mandates, verification, and history. Drafts, requested revisions, admitted material, and operational activity remain distinct.
+
+### Check and maintain
+
+Inspect broken links, inconsistent properties, stale derived material, unavailable dependencies, and other actionable health findings without silently “fixing” ambiguous cases.
+
+See the [User guide](docs/user-guide.md) and [Capability directory](docs/capabilities.md).
+
+## What Governor can and cannot protect
+
+Governor adds application-level safeguards: a read boundary, write postures, previews, serialized mutations, revision checks, retry protection, protected properties, a journal, a review center, and recoverable operations.
+
+It is **not an operating-system sandbox**. Community Plugins inherit Obsidian's local privileges, and a malicious local program or another fully privileged plugin may bypass Governor. Use a test vault for development, keep verified backups, review dependencies, and enable only the authority you need.
+
+Governor is desktop-only because its local bridge and some operational storage use desktop APIs. The public configuration is local-first and contains no client-side telemetry. Read [Security](SECURITY.md), [Privacy](PRIVACY.md), [Threat model](docs/threat-model.md), and [Data flow](docs/data-flow.md) before connecting a sensitive vault.
+
+Governor's local Git store is outside Obsidian Sync and retains historical note and attachment bytes from the governed scope, including content later changed or deleted. Configure its scope and retention as you would a sensitive backup.
+
+Replayable observations are also sensitive: they may retain the exact note content or metadata Governor returned during an earlier session. They stay in protected replica-local storage by default, have a separate retention policy, and are not portable-standing Sync data.
 
 ## Documentation
 
-- **[docs/reference.md](docs/reference.md)** — the precise contracts: addressing (`uid:`, schemes), write queue & journal, `if_rev`/idempotency, advisory claims, the path allowlist and its known oracles, publishing tools from other plugins, external-tool trust, Code Mode.
-- [The acceptance model](docs/acceptance-model.md) — the accept-forbidden guard, in full.
-- [Kernel v0 primitives](docs/kernel-v0.md) — queue, journal, `if_rev`, idempotency, locks, identity.
-- [Identity & links](docs/identity-and-links.md) — uid index, `uid:` addressing, link healing.
-- [Agent write & review surface](docs/agent-writes.md) — batch writes, change-`intent`, `obsidian_pending_review`.
-- [The module system](docs/modules.md) — the registry, the mount, toggling, the accept tripwire.
-- [Scope provider](docs/scope-provider.md) · [Vocabulary provider](docs/vocabulary.md) — `jd:` addressing, placement, and mutation (assign/refile/renumber) and controlled-vocabulary validation (vocabulary provider is read-only).
-- [Conformance engine](docs/conformance.md) — rule packs, the ratchet, the headless CLI.
+- [Documentation map](docs/README.md)
+- [Getting started](docs/getting-started.md)
+- [User guide](docs/user-guide.md)
+- [Vocabulary](docs/vocabulary.md)
+- [Action registry](docs/action-registry.md)
+- [Observations and replay](docs/observations-and-replay.md)
+- [Review and safety](docs/review-and-safety.md)
+- [Change classes](docs/change-classes.md)
+- [Sessions, mandates, and cohorts](docs/sessions-mandates-and-cohorts.md)
+- [Standing and attestations](docs/standing-and-attestations.md)
+- [Git, Sync, and portability](docs/git-and-sync.md)
+- [Module directory](docs/modules.md)
+- [Capability directory](docs/capabilities.md)
+- [Settings](docs/settings.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Security](SECURITY.md) and [Privacy](PRIVACY.md)
+- [Agent guide](docs/agent-guide.md)
+- [Architecture](docs/architecture.md) and [Developer guide](docs/developer-guide.md)
+- [Operator guide](docs/operator-guide.md)
+- [Community Plugin submission packet](submission/community-plugin-submission.md)
 
-Deep-dive index with the architecture story: [docs/README.md](docs/README.md).
+## Honest limits
 
-**Where this is going:** [the vision walkthrough](docs/vision-walkthrough.md) — the whole product written as if shipped, with an appendix mapping every claim to today's status. The roadmap, in narrative order.
+- Governor cannot determine whether a judgment-bearing edit is substantively correct; it can make the edit legible and keep acceptance human.
+- A scope limits what Governor exposes through its own surface. It does not reduce Obsidian's or another plugin's operating-system permissions.
+- An uncertain timeout may have changed the vault. Re-read before retrying.
+- Playback covers what crossed Governor's own boundary, not the model's reasoning, complete client context, or information obtained elsewhere.
+- Optional integrations can disappear or become incompatible. Governor reports that state explicitly rather than returning a false empty result.
+- Review capacity is finite. Governor supports cohorts, full-coverage verification, bounded mandates, budgets, and supersession, but the user still owns the governing judgment.
+- Obsidian Sync moves files individually, not as a Governor transaction. A receiving device does not admit a synced cohort until every exact subject and required attestation is present.
+- A Community directory listing is distribution and review infrastructure, not a security certification.
 
-## Repo
+## Support, security, and contribution
 
-`~/repos/system/obsidian-governor`. See `CLAUDE.md` for the locked architecture decisions.
+- For ordinary issues, follow [Support](SUPPORT.md).
+- For vulnerabilities, follow [Security](SECURITY.md) and do not disclose sensitive details in a public issue.
+- For development and documentation contributions, follow [Contributing](CONTRIBUTING.md).
+- An actual submission repository must include its license in a root-level `LICENSE` file, as required by Obsidian's Community Plugin policies.
+
+Your notes remain Markdown files in your vault. Governor uses standard Git objects for local history and portable signed attestations for evidence and standing. Obsidian Sync can continue moving the visible vault normally; Governor's Git database stays outside Sync. Uninstalling the plugin does not convert your notes into a proprietary format. That is the exit guarantee.

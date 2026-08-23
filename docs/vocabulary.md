@@ -1,105 +1,199 @@
-# Vocabulary provider — controlled vocabulary (read-only)
+# Vocabulary
 
-The vocabulary provider is a [capability module](modules.md) (id `vocab`, capabilities
-`["vocabulary"]`) that lets an agent **check a note's tags, properties, types, and glossary
-terms against the vault's controlled vocabulary** — and validate them **without writing
-anything**. Validation and resolution only; nothing here mutates a note.
+Governor uses a focused public vocabulary. You can use the product without learning its internal tool names or architecture.
 
-Files: `packages/plugin/src/mcp/tools-vocab.ts` (tools),
-`packages/plugin/src/kernel/vocab/` (the pure engine: `provider.ts`, `registry.ts`,
-`blueprint.ts`, `glossary.ts`, `scope-tags.ts`, `findings.ts`). Obsidian-import-free; the vault
-reader arrives as an injected `VocabSource` exposing only `paths()` / `frontmatter()` /
-`body()` — enumeration and reads, structurally no write reach.
+## The terms users may encounter
 
-## What it validates
+### Vault
 
-Four kinds — `VocabKind = "tag" | "property" | "type" | "term"` — served by three providers:
+The collection of notes open in Obsidian. Governor serves the running vault, not an abstract folder chosen by an external process.
 
-- **scope-tags** (`scope-tags.ts`, #251) serves **`tag`** — the live per-scope whitelist model,
-  two independent gates over the vault's own declarations:
-  1. *existence* — a tag exists iff a registry note (`fileClass: Meta/Tag`, canonical token in
-     its `tag` field) declares it; exact-match, deliberately not prefix-permissive;
-  2. *placement* — each scope folder-note declares what it admits via `allowedTags`, and a
-     note's effective set is the **union walking up its folder chain** (band ← category ← area
-     ← the root scope note, live default `The system.md`), with subtree semantics: allowing
-     `note` admits `note/task`, `note/clipping/web`, ….
+### Note
 
-  Every vault-semantic value is config (`ScopeTagsConfig`: `registryClass`, `tagKey`,
-  `allowedTagsKey`, `rootNote`) with today's live shapes as defaults, validated per-provider by
-  the registry (invalid config skips that one instance and reports). Two deliberate gates match
-  the live rollout state: an **unseeded registry** (zero registry notes) forces no per-tag
-  findings — a reportable state (counts of 0), not drift — and a note whose chain declares no
-  `allowedTags` key has placement un-engaged, while a declared-empty whitelist is authoritative.
-- **blueprint** (`blueprint.ts`) serves **`tag`**, **`property`**, **`type`** in the *gen-old
-  registry grammar*: tags from `<name>.tag.md` notes (namespace-prefix permissive), properties
-  from flat `<key>.property.md`, types from `<Name>.fileclass` files (`extends` = parent,
-  `retired: true` = deprecated). No longer in the shipped defaults (that grammar has no live
-  surface); available via settings.
-- **glossary** (`glossary.ts`) serves **`term`**: definition notes tagged `note/definition`
-  (term = `title`, gloss = `description`) and `## Terms` sections of `- **term** — definition`
-  bullets.
+A Markdown document in the vault. A note may also have properties, links, attachments, history, and a place in an evaluated view.
 
-The registry (`VocabRegistry`) skip-and-reports duplicate ids, unknown providers, and invalid
-per-provider configs into a `problems` array (it never throws), reserving an id before the
-provider check. Shipped defaults (corrected 2026-08-19): one `scope-tags` instance over the
-whole vault, one `glossary` with `termsRoot` at the framework document's live slot
-(the vault's `00.89 obsidian-governor` folder — renamed from its former `Assent`
-name on 2026-08-19, which the default was corrected to follow).
+### Property
 
-## The four tools
+Structured information attached to a note, usually displayed at the top of the note in Obsidian. Examples include status, date, or project. Some properties may be protected so only a human action can change or authorize them.
 
-All read-only (`readOnlyHint: true`), registered through the module registry.
+### Link
 
-| Tool | Input | Returns |
-| --- | --- | --- |
-| **`obsidian_vocabularies`** | *(none)* | `{ vocabularies: [{ id, provider, root, capabilities, kinds, counts, examples }], problems }` — every configured vocabulary, its served kinds, per-kind counts and examples. |
-| **`obsidian_resolve_term`** | `token?` **xor** `path?`; plus `kind?` (`tag`\|`property`\|`type`\|`term`), `parse?`, `vocabulary?` | `token` → `{ token, found, vocabulary, entry }` (one sense) or `{ found:false }`; `token` + `parse:true` → `{ token, valid, findings }` (validate-only); `path` → `{ path, terms:[{ token, kind, found, canonical?, vocabulary?, definition?, deprecated?, ambiguous? }] }` (the note's own tags/properties/types). |
-| **`obsidian_validate_terms`** | `path` | `{ path, findings, clean }` — the note's vocabulary findings. Report-only; findings are returned, never fixed, nothing is written. |
-| **`obsidian_list_vocabulary`** | `kind`, `scope?`, `vocabulary?` | `{ kind, count, entries }` — every registered term of that kind, case-insensitively sorted, each carrying its `vocabulary` id. |
+A connection written in one note that points to another. Governor uses Obsidian's link-aware move path so a move can heal links the same way an in-app rename does.
 
-### Error codes and finding shapes
+### View
 
-Coded tool errors (`Error [code]: …`):
+A presentation computed from notes, such as a filtered table or cards. A view helps people and agents see information; it does not automatically become the canonical source of the facts it displays.
 
-- **`out_of_allowlist`** — a `path` argument outside the session's allowlist
-  (`obsidian_resolve_term` path branch, `obsidian_validate_terms`).
-- **`vocab_ambiguous`** — a token with more than one sense across kinds; the resolver refuses to
-  pick and names the candidates (`obsidian_resolve_term` token branch).
+### Action
 
-Finding codes (`VocabFinding.code`, shape `{ code, token, path, detail }`):
+A stable contract named by its postcondition, such as “append one exact tail without altering prior bytes” or “move one note through Obsidian's link-aware path.” An action exists independently of the tool, button, or automation that invokes it.
 
-```
-unregistered_tag | undefined_property | unknown_type | unknown_term
-deprecated | ambiguous | malformed_token
-tag_unregistered | tag_out_of_scope | allowedTags_unregistered
-registry_entry_untagged | registry_duplicate
-```
+### Operation
 
-blueprint maps an unknown-per-kind token to `unregistered_tag` / `undefined_property` /
-`unknown_type`; glossary emits `unknown_term` / `deprecated`; the whole-note rule pack
-(`findings.ts`) adds `malformed_token` (e.g. a whitespace tag) and `ambiguous`; the last five
-are the scope-tags provider's pack (below).
+One invocation of an action against exact inputs and subjects. An operation may produce observations, a plan, attempted and observed effects, verification, a proposal, an authority transition, and a receipt. Even a read is executed as an operation, although low-information reads may remain ephemeral.
 
-## Read-only, and the findings rule packs
+### Observation
 
-Every tool is `readOnlyHint: true` and the module has no write path. `findings.ts`
-(`noteVocabFindings` — the pure whole-note rule pack) is exposed for a single named note through
-`obsidian_validate_terms` but is **not registered as its own tool**: capabilities arrive as rule
-packs, never as new mutating surface. Deciding whether an unregistered tag *should* be added to
-the vocabulary, or a note re-tagged, is a decision the tool **names for you** — it never takes
-it.
+What Governor returned from a read operation after applying the effective scope. A replayable observation preserves the exact returned payload and its source state. It proves what Governor supplied, not what a model understood.
 
-The scope-tags provider adds its **five-finding whole-vault rule pack** (`scopeTagsFindings` in
-`scope-tags.ts` — also not a tool; rail material):
+### Effect
 
-- `tag_unregistered` — a note carries a tag no registry note declares
-- `tag_out_of_scope` — registered, but outside the note's chain union
-- `allowedTags_unregistered` — a scope whitelists a tag that isn't in the registry
-- `registry_entry_untagged` — a registry note with an empty/missing `tag` field
-- `registry_duplicate` — two registry notes claiming one token
+What Governor observed changing as a result of an operation. Intended, attempted, handler-reported, observed, and authority effects are separate facts.
 
-Per-note, `tag_out_of_scope` and `allowedTags_unregistered` also surface through
-`obsidian_validate_terms` via the optional `noteFindings` seam on `VocabularyProvider` (provider-
-specific whole-note checks, called by `noteVocabFindings`); `tag_unregistered` rides the
-ordinary token path. Report-first throughout — no write-time refusal; curation is human.
-</content>
+### Surface
+
+A door onto a registered action, such as an MCP tool, Obsidian control, automation binding, or internal Governor call. A surface cannot weaken the action's scope, authority, verification, retention, receipt, or recovery contract.
+
+### Capability
+
+A user-facing outcome Governor can currently make available, projected from one or more registered actions plus distribution, settings, dependencies, posture, and scope. Capability presence does not itself grant permission.
+
+### Scope
+
+The territory a connection may access. Scope answers **where** the assistant may work. Posture answers **what kind of operation** it may perform there.
+
+### Proposal
+
+An agent-authored change that does not yet have human standing. A proposal can be reviewed, revised, accepted, reverted, superseded, or allowed to expire.
+
+### Acceptance
+
+The human authority act that permits an exact proposal or cohort to gain standing. Acceptance can occur at review time or prospectively through a bounded mandate. It is not an agent capability.
+
+### Admission
+
+Governor's mechanical transition that gives an exact verified subject standing under a direct human acceptance or valid mandate. The authoring agent cannot perform admission.
+
+### Standing
+
+The state in which Governor treats an exact subject as authoritative for a named purpose. Presence, provenance, successful execution, verification, and standing are separate facts.
+
+### Session
+
+A durable, bounded envelope for one body of work. A session binds the actor, purpose, scope, base state, mandate, proposals, cohorts, receipts, expiry, and closure even when the client reconnects.
+
+### Mandate
+
+A human-accepted delegation naming who may act, where, for what outcome, under which change classes, limits, verifier policy, admission rule, expiry, and recovery requirements.
+
+### Cohort
+
+An immutable manifest of exact proposal items frozen for one verification and admission decision. A cohort may be selected by session, collection, scope, or change class, but later work is never added after its digest is calculated.
+
+### Change class
+
+The kind of effect a proposal has on the knowledge system: encoding, presentation, representation, structural, content, or authority. Class determines relevant invariants and verification; scale and risk are recorded separately.
+
+### Verification
+
+A named check applied to an exact subject. Verification proves its predicate—such as information preservation or link health—not universal correctness and not authority.
+
+### Attestation
+
+A signed claim about an immutable subject: who proposed it, what a human mandated, which predicate a verifier checked, why Governor admitted it, or what effect a replica observed.
+
+### Record
+
+Material intentionally preserved as historical evidence. A record normally grows through dated end-of-file appends and is protected from in-place rewriting.
+
+### Review queue
+
+The collection of proposals and frozen cohorts awaiting human attention. The review center presents that queue alongside drafts, revisions, mandates, verification, replica activity, and history without collapsing them into one state.
+
+### Receipt
+
+The human-facing presentation of an operation record: what Governor observed, what changed, which safeguards applied, how the result was verified, what remains uncertain, and how to recover.
+
+### Replica
+
+One local copy of a vault on a device. Obsidian Sync can move files among replicas; each Governor runtime maintains local effect state and admits a synced cohort only when its exact subjects and authority evidence are complete.
+
+## Four postures
+
+These are the only primary posture labels in the public interface:
+
+- **Looking only** — read, search, explain, navigate, and validate.
+- **Drafting a change** — plan or preview without applying.
+- **Proposing governed changes** — create bounded proposals that remain without standing.
+- **Working under a mandate** — act inside an accepted scope, class, transformation, budget, verifier, and admission policy.
+
+A posture is not a user role or a statement about who owns a note. It is the operation mode currently available to the connection.
+
+## Five separate state axes
+
+One of Governor's most important distinctions is that “state” is not one list.
+
+| Axis | Values you might see | It answers |
+|---|---|---|
+| Development | draft, ready, revision requested | How mature is the work? |
+| Verification | unverified, running, passed, failed, stale | Which predicates cover the exact subject? |
+| Authority | ungoverned, proposed, admitted, superseded, revoked | What has standing? |
+| Record | working, snapshot, frozen, archived | How is it retained? |
+| Operational | queued, running, blocked, completed | What is the machinery doing? |
+
+Examples:
+
+- A task can be operationally **completed** while its documentation remains **draft** and its proposal **unverified**.
+- A note can be an **archived record** that never gained **admitted standing**.
+- A proposal can be **ready for review** in development state and **proposed** in authority state.
+- A classified operation can be **completed** and **verified** without gaining standing if no acceptance or mandate covers it.
+
+## Distinctions that prevent mistakes
+
+### Path is not identity
+
+A path says where a note is now. A stable identifier says which note it is across moves and renames.
+
+### Presentation is not authority
+
+A table, summary, generated note, or Base may present facts. It does not become the canonical source merely by being convenient.
+
+### Provenance is not acceptance
+
+Provenance says where material came from. Acceptance says whether a human has given it current standing.
+
+### Success is not correctness
+
+An operation can complete exactly as requested while the request itself was mistaken. Verification checks what landed; review decides whether it is right.
+
+### Registration is not permission
+
+A capability may exist in the product but remain disabled, outside scope, incompatible, private, or excluded.
+
+### Invocation is not evidence
+
+An ephemeral operation proves no durable observation. A proposal, verification result, or admission must cite observations captured at the level its predicate requires.
+
+### Returned is not understood
+
+A replayable observation establishes what Governor returned. It does not establish that the client displayed every byte, that the model attended to it, or that the model interpreted it correctly.
+
+### Unavailable is not empty
+
+A missing dependency, disabled module, or unpublished index must be reported as unavailable. It must not become a convincing zero-result answer.
+
+### Verification is not acceptance
+
+A verifier states that a named predicate passed for an exact subject. The human gesture or mandate supplies authority; Governor admission records standing.
+
+### Session is not identity
+
+A session groups work. Governor derives actor identity from the registered connection and key binding rather than trusting a client-supplied name or Git author string.
+
+### Collection is not cohort
+
+A collection is an evolving organizational scope. A cohort is the frozen exact set selected from it for one decision.
+
+### Sync is not a transaction
+
+Obsidian Sync moves files at file granularity. Governor waits for complete subject and attestation matches before admitting a synced cohort on a receiving device.
+
+## Words you do not need to learn
+
+Developer and operator documents use terms such as revision precondition, idempotency, advisory claim, protected property, conformance debt, disposition substrate, derived artifact, action registry, and capability projection. You do not need them for ordinary use.
+
+They remain controlled terms only when they change a validator, permission, lifecycle, filing decision, retrieval result, receipt, or recovery procedure. A distinction with no operational consumer belongs in explanatory prose, not in the public vocabulary.
+
+## Naming rule
+
+When documentation or UI introduces a new public term, it must answer: **What should the user do differently because this term exists?** If the answer is “nothing,” the term should remain internal.
