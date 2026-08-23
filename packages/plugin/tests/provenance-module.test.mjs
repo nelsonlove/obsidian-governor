@@ -39,6 +39,7 @@ import {
   validateProvenanceConfig,
   globMatchesPath,
   renderAudit,
+  globSegmentRe,
 } from "../src/kernel/provenance/index.ts";
 import {
   registerProvenanceTools,
@@ -1019,5 +1020,101 @@ describe("#257 round 2: the witness, precedence, collisions, and honest emptines
   test("an existing extension is left alone; only a bare name gains .md", () => {
     assert.equal(provenanceConfigOf({ auditNote: "Some/Audit.markdown" }).auditNote, "Some/Audit.markdown");
     assert.equal(provenanceConfigOf({ auditNote: "Some/Audit" }).auditNote, "Some/Audit.md");
+  });
+});
+
+// ── 1h. #257 round 3 — the write path, not just the config value ────────────
+
+describe("#257 round 3: regen writes and READS the same note", () => {
+  test("FLAT + configured auditNote: the tool writes THERE, and preserves THAT note's human section", async () => {
+    // Round 2 fixed provenanceConfigOf and left the tool deriving, so regen
+    // read the human sections from the configured note and wrote them over the
+    // derived one — destroying the target's own hand-written text. Strictly
+    // worse than the silent-ignore it replaced, and the round-2 test never
+    // touched the write path, only the config value.
+    const DERIVED = "Meta/Plugins/Plugins.md";
+    const CONFIGURED = "Meta/My audit.md";
+    const backend = fakeBackend({
+      globs: { ".obsidian/plugins/*/manifest.json": [], "Meta/Plugins/*.md": [DERIVED] },
+      files: {
+        ".obsidian/community-plugins.json": JSON.stringify([]),
+        [DERIVED]: "---\nderived-from: []\n---\n<!-- human:start notes -->\nDERIVED-OWN-TEXT\n<!-- human:end -->\n",
+        [CONFIGURED]: "---\nderived-from: []\n---\n<!-- human:start notes -->\nCONFIGURED-OWN-TEXT\n<!-- human:end -->\n",
+      },
+      stats: {
+        [DERIVED]: { type: "file", mtime: 1 },
+        ".obsidian/community-plugins.json": { type: "file", mtime: 1 },
+      },
+    });
+    const res = await tools(backend, {
+      notesDir: "Meta/Plugins",
+      notesSource: FLAT,
+      auditNote: CONFIGURED,
+    }).tools.get("provenance_regen").handler({ write: true });
+
+    assert.equal(res.isError, undefined);
+    assert.equal(res.structuredContent.written, CONFIGURED, "the configured note is the destination");
+    assert.equal(backend._written[0].path, CONFIGURED);
+    assert.match(backend._written[0].text, /CONFIGURED-OWN-TEXT/, "it carries its OWN human section forward");
+    assert.doesNotMatch(backend._written[0].text, /DERIVED-OWN-TEXT/, "never another note's text");
+    assert.ok(!backend._written.some((w) => w.path === DERIVED), "and the derived note is not touched at all");
+  });
+
+  test("the witness is decided about the note actually written", async () => {
+    // Same root cause, other consequence: with the write going to the derived
+    // path while `self` was the configured one, the +1 was decided about a file
+    // that was never written — witnessing 2 for a set that becomes 3, so the
+    // NEXT deletion returns the count to 2 and is masked.
+    const backend = fakeBackend({
+      globs: { ".obsidian/plugins/*/manifest.json": [], "Meta/Plugins/*.md": ["Meta/Plugins/A.md"] },
+      files: { ".obsidian/community-plugins.json": JSON.stringify([]) },
+      stats: {
+        "Meta/Plugins/A.md": { type: "file", mtime: 1 },
+        ".obsidian/community-plugins.json": { type: "file", mtime: 1 },
+      },
+    });
+    const res = await tools(backend, { notesDir: "Meta/Plugins", notesSource: FLAT })
+      .tools.get("provenance_regen").handler({ write: true });
+    // Default flat destination is the derived note, which IS inside the glob:
+    // A.md + community-plugins.json = 2 now, 3 once it lands.
+    assert.equal(res.structuredContent.written, "Meta/Plugins/Plugins.md");
+    assert.match(backend._written[0].text, /^derived-source-count: 3$/m);
+  });
+
+  test("ONE glob-segment matcher: an unbalanced `[` is escaped, not a crash", () => {
+    // globMatchesPath was a second, weaker copy and threw
+    // "Unterminated character class" on a folder name the expander handles.
+    assert.doesNotThrow(() => globMatchesPath("Meta/P [wip/*.md", "Meta/P [wip/A.md"));
+    assert.equal(globMatchesPath("Meta/P [wip/*.md", "Meta/P [wip/A.md"), true);
+    // The kernel matcher and the one the expander uses are now the SAME function.
+    assert.equal(globSegmentRe("*.md").test("A.md"), true);
+    assert.equal(globSegmentRe("[!x]y").test("zy"), true, "glob negation, not a literal !");
+    assert.equal(globSegmentRe("[!x]y").test("xy"), false);
+  });
+
+  test("only a markdown extension counts — a JD-numbered name still gets .md", () => {
+    assert.equal(provenanceConfigOf({ auditNote: "Meta/Plugin audit 00.18" }).auditNote, "Meta/Plugin audit 00.18.md");
+    assert.equal(provenanceConfigOf({ auditNote: "Some/v1.2" }).auditNote, "Some/v1.2.md");
+    assert.equal(provenanceConfigOf({ auditNote: "Some/Audit.markdown" }).auditNote, "Some/Audit.markdown");
+    assert.equal(provenanceConfigOf({ auditNote: "Some/Audit.MD" }).auditNote, "Some/Audit.MD");
+  });
+
+  test("provenance_reconcile surfaces collisions, not only unmatched slots", async () => {
+    const ROOT = "00-09 System/07 Repositories";
+    const s = (n) => `${ROOT}/${n}/${n}.md`;
+    const a = s("07.10 foo"), b = s("07.11 obsidian-foo");
+    const backend = fakeBackend({
+      notes: { [a]: { "github-repo": "me/foo" }, [b]: { "github-repo": "me/obsidian-foo" } },
+      globs: {
+        ".obsidian/plugins/*/manifest.json": [".obsidian/plugins/obsidian-foo/manifest.json"],
+        [`${ROOT}/*/*.md`]: [a, b],
+      },
+      files: {
+        ".obsidian/plugins/obsidian-foo/manifest.json": JSON.stringify({ id: "obsidian-foo", version: "1.0.0" }),
+        ".obsidian/community-plugins.json": JSON.stringify([]),
+      },
+    });
+    const res = await tools(backend, {}).tools.get("provenance_reconcile").handler({});
+    assert.deepEqual(res.structuredContent.collidingSlots, [["obsidian-foo", b]]);
   });
 });

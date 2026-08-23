@@ -82,13 +82,44 @@ export function globMatchesPath(pattern: string, path: string): boolean {
   const pSegs = pattern.split("/");
   const xSegs = path.split("/");
   if (pSegs.length !== xSegs.length) return false;
-  return pSegs.every((seg, i) => {
-    if (!/[*?[]/.test(seg)) return seg === xSegs[i];
-    const re = new RegExp(
-      "^" + seg.replace(/[.+^${}()|\\]/g, "\\$&").replace(/\*/g, "[^/]*").replace(/\?/g, "[^/]") + "$",
-    );
-    return re.test(xSegs[i]);
-  });
+  return pSegs.every((seg, i) => (/[*?[]/.test(seg) ? globSegmentRe(seg).test(xSegs[i]) : seg === xSegs[i]));
+}
+
+/**
+ * One glob SEGMENT as an anchored RegExp — `*`, `?`, `[…]`, `[!…]`, matching
+ * Python `fnmatch`/`Path.glob` for the patterns provenance uses.
+ *
+ * THE ONE DEFINITION, deliberately. It lived in the Obsidian adapter, and
+ * {@link globMatchesPath} was written as a second, weaker copy — which threw
+ * `Unterminated character class` on an unbalanced `[` in a configured folder
+ * name, where the adapter's version escapes it. Two implementations of "does
+ * this glob match" that disagree is precisely the bug the witness comparison
+ * exists to avoid, so there is now one, and the expander imports it from here.
+ *
+ * `.*` for `*` cannot cross `/` because callers split on `/` first: a segment
+ * contains no slash to cross.
+ */
+export function globSegmentRe(seg: string): RegExp {
+  let out = "^";
+  for (let i = 0; i < seg.length; i++) {
+    const ch = seg[i];
+    if (ch === "*") out += ".*";
+    else if (ch === "?") out += ".";
+    else if (ch === "[") {
+      const close = seg.indexOf("]", i + 1);
+      if (close === -1) {
+        out += "\\[";
+      } else {
+        // A leading `!` negates a glob char class (`[!x]`); regex spells that `[^x]`.
+        const body = seg.slice(i + 1, close).replace(/\\/g, "\\\\");
+        out += "[" + (body.startsWith("!") ? "^" + body.slice(1) : body) + "]";
+        i = close;
+      }
+    } else {
+      out += ch.replace(/[.+^${}()|\\]/g, "\\$&");
+    }
+  }
+  return new RegExp(out + "$");
 }
 
 /** The `generator:` stamp on the rendered audit note — identifies what produced
@@ -205,8 +236,12 @@ export function provenanceConfigOf(config: Record<string, unknown>): ProvenanceC
   const fallback = notesSource === "flat" ? flatAuditPath(notesDir) : DEFAULT_AUDIT_NOTE;
   // Append `.md` only when there is no extension at all: `Audit.markdown` is a
   // deliberate filename, and `Audit.markdown.md` is nobody's intent.
+  // Only a MARKDOWN extension counts as "already has one". A generic
+  // dot-suffix test drops `.md` from names this vault actually produces —
+  // `Meta/Plugin audit 00.18` and `Some/v1.2` both end in a dot-alnum run and
+  // are not extensions — leaving a file Obsidian will not treat as a note.
   const auditNote =
-    explicit === null ? fallback : /\.[A-Za-z0-9]+$/.test(explicit) ? explicit : `${explicit}.md`;
+    explicit === null ? fallback : /\.(md|markdown)$/i.test(explicit) ? explicit : `${explicit}.md`;
 
   return { notesDir, notesSource, auditNote };
 }

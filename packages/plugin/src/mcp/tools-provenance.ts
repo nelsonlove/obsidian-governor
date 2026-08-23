@@ -47,6 +47,7 @@ import {
   type ProvenanceBackend,
   type ProvenanceSource,
   type FileStat,
+  globSegmentRe,
 } from "../kernel/provenance/index.js";
 
 const RO = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
@@ -65,35 +66,14 @@ export interface ProvenanceToolsCtx {
 }
 
 // ── glob over the vault filesystem (adapter-only; the one untestable seam) ────
+// The segment matcher is the KERNEL's (provenance-config.ts) — one definition,
+// so the expander and the witness's `globMatchesPath` cannot disagree.
 //
 // Translates a single glob segment (`*`, `?`, `[…]`) to an anchored RegExp,
 // matching Python `fnmatch`/`Path.glob` for the patterns provenance uses
 // (`.obsidian/plugins/*/manifest.json`, `{notesDir}/*.md`, a wildcard
 // `derived-from` entry). `**` is not needed by any provenance pattern and is
 // treated as a literal `*` segment.
-function globSegmentRe(seg: string): RegExp {
-  let out = "^";
-  for (let i = 0; i < seg.length; i++) {
-    const ch = seg[i];
-    if (ch === "*") out += ".*";
-    else if (ch === "?") out += ".";
-    else if (ch === "[") {
-      const close = seg.indexOf("]", i + 1);
-      if (close === -1) {
-        out += "\\[";
-      } else {
-        // A leading `!` negates a glob char class (`[!x]`); regex spells that `[^x]`.
-        const body = seg.slice(i + 1, close).replace(/\\/g, "\\\\");
-        out += "[" + (body.startsWith("!") ? "^" + body.slice(1) : body) + "]";
-        i = close;
-      }
-    } else {
-      out += ch.replace(/[.+^${}()|\\]/g, "\\$&");
-    }
-  }
-  return new RegExp(out + "$");
-}
-
 interface VaultAdapter {
   stat(path: string): Promise<{ type: "file" | "folder"; mtime: number } | null>;
   read(path: string): Promise<string>;
@@ -298,6 +278,7 @@ export function registerProvenanceTools(
           notesDir: cfg.notesDir,
           notesSource: cfg.notesSource,
           unmatchedSlots: r.unmatchedSlots,
+          collidingSlots: r.collidingSlots,
           counts: {
             installed: Object.keys(r.installed).length,
             enabled: r.enabled.length,
@@ -334,10 +315,17 @@ export function registerProvenanceTools(
     },
     async ({ write }) => {
       try {
-        // The destination is CONFIGURATION in jd-slots mode, never derived from
-        // the folder — deriving it would resolve onto that folder's own JD
-        // folder note and rewrite it (#257).
-        const path = cfg.notesSource === "jd-slots" ? cfg.auditNote : auditPath(cfg.notesDir);
+        // The destination is `cfg.auditNote` in BOTH layouts — flat's default
+        // still derives, inside provenanceConfigOf, but the tool never derives
+        // again here.
+        //
+        // Branching on the mode was a half-applied fix and strictly worse than
+        // the bug it replaced: `regenerateAudit` read the existing note's
+        // human sections from `cfg.auditNote` while this wrote to the derived
+        // path, so a flat vault with a configured auditNote had one note's
+        // hand-written sections copied over a DIFFERENT note, destroying the
+        // target's own. One path, read and written, or they drift.
+        const path = cfg.auditNote;
         const text = await regenerateAudit(
           source as ProvenanceSource,
           nowStamp(),

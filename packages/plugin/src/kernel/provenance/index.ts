@@ -26,6 +26,7 @@ export {
   DEFAULT_AUDIT_NOTE,
   notesGlob,
   globMatchesPath,
+  globSegmentRe,
   flatAuditPath,
   AUDIT_GENERATOR,
   AUDIT_DERIVATION_MODE,
