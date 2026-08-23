@@ -14,7 +14,7 @@
 // OPT-IN per-skill `preload: true` (over that skill's attached agents), not from attachment —
 // preloading a whole scope would spend the fresh context window delegation exists to provide.
 // A per-agent `no-skills: true` emits the one real boundary the platform offers
-// (`disallowedTools: [Skill]`). See docs/overview.md.
+// (`disallowedTools: [Skill]`). See docs/README.md.
 //
 // `type: command` notes are flat — they take no part in the tree (no parent, no ownership) and
 // emit a Claude Code slash command at `commands/<name>.md`. `type: policy` bodies are injected

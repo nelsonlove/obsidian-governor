@@ -2,7 +2,6 @@
 
 Status: normative implementation handoff for the settled target design  
 Decision date: 2026-08-20  
-Companion task: `[[07.36 obsidian-governor]]`  
 Repository: `nelsonlove/obsidian-governor`
 
 > [!important]

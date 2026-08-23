@@ -18,11 +18,13 @@ issues (#92, #105, #107, #109, #110, #137, #153) on 2026-08-10 after an
 initial seed was found to be laundering two false claims — see the
 Known-overstated section for what that audit changed.
 
-`docs/vision-walkthrough.md` is excluded from this check entirely (not
-allowlisted, not scanned) — it is explicitly bannered as describing the
-destination, not the shipped product, and allowlisting aspiration-written-
-as-fact would train this control to accept exactly the thing it exists to
-catch. See docs-drift.test.mjs for the exclusion.
+`docs/vision-walkthrough.md` and its genre-based exclusion were RETIRED by
+the 2026-08-23 documentation migration (the page's content is owned by
+getting-started.md and user-guide.md). No file is excluded from this check
+anymore; the imported target-state corpus is handled span-by-span in the
+"Imported documentation corpus" section at the bottom — tracked, not
+approved — because allowlisting aspiration-written-as-fact as APPROVED would
+train this control to accept exactly the thing it exists to catch.
 
 If a claim's wording changes at all — including gaining or losing a
 qualifier like "through the plugin's guarded path" — it becomes a different
@@ -169,7 +171,7 @@ Known-overstated section instead — see its header for the format.
 - Every journal record's `actor.server` carries a persistent **install id** — minted once and kept beside the journal in `.obsidian/plugins/governor/install-id.json` (`packages/plugin/src/kernel/install-id.js`) — plus the **vault name** and plugin **version**.
 - They are declared generically on **every mutating registration** (`withKernelArgs` in `packages/plugin/src/mcp/guarded.ts`) and consumed generically (stripped from args and passed to `Kernel.runMutation`).
 
-## docs/modules.md
+## docs/module-system.md (formerly docs/modules.md — renamed 2026-08-23; spans match by text, headings are organizational)
 
 - Because the registrar it forwards to is the **guard-patched `server.registerTool`**, every module tool lands at the **same interception point** as every hand-registered tool — guarded, queued, journaled, kernel-args-declared, Code Mode captured — with **no module-specific bypass possible**.
 - The enforcement lives in the mount's gate (a bare `registerAll` with no gate would allow mutating tools) — but the sole `registerAll` caller is `mountModules`, which always passes it, and the guard-patched `registerTool` is the backstop underneath.
@@ -254,3 +256,115 @@ and narrow it) — this list is not meant to be permanent.
   tracked by: #137, #105, #107 (same residuals as the opening claim).
 - An agent that has never heard of the acceptance model, or one actively trying to forge acceptance, hits the same wall: the write is refused before it lands.
   tracked by: #137, #105, #107 — for these specific paths, the write is not currently refused.
+
+## Imported documentation corpus (2026-08-23) — tracked, not approved-as-true, PENDING OPERATOR REVIEW
+
+The 2026-08-23 documentation migration (PR #340, executed on the operator's
+go) landed the target-state corpus, importing 48 flagged spans at once. Per
+this file's own rule, an entry means a HUMAN reviewed the sentence — so be
+explicit about what these entries are instead: they were classified by the
+migration session (agent), each with its evidence note below, and they are
+tracked here so the check tells the truth rather than being widened or
+bypassed. NONE is approved-as-true by a human yet. The operator's
+span-by-span review pass is the named follow-up: promote entries whose note
+says "substantiated" (after checking the named pins), and leave the
+gate-tracked ones here until their gate ships. The corpus-level honesty
+anchor for every target-state claim is docs/status-and-compatibility.md
+§ Current release state.
+
+- An agent may accept a bounded delegation, but acceptance and admission remain outside every agent surface.
+  tracked by: Gate 2 (mandates) per docs/status-and-compatibility.md § Current release state — target-state, not shipped in 0.17.0. The acceptance/admission-outside-agent-surface half is substantiated by the perimeter suites. [docs/README.md:51]
+- portable standing begins prospectively; legacy acceptance imports as evidence, never fabricated signed authority;
+  tracked by: Gate 3 (signing / portable standing / Sync replicas) per docs/status-and-compatibility.md § Current release state — target-state, not shipped in 0.17.0. The no-fabrication half is substantiated by WP8's import pins (no authority fields on evidence records). [docs/architecture.md:54]
+- It cannot register a capability around the guard.
+  tracked by: substantiated as of 0.17.0 — module host + guard interception-point suites (modules-mount refuses non-read-only registrations; the guard wraps every registration). Promotion to an approved section is the operator's call. [docs/architecture.md:91]
+- The accepted family is a structural floor enforced at the shared write primitive and at every exceptional transport that can write content.
+  tracked by: #137, #105, #107 — the same accept-guard residuals the entries above track; this is the corpus restating the claim those entries already refuse to launder. [docs/architecture.md:231]
+- Mutating optional modules cannot receive a raw accept, admit, signer, mandate-activation, baseline, or standing-ref primitive.
+  tracked by: substantiated as of 0.17.0 — no signer/mandate/standing-ref primitive exists to hand out, and the module host's registerAll gate refuses mutating registrations (pinned by its own suite). Promotion is the operator's call. [docs/architecture.md:264]
+- They cannot weaken human acceptance or Governor-only admission.
+  tracked by: substantiated as of 0.17.0 — perimeter suites (accept human-only; admission gesture-gated). Promotion is the operator's call. [docs/architecture.md:274]
+- An agent cannot accept a result, activate or widen a mandate, choose an authoritative actor or signer, sign as the human, admit, revoke human authority, or advance a standing ref.
+  tracked by: substantiated for what ships (admission gesture-gated, one-shot refs; accept human-only); mandate/signing verbs do not exist yet (Gates 2–3), so those clauses are vacuously true today. Promotion is the operator's call. [docs/coding-agent-development-guide.md:73]
+- Sampling may supplement an audit but never establishes standing.
+  tracked by: substantiated as of 0.17.0 — WP7 exact-and-total coverage pins (a failed or unevaluated item fails the cohort; sampling has no code path to standing). Promotion is the operator's call. [docs/coding-agent-development-guide.md:77]
+- Private signing keys never enter notes, Git, journals, ordinary settings, release artifacts, or Sync.
+  tracked by: Gate 3 (signing / portable standing / Sync replicas) per docs/status-and-compatibility.md § Current release state — target-state, not shipped in 0.17.0. [docs/coding-agent-development-guide.md:81]
+- | `packages/plugin/src/mcp/guarded.ts` and other surface registration | Action registry plus surface bindings | Inventory both directions, bind every surface to a versioned action, and make raw handler reachability a build failure |
+  tracked by: work-package directive (WP0/WP10 territory), not a shipped claim — the guide speaks in imperatives to its implementer. [docs/coding-agent-development-guide.md:111]
+- | `kernel/governance/auto-accept/*` | Transformation registry, verifiers, and mandate policy | Reassess every class; no legacy entry receives automatic authority merely because it was previously allowlisted |
+  tracked by: work-package directive (WP9 territory), not a shipped claim. [docs/coding-agent-development-guide.md:119]
+- Never write note bodies to the audit journal.
+  tracked by: substantiated as of 0.17.0 — kernel digestArgs pins (bodies collapse to `<N chars>`; journal suites). Promotion is the operator's call. [docs/data-flow.md:195]
+- Treat every existing accepted property as standing** — lowest migration effort; vulnerable to stale, malformed, or agent-written properties and false provenance.
+  tracked by: REJECTED-ALTERNATIVE text inside D04 — the register describing the option it declines, not a product claim. [docs/design-decision-register.md:225]
+- A checkpoint may summarize prior segments but cannot erase revocation or provenance meaning.
+  tracked by: Gate 3 (signing / portable standing / Sync replicas) per docs/status-and-compatibility.md § Current release state — target-state, not shipped in 0.17.0. [docs/design-decision-register.md:258]
+- Configuration can extend protected properties but cannot redefine the accepted-family floor.
+  tracked by: substantiated as of 0.17.0 — ACCEPT_FORBIDDEN is a fixed set; protected-properties config extends, never replaces (pinned). Promotion is the operator's call. [docs/developer-guide.md:113]
+- Cohorts use canonical manifests and exact digests; mutable queries never become acceptance subjects.
+  tracked by: substantiated as of 0.17.0 — WP7a freeze pins (immutable exact manifests; a drifted cohort refuses). Promotion is the operator's call. [docs/developer-guide.md:131]
+- The target suite retains these because they support durable principles, not because every existing default or document is accepted unchanged.
+  tracked by: meta-statement about the documentation itself, not a runtime security claim. [docs/documentation-basis.md:104]
+- The assistant cannot press Accept, admit the result, or forge the records that represent standing.
+  tracked by: substantiated as of 0.17.0 for the shipped surface (no agent-reachable accept; admission gesture-gated; claims carry no caller-forgeable verification) — the page's surrounding walkthrough is target-state, see its banner. [docs/getting-started.md:150]
+- Git author and committer strings are never treated as authentication or acceptance.
+  tracked by: substantiated as of 0.17.0 — nothing reads commit author strings for authority; admission binds gate-minted gestureRefs (D08 suites). Promotion is the operator's call. [docs/git-and-sync.md:25]
+- never auto-accepts a merged conflict;
+  tracked by: Gate 3 (signing / portable standing / Sync replicas) per docs/status-and-compatibility.md § Current release state — target-state, not shipped in 0.17.0. No merge path exists in 0.17.0, so the claim is vacuously true today. [docs/git-and-sync.md:125]
+- Every path-taking operation accepts vault-relative paths and may accept registered stable or scheme addresses.
+  tracked by: substantiated as of 0.17.0 — uid:/jd: addressing binds at the shared interception point (mapPaths suites). Promotion is the operator's call. [docs/operation-contract.md:62]
+- A session, collection, folder, or query may select items, but cannot remain the mutable subject of an acceptance.
+  tracked by: substantiated as of 0.17.0 — WP7a freeze pins. Promotion is the operator's call. [docs/operation-contract.md:178]
+- The accepted family and Governor authority state are always protected.
+  tracked by: #137, #105, #107 — the same accept-guard residuals the entries above track; this is the corpus restating the claim those entries already refuse to launder. [docs/operation-contract.md:213]
+- The guard does not cover direct disk writes or every discovered side effect.
+  tracked by: an honest-limits claim (states what the guard does NOT cover) — consistent with the shipped repoint-containment and record-immutability boundaries. [docs/operation-contract.md:221]
+- Journal status never substitutes for live verification.
+  tracked by: substantiated as of 0.17.0 — verification runs at admission; degraded receipts say what was not written. Promotion is the operator's call. [docs/receipts-and-errors.md:147]
+- It cannot accept or admit its own work, enlarge its mandate, or choose the evidence that makes an out-of-policy result authoritative.
+  tracked by: substantiated for what ships (accept human-only; admit gesture-gated; service-run verification); mandate clauses are Gate 2. See also the residual-tracked entries above. [docs/review-and-safety.md:7]
+- Acceptance is always a human authority act.
+  tracked by: #137, #105, #107 — the same accept-guard residuals the entries above track; this is the corpus restating the claim those entries already refuse to launder. [docs/review-and-safety.md:9]
+- Configuration may extend the protected set but cannot weaken the acceptance floor.
+  tracked by: substantiated as of 0.17.0 — same floor pin as docs/developer-guide.md:113. Promotion is the operator's call. [docs/review-and-safety.md:172]
+- An agent cannot interpret continued conversation, silence, or prior approval as acceptance of a changed mandate.
+  tracked by: Gate 2 (mandates) per docs/status-and-compatibility.md § Current release state — target-state, not shipped in 0.17.0. [docs/sessions-mandates-and-cohorts.md:72]
+- An agent never accepts its own work.
+  tracked by: #137, #105, #107 — the same accept-guard residuals the entries above track; this is the corpus restating the claim those entries already refuse to launder. [docs/sessions-mandates-and-cohorts.md:135]
+- “Accept all” never means future work and never means every pending item in an evolving query.
+  tracked by: substantiated in kernel terms as of 0.17.0 (cohorts freeze to exact manifests; a changed member refuses) — the session-accept UI framing is target-state (Gate 2). [docs/sessions-mandates-and-cohorts.md:153]
+- | Takes effect | After a human accepts the mandate; never retroactively |
+  tracked by: Gate 2 (mandates) per docs/status-and-compatibility.md § Current release state — target-state, not shipped in 0.17.0. [docs/settings.md:205]
+- | Acceptance | On in target product | Human sessions, cohorts, mandates, admission, and history | Review, Git, verifier, and attestation services | Return to proposal-only operation; never expose agent admission |
+  tracked by: target-product settings table — the row describes the target module layout, labeled by the page's own 'target product' column. [docs/settings.md:281]
+- A journal-write failure never turns a completed vault mutation into a failure response.
+  tracked by: substantiated as of 0.17.0 — journal failures are swallowed and never fail the vault operation (kernel suites). Promotion is the operator's call. [docs/settings.md:303]
+- A later checkpoint may summarize earlier segments but cannot erase revocation or provenance meaning.
+  tracked by: Gate 3 (signing / portable standing / Sync replicas) per docs/status-and-compatibility.md § Current release state — target-state, not shipped in 0.17.0. [docs/standing-and-attestations.md:216]
+- Each authorized device or verifier role has its own private signing key in operating-system protected secret storage; private keys never enter notes, Git, journals, ordinary settings, or Obsidian Sync.
+  tracked by: Gate 3 (signing / portable standing / Sync replicas) per docs/status-and-compatibility.md § Current release state — target-state, not shipped in 0.17.0. [docs/standing-and-attestations.md:220]
+- | Human review, cohorts, mandates, and acceptance | Public default in-app surface | Acceptance never exposed to agents; prospective authority remains exact and bounded |
+  tracked by: a row of the page's own TARGET-STATE product matrix, labeled as such by the table it sits in. [docs/status-and-compatibility.md:40]
+- Every module surface binds a registered action through the shared operation executor; no module receives raw accept or baseline authority.
+  tracked by: a contradiction-register resolution describing target architecture, labeled 'Resolved in target architecture' in place. [docs/status-and-compatibility.md:141]
+- **Earlier target claim:** Every proposal required a contemporaneous individual human acceptance gesture.
+  tracked by: HISTORICAL quote inside contradiction C-007 — the register quoting the earlier claim it corrects. [docs/status-and-compatibility.md:147]
+- **Controls:** opaque command and code execution absent from the public surface; dynamic templates fail closed where output cannot be inspected; private packs require separate enablement and audit.
+  tracked by: mixed shipped/target controls list — the shipped subset (no public code execution, allowlists, read-only default) is substantiated; verifier/mandate clauses are Gates 2–3. [docs/threat-model.md:153]
+- | Acceptance and protected-property floor | Fail closed: refuse the write when honored bytes cannot be inspected |
+  tracked by: the accept-guard's fail-closed posture ships (unreadable bytes refuse); the row's full mitigation table is target-labeled. [docs/threat-model.md:257]
+- You accept the final mandate in Obsidian; the agent cannot broaden it later.
+  tracked by: Gate 2 (mandates) per docs/status-and-compatibility.md § Current release state — target-state, not shipped in 0.17.0. [docs/user-guide.md:103]
+- “Accept this session” always freezes and displays the exact current items.
+  tracked by: the freeze semantics are substantiated (WP7a/WP7b pins: exact manifests, drift refuses); the session-accept UI is target-state (Gate 2). [docs/user-guide.md:134]
+- It never accepts future session work. “Accept this collection” means the exact cohort currently selected from the collection, not every note that may later enter it.
+  tracked by: the freeze semantics are substantiated (WP7a/WP7b pins: exact manifests, drift refuses); the session-accept UI is target-state (Gate 2). [docs/user-guide.md:134]
+- **Cohort** — Governor verifies every item and you accept the frozen set once.
+  tracked by: substantiated as of 0.17.0 — WP7b cohort admission (service verifies every item; one gesture, one claim; pinned). Promotion is the operator's call. [docs/user-guide.md:167]
+- It cannot accept its own proposal, expand its mandate, choose its authoritative identity, or manufacture standing.
+  tracked by: the accept/admit/standing clauses are substantiated (perimeter + one-shot gestureRef pins); mandate/identity clauses are Gates 2–3. [README.md:48]
+- **Acceptance is always a human authority act.** You may exercise it over one result, one frozen cohort, or prospectively through a bounded mandate.
+  tracked by: #137, #105, #107 — the same accept-guard residuals the entries above track; this is the corpus restating the claim those entries already refuse to launder. The cohort half ships (WP7b); the prospective-mandate half is Gate 2. [README.md:50]
+- Governor cannot determine whether a judgment-bearing edit is substantively correct; it can make the edit legible and keep acceptance human.
+  tracked by: an honest-limits claim — states what Governor cannot do; no implementation could falsify it in the dangerous direction. [README.md:166]

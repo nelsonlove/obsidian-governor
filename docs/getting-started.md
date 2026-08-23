@@ -1,5 +1,8 @@
 # Getting started with Governor
 
+> [!note] Target-state walkthrough
+> This page describes the target product journey. Not every control below exists in the shipped release — what IS shipped is owned by [Current release state](status-and-compatibility.md#current-release-state--0170-2026-08-23). For installing the current build, see the root [README's "Installing today"](../README.md#installing-today-pre-community-directory) section.
+
 This guide assumes you know little about Obsidian and nothing about MCP. By the end, you will have asked an assistant to read from a limited part of your vault, previewed a harmless change, created and verified one proposal, accepted it in Obsidian, and understood the receipt. Mandates and batch review come later.
 
 ## Before you begin

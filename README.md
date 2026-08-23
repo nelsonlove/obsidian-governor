@@ -86,9 +86,27 @@ Governor's normal Community Plugin surface does not expose permanent deletion, a
 
 Private operators may add separately installed capability packs. Those packs are not part of the public default and are not covered merely because Governor itself appears in the Community directory.
 
+## Installing today (pre-Community-directory)
+
+Governor is not yet in Obsidian's Community Plugins directory (the submission is target state — see [Status and compatibility](docs/status-and-compatibility.md)). To install now:
+
+1. **Build** (or grab a [release](https://github.com/nelsonlove/obsidian-governor/releases) — BRAT-installable):
+   ```bash
+   npm install && npm run build      # emits main.js (bridge embedded) + manifest.json
+   ```
+2. **Copy into your vault** and enable it:
+   ```bash
+   cp main.js manifest.json <vault>/.obsidian/plugins/governor/
+   ```
+   Then Settings → Community plugins → enable **Governor**.
+3. **Connect Claude Code** — run **`Governor: Connect to Claude Code`** from the command palette (one-time; the exact registration line is always in **Settings → Governor** if you'd rather paste it yourself).
+4. **Restart any open Claude Code session** — MCP servers load at session start.
+
+Upgrading from ≤0.11 (plugin id `vault-mcp`): disable the old "Vault MCP" plugin FIRST — Governor refuses to migrate while it is enabled and says so; its first load then adopts the old folder's data and leaves a `MIGRATED.md` marker.
+
 ## Start in ten minutes
 
-1. Install Governor from Obsidian's Community Plugins directory and enable it.
+1. Install and enable Governor (see **Installing today**, above — the Community Plugins directory listing is target state).
 2. Open **Settings → Governor**.
 3. Keep the initial posture at **Looking only**.
 4. Use **Connect a local assistant** and follow the client-specific instructions.

@@ -1,5 +1,8 @@
 # Troubleshooting
 
+> [!note] Target-state document
+> This page describes the target product. Not every behavior below is shipped — what IS shipped is owned by [Current release state](status-and-compatibility.md#current-release-state--0170-2026-08-23).
+
 Start with the symptom. Do not widen scope, enable a private pack, or retry an uncertain mutation merely to see whether the error disappears.
 
 ## The assistant cannot connect

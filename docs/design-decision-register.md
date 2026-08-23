@@ -2,7 +2,6 @@
 
 Status: settled by Nelson  
 Date: 2026-08-20  
-Companion task: `[[07.36 obsidian-governor]]`
 
 ## Purpose
 
