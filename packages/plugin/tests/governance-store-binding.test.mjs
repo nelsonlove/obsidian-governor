@@ -180,3 +180,29 @@ describe("the admission binding gate — a mismatched machine cannot grow a seco
     assert.notEqual(outcome.code, "store_mismatch");
   });
 });
+
+describe("bindChain refuses a corrupt marker — a bind never launders", () => {
+  test("unparseable cutover.json → state_corrupt, file untouched, no id minted", async () => {
+    const files = new Map([["gov/cutover.json", "{ not json"]]);
+    const io = {
+      exists: async (p) => files.has(p),
+      read: async (p) => files.get(p),
+      write: async (p, d) => void files.set(p, d),
+      append: async (p, d) => void files.set(p, (files.get(p) ?? "") + d),
+      mkdir: async () => {},
+    };
+    const storeIdIo = (() => { let id = null, w = 0; return { read: async () => id, write: async (v) => { id = v; w++; }, writes: () => w }; })();
+    const migration = buildMigration({
+      io,
+      paths: { govDir: "gov", acceptanceLog: "gov/a.jsonl", pendingIndex: "gov/p.json", baselinesDir: "gov/b", legacyEvidence: "gov/e.jsonl", cutoverState: "gov/cutover.json" },
+      baselines: () => [],
+      now: () => T0,
+      storeIdIo,
+      mintId: () => "s-x",
+    });
+    await migration.loadState();
+    await assert.rejects(() => migration.bindChain("g-1"), (e) => e instanceof CutoverRefusedError && e.code === "state_corrupt");
+    assert.equal(files.get("gov/cutover.json"), "{ not json", "the unparseable file survives byte-identical for the human");
+    assert.equal(storeIdIo.writes(), 0, "no identity was minted on the refused path");
+  });
+});

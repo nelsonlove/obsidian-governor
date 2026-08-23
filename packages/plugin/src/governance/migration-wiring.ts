@@ -170,6 +170,17 @@ export function buildMigration(deps: MigrationDeps): Migration {
       return bindingVerdict(cur, await deps.storeIdIo.read());
     },
     async bindChain(gestureRef) {
+      // Same corrupt-guard as rollback, same reason: the corrupt-fallback
+      // read reports cutOver:true, and binding THAT would write the fallback
+      // over whatever the unparseable file recorded — a bind must never
+      // launder a corrupt marker into a fresh one.
+      await cutoverStore.read();
+      if (corrupt) {
+        throw new CutoverRefusedError(
+          "state_corrupt",
+          `the cutover state file (${deps.paths.cutoverState}) is unreadable — repair or remove it by hand before binding; refusing to overwrite what it may record`
+        );
+      }
       const storeId = await mintStoreIdGestured(deps.storeIdIo, gestureRef, deps.mintId);
       const next = await bindMarker(cutoverStore, gestureRef, storeId, deps.now());
       cached = next;
