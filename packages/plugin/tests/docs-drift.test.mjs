@@ -526,11 +526,18 @@ test("VACUITY: gutting the orphan detector makes the plant survive — the leg r
   const raw = readFileSync(ALLOWLIST_PATH, "utf8");
   const docs = readInvariantDocs();
   const plant = "- Governor guarantees this exact sentence appears in no scanned doc anywhere.";
-  assert.deepEqual(findOrphanEntries(raw, docs), [], "sanity: the unplanted allowlist is orphan-free");
+  // Assert the DELTA, not an absolute. An absolute `[]` baseline here would go
+  // red whenever the live allowlist happens to hold a real orphan — the same
+  // failure as the check above, but reported under this test's name, which
+  // promises something about gutting the detector. That is the very
+  // title-vs-assertion mismatch this file exists to catch, so the leg must not
+  // reproduce it: measuring the delta keeps the leg's verdict about the
+  // DETECTOR and leaves corpus state to the check above.
+  const base = findOrphanEntries(raw, docs);
   assert.deepEqual(
     findOrphanEntries(raw + "\n" + plant + "\n", docs),
-    [normalizeClaim(plant.slice(2)).slice(0, 90)],
-    "the detector must flag the planted orphan — and ONLY it"
+    [...base, normalizeClaim(plant.slice(2)).slice(0, 90)],
+    "the detector must flag the planted orphan — and change nothing else"
   );
 });
 
