@@ -28,10 +28,42 @@
 // a real gesture — the browser's unforgeability is what makes isTrusted === true reachable ONLY
 // from a physical click at runtime.
 
-// True only for a genuine, user-agent-dispatched gesture: a real Event whose isTrusted is true.
-// Rejects forged plain objects (not an Event) and synthesized Events (isTrusted forced false).
+// True only for a genuine, user-agent-dispatched gesture: a real platform Event whose isTrusted
+// is true. Rejects forged plain objects (not a platform Event) and synthesized Events (isTrusted
+// forced false).
+//
+// REALM-SAFE since the popout incident (2026-08-23): `evt instanceof Event` compares against
+// THIS realm's constructor, so a genuinely trusted click delivered in a POPOUT window (whose
+// events are instances of that window's Event) failed instanceof and the gate silently swallowed
+// a real human gesture — every gesture-gated control was dead in popouts, indistinguishable from
+// the forgery case. The realm-safe form keeps both security properties:
+//   * The WebIDL BRAND CHECK: `Event.prototype.composedPath.call(evt)` throws TypeError for
+//     anything that is not a REAL platform Event object — brand validation reads the internal
+//     slot, which is realm-independent, so a forged plain object `{isTrusted:true}` (from any
+//     realm) still cannot pass, while a popout's genuine event does.
+//   * `isTrusted` stays [LegacyUnforgeable] on every real platform Event in every realm, so a
+//     renderer-synthesized Event (any realm) still reads false.
+// There is NO instanceof fast path, deliberately (review finding, sixteenth instance): a fast
+// path returning on `evt instanceof Event` short-circuits BEFORE the brand check for exactly
+// the objects instanceof gets wrong — it tunnels proxies through their prototype chain, so a
+// get-trapped proxy forging isTrusted would be admitted at the fast path and the brand check
+// below would never run. The brand check alone decides platform-Event-ness for every input in
+// every realm; the in-realm test doubles (an Event subclass with a shadowed isTrusted getter)
+// carry the brand and still pass — verified by running, nothing in the suite needs instanceof.
+// Per-realm proxy verdict, measured through THIS function (not the primitive): the renderer's
+// brand check throws for proxied platform objects, so the forged-proxy spelling is CLOSED in
+// Chromium; Node's brand tunnels proxies, so it remains OPEN in the test environment
+// (documented in the test); Layer 1 — handler unreachability — is the primary wall in both.
+// The whole body is one try: a brand failure OR a throwing isTrusted getter (unconstructible
+// on a real browser event, a Node-realm artifact) degrades to refusal, never propagates into
+// a UI handler — the gate is total.
 export function isRealGesture(evt?: unknown): evt is Event {
-  return evt instanceof Event && evt.isTrusted === true;
+  try {
+    Event.prototype.composedPath.call(evt as Event);
+    return (evt as Event).isTrusted === true;
+  } catch {
+    return false;
+  }
 }
 
 export type DispositionOutcome = "blocked-untrusted" | "cancelled" | "done";
