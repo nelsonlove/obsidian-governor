@@ -478,6 +478,24 @@ test("VACUITY: the pending-section pins catch the planted 49th and the missing e
   assert.equal(parsePendingSection(plantedWithNote).length, PENDING_IMPORT_ENTRIES + 1, "a note-carrying plant still trips the exact count");
 });
 
+// The orphan detector, extracted so the check and its vacuity leg run the SAME
+// code. When a leg re-implements (or merely re-states) the predicate, gutting
+// the real loop leaves the leg green — which is exactly what happened here.
+function readInvariantDocs() {
+  return INVARIANT_CHECK_FILES.map((f) => normalizeClaim(readFileSync(f, "utf8")));
+}
+
+function findOrphanEntries(raw, docs) {
+  const orphans = [];
+  for (const line of raw.split("\n")) {
+    const m = /^-\s+(.*)$/.exec(line);
+    if (!m) continue;
+    const claim = normalizeClaim(m[1]);
+    if (!docs.some((d) => d.includes(claim))) orphans.push(claim.slice(0, 90));
+  }
+  return orphans;
+}
+
 test("every allowlist entry appears in some doc — an orphaned entry is a standing pre-approval for a sentence nobody has written", () => {
   // Fourteenth instance (governor-lead): a reworded doc span left its old
   // allowlist entry behind, and the "no dead entries" test's TITLE promised
@@ -488,24 +506,32 @@ test("every allowlist entry appears in some doc — an orphaned entry is a stand
   // pre-approved and the ratchet stays silent. So: every entry, both tiers,
   // must appear verbatim (normalized) in at least one scanned doc.
   const raw = readFileSync(ALLOWLIST_PATH, "utf8");
-  const docs = INVARIANT_CHECK_FILES.map((f) => normalizeClaim(readFileSync(f, "utf8")));
-  const orphans = [];
-  for (const line of raw.split("\n")) {
-    const m = /^-\s+(.*)$/.exec(line);
-    if (!m) continue;
-    const claim = normalizeClaim(m[1]);
-    if (!docs.some((d) => d.includes(claim))) orphans.push(claim.slice(0, 90));
-  }
-  assert.deepEqual(orphans, [], "orphaned allowlist entries (in no doc) — delete them or restore their sentence:\n" + orphans.join("\n"));
+  assert.deepEqual(
+    findOrphanEntries(raw, readInvariantDocs()),
+    [],
+    "orphaned allowlist entries (in no doc) — delete them or restore their sentence"
+  );
 });
 
-test("VACUITY: the orphan check catches a planted entry that no doc contains", () => {
-  const docs = INVARIANT_CHECK_FILES.map((f) => normalizeClaim(readFileSync(f, "utf8")));
-  const planted = normalizeClaim("This exact sentence about the journal guard never appearing in any accepted doc anywhere.");
-  assert.ok(!docs.some((d) => d.includes(planted)), "the plant is genuinely absent from the docs");
-  // The check's own predicate, applied to the plant, must flag it.
-  const flagged = !docs.some((d) => d.includes(planted));
-  assert.ok(flagged, "the orphan predicate fires on the plant");
+test("VACUITY: gutting the orphan detector makes the plant survive — the leg runs the REAL loop", () => {
+  // Fifteenth instance, and it was in the fix for the fourteenth: the first
+  // version of this leg asserted `!docs.some(d => d.includes(planted))` and
+  // then re-computed that SAME expression as its "the predicate fires" check.
+  // It never called the detector, so `if (false) orphans.push(...)` left the
+  // whole file green — the guard could have been deleted outright and nothing
+  // would have noticed. A vacuity leg that re-states the claim instead of
+  // exercising the code proves only that the sentence was well-chosen.
+  //
+  // So plant a genuine orphan INTO the allowlist text and run the real loop.
+  const raw = readFileSync(ALLOWLIST_PATH, "utf8");
+  const docs = readInvariantDocs();
+  const plant = "- Governor guarantees this exact sentence appears in no scanned doc anywhere.";
+  assert.deepEqual(findOrphanEntries(raw, docs), [], "sanity: the unplanted allowlist is orphan-free");
+  assert.deepEqual(
+    findOrphanEntries(raw + "\n" + plant + "\n", docs),
+    [normalizeClaim(plant.slice(2)).slice(0, 90)],
+    "the detector must flag the planted orphan — and ONLY it"
+  );
 });
 
 test("allowlist entries are unique and each still reads as an invariant claim (text-liveness, not doc-presence — orphans are the NEXT test)", () => {
