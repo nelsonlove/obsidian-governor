@@ -51,6 +51,7 @@ async function harness() {
     proposals,
     readNoteBytes: async (p) => (vault.has(p) ? enc(vault.get(p)) : null),
     writeNoteBytes: async (p, bytes) => void vault.set(p, dec(bytes)),
+    bindingGate: async () => ({ ok: true }),
     appendSettlement: async (r) => {
       if (settlementFails) throw new Error("settlement disk on fire");
       settlements.push(r);
@@ -312,7 +313,8 @@ describe("admission wiring — the full path against the real repository", () =>
         proposals: flakyProposals,
         readNoteBytes: async (p) => (local.vault.has(p) ? enc(local.vault.get(p)) : null),
         writeNoteBytes: async () => {},
-        appendSettlement: async () => {},
+        bindingGate: async () => ({ ok: true }),
+    appendSettlement: async () => {},
         now: () => T0,
       });
       const p1 = await local.produce("Notes/Sentinel.md", "base\n", "proposed\n");
@@ -343,7 +345,8 @@ describe("admission wiring — the full path against the real repository", () =>
         proposals: local.proposals,
         readNoteBytes: async (p) => (local.vault.has(p) ? enc(local.vault.get(p)) : null),
         writeNoteBytes: async () => {},
-        appendSettlement: async () => {},
+        bindingGate: async () => ({ ok: true }),
+    appendSettlement: async () => {},
         now: () => T0,
       });
       const outcome = await faulting.admitWithGesture(p1.id, "gesture-s2");

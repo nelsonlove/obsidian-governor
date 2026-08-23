@@ -1,5 +1,9 @@
 # Troubleshooting
 
+## "Cut over elsewhere; chain absent here" (or "marker unbound")
+
+This machine's vault copy says the authority cutover ran, but the standing chain the marker authorizes is not on this machine — typically a vault restore without its chain backup, or a copy of the vault. Admission answers here are deliberately refused rather than reading as an empty "nothing admitted." Fix: restore the chain backup onto this machine (which restores the authorized identity), or work on the machine that holds the chain. A marker that predates the binding fix shows "unbound" instead — resolve it with the one-time "bind this machine's chain" control, on the right machine only.
+
 ## A button in Governor does nothing when clicked
 
 If a Governor control (Accept, Admit, Cut over, adopt-baseline, the auto-accept checkboxes) produces no dialog and no notice, check whether the view lives in a popout window. On 0.15.0–0.17.0 the gesture gate refused clicks from popout windows silently (see [Status and compatibility](status-and-compatibility.md#current-release-state--0170-2026-08-23)); use the main window there. On later builds popout clicks work, and a genuinely blocked click shows a notice instead of doing nothing.
