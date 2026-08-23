@@ -1642,6 +1642,13 @@ function renderMigrationSection(containerEl: HTMLElement, plugin: Plugin): void 
       else {
         bindingEl.setText(`CHAIN BINDING: ${v.state === "marker-unbound" ? "UNBOUND" : "MISMATCH"} \u2014 ${v.detail}`);
         if (v.state === "marker-unbound") {
+          // A CORRUPT marker also reads marker-unbound (the verdict cannot
+          // see corruption) — but its bind can only refuse (state_corrupt),
+          // so the button would be a doomed control under a wrong caption.
+          // The status line above already says STATE FILE CORRUPT; suppress
+          // the button and let the repair happen by hand.
+          void migration.status().then((st) => {
+            if (st.corrupt) return;
           const bindBtn = containerEl.createEl("button", { cls: "mod-warning governance-bind-chain", text: "This machine holds the authorized chain \u2014 bind it\u2026" });
           bindBtn.addEventListener("click", (evt) => {
             void runGuardedDisposition(
@@ -1656,6 +1663,7 @@ function renderMigrationSection(containerEl: HTMLElement, plugin: Plugin): void 
                 }
               }
             ).then(noticeGestureBlocked);
+          });
           });
         }
       }

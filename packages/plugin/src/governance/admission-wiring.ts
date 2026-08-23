@@ -313,16 +313,20 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
     },
 
     async admitCohortWithGesture(frozen, members, gestureRef) {
-      {
-        const gate = await deps.bindingGate();
-        if (!gate.ok) return { ok: false, code: gate.code, detail: gate.detail };
-      }
       // The degraded discriminator is standing MOVEMENT during this call —
       // the item path's rule, applied at cohort scale. A failed pre-read is
       // "unknown", which suppresses the degraded-success branch entirely.
       let preHead: string | null = null;
       let preHeadKnown = false;
       try {
+        // Inside the try (review symmetry): a THROWING gate degrades to the
+        // caught admission_error like the item path's — never an unhandled
+        // rejection in a click handler. Unreachable with today's
+        // swallow-everything reads; pinned by shape, not by reachability.
+        {
+          const gate = await deps.bindingGate();
+          if (!gate.ok) return { ok: false, code: gate.code, detail: gate.detail };
+        }
         // RE-FETCH EVERY MEMBER at click time: the caller's array is a
         // freeze-time snapshot, and an authority/development flip that
         // changes no note bytes (a revision request, a concurrent admission)
