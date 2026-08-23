@@ -1,5 +1,8 @@
 # The acceptance model
 
+> **This documents the LEGACY acceptance system.** It remains the live authority until the WP8 cutover runs (a human-confirmed act; see the [cutover runbook](../packages/plugin/docs/wp8-cutover-runbook.md)). After the cutover its writers refuse and the successor model is [standing-and-attestations.md](standing-and-attestations.md). Current state: [status-and-compatibility.md](status-and-compatibility.md).
+
+
 > **This is the heart of the design.** Everything else in the kernel — the queue, the
 > journal, the modules — is machinery. This is the invariant the machinery exists to
 > protect.
@@ -468,7 +471,7 @@ processor, another plugin's config — produces the honored bytes after the guar
 The value of the model is that "an agent cannot accept" is not a rule an agent is *asked* to
 follow — it is a property the kernel *enforces*. An agent that has never heard of the
 acceptance model, or one actively trying to forge acceptance, hits the same wall: the write is
-refused before it lands. Combined with the [module system's](modules.md) accept/baseline
+refused before it lands. Combined with the [module system's](module-system.md) accept/baseline
 name tripwire (no module may even *register* a tool whose name mentions `accept`/`approve`/
 `baseline`) and the fact that no module is handed a write or accept surface at all, the
 invariant is defended at the write path, at the CLI path, and at the extension boundary

@@ -1,5 +1,8 @@
 # Identity substrate & link health
 
+> **Deep reference for the shipped implementation.** Canonical concepts and the target design live in the [documentation corpus](README.md); what is shipped versus target is owned by [status-and-compatibility.md](status-and-compatibility.md).
+
+
 A path is not an identity. Rename a note, move it into a folder, let a template reorganize it
 — and every path you were holding is silently wrong, usually without an error (a path that no
 longer exists reads as "create a new note here"). The identity substrate gives an agent a

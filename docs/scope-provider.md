@@ -1,6 +1,9 @@
 # Scope provider — `jd:` addressing
 
-The scope provider is a [capability module](modules.md) (id `scheme`, capabilities
+> **Deep reference for the shipped implementation.** Canonical concepts and the target design live in the [documentation corpus](README.md); what is shipped versus target is owned by [status-and-compatibility.md](status-and-compatibility.md).
+
+
+The scope provider is a [capability module](module-system.md) (id `scheme`, capabilities
 `["addressing", "allocation"]`) that gives an agent a **scheme-relative** way to name and place
 notes. The default configured scheme is **Johnny Decimal**, addressed `jd:`.
 
@@ -88,7 +91,7 @@ before it reaches any provider method or planning function, and the note being o
 before planning runs — a hidden note can be neither read as "what's there" nor written to by
 these tools.
 
-**Registration is direct, not through the module registry.** The [module registry](modules.md)'s
+**Registration is direct, not through the module registry.** The [module registry](module-system.md)'s
 `registerAll` gate refuses any tool whose `annotations.readOnlyHint !== true` — a capability
 module is load-bearing read-only-or-nothing by that gate's design. These three tools mutate by
 design, so they register directly in `server.ts`, the same way `obsidian_move_notes`/

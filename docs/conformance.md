@@ -1,5 +1,8 @@
 # The conformance engine
 
+> **Deep reference for the shipped implementation.** Canonical concepts and the target design live in the [documentation corpus](README.md); what is shipped versus target is owned by [status-and-compatibility.md](status-and-compatibility.md).
+
+
 CI for the vault: a headless TypeScript engine (`packages/plugin/src/conformance/`) that
 runs **rule packs** over a snapshot of the vault and diffs the findings against an accepted
 **baseline**, so only *new* drift alarms. It implements the project's "checks before gates"

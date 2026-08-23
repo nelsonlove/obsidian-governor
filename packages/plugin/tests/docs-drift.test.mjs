@@ -16,7 +16,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { join, dirname, resolve, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -199,13 +199,14 @@ test("annotated legacy contexts stay allowed for the 0.12.0 rename rules (no ove
 
 const ALLOWLIST_PATH = join(REPO_ROOT, "packages", "plugin", "tests", "docs-invariant-claims-allowlist.md");
 
-// docs/vision-walkthrough.md is bannered "describes the destination, not the shipped product"
-// (#154) — it deliberately writes every feature as if complete, as roadmap acceptance criteria.
-// Scanning it for unsubstantiated claims would either force allowlisting aspiration as if it
-// were a reviewed, substantiated fact, or force rewriting a document whose entire premise is
-// "written as if done." Excluded from THIS check specifically (not from FILES / the other
-// docs-drift rules above) — a vision doc is a different genre from a shipped-behavior claim.
-const INVARIANT_CHECK_EXCLUDED_FILES = [join(DOCS_DIR, "vision-walkthrough.md")];
+// docs/vision-walkthrough.md (#154's bannered vision doc) was RETIRED by the 2026-08-23
+// documentation migration — its content is owned by getting-started.md and user-guide.md per
+// the migration map — so its genre-based exclusion retired with it. The imported target-state
+// corpus is handled the other way (the way the exclusion's own rationale said aspiration must
+// NOT be handled at scale): every flagged span is tracked, not approved, in the allowlist's
+// "Imported documentation corpus" section, pending the operator's span-by-span review, with
+// docs/status-and-compatibility.md as the corpus-level honesty anchor. No file is excluded.
+const INVARIANT_CHECK_EXCLUDED_FILES = [];
 const INVARIANT_CHECK_FILES = FILES.filter((f) => !INVARIANT_CHECK_EXCLUDED_FILES.includes(f));
 
 const INVARIANT_WORD_RE = /\b(never|every|always|cannot|no way|guarantee(?:s|d|ing)?|impossible)\b/i;
@@ -415,25 +416,66 @@ test("every invariant+security claim currently in README.md / docs/*.md is on th
   );
 });
 
-test("docs/vision-walkthrough.md is excluded from the invariant-claims check, verified by injection", () => {
-  // Prove the exclusion is real, not just an assumed side effect of a filter that might be a
-  // no-op: (1) the file is still in FILES (the other docs-drift rules still cover it), (2) it
-  // is NOT in INVARIANT_CHECK_FILES, and (3) it actually contains flagged spans today — so the
-  // exclusion is doing real work, not excluding a file that would have passed anyway.
-  const visionPath = join(DOCS_DIR, "vision-walkthrough.md");
-  assert.ok(FILES.includes(visionPath), "vision-walkthrough.md must still be in FILES (other docs-drift rules apply to it)");
-  assert.ok(
-    !INVARIANT_CHECK_FILES.includes(visionPath),
-    "vision-walkthrough.md must be excluded from the invariant-claims file list specifically"
-  );
+test("the invariant-claims check covers EVERY docs file — the retired vision-doc exclusion stays retired", () => {
+  // vision-walkthrough.md was retired with the 2026-08-23 corpus migration and its exclusion
+  // with it. This pin holds the stronger property that replaced it: no file is exempt from
+  // the invariant-claims check (an exclusion list that silently regrew would recreate the
+  // scan-what-passes hazard at corpus scale), and the retired file stays gone rather than
+  // resurrecting unscanned.
+  assert.equal(INVARIANT_CHECK_EXCLUDED_FILES.length, 0, "no docs file is excluded from the invariant-claims check");
+  assert.equal(INVARIANT_CHECK_FILES.length, FILES.length, "the check's file list IS the docs corpus");
+  assert.ok(!existsSync(join(DOCS_DIR, "vision-walkthrough.md")), "vision-walkthrough.md stays retired (owned by getting-started/user-guide per the migration map)");
+});
 
-  const text = readFileSync(visionPath, "utf8");
-  assert.ok(/\(vision\)/.test(text) || /destination, not the shipped product/.test(text), "sanity: the file is still bannered as vision/aspirational prose");
-  const flaggedInVision = extractSpans(text).filter((s) => isInvariantSecurityClaim(s.text));
-  assert.ok(
-    flaggedInVision.length > 0,
-    "sanity: vision-walkthrough.md must actually contain invariant+security spans today, or this exclusion is untested"
+// The imported-corpus pending section is a DIFFERENT TIER from the approved sections, and the
+// parser is flat — so without these pins the distinction lives only in prose (twelfth instance:
+// a header stating a distinction the mechanism does not make, inside the control whose job is
+// stopping documentation from claiming more than the code does; governor-lead planted a fresh
+// no-evidence overclaim in the pending section and the suite stayed green). The pins: the
+// pending section's entry count is EXACT (a 49th entry is a visible decision, not a quiet ride;
+// promotions decrement it; zero retires the section), and every pending entry carries its
+// evidence note.
+const PENDING_SECTION_HEADING = "## Imported documentation corpus (2026-08-23)";
+const PENDING_IMPORT_ENTRIES = 48; // decrement as the operator promotes entries; delete section + pins at zero
+
+function parsePendingSection(raw) {
+  const at = raw.indexOf(PENDING_SECTION_HEADING);
+  if (at === -1) return null;
+  const rest = raw.slice(at);
+  const next = rest.indexOf("\n## ", 1);
+  const body = next === -1 ? rest : rest.slice(0, next);
+  const lines = body.split("\n");
+  const entries = [];
+  lines.forEach((line, i) => {
+    const m = /^-\s+(.*)$/.exec(line);
+    if (m) entries.push({ text: m[1], hasNote: /^\s+tracked by:/.test(lines[i + 1] ?? "") });
+  });
+  return entries;
+}
+
+test("the pending-import section is pinned: exact entry count, every entry carries its evidence note", () => {
+  const raw = readFileSync(ALLOWLIST_PATH, "utf8");
+  const entries = parsePendingSection(raw);
+  assert.ok(entries !== null, "the pending-import section exists (retire these pins when the operator's promotion review empties it)");
+  assert.equal(
+    entries.length,
+    PENDING_IMPORT_ENTRIES,
+    `the pending section holds exactly ${PENDING_IMPORT_ENTRIES} entries — adding one is a visible decision (bump the pin consciously); promoting one decrements it`
   );
+  const noteless = entries.filter((e) => !e.hasNote).map((e) => e.text.slice(0, 80));
+  assert.deepEqual(noteless, [], "every pending entry must carry its indented 'tracked by:' evidence note");
+});
+
+test("VACUITY: the pending-section pins catch the planted 49th and the missing evidence note", () => {
+  const raw = readFileSync(ALLOWLIST_PATH, "utf8");
+  // Governor-lead's exact plant: a fresh overclaim appended to the pending section, no note.
+  const planted = raw + "\n- Governor guarantees that no agent can ever bypass the acceptance perimeter under any circumstances\n";
+  const entries = parsePendingSection(planted);
+  assert.equal(entries.length, PENDING_IMPORT_ENTRIES + 1, "the count pin sees the 49th");
+  assert.ok(entries.some((e) => !e.hasNote), "the evidence-note pin sees the noteless plant");
+  // And a plant WITH a forged note still trips the count pin — the note check alone is not the defence.
+  const plantedWithNote = raw + "\n- Another overclaim\n  tracked by: nothing real\n";
+  assert.equal(parsePendingSection(plantedWithNote).length, PENDING_IMPORT_ENTRIES + 1, "a note-carrying plant still trips the exact count");
 });
 
 test("allowlist has no duplicate entries and no dead (no-longer-flaggable) entries", () => {

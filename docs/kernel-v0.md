@@ -1,5 +1,8 @@
 # Kernel v0 — the write substrate
 
+> **Deep reference for the shipped implementation.** Canonical concepts and the target design live in the [documentation corpus](README.md); what is shipped versus target is owned by [status-and-compatibility.md](status-and-compatibility.md).
+
+
 The kernel is the plugin-singleton machinery every mutating tool call routes through. It
 turns "an agent editing files" into a **serialized, journaled, concurrency-safe, attributable**
 stream of operations. It lives in `packages/plugin/src/kernel/` and is Obsidian-free by

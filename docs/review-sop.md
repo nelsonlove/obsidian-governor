@@ -1,5 +1,8 @@
 # Review SOP — comments are the gate
 
+> **Deep reference for the shipped implementation.** Canonical concepts and the target design live in the [documentation corpus](README.md); what is shipped versus target is owned by [status-and-compatibility.md](status-and-compatibility.md).
+
+
 *The durable record of the fleet's review protocol (#131), companion to the claiming SOP (#123).*
 
 ## The constraint
