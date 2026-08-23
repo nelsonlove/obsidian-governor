@@ -377,7 +377,10 @@ describe("governance module: THE TRIPWIRE — source reachability (accept surfac
     const wiringRaw = readRaw("governance/wiring.ts");
     const m = /async function setClassEnabled\([^)]*\)[^{]*\{([\s\S]*?)\n\}/.exec(wiringRaw);
     assert.ok(m, "setClassEnabled must be a module-scope function");
-    assert.match(m[1], /if \(!isRealGesture\(evt\)\) return false;/,
+    // The refusal may carry the popout-incident Notice (2026-08-23) — the pin
+    // is the GATE-then-refuse shape, not the exact statement body: the branch
+    // must test !isRealGesture(evt) and its consequent must return false.
+    assert.match(m[1], /if \(!isRealGesture\(evt\)\) \{?[^}\n]*return false;? ?\}?/,
       "setClassEnabled must refuse unless handed a real trusted gesture");
   });
 

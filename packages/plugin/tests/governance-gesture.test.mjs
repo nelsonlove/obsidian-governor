@@ -194,3 +194,82 @@ test("runGuardedAdopt IS the confirm-gated instantiation of the shared gate (one
     assert.equal(await runGuardedDisposition(evt, confirm, async () => {}), expected);
   }
 });
+
+// ── Cross-realm (popout) family — the 2026-08-23 live incident ──────────────
+//
+// A genuinely trusted click in a POPOUT window is an instance of THAT
+// window's Event, so the old `evt instanceof Event` gate returned
+// blocked-untrusted for a real human gesture — every gesture-gated control
+// was silently dead in popouts (a FALSE NEGATIVE; no attacker was ever
+// admitted). The realm-safe gate brand-checks via
+// Event.prototype.composedPath.call, which validates the platform-object
+// internal slot regardless of realm.
+//
+// Node cannot host a true second DOM realm, so the cross-realm TRUSTED case
+// uses the brand-vs-realm separation Node does offer: a REAL Event with its
+// prototype cut (instanceof false, brand intact) and an own isTrusted:true
+// (Node's isTrusted is a shadowable prototype getter — the file's documented
+// Node-vs-browser gap; in browsers isTrusted is unforgeable and reads true
+// only on user-agent events). Renderer-realm behavior was verified LIVE in
+// the running Obsidian (Chromium): forged plain THROWS, real returns [],
+// and — stricter than Node — a Proxy-wrapped Event THROWS the brand check
+// while passing instanceof, so in the runtime that matters the new gate
+// CLOSES the proxy spelling the old gate admitted at Layer 2 (Layer 1,
+// handler unreachability, was and remains the primary wall there). In Node
+// the proxy passes the brand (returns []) — a documented test-environment
+// divergence, pinned below as Node behavior.
+//
+// Vacuity discipline (#342's rule): every leg below calls the REAL
+// isRealGesture/runGuardedDisposition — no predicate is restated. Both
+// failure directions are covered by construction: gut isRealGesture to
+// `return true` and the forged/synthesized legs redden; gut it to `return
+// false` and the trusted legs redden (mutation-verified in the PR).
+
+
+function crossRealmTrustedStandIn() {
+  const evt = new Event("click");
+  Object.setPrototypeOf(evt, null);
+  Object.defineProperty(evt, "isTrusted", { value: true });
+  return evt;
+}
+
+test("cross-realm TRUSTED gesture passes: brand intact, instanceof false — the popout fix", () => {
+  const evt = crossRealmTrustedStandIn();
+  assert.equal(evt instanceof Event, false, "the stand-in genuinely fails same-realm instanceof — else this test proves nothing");
+  assert.equal(isRealGesture(evt), true, "a real platform Event that is trusted passes regardless of realm");
+});
+
+test("cross-realm SYNTHESIZED event stays blocked: brand intact, isTrusted false", () => {
+  const evt = new Event("click");
+  Object.setPrototypeOf(evt, null);
+  assert.equal(evt instanceof Event, false);
+  assert.equal(isRealGesture(evt), false, "brand alone never admits — isTrusted must be true");
+});
+
+test("forged plain object stays blocked — the brand check throws for a non-Event, in any realm", () => {
+  assert.equal(isRealGesture({ isTrusted: true }), false);
+  assert.equal(isRealGesture({ isTrusted: true, composedPath() { return []; } }), false, "carrying a composedPath function is not the brand — duck-typing would pass this, the brand check must not");
+});
+
+test("garbage inputs return false, never throw", () => {
+  for (const junk of [null, undefined, 0, 42, "click", Symbol("x"), () => {}, [], Object.create(null)]) {
+    assert.equal(isRealGesture(junk), false, String(typeof junk));
+  }
+});
+
+test("Proxy-wrapped real Event — Node passes the brand (documented divergence); the RENDERER throws it (live-verified), so the runtime gate is stricter than this test environment", () => {
+  const real = new Event("click");
+  const prox = new Proxy(real, {});
+  assert.equal(prox instanceof Event, true, "instanceof tunnels proxies — the OLD gate admitted this spelling at Layer 2");
+  // Node behavior: brand passes through the proxy, and the untrapped
+  // isTrusted reads the target's false — blocked on trust, not brand.
+  assert.equal(isRealGesture(prox), false, "an untrapped proxy still fails isTrusted");
+  // A get-trapped proxy lying about isTrusted: passes Layer 2 IN NODE ONLY.
+  // In the live renderer the brand check throws for proxied platform
+  // objects (verified 2026-08-23), so this spelling is blocked at Layer 2
+  // there; Layer 1 (addEventListener handler unreachability) is the primary
+  // wall in both. This assertion pins the NODE fact so a future change to
+  // it is a visible decision, not drift.
+  const lying = new Proxy(real, { get: (t, k) => (k === "isTrusted" ? true : Reflect.get(t, k)) });
+  assert.equal(isRealGesture(lying), true, "NODE-ONLY: brand tunnels the proxy here; renderer throws it — see the header note");
+});

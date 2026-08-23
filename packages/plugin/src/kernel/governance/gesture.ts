@@ -28,10 +28,33 @@
 // a real gesture — the browser's unforgeability is what makes isTrusted === true reachable ONLY
 // from a physical click at runtime.
 
-// True only for a genuine, user-agent-dispatched gesture: a real Event whose isTrusted is true.
-// Rejects forged plain objects (not an Event) and synthesized Events (isTrusted forced false).
+// True only for a genuine, user-agent-dispatched gesture: a real platform Event whose isTrusted
+// is true. Rejects forged plain objects (not a platform Event) and synthesized Events (isTrusted
+// forced false).
+//
+// REALM-SAFE since the popout incident (2026-08-23): `evt instanceof Event` compares against
+// THIS realm's constructor, so a genuinely trusted click delivered in a POPOUT window (whose
+// events are instances of that window's Event) failed instanceof and the gate silently swallowed
+// a real human gesture — every gesture-gated control was dead in popouts, indistinguishable from
+// the forgery case. The realm-safe form keeps both security properties:
+//   * The WebIDL BRAND CHECK: `Event.prototype.composedPath.call(evt)` throws TypeError for
+//     anything that is not a REAL platform Event object — brand validation reads the internal
+//     slot, which is realm-independent, so a forged plain object `{isTrusted:true}` (from any
+//     realm) still cannot pass, while a popout's genuine event does.
+//   * `isTrusted` stays [LegacyUnforgeable] on every real platform Event in every realm, so a
+//     renderer-synthesized Event (any realm) still reads false.
+// The same-realm fast path keeps Node-test semantics unchanged (tests use an in-realm Event
+// subclass whose isTrusted getter returns true; Node's cross-realm Event internals differ from
+// the browser's, so the brand-check branch is browser-semantics territory — see the test file's
+// note).
 export function isRealGesture(evt?: unknown): evt is Event {
-  return evt instanceof Event && evt.isTrusted === true;
+  if (evt instanceof Event) return evt.isTrusted === true;
+  try {
+    Event.prototype.composedPath.call(evt as Event);
+  } catch {
+    return false;
+  }
+  return (evt as Event).isTrusted === true;
 }
 
 export type DispositionOutcome = "blocked-untrusted" | "cancelled" | "done";

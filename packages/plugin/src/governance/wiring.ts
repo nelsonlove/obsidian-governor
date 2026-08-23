@@ -114,7 +114,7 @@ import {
   selectAcceptEligible,
   type AcceptEligibilityCtx,
 } from "../kernel/governance/menu-eligibility.js";
-import { GovernanceReviewView, VIEW_TYPE_GOVERNANCE, confirmAdopt, confirmMenuAccept, renderAllowlist, wireAdoptButton, ADOPT_BASELINE_DESC, acceptThroughGate, type ReviewController, type RevisingItem, renderLegacyRetiredNotice, confirmCutover, confirmRollbackCutover } from "./pane.js";
+import { GovernanceReviewView, VIEW_TYPE_GOVERNANCE, confirmAdopt, confirmMenuAccept, renderAllowlist, wireAdoptButton, ADOPT_BASELINE_DESC, acceptThroughGate, type ReviewController, type RevisingItem, renderLegacyRetiredNotice, confirmCutover, confirmRollbackCutover, noticeGestureBlocked } from "./pane.js";
 import { isExcludedTerritory } from "./territories.js";
 
 // Guarded territories moved to ./territories.ts when observation capture became
@@ -316,7 +316,7 @@ async function saveAllowlist(plugin: Plugin): Promise<void> {
 // adopt-baseline: it does nothing unless `evt` is a genuine trusted gesture. A forged plain
 // object or a synthesized (untrusted) event → refused (returns false), allowlist unchanged.
 async function setClassEnabled(plugin: Plugin, cls: ClassId, on: boolean, evt: unknown): Promise<boolean> {
-  if (!isRealGesture(evt)) return false;
+  if (!isRealGesture(evt)) { noticeGestureBlocked("blocked-untrusted"); return false; }
   const set = allowlistFor(plugin);
   if (on) set.add(cls); else set.delete(cls);
   await saveAllowlist(plugin);
@@ -1654,7 +1654,7 @@ function renderMigrationSection(containerEl: HTMLElement, plugin: Plugin): void 
             new Notice(`Rollback did not run: ${e instanceof Error ? e.message : String(e)}`, 12000);
           }
         }
-      );
+      ).then(noticeGestureBlocked);
     });
     return;
   }
@@ -1671,7 +1671,7 @@ function renderMigrationSection(containerEl: HTMLElement, plugin: Plugin): void 
       } catch (e) {
         new Notice(`Legacy import failed: ${e instanceof Error ? e.message : String(e)} — nothing partial is authoritative (the store is append-only evidence).`, 12000);
       }
-    });
+    }).then(noticeGestureBlocked);
   });
 
   const cutBtn = row.createEl("button", { cls: "mod-warning", text: "Cut over…" });
@@ -1703,7 +1703,7 @@ function renderMigrationSection(containerEl: HTMLElement, plugin: Plugin): void 
           new Notice(`Cutover did NOT run: ${e instanceof Error ? e.message : String(e)} — legacy remains authoritative.`, 12000);
         }
       }
-    );
+    ).then(noticeGestureBlocked);
   });
 
 }

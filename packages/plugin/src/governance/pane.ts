@@ -35,6 +35,18 @@ import { AcceptGateError, type AcceptOpts } from "../kernel/governance/accept.js
 import { type PendingItem, groupByAgent } from "../kernel/governance/queue.js";
 import { diffNote, toHunks, type DiffLine, type HunkCollapsed } from "../kernel/governance/diff.js";
 import { isRealGesture, runGuardedAdopt, runGuardedDisposition } from "../kernel/governance/gesture.js";
+import type { DispositionOutcome } from "../kernel/governance/gesture.js";
+
+// The popout incident (2026-08-23): a silently swallowed REAL click is
+// indistinguishable from the forgery case the silence was designed for — a
+// perimeter that refuses a human must say so. Shown by every gesture-gated
+// control when the gate blocks; a forger learning their forgery failed costs
+// nothing, a human whose click vanishes loses trust in the whole surface.
+export const GESTURE_BLOCKED_TEXT =
+  "Click was not recognized as a direct gesture. If this view is in a popout window on an older build, use the main window.";
+export function noticeGestureBlocked(outcome: DispositionOutcome): void {
+  if (outcome === "blocked-untrusted") new Notice(GESTURE_BLOCKED_TEXT, 8000);
+}
 
 import { dispositionsFor, dispositionById, acceptEffectFor, type DispositionId } from "../kernel/governance/dispositions.js";
 import type { AcceptResult } from "../kernel/governance/accept.js";
@@ -164,7 +176,7 @@ class ConfirmModal extends Modal {
     // or synthesized click must not slip past the human-confirmation gate). The listener is torn
     // down with the modal's contentEl on close.
     confirm.addEventListener("click", (evt) => {
-      if (!isRealGesture(evt)) return;
+      if (!isRealGesture(evt)) { noticeGestureBlocked("blocked-untrusted"); return; }
       this.settle(true);
       this.close();
     });
@@ -206,7 +218,7 @@ class GateModal extends Modal {
     const mk = (text: string, cls: string, choice: "accept" | "open" | null) => {
       const b = row.createEl("button", { text, cls });
       b.addEventListener("click", (evt) => {
-        if (!isRealGesture(evt)) return; // forged/synthesized click is inert
+        if (!isRealGesture(evt)) { noticeGestureBlocked("blocked-untrusted"); return; } // forged/synthesized click is inert
         this.decided = true;
         this.close();
         this.done(choice);
@@ -380,7 +392,7 @@ class RequestChangesModal extends Modal {
     cancel.onclick = () => this.close();
     const confirm = row.createEl("button", { cls: "mod-cta governance-request-confirm", text: "Request changes" });
     confirm.addEventListener("click", (evt) => {
-      if (!isRealGesture(evt)) return;
+      if (!isRealGesture(evt)) { noticeGestureBlocked("blocked-untrusted"); return; }
       const text = input.value.trim();
       if (!text) return; // nothing to request — keep the modal open for the human to type or cancel
       this.settle(text);
@@ -492,6 +504,7 @@ export function wireAdoptButton(
   btn.addEventListener("click", async (evt) => {
     try {
       const outcome = await runGuardedAdopt(evt, confirm, adopt);
+      noticeGestureBlocked(outcome);
       if (outcome === "done") await onDone();
     } catch (e) {
       // A stale-rendered button after the WP8 cutover reaches the store
@@ -758,7 +771,7 @@ export class GovernanceReviewView extends ItemView {
             }
             void this.rerender();
           }
-        );
+        ).then(noticeGestureBlocked);
       });
 
       const revertBtn = controls.createEl("button", { cls: "governance-revert", text: "Revert to base" });
@@ -783,7 +796,7 @@ export class GovernanceReviewView extends ItemView {
             new Notice(outcome.ok ? `Reverted; proposal ${outcome.supersededProposalId.slice(0, 8)}… superseded.` : `Not reverted [${outcome.code}]: ${outcome.detail}`, 8000);
             void this.rerender();
           }
-        );
+        ).then(noticeGestureBlocked);
       });
     }
   }
@@ -817,7 +830,7 @@ export class GovernanceReviewView extends ItemView {
           return;
         }
         await this.decideCohort(deps, sel.frozen, sel.members, gestureRef);
-      });
+      }).then(noticeGestureBlocked);
     });
     if (this.pendingSuccessor) {
       const suc = this.pendingSuccessor;
@@ -828,7 +841,7 @@ export class GovernanceReviewView extends ItemView {
       sucBtn.addEventListener("click", (evt) => {
         void runGuardedDisposition(evt, null, async (gestureRef) => {
           await this.decideCohort(deps, suc.frozen, suc.members, gestureRef);
-        });
+        }).then(noticeGestureBlocked);
       });
     }
   }
@@ -949,7 +962,7 @@ export class GovernanceReviewView extends ItemView {
       });
       proposedAcceptBtn.title = acceptEffectFor("proposed", identity);
       proposedAcceptBtn.addEventListener("click", async (evt) => {
-        if (!isRealGesture(evt)) return; // inert on forged arg or synthesized click
+        if (!isRealGesture(evt)) { noticeGestureBlocked("blocked-untrusted"); return; } // inert on forged arg or synthesized click
         proposedAcceptBtn.disabled = true;
         try {
           const res = await acceptThroughGate(this.app, deps, item.path, item.title);
@@ -971,7 +984,7 @@ export class GovernanceReviewView extends ItemView {
         text: requestDesc.label,
       });
       proposedRequestBtn.addEventListener("click", async (evt) => {
-        if (!isRealGesture(evt)) return; // inert on forged arg or synthesized click
+        if (!isRealGesture(evt)) { noticeGestureBlocked("blocked-untrusted"); return; } // inert on forged arg or synthesized click
         const text = await promptRequestChanges(this.app, item.title);
         if (text === null) return; // cancelled — nothing changes
         proposedRequestBtn.disabled = true;
@@ -1026,7 +1039,7 @@ export class GovernanceReviewView extends ItemView {
       // authority-class discipline). Reaches the module-scope performWithdraw via deps only.
       const withdrawBtn = controls.createEl("button", { cls: "governance-withdraw", text: withdrawDesc.label });
       withdrawBtn.addEventListener("click", async (evt) => {
-        if (!isRealGesture(evt)) return; // inert on forged arg or synthesized click
+        if (!isRealGesture(evt)) { noticeGestureBlocked("blocked-untrusted"); return; } // inert on forged arg or synthesized click
         withdrawBtn.disabled = true;
         try {
           await deps.withdraw(item.path);
@@ -1178,7 +1191,7 @@ export class GovernanceReviewView extends ItemView {
     // isRealGesture (forged plain-object arg fails instanceof Event; synthesized click has
     // isTrusted false). Only a physical human click reaches deps.accept / deps.revert.
     acceptBtn.addEventListener("click", async (evt) => {
-      if (!isRealGesture(evt)) return; // inert on forged arg or synthesized click
+      if (!isRealGesture(evt)) { noticeGestureBlocked("blocked-untrusted"); return; } // inert on forged arg or synthesized click
       setBusy(true);
       try {
         const res = await acceptThroughGate(this.app, deps, item.path, item.title);
@@ -1196,7 +1209,7 @@ export class GovernanceReviewView extends ItemView {
       }
     });
     revertBtn.addEventListener("click", async (evt) => {
-      if (!isRealGesture(evt)) return; // inert on forged arg or synthesized click
+      if (!isRealGesture(evt)) { noticeGestureBlocked("blocked-untrusted"); return; } // inert on forged arg or synthesized click
       setBusy(true);
       try {
         await deps.revert(item.path);
@@ -1213,7 +1226,7 @@ export class GovernanceReviewView extends ItemView {
     // the state change run: acceptance-status → revising + the [!revision-request] callout below
     // the note's H1 (deps.requestChanges → module-scope performRequestChanges in wiring.ts).
     requestBtn.addEventListener("click", async (evt) => {
-      if (!isRealGesture(evt)) return; // inert on forged arg or synthesized click
+      if (!isRealGesture(evt)) { noticeGestureBlocked("blocked-untrusted"); return; } // inert on forged arg or synthesized click
       const text = await promptRequestChanges(this.app, item.title);
       if (text === null) return; // cancelled — nothing changes
       setBusy(true);
