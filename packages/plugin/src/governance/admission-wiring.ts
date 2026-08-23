@@ -116,8 +116,14 @@ export interface BuildAdmissionDeps {
    * NEW chain beside a marker naming another — the exact split the binding
    * exists to prevent. Refusing both ways: legacy already refuses (cutOver),
    * and admission refuses HERE with the verdict's own honest detail.
+   *
+   * REQUIRED and called unconditionally (review finding - fourth
+   * guard-exists-path-doesn't-run of the week): as an optional field, the
+   * one production wiring in main.ts was unpinned and deletable with a
+   * green suite. Required means the COMPILER pins the wiring: a .ts caller
+   * cannot build without providing the gate.
    */
-  bindingGate?: () => Promise<{ ok: true } | { ok: false; code: string; detail: string }>;
+  bindingGate: () => Promise<{ ok: true } | { ok: false; code: string; detail: string }>;
   refreshProjections?: () => Promise<void>;
   now?: () => number;
 }
@@ -307,7 +313,7 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
     },
 
     async admitCohortWithGesture(frozen, members, gestureRef) {
-      if (deps.bindingGate) {
+      {
         const gate = await deps.bindingGate();
         if (!gate.ok) return { ok: false, code: gate.code, detail: gate.detail };
       }
@@ -449,7 +455,7 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
       let preHead: string | null = null;
       let preHeadKnown = false;
       try {
-        if (deps.bindingGate) {
+        {
           const gate = await deps.bindingGate();
           if (!gate.ok) return { ok: false, code: gate.code, detail: gate.detail };
         }

@@ -51,6 +51,7 @@ async function harness(opts = {}) {
     proposals,
     readNoteBytes: async (p) => (vault.has(p) ? enc(vault.get(p)) : null),
     writeNoteBytes: async (p, bytes) => void vault.set(p, new TextDecoder().decode(bytes)),
+    bindingGate: async () => ({ ok: true }),
     appendSettlement: opts.appendSettlement ?? (async () => {}),
     now: () => T0,
   });
@@ -404,7 +405,8 @@ describe("review regressions — correlation, staleness, concurrency, degradatio
   test("a settlement-append failure AFTER the CAS reports a DEGRADED success — the admission stands and projections advance", async () => {
     let failNext = false;
     const h = await harness({
-      appendSettlement: async () => {
+      bindingGate: async () => ({ ok: true }),
+    appendSettlement: async () => {
         if (failNext) {
           failNext = false;
           throw new Error("disk full (injected)");
