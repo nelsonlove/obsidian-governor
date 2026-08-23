@@ -257,19 +257,30 @@ test("garbage inputs return false, never throw", () => {
   }
 });
 
-test("Proxy-wrapped real Event — Node passes the brand (documented divergence); the RENDERER throws it (live-verified), so the runtime gate is stricter than this test environment", () => {
+test("Proxy spelling, per-realm verdict measured through isRealGesture itself: CLOSED in the renderer, OPEN in Node, Layer 1 in both", () => {
   const real = new Event("click");
   const prox = new Proxy(real, {});
-  assert.equal(prox instanceof Event, true, "instanceof tunnels proxies — the OLD gate admitted this spelling at Layer 2");
-  // Node behavior: brand passes through the proxy, and the untrapped
-  // isTrusted reads the target's false — blocked on trust, not brand.
-  assert.equal(isRealGesture(prox), false, "an untrapped proxy still fails isTrusted");
-  // A get-trapped proxy lying about isTrusted: passes Layer 2 IN NODE ONLY.
-  // In the live renderer the brand check throws for proxied platform
-  // objects (verified 2026-08-23), so this spelling is blocked at Layer 2
-  // there; Layer 1 (addEventListener handler unreachability) is the primary
-  // wall in both. This assertion pins the NODE fact so a future change to
-  // it is a visible decision, not drift.
+  assert.equal(prox instanceof Event, true, "instanceof tunnels proxies — which is why the gate must have NO instanceof fast path (16th instance: a fast path returned before the brand check ever ran for exactly these objects)");
+  assert.equal(isRealGesture(prox), false, "an untrapped proxy fails isTrusted (target's false) — this leg alone cannot distinguish brand behavior");
+  // THE leg that matters: a get-trapped proxy FORGING isTrusted. Verdict is
+  // per-realm, each measured through the real function:
+  //   * Renderer (live-verified 2026-08-23, verbatim function body evaluated
+  //     in the running Obsidian): Chromium's brand check THROWS for proxied
+  //     platform objects, so isRealGesture(forging proxy) === false. CLOSED.
+  //   * Node (this assertion): the brand tunnels the proxy — true. OPEN in
+  //     the test environment only. Layer 1 (addEventListener handler
+  //     unreachability) is the primary wall in both realms.
+  // This pin holds the NODE fact so a change to it is a visible decision —
+  // and unlike the untrapped leg, this one CAN fail: a Node brand that
+  // stopped tunneling proxies would flip it.
   const lying = new Proxy(real, { get: (t, k) => (k === "isTrusted" ? true : Reflect.get(t, k)) });
-  assert.equal(isRealGesture(lying), true, "NODE-ONLY: brand tunnels the proxy here; renderer throws it — see the header note");
+  assert.equal(isRealGesture(lying), true, "NODE fact: brand tunnels proxies here; the renderer refuses them — verdicts are per-realm, see above");
+});
+
+test("a throwing isTrusted getter degrades to refusal, never propagates into a UI handler", () => {
+  // Unconstructible on a real browser event (isTrusted is unforgeable); a
+  // Node-realm artifact. The gate must answer false, not throw.
+  const evt = new Event("click");
+  Object.defineProperty(evt, "isTrusted", { get() { throw new Error("boom"); } });
+  assert.equal(isRealGesture(evt), false);
 });

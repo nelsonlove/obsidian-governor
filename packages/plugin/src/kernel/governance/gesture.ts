@@ -43,18 +43,27 @@
 //     realm) still cannot pass, while a popout's genuine event does.
 //   * `isTrusted` stays [LegacyUnforgeable] on every real platform Event in every realm, so a
 //     renderer-synthesized Event (any realm) still reads false.
-// The same-realm fast path keeps Node-test semantics unchanged (tests use an in-realm Event
-// subclass whose isTrusted getter returns true; Node's cross-realm Event internals differ from
-// the browser's, so the brand-check branch is browser-semantics territory — see the test file's
-// note).
+// There is NO instanceof fast path, deliberately (review finding, sixteenth instance): a fast
+// path returning on `evt instanceof Event` short-circuits BEFORE the brand check for exactly
+// the objects instanceof gets wrong — it tunnels proxies through their prototype chain, so a
+// get-trapped proxy forging isTrusted would be admitted at the fast path and the brand check
+// below would never run. The brand check alone decides platform-Event-ness for every input in
+// every realm; the in-realm test doubles (an Event subclass with a shadowed isTrusted getter)
+// carry the brand and still pass — verified by running, nothing in the suite needs instanceof.
+// Per-realm proxy verdict, measured through THIS function (not the primitive): the renderer's
+// brand check throws for proxied platform objects, so the forged-proxy spelling is CLOSED in
+// Chromium; Node's brand tunnels proxies, so it remains OPEN in the test environment
+// (documented in the test); Layer 1 — handler unreachability — is the primary wall in both.
+// The whole body is one try: a brand failure OR a throwing isTrusted getter (unconstructible
+// on a real browser event, a Node-realm artifact) degrades to refusal, never propagates into
+// a UI handler — the gate is total.
 export function isRealGesture(evt?: unknown): evt is Event {
-  if (evt instanceof Event) return evt.isTrusted === true;
   try {
     Event.prototype.composedPath.call(evt as Event);
+    return (evt as Event).isTrusted === true;
   } catch {
     return false;
   }
-  return (evt as Event).isTrusted === true;
 }
 
 export type DispositionOutcome = "blocked-untrusted" | "cancelled" | "done";
