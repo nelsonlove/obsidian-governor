@@ -281,7 +281,7 @@ anchor for every target-state claim is docs/status-and-compatibility.md
 - The accepted family is a structural floor enforced at the shared write primitive and at every exceptional transport that can write content.
   tracked by: #137, #105, #107 — the same accept-guard residuals the entries above track; this is the corpus restating the claim those entries already refuse to launder. [docs/architecture.md:231]
 - Mutating optional modules cannot receive a raw accept, admit, signer, mandate-activation, baseline, or standing-ref primitive.
-  tracked by: substantiated as of 0.17.0 — no signer/mandate/standing-ref primitive exists to hand out, and the module host's registerAll gate refuses mutating registrations (pinned by its own suite). Promotion is the operator's call. [docs/architecture.md:264]
+  tracked by: substantiated as of 0.17.0 — no signer/mandate/standing-ref primitive exists to hand out, and the module host's gate refuses UNDECLARED mutating registrations (declared-mutating modules register through the guard-patched registrar with full kernel treatment; accept/baseline primitives are never in any module's context — pinned by the modules-mount suite). Promotion is the operator's call. [docs/architecture.md:264]
 - They cannot weaken human acceptance or Governor-only admission.
   tracked by: substantiated as of 0.17.0 — perimeter suites (accept human-only; admission gesture-gated). Promotion is the operator's call. [docs/architecture.md:274]
 - An agent cannot accept a result, activate or widen a mandate, choose an authoritative actor or signer, sign as the human, admit, revoke human authority, or advance a standing ref.
@@ -301,7 +301,7 @@ anchor for every target-state claim is docs/status-and-compatibility.md
 - A checkpoint may summarize prior segments but cannot erase revocation or provenance meaning.
   tracked by: Gate 3 (signing / portable standing / Sync replicas) per docs/status-and-compatibility.md § Current release state — target-state, not shipped in 0.17.0. [docs/design-decision-register.md:258]
 - Configuration can extend protected properties but cannot redefine the accepted-family floor.
-  tracked by: substantiated as of 0.17.0 — ACCEPT_FORBIDDEN is a fixed set; protected-properties config extends, never replaces (pinned). Promotion is the operator's call. [docs/developer-guide.md:113]
+  tracked by: substantiated as of 0.17.0 — the accepted-family floor is fixed in code (`acceptForbiddenReason` in packages/core accept-guard.ts — "THE FLOOR IS NOT CONFIG"; `normalizeProtectedProperties` drops floor keys loudly); protected-properties config extends, never replaces (pinned). Promotion is the operator's call. [docs/developer-guide.md:113]
 - Cohorts use canonical manifests and exact digests; mutable queries never become acceptance subjects.
   tracked by: substantiated as of 0.17.0 — WP7a freeze pins (immutable exact manifests; a drifted cohort refuses). Promotion is the operator's call. [docs/developer-guide.md:131]
 - The target suite retains these because they support durable principles, not because every existing default or document is accepted unchanged.
@@ -368,3 +368,17 @@ anchor for every target-state claim is docs/status-and-compatibility.md
   tracked by: #137, #105, #107 — the same accept-guard residuals the entries above track; this is the corpus restating the claim those entries already refuse to launder. The cohort half ships (WP7b); the prospective-mandate half is Gate 2. [README.md:50]
 - Governor cannot determine whether a judgment-bearing edit is substantively correct; it can make the edit legible and keep acceptance human.
   tracked by: an honest-limits claim — states what Governor cannot do; no implementation could falsify it in the dangerous direction. [README.md:166]
+
+The three entries below were added 2026-08-23 by the coherence-audit fix pass
+(NOT part of the original import): the module-system C-006 alignment and the
+install-id path correction reworded flagged sentences, and per this file's
+own rule a changed span is a new claim. Same epistemic status as the rest of
+this section — agent-classified, tracked, pending the operator's review. The
+count pin in docs-drift.test.mjs was bumped 48 → 51 consciously for these.
+
+- Every journal record's `actor.server` carries a persistent **install id** — minted once and kept beside the journal in `.obsidian/plugins/governor/install-id.json` (`packages/plugin/src/kernel/install-id.ts`) — plus the **vault name** and plugin **version**.
+  tracked by: substantiated as of 0.17.0 — install-id.ts loadInstallId + its suite (persistent id beside the journal; ephemeral fallback); this is the previously-approved span with the file extension corrected .js → .ts. Promotion is the operator's call. [docs/kernel-v0.md]
+- The only registrar a module holds is the wrapped `scoped` registrar, which runs the forbidden-name + collision + gate checks before forwarding — a module cannot walk it to a raw `registerTool` or to any accept surface.
+  tracked by: substantiated as of 0.17.0 — modules-mount suite (gate + forbidden-name + collision pins) and registration-surface-sealed suite (every SDK registration method patched or sealed). Promotion is the operator's call. [docs/module-system.md]
+- A declared-mutating module's handlers can reach VAULT writes — that is what the declaration grants — but only through the guarded path with the full kernel treatment; **no mounted handler, mutating or not, can reach an accept, baseline, or standing-authority surface** (those primitives are simply never in any module's context).
+  tracked by: substantiated as of 0.17.0 — modules-mount suite (declared-mutating registration rides the guard-patched registrar; host ctx pinned to getSettings+visible over Object.keys) and accept-forbidden suite. This sentence is the C-006 alignment the status page's register calls for. Promotion is the operator's call. [docs/module-system.md]

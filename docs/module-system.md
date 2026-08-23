@@ -32,7 +32,7 @@ interface VaultModule {
 
 - **`capability`** — faces agents; contributes tools.
 - **`governance`** — faces the human; a deliberately one-way, read-only surface (the shape of
-  the [acceptance module](README.md#the-acceptance-module)'s review pane). **The v1 host
+  the acceptance module's review pane). **The v1 host
   refuses governance-postured modules outright** at construction. The fold (#83) landed by
   clearing that gate rather than lifting it: the acceptance module (module id `acceptance`;
   the posture name `governance` is unrelated to the retired module id of the same spelling)
@@ -75,21 +75,21 @@ module the v1 registry will instantiate at all. The tripwire exists so a future 
 
 ### 2. The read-only mount gate
 
-`mountModules` passes the registry a **gate** that refuses any module tool whose annotations are
-not **explicitly** read-only:
+`mountModules` passes the registry a **gate**: a module's tool must be **explicitly**
+read-only (`readOnlyHint === true`, strict — absent or `false` both refused) **unless the
+module itself declares `mutating: true`** in its registration row. A refused tool is **not
+registered, not recorded in `describe()`, and does not reserve its name** (the gate runs
+*before* the registration is recorded, so bookkeeping stays truthful).
 
-```ts
-gate: (name, def) => def?.annotations?.readOnlyHint === true ? null : "not explicitly read-only …"
-```
-
-The check is strict `=== true` (absent or `false` both refused) — stricter than the write guard
-itself. A refused tool is **not registered, not recorded in `describe()`, and does not reserve
-its name** (the gate runs *before* the registration is recorded, so bookkeeping stays truthful).
-The two v1 modules pass because all nine of their tools are `readOnlyHint: true`. A future module
-that grows a mutating handler **fails the mount loudly** rather than drifting onto the write path.
-The enforcement lives in the mount's gate (a bare `registerAll` with no gate would allow mutating
-tools) — but the sole `registerAll` caller is `mountModules`, which always passes it, and the
-guard-patched `registerTool` is the backstop underneath.
+The `mutating: true` declaration is a real, deliberate escape hatch — six of the current
+modules use it (see the table below) — not a bypass of any write control: a declared-mutating
+module's tools still register through the guard-patched registrar, so they take the full
+kernel treatment (read-only mode, path allowlist, write queue, journal, kernel args) exactly
+like built-in mutating tools. What the gate refuses is the UNDECLARED case: slipping a
+mutating handler into a module that did not declare itself mutating fails the mount loudly
+rather than drifting onto the write path. This matches the resolution the status page's
+contradiction C-006 records: the module contract distinguishes read-only from declared
+mutating actions; no module receives raw accept or baseline authority either way.
 
 ## The host context handed to modules is minimal
 
@@ -101,13 +101,13 @@ guard-patched `registerTool` is the backstop underneath.
   module bounds its answers by the read boundary **exactly** like the built-in tools, without
   importing `guard.ts`.
 
-There is **no `kernel`, no raw server, no `registerTool`, no baseline/accept primitive**. (The
-`ModuleHostCtx` *type* permits optional `kernel?`/`sources?` for future use, but the mount
-populates neither.) The only registrar a module holds is the wrapped `scoped` registrar, which
-runs the forbidden-name + collision + read-only checks before forwarding — a module cannot walk
-it to a raw `registerTool` or to any write/accept surface. Every mounted handler's own context
-carries only read-only closures; no mounted handler can reach a write, accept, or baseline
-surface.
+There is **no raw server, no raw `registerTool`, no baseline/accept primitive**. The only
+registrar a module holds is the wrapped `scoped` registrar, which runs the forbidden-name +
+collision + gate checks before forwarding — a module cannot walk it to a raw `registerTool`
+or to any accept surface. A declared-mutating module's handlers can reach VAULT writes — that
+is what the declaration grants — but only through the guarded path with the full kernel
+treatment; **no mounted handler, mutating or not, can reach an accept, baseline, or
+standing-authority surface** (those primitives are simply never in any module's context).
 
 ## Toggling a module
 
@@ -119,8 +119,9 @@ type ModuleSettings = Record<string, { enabled?: boolean; config?: Record<string
 ```
 
 - **`modules.<id>.enabled`** overrides the module's default. The **Modules** section of the
-  plugin settings tab (`connection-ui.ts`) renders a toggle per module ("Scope provider
-  module", "Vocabulary provider module") writing this flag.
+  plugin settings tab (`connection-ui.ts`) renders a GENERATED section per registered module —
+  an "Enabled" toggle plus whatever config controls the module's manifest declares — so a new
+  module gets its settings surface from its manifest rather than hand-built UI.
 - **`modules.<id>.config`** is merged over the module's `settingsSchema.defaults` (shallow).
 - **When it takes effect.** Config the *handlers* read (allowlist, scheme rows, vocabularies) is
   a thunk, so those edits land live. But `enabled` is read once **per mount, i.e. per
@@ -135,16 +136,29 @@ type ModuleSettings = Record<string, { enabled?: boolean; config?: Record<string
     reload** (`main.ts setGovernanceMounted` → `wireGovernance` returns a child `Component` the
     plugin `removeChild`s on disable). Its badge-display config is still read live per refresh.
     The always-on read-only `obsidian_pending_review` MCP view is unaffected by the toggle either
-    way. This live behavior is scoped to that one module; every other module stays next-connect.
+    way. The scheme module's in-Obsidian panes (Inbox/Drift) live-mount the same way. Tool surfaces
+    for every module stay next-connect.
 
-## The two built-in modules
+## The built-in modules
 
-| Module id | Posture | Capabilities | Tools | Doc |
-| --- | --- | --- | --- | --- |
-| `scheme` | capability | `addressing`, `allocation` | `obsidian_schemes`, `obsidian_resolve_address`, `obsidian_next_address`, `obsidian_list_scope`, `obsidian_expected_location` | [scope-provider.md](scope-provider.md) |
-| `vocab` | capability | `vocabulary` | `obsidian_vocabularies`, `obsidian_resolve_term`, `obsidian_validate_terms`, `obsidian_list_vocabulary` | [vocabulary.md](vocabulary-module.md) |
+The authoritative inventory is the [module directory](modules.md); this table is the
+mount-registration view (id, default, declared posture). Eleven modules register today:
 
-Both pre-date the host, so their config rows still live in the top-level `schemes` /
+| Module id | Default | Posture | Capabilities |
+| --- | --- | --- | --- |
+| `scheme` | enabled | read-only | `addressing`, `allocation` — deep ref: [scope-provider.md](scope-provider.md) |
+| `vocab` | enabled | read-only | `vocabulary` — deep ref: [vocabulary-module.md](vocabulary-module.md) |
+| `bases` | enabled | read-only | `bases` — deep ref: [bases.md](bases.md) |
+| `health` | disabled | read-only | `health` |
+| `acceptance` | disabled | read-only (zero MCP tools; gates the in-Obsidian review pane) | `acceptance` |
+| `skills` | disabled | **mutating** | `compile`, `export`, `authoring` — deep ref: [skills.md](skills.md) |
+| `provenance` | disabled | **mutating** | `freshness`, `reconcile`, `regen` — deep ref: [provenance.md](provenance.md) |
+| `fileclass` | disabled | **mutating** | `fileclass` |
+| `crosssession` | disabled | **mutating** | `coordination` — deep ref: [crosssession.md](crosssession.md) |
+| `jd-scaffold` | disabled | **mutating** | `scaffolding` |
+| `triage` | disabled | **mutating** | `triage` — deep ref: [triage.md](triage.md) |
+
+The first two (`scheme`, `vocab`) pre-date the host, so their config rows still live in the top-level `schemes` /
 `vocabularies` settings (not `modules.<id>.config`) and their tool layers filter via their own
 `getSettings` + guard imports — preserved verbatim so the mount is a pure re-wiring with **zero
 behavior change**. A *new* module should instead read `host`/`config` and use `host.visible`,

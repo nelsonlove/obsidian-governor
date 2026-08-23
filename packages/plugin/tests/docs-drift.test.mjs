@@ -436,7 +436,7 @@ test("the invariant-claims check covers EVERY docs file — the retired vision-d
 // promotions decrement it; zero retires the section), and every pending entry carries its
 // evidence note.
 const PENDING_SECTION_HEADING = "## Imported documentation corpus (2026-08-23)";
-const PENDING_IMPORT_ENTRIES = 48; // decrement as the operator promotes entries; delete section + pins at zero
+const PENDING_IMPORT_ENTRIES = 51; // 48 imported 2026-08-23 + 3 from the coherence-audit fix pass (C-006 alignment + install-id path correction reworded flagged spans — see the section's dated note). Decrement as the operator promotes entries; delete section + pins at zero
 
 function parsePendingSection(raw) {
   const at = raw.indexOf(PENDING_SECTION_HEADING);

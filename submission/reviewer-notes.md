@@ -2,6 +2,9 @@
 
 These notes orient an Obsidian Community Plugin or security reviewer to Governor's highest-consequence boundaries. They are a review map, not a substitute for source inspection or release evidence.
 
+> [!important]
+> Like the rest of this packet, these notes describe the TARGET submission. What is shipped today is owned by [Status and compatibility](../docs/status-and-compatibility.md#current-release-state--0170-2026-08-23) — as of 0.17.0, mandates, signing/attestation envelopes, and Sync replica reconciliation named below are Gates 2+ target state, not inspectable behavior. A reviewer of the current build should read the checks below as the acceptance criteria those gates must meet, not as claims about 0.17.0.
+
 ## Why the plugin has broad local authority
 
 Governor connects a local AI client to the running Obsidian application so the client can retrieve live vault information and request governed changes. Community Plugins inherit Obsidian's privileges, so the meaningful security boundary is Governor's own registration, scope, guard, review, and release design—not an OS sandbox claim.
@@ -105,7 +108,7 @@ Any intentional non-public API hop must be feature-checked, isolated, documented
 
 ### 11. Optional dependencies
 
-For Bases, vocabulary, schemes, conformance, triage, coordination, and external publishers, verify disabled/missing/incompatible/unavailable behavior. A missing source must not become a convincing empty result.
+For Bases, vocabulary, schemes, conformance, and external publishers, verify disabled/missing/incompatible/unavailable behavior. A missing source must not become a convincing empty result. (Triage mutations and cross-session coordination are a stronger check: per [Status and compatibility](../docs/status-and-compatibility.md), they are target-private in the first release — verify they are ABSENT from the Community bundle, as the [release checklist](release-checklist.md) states, not merely disabled.)
 
 ### 12. Startup and large-vault cost
 
@@ -133,7 +136,7 @@ Reviewers should be able to confirm these are absent, not merely default-off:
 - destructive import; and
 - authority-restoring version restoration.
 
-Private-pack documentation exists to make the boundary explicit. It is not evidence that private code belongs in the submitted bundle.
+Private-pack documentation exists to make the boundary explicit. It is not evidence that private code belongs in the submitted bundle. Beyond the exclusions above, six in-repo capabilities are **target-private in the first release** and must also be absent from the bundle: skills/policy compilation, cross-session coordination, JD scaffolding, triage mutations, QuickAdd execution, and provenance regeneration ([Status and compatibility](../docs/status-and-compatibility.md)).
 
 ## Known residual risks
 
@@ -147,6 +150,7 @@ Private-pack documentation exists to make the boundary explicit. It is not evide
 - Third-party host APIs may change or behave differently while appearing available.
 - Human review can still be overloaded or careless.
 - Obsidian Sync can expose a temporary mixed working tree while a cohort is still receiving.
+- The standing chain's backup coverage is ruled but implementation lives outside the plugin (issue #337); until the operator's backup job covers the history store, losing that local directory reads as "nothing is admitted" (a critical health check makes the state loud).
 
 These are documented in the [Threat model](../docs/threat-model.md), not hidden as implementation trivia.
 

@@ -1,5 +1,8 @@
 # Agent guide
 
+> [!note] Target-state document
+> This page describes the target product. Not every behavior below is shipped — what IS shipped is owned by [Current release state](status-and-compatibility.md#current-release-state--0170-2026-08-23).
+
 This is the normative behavioral contract for an AI assistant using Governor. It supplements tool schemas. A schema says what a call accepts; this guide says how to work safely and how to explain the result to a person.
 
 ## Prime directive
@@ -85,7 +88,7 @@ Use the session id and actor binding Governor provides. You may suggest a human-
 
 Before delegated work, inspect the exact mandate. You may:
 
-- accept the assignment it offers;
+- agree to the assignment it offers (agreeing to work confers no standing);
 - refuse it;
 - draft a narrower counter-proposal;
 - ask Governor to split mixed change classes; or

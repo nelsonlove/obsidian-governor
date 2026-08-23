@@ -47,7 +47,7 @@ A record's shape (`packages/plugin/src/kernel/journal.ts`):
 {"ts":"2026-08-08T19:04:11.427Z","op":"obsidian_write_note",
  "target":{"path":"Inbox/Idea.md","uid":"019f…"},
  "actor":{"transport":"mcp","client":"claude-code/1.0.0","connection":"m1x8g-3",
-          "server":{"vault":"obsidian","install":"3f7c…","version":"0.8.0"}},
+          "server":{"vault":"obsidian","install":"3f7c…","version":"0.8.0"}},   // illustrative sample from an older release; the shape is current
  "argsDigest":{"path":"Inbox/Idea.md","content":"<812 chars>","overwrite":true},
  "outcome":"ok","durationMs":37,"queueWaitMs":0,
  "revBefore":1754680000000,"revAfter":1754680051427,
@@ -208,7 +208,7 @@ claim to disclose in a session that cannot write. Listing still works. Claims ar
 
 Every journal record's `actor.server` carries a persistent **install id** — minted once and
 kept beside the journal in `.obsidian/plugins/governor/install-id.json`
-(`packages/plugin/src/kernel/install-id.js`) — plus the **vault name** and plugin **version**.
+(`packages/plugin/src/kernel/install-id.ts`) — plus the **vault name** and plugin **version**.
 This is what keeps a journal attributable after it's copied off the machine, and keeps two
 vaults' journals distinguishable when read together. The `initialize` handshake carries the
 vault name too, in `serverInfo.title`.
@@ -231,4 +231,3 @@ argument would be discarded before the wrapper ever saw it. Declaring once cover
 surface and Code Mode's `obsidian_call_tool` (which parses against the same captured shape). A
 mutating tool — built-in or external — must therefore not name an argument after one of these
 reserved keys; the peel strips them at runtime regardless of the tool's own schema.
-</content>
