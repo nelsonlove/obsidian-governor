@@ -41,24 +41,9 @@ Known-overstated section instead — see its header for the format.
 
 ## README.md
 
-- Governor is an Obsidian plugin that connects AI agents (Claude Code, or anything that speaks MCP) to your vault the *governed* way: agents see your vault the way Obsidian does, every change they make is recorded and attributed, and one rule is enforced at the shared write primitive: **an agent cannot mark its own work as accepted through it.
-- **A paper trail for everything.** Every mutating operation through the plugin's guarded path lands in an append-only journal: what happened, to which note, by which agent, in which session — and, when the agent says so, *why*. (The optional headless FS-fallback mode is a documented exception — see [Honest limits](#honest-limits).) "What did it do while I was out" becomes a file you can read.
-- Reviewing and accepting is meant to happen only in the plugin's human-only review pane (the **acceptance module**) — never through the API on the surfaces the guard covers today; the surfaces it doesn't cover yet are named, tracked gaps, not silent ones (see [Honest limits](#honest-limits)).
-- Open the journal (or the review pane, if the acceptance module is enabled): every change is there, attributed, diffable, waiting for your verdict.
-- **Acceptance is a human gesture, and it goes in no API.** There is no accept tool, no accept argument, and no way to smuggle acceptance in as data **through the shared write primitive**: it rejects any write that would introduce `acceptance-status: accepted` (or `accepted-by` / `accepted-on`), on every write surface that routes through it — including the CLI proxy — while leaving your own existing accepted values untouched.
-- The guarantee is narrower and real: nothing arriving through a surface the guard covers can forge acceptance, every write on the plugin's guarded path is journaled, and out-of-band changes surface as drift.
-- Every claim above about journaling is scoped to the plugin's guarded path, not this fallback.
-- **The guard doesn't cover every surface yet — named, not papered over.** Templated note creation ([#137](https://github.com/nelsonlove/obsidian-governor/issues/137), [#105](https://github.com/nelsonlove/obsidian-governor/issues/105)), CLI flag-form arguments ([#107](https://github.com/nelsonlove/obsidian-governor/issues/107)), and a couple of lower-severity paths can currently introduce or resurrect acceptance without going through the guarded primitive.
-- Context-conscious sessions can use **Code Mode** (`--code-mode` on the bridge command): three meta-tools — search, describe, call — over the same registry, with every guard binding on the target tool exactly as on the full surface.
 
 ## docs/README.md
 
-- | **[acceptance-model.md](acceptance-model.md)** | **The heart of the design.** Acceptance is human-only — "the accept verb goes in no API." The accept-forbidden guard at the shared write primitive, on every write surface that routes through it (including the CLI proxy), and its documented residuals (tracked publicly; not yet all closed). |
-- **Agents can stamp identity** (a created-seeded UUIDv7 `uid`, `created`/`modified`, canonical frontmatter order) and **attach an advisory `intent`** ("why I'm making this change") that rides the journal record — but stamping itself **never writes acceptance** (it defaults and preserves `acceptance-status`, never mints or elevates it); the guard against acceptance arriving by other routes is the shared write primitive, and its known gaps are tracked (see the top-level [README's Honest limits](../README.md#honest-limits)).
-- **The human keeps the sole accept veto — by design, and by enforcement on the surfaces the guard covers.** Acceptance is a gesture made in the **[acceptance module](#the-acceptance-module)** — never through a tool, agent, or CLI call the guard sees.
-- The acceptance model's guarantees below are stated for the **plugin's guarded write surfaces**; these issues are the honest boundary of that claim until closed.
-- "Every write is journaled" is true of the **plugin's kernel-guarded path** only, never of this fallback.
-- | [provenance.md](provenance.md) | The provenance module: derived-content freshness — what `derived-from` + `generated` detect, the two-tier deleted-source detection (missing plain paths always; glob deletions via the opt-in `derived-source-count` witness), and the honest limits of an mtime-based check. |
 
 ## docs/acceptance-model.md
 
@@ -150,7 +135,6 @@ Known-overstated section instead — see its header for the format.
 
 ## docs/conformance.md
 
-- An explicit `--baseline=` fixture path is always allowed; the guard flips once the port set is complete and the cutover rebaseline is reviewed.
 - Frontmatter is a `generated`/`generator` derivation stamp, never an acceptance field (accept-guard-checked before every write).
   substantiated 2026-08-17: `renderDebtRegister` emits a fixed two-key frontmatter block
   (nothing from the sidecar reaches frontmatter), and BOTH write paths —
@@ -168,15 +152,11 @@ Known-overstated section instead — see its header for the format.
 - Every mutating operation appends **one JSONL line** to `.obsidian/plugins/governor/journal/YYYY-MM.jsonl` (rolled monthly, inside the plugin's own folder, not the note tree).
 - A failed journal write is logged to console and dropped; it never fails the vault operation.
 - Claiming and releasing are treated as **mutating** (journaled with `target.ref = scope:<prefix>` / `lock:<id>`), so **read-only mode blocks claiming and releasing** — there is nothing for a claim to disclose in a session that cannot write.
-- Every journal record's `actor.server` carries a persistent **install id** — minted once and kept beside the journal in `.obsidian/plugins/governor/install-id.json` (`packages/plugin/src/kernel/install-id.js`) — plus the **vault name** and plugin **version**.
 - They are declared generically on **every mutating registration** (`withKernelArgs` in `packages/plugin/src/mcp/guarded.ts`) and consumed generically (stripped from args and passed to `Kernel.runMutation`).
 
 ## docs/module-system.md (formerly docs/modules.md — renamed 2026-08-23; spans match by text, headings are organizational)
 
 - Because the registrar it forwards to is the **guard-patched `server.registerTool`**, every module tool lands at the **same interception point** as every hand-registered tool — guarded, queued, journaled, kernel-args-declared, Code Mode captured — with **no module-specific bypass possible**.
-- The enforcement lives in the mount's gate (a bare `registerAll` with no gate would allow mutating tools) — but the sole `registerAll` caller is `mountModules`, which always passes it, and the guard-patched `registerTool` is the backstop underneath.
-- There is **no `kernel`, no raw server, no `registerTool`, no baseline/accept primitive**. (The `ModuleHostCtx` *type* permits optional `kernel?`/`sources?` for future use, but the mount populates neither.) The only registrar a module holds is the wrapped `scoped` registrar, which runs the forbidden-name + collision + read-only checks before forwarding — a module cannot walk it to a raw `registerTool` or to any write/accept surface.
-- Every mounted handler's own context carries only read-only closures; no mounted handler can reach a write, accept, or baseline surface.
 
 ## docs/reference.md
 
@@ -218,6 +198,15 @@ shared `moveOne` seam pinned by `tests/link-healing.test.mjs`'s source scan.
 - A patch carrying an acceptance field is refused at validation AND sanitized/dropped at coercion — it can never reach a note.
 - Moves ride the shared link-healing move primitive (`moveOne` — `fileManager.renameFile`, parents created, **never an overwrite**: `destination_occupied`); trash is Obsidian's trash; frontmatter transitions go through `processFrontMatter` with the shared accept-forbidden rule re-checked over every effective patch.
 
+
+Orphan purge (2026-08-23): the allowlist→docs direction was added to
+docs-drift.test.mjs (fourteenth instance — the old "no dead entries" title
+promised orphan coverage its code never ran), and its first run found the
+entries below the docs had outgrown: sentences from the pre-corpus README /
+docs family that PR #340 replaced, plus spans reworded by the coherence-fix
+pass. Each was a standing pre-approval for a sentence nobody has written —
+exempt-forever if ever re-written. Deleted rather than kept: an approval
+belongs to a living sentence. (Count: see the purge commit.)
 
 ## Known-overstated (tracked, not approved-as-true)
 
@@ -281,7 +270,7 @@ anchor for every target-state claim is docs/status-and-compatibility.md
 - The accepted family is a structural floor enforced at the shared write primitive and at every exceptional transport that can write content.
   tracked by: #137, #105, #107 — the same accept-guard residuals the entries above track; this is the corpus restating the claim those entries already refuse to launder. [docs/architecture.md:231]
 - Mutating optional modules cannot receive a raw accept, admit, signer, mandate-activation, baseline, or standing-ref primitive.
-  tracked by: substantiated as of 0.17.0 — no signer/mandate/standing-ref primitive exists to hand out, and the module host's registerAll gate refuses mutating registrations (pinned by its own suite). Promotion is the operator's call. [docs/architecture.md:264]
+  tracked by: substantiated as of 0.17.0 — no signer/mandate/standing-ref primitive exists to hand out, and the module host's gate refuses UNDECLARED mutating registrations (declared-mutating modules register through the guard-patched registrar with full kernel treatment; accept/baseline primitives are never in any module's context — pinned by the modules-mount suite). Promotion is the operator's call. [docs/architecture.md:264]
 - They cannot weaken human acceptance or Governor-only admission.
   tracked by: substantiated as of 0.17.0 — perimeter suites (accept human-only; admission gesture-gated). Promotion is the operator's call. [docs/architecture.md:274]
 - An agent cannot accept a result, activate or widen a mandate, choose an authoritative actor or signer, sign as the human, admit, revoke human authority, or advance a standing ref.
@@ -301,7 +290,7 @@ anchor for every target-state claim is docs/status-and-compatibility.md
 - A checkpoint may summarize prior segments but cannot erase revocation or provenance meaning.
   tracked by: Gate 3 (signing / portable standing / Sync replicas) per docs/status-and-compatibility.md § Current release state — target-state, not shipped in 0.17.0. [docs/design-decision-register.md:258]
 - Configuration can extend protected properties but cannot redefine the accepted-family floor.
-  tracked by: substantiated as of 0.17.0 — ACCEPT_FORBIDDEN is a fixed set; protected-properties config extends, never replaces (pinned). Promotion is the operator's call. [docs/developer-guide.md:113]
+  tracked by: substantiated as of 0.17.0 — the accepted-family floor is fixed in code (`acceptForbiddenReason` in packages/core accept-guard.ts — "THE FLOOR IS NOT CONFIG"; `normalizeProtectedProperties` drops floor keys loudly); protected-properties config extends, never replaces (pinned). Promotion is the operator's call. [docs/developer-guide.md:113]
 - Cohorts use canonical manifests and exact digests; mutable queries never become acceptance subjects.
   tracked by: substantiated as of 0.17.0 — WP7a freeze pins (immutable exact manifests; a drifted cohort refuses). Promotion is the operator's call. [docs/developer-guide.md:131]
 - The target suite retains these because they support durable principles, not because every existing default or document is accepted unchanged.
@@ -368,3 +357,17 @@ anchor for every target-state claim is docs/status-and-compatibility.md
   tracked by: #137, #105, #107 — the same accept-guard residuals the entries above track; this is the corpus restating the claim those entries already refuse to launder. The cohort half ships (WP7b); the prospective-mandate half is Gate 2. [README.md:50]
 - Governor cannot determine whether a judgment-bearing edit is substantively correct; it can make the edit legible and keep acceptance human.
   tracked by: an honest-limits claim — states what Governor cannot do; no implementation could falsify it in the dangerous direction. [README.md:166]
+
+The three entries below were added 2026-08-23 by the coherence-audit fix pass
+(NOT part of the original import): the module-system C-006 alignment and the
+install-id path correction reworded flagged sentences, and per this file's
+own rule a changed span is a new claim. Same epistemic status as the rest of
+this section — agent-classified, tracked, pending the operator's review. The
+count pin in docs-drift.test.mjs was bumped 48 → 51 consciously for these.
+
+- Every journal record's `actor.server` carries a persistent **install id** — minted once and kept beside the journal in `.obsidian/plugins/governor/install-id.json` (`packages/plugin/src/kernel/install-id.ts`) — plus the **vault name** and plugin **version**.
+  tracked by: substantiated as of 0.17.0 — install-id.ts loadInstallId + its suite (persistent id beside the journal; ephemeral fallback); this is the previously-approved span with the file extension corrected .js → .ts. Promotion is the operator's call. [docs/kernel-v0.md]
+- The only registrar a module holds is the wrapped `scoped` registrar, which runs the forbidden-name + collision + gate checks before forwarding — a module cannot walk it to a raw `registerTool` or to any accept surface.
+  tracked by: substantiated as of 0.17.0 — modules-mount suite (gate + forbidden-name + collision pins) and registration-surface-sealed suite (every SDK registration method patched or sealed). Promotion is the operator's call. [docs/module-system.md]
+- A declared-mutating module's handlers can reach VAULT writes — that is what the declaration grants — but only through the guarded path with the full kernel treatment; **no mounted handler, mutating or not, can reach an accept, baseline, or standing-authority surface** (those primitives are simply never in any module's context).
+  tracked by: substantiated as of 0.17.0 — modules-mount suite (declared-mutating registration rides the guard-patched registrar; host ctx pinned to getSettings+visible over Object.keys) and accept-forbidden suite. This sentence is the C-006 alignment the status page's register calls for. Promotion is the operator's call. [docs/module-system.md]

@@ -25,7 +25,7 @@ Standing may be superseded, revoked, or invalidated by later changes. It does no
 
 ## Acceptance and admission
 
-**Acceptance** is the human authority act. It can be contemporaneous—a click on a verified cohort—or prospective—a signed mandate for a bounded class of verified results.
+**Acceptance** is the human authority act (owned by [Review and safety](review-and-safety.md); restated here for flow). It can be contemporaneous—a click on a verified cohort—or prospective—a signed mandate for a bounded class of verified results.
 
 **Admission** is Governor's mechanical transition that records that an exact subject satisfied the applicable human authority and now has standing.
 

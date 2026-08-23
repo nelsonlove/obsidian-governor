@@ -1,10 +1,13 @@
 # Review and safety
 
+> [!note] Target-state document
+> This page describes the target product. Not every behavior below is shipped — what IS shipped is owned by [Current release state](status-and-compatibility.md#current-release-state--0170-2026-08-23).
+
 Governor treats AI-assisted vault work as a governance problem, not merely a file-access problem. The important question is not only “Can the assistant make this change?” but “Who decided it should have standing, how can the result be checked, and what happens when the operation is wrong or incomplete?”
 
 ## The central invariant
 
-An agent may create or revise a proposal and may accept a delegation from the user. It cannot accept or admit its own work, enlarge its mandate, or choose the evidence that makes an out-of-policy result authoritative.
+An agent may create or revise a proposal and may agree to a delegation from the user (agreeing to work confers no standing). It cannot accept or admit its own work, enlarge its mandate, or choose the evidence that makes an out-of-policy result authoritative.
 
 Acceptance is always a human authority act. The human may accept one exact result, one frozen cohort, or a bounded mandate that authorizes later admission when named verification predicates pass. No agent-facing capability can accept, admit, approve, advance a standing ref, sign a human mandate, or write protected authority state.
 

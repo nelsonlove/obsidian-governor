@@ -17,9 +17,9 @@
 //     — a read-only registration cannot reach the write queue, the write
 //     primitive, or the accept-guard's territory at all (the guard routes
 //     ONLY `readOnlyHint === false` calls to the kernel's mutation path).
-//     `mutating: true` is a real, deliberate escape hatch (five modules use
-//     it today: skills, provenance, fileclass, crosssession, triage), not a
-//     bypass of this gate — a module that does NOT declare it still gets the
+//     `mutating: true` is a real, deliberate escape hatch (six modules use
+//     it today: skills, provenance, fileclass, crosssession, jd-scaffold,
+//     triage), not a bypass of this gate — a module that does NOT declare it still gets the
 //     original all-read-only enforcement. Pinned by test: the mount's
 //     registerAll gate refuses a non-mutating module's tool whose
 //     annotations are not read-only (see `mountModules`), so a future module

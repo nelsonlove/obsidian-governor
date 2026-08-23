@@ -13,7 +13,7 @@ An agent may *propose* a change to the vault. It may write notes, edit frontmatt
 its reasoning, and mark its own work `acceptance-status: proposed`. What it may **never** do
 is declare that a change has been **accepted**. Acceptance — the moment a human blesses a
 proposed change as canonical — is made by a person, in the
-[acceptance module](README.md#the-acceptance-module) review pane, and **nowhere else**.
+[acceptance module](module-system.md) review pane, and **nowhere else**.
 
 The design scar, stated exactly as it appears throughout the source:
 
@@ -479,4 +479,3 @@ simultaneously.
 
 The human's accept gesture stays exactly where it belongs: in a person's hands, in the review
 pane.
-</content>

@@ -129,4 +129,3 @@ band) — distinct from a fully allocatable scope.
 `misfiled`, `duplicate_address`, `malformed_name`, `unaddressed`) that is deliberately **not
 registered as a tool** — capabilities arrive as rule packs, not as new mutating surface. It is
 available to future review/rail surfaces, not to agents as a write path.
-</content>
