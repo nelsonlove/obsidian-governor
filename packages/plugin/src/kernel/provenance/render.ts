@@ -83,11 +83,23 @@ export function renderAudit(
   ];
   lines.push(...(recon.unnoted.length ? recon.unnoted.map((id) => `- \`${id}\``) : ["- (none)"]));
   lines.push("", "## Version drift (note vs manifest)", "");
+  // "(none)" from a path that cannot fire is exactly the shape of #257. When no
+  // note recorded a version at all, say THAT — an empty drift list means
+  // "nothing to compare", not "nothing has drifted", and the two must not
+  // render the same.
+  const anyVersionRecorded = Object.keys(recon.noted).some((id) => recon.notedVersions[id] !== undefined);
   lines.push(
     ...(recon.staleVersion.length
       ? recon.staleVersion.map(([id, nv, mv]) => `- \`${id}\`: note ${nv} → manifest ${mv}`)
-      : ["- (none)"]),
+      : anyVersionRecorded
+        ? ["- (none)"]
+        : ["- (no version data — no matched note records a plugin version, so drift cannot be computed)"]),
   );
+  if (recon.collidingSlots.length) {
+    // Two notes for one plugin. The audit must not quietly pick one.
+    lines.push("", "## Notes claiming a plugin another note already claimed", "");
+    lines.push(...recon.collidingSlots.map(([id, p]) => `- \`${id}\` also claimed by \`${p}\``));
+  }
   if (notesSource === "jd-slots") {
     // Reported, not dropped. A slot whose `github-repo:` matches nothing
     // installed is either a repo that is not a plugin (fine, and visible) or a

@@ -37,6 +37,8 @@ import {
   DEFAULT_AUDIT_NOTE,
   provenanceConfigOf,
   validateProvenanceConfig,
+  globMatchesPath,
+  renderAudit,
 } from "../src/kernel/provenance/index.ts";
 import {
   registerProvenanceTools,
@@ -907,5 +909,115 @@ describe("#257 the shipped defaults, and why the audit path is not derived", () 
     assert.equal(res.structuredContent.written, DEFAULT_AUDIT_NOTE);
     assert.equal(backend._written[0].path, DEFAULT_AUDIT_NOTE);
     assert.notEqual(backend._written[0].path, auditPath(DEFAULT_NOTES_DIR), "never the folder note");
+  });
+});
+
+// ── 1g. #257 review round 2 — the six defects an independent review found ────
+
+describe("#257 round 2: the witness, precedence, collisions, and honest emptiness", () => {
+  const ROOT = "00-09 System/07 Repositories";
+  const slot = (n) => `${ROOT}/${n}/${n}.md`;
+
+  function vault({ notes = {}, extra = [], manifests = {} } = {}) {
+    const globs = {
+      ".obsidian/plugins/*/manifest.json": Object.keys(manifests).map((id) => `.obsidian/plugins/${id}/manifest.json`),
+      [`${ROOT}/*/*.md`]: [...Object.keys(notes), ...extra].sort(),
+    };
+    const files = { ".obsidian/community-plugins.json": JSON.stringify([]) };
+    for (const [id, v] of Object.entries(manifests)) {
+      files[`.obsidian/plugins/${id}/manifest.json`] = JSON.stringify({ id, version: v });
+    }
+    // resolveEntries stats a LITERAL derived-from entry; without this the
+    // community-plugins.json source resolves to nothing and the witness is short.
+    const stats = Object.fromEntries(
+      [...Object.keys(files), ...Object.keys(notes), ...extra].map((f) => [f, { type: "file", mtime: 1 }]),
+    );
+    return fakeBackend({ notes, globs, files, stats });
+  }
+
+  test("WITNESS: the audit sits OUTSIDE its own glob, so it is never counted in", async () => {
+    // The bug: `files.includes(self)` conflates "does not exist yet" with
+    // "structurally outside the glob", so under the shipped default the +1 was
+    // applied on every regen forever and the note read permanently STALE.
+    const s = slot("07.21 obsidian-governor");
+    const v = vault({ notes: { [s]: { "github-repo": "n/governor" } }, manifests: { governor: "1.0.0" } });
+    const out = await regenerateAudit(v, "2036-01-01T00:00:00", ROOT, "jd-slots", DEFAULT_AUDIT_NOTE);
+    // 1 slot note + 1 manifest + community-plugins.json = 3. The audit is NOT a
+    // fourth: it lives beside the slots, not inside `{root}/<slot>/`.
+    assert.match(out, /^derived-source-count: 3$/m);
+    assert.equal(globMatchesPath(notesGlob(ROOT, "jd-slots"), DEFAULT_AUDIT_NOTE), false);
+  });
+
+  test("WITNESS: a FLAT audit IS inside its own glob and still counts itself in", async () => {
+    // The +1 must survive for the case it was written for — a first-ever regen.
+    const v = fakeBackend({
+      globs: { ".obsidian/plugins/*/manifest.json": [], "Meta/Plugins/*.md": ["Meta/Plugins/A.md"] },
+      files: { ".obsidian/community-plugins.json": JSON.stringify([]) },
+      stats: {
+        "Meta/Plugins/A.md": { type: "file", mtime: 1 },
+        ".obsidian/community-plugins.json": { type: "file", mtime: 1 },
+      },
+    });
+    const out = await regenerateAudit(v, "2036-01-01T00:00:00", "Meta/Plugins", "flat", "Meta/Plugins/Plugins.md");
+    // A.md + community-plugins.json = 2 now, 3 once the audit lands.
+    assert.match(out, /^derived-source-count: 3$/m);
+    assert.equal(globMatchesPath(notesGlob("Meta/Plugins", "flat"), "Meta/Plugins/Plugins.md"), true);
+  });
+
+  test("COLLISION: two notes claiming one plugin — first wins, loser is REPORTED", async () => {
+    const a = slot("07.10 foo");
+    const b = slot("07.11 obsidian-foo");
+    const v = vault({
+      notes: { [a]: { "github-repo": "me/foo" }, [b]: { "github-repo": "me/obsidian-foo" } },
+      manifests: { "obsidian-foo": "1.0.0" },
+    });
+    const r = await reconcile(v, ROOT, "jd-slots");
+    assert.equal(r.noted["obsidian-foo"], a, "sorted glob order decides, deterministically");
+    assert.deepEqual(r.collidingSlots, [["obsidian-foo", b]], "the loser is reported, never silently dropped");
+    assert.ok(renderAudit(r, "t", ROOT, undefined, "jd-slots").includes(b), "and it reaches the rendered audit");
+  });
+
+  test("PRECEDENCE: an explicit `plugin.id` wins REGARDLESS of glob order", async () => {
+    // The original single-pass loop let whichever note sorted last win, so this
+    // held only by accident of filename. Assert both orders.
+    for (const name of ["07.05 explicit-first", "07.99 explicit-last"]) {
+      const ex = slot(name);
+      const repo = slot("07.21 obsidian-governor");
+      const v = vault({
+        notes: { [ex]: { plugin: { id: "governor" } }, [repo]: { "github-repo": "n/governor" } },
+        manifests: { governor: "1.0.0" },
+      });
+      const r = await reconcile(v, ROOT, "jd-slots");
+      assert.equal(r.noted["governor"], ex, `explicit id must win with slot named ${name}`);
+      assert.deepEqual(r.collidingSlots, [["governor", repo]], "the inferred note is the reported loser");
+    }
+  });
+
+  test("HONEST EMPTINESS: no note records a version ⇒ the audit says so, not “(none)”", () => {
+    const noVersions = {
+      installed: {}, enabled: [], noted: { governor: slot("07.21 obsidian-governor") },
+      unnoted: [], staleVersion: [], unmatchedSlots: [], collidingSlots: [], notedVersions: {},
+    };
+    const text = renderAudit(noVersions, "t", ROOT, undefined, "jd-slots");
+    assert.match(text, /no version data/, "an uncomputable comparison must not render as a clean one");
+    assert.doesNotMatch(text.split("## Version drift")[1].split("##")[0], /\(none\)/);
+
+    const withVersion = { ...noVersions, notedVersions: { governor: "1.0.0" } };
+    const text2 = renderAudit(withVersion, "t", ROOT, undefined, "jd-slots");
+    // VACUITY: the branch is reachable both ways — otherwise the assertion above
+    // would pass against a renderer that always printed the caveat.
+    assert.match(text2.split("## Version drift")[1].split("##")[0], /\(none\)/);
+  });
+
+  test("NO SILENT IGNORE: a configured auditNote is honoured in FLAT mode too", () => {
+    const cfg = provenanceConfigOf({ notesDir: "Meta/Plugins", notesSource: "flat", auditNote: "Meta/My audit.md" });
+    assert.equal(cfg.auditNote, "Meta/My audit.md", "a rendered, validated field must not be silently discarded");
+    // Unset ⇒ flat still derives, as it always did.
+    assert.equal(provenanceConfigOf({ notesDir: "Meta/Plugins", notesSource: "flat" }).auditNote, "Meta/Plugins/Plugins.md");
+  });
+
+  test("an existing extension is left alone; only a bare name gains .md", () => {
+    assert.equal(provenanceConfigOf({ auditNote: "Some/Audit.markdown" }).auditNote, "Some/Audit.markdown");
+    assert.equal(provenanceConfigOf({ auditNote: "Some/Audit" }).auditNote, "Some/Audit.md");
   });
 });

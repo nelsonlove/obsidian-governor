@@ -25,6 +25,8 @@ export {
   DEFAULT_NOTES_SOURCE,
   DEFAULT_AUDIT_NOTE,
   notesGlob,
+  globMatchesPath,
+  flatAuditPath,
   AUDIT_GENERATOR,
   AUDIT_DERIVATION_MODE,
   SOURCE_COUNT_FIELD,

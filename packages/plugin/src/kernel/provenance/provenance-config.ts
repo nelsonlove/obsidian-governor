@@ -55,6 +55,42 @@ export const DEFAULT_NOTES_DIR = "00-09 System/07 Repositories";
  */
 export const DEFAULT_AUDIT_NOTE = "00-09 System/07 Repositories/Plugin audit.md";
 
+/**
+ * FLAT mode's derived audit path: the note named after its own folder.
+ *
+ * Correct for a flat folder and destructive for a JD one — see
+ * {@link DEFAULT_AUDIT_NOTE}. Lives here so config resolution can default to it
+ * without reaching into regen.
+ */
+export function flatAuditPath(notesDir: string = DEFAULT_NOTES_DIR): string {
+  const dir = notesDir.replace(/\/+$/, "") || notesDir;
+  const base = dir.split("/").pop() || dir;
+  return `${dir}/${base}.md`;
+}
+
+/**
+ * Would `path` be matched by `pattern`? Structural, NOT existence-based.
+ *
+ * The witness needs "is the audit inside its own source glob", and asking
+ * "does it exist in the resolved set" answers a different question: in jd-slots
+ * mode the audit note sits beside the slots, never inside `{root}/*\/*.md`, so
+ * an existence test reports "absent" forever and adds +1 on every single regen
+ * — the note then reads permanently STALE and the deletion signal it carries
+ * becomes a constant false alarm.
+ */
+export function globMatchesPath(pattern: string, path: string): boolean {
+  const pSegs = pattern.split("/");
+  const xSegs = path.split("/");
+  if (pSegs.length !== xSegs.length) return false;
+  return pSegs.every((seg, i) => {
+    if (!/[*?[]/.test(seg)) return seg === xSegs[i];
+    const re = new RegExp(
+      "^" + seg.replace(/[.+^${}()|\\]/g, "\\$&").replace(/\*/g, "[^/]*").replace(/\?/g, "[^/]") + "$",
+    );
+    return re.test(xSegs[i]);
+  });
+}
+
 /** The `generator:` stamp on the rendered audit note — identifies what produced
  *  the derived artifact. Constant (Python `render.py`). */
 export const AUDIT_GENERATOR = "obsidian-plugin-audit";
@@ -157,12 +193,20 @@ export function provenanceConfigOf(config: Record<string, unknown>): ProvenanceC
 
   // The audit note is a FILE path; a trailing slash means someone typed a
   // folder, and writing to `…/.md` is not recoverable into an intent. Degrade.
+  //
+  // The DEFAULT depends on the layout, and an explicit value is honoured in
+  // BOTH layouts. An earlier revision derived flat mode's destination
+  // unconditionally, which made a configured `auditNote` a field the config tab
+  // renders, validate() accepts, and the code silently ignores — the exact
+  // shape this module exists to stop.
   const rawAudit = config.auditNote;
-  const auditPicked =
-    typeof rawAudit === "string" && rawAudit.trim() !== "" && !rawAudit.trim().endsWith("/")
-      ? rawAudit.trim()
-      : DEFAULT_PROVENANCE_CONFIG.auditNote;
-  const auditNote = auditPicked.endsWith(".md") ? auditPicked : `${auditPicked}.md`;
+  const explicit =
+    typeof rawAudit === "string" && rawAudit.trim() !== "" && !rawAudit.trim().endsWith("/") ? rawAudit.trim() : null;
+  const fallback = notesSource === "flat" ? flatAuditPath(notesDir) : DEFAULT_AUDIT_NOTE;
+  // Append `.md` only when there is no extension at all: `Audit.markdown` is a
+  // deliberate filename, and `Audit.markdown.md` is nobody's intent.
+  const auditNote =
+    explicit === null ? fallback : /\.[A-Za-z0-9]+$/.test(explicit) ? explicit : `${explicit}.md`;
 
   return { notesDir, notesSource, auditNote };
 }

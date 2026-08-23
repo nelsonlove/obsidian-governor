@@ -39,6 +39,16 @@ export interface Reconciliation {
    *  cannot place is exactly the thing a human needs to see, and silence here
    *  is what made the old audit useless. Always empty in `flat` mode. */
   unmatchedSlots: string[];
+  /** `[pluginId, losingNotePath]` where a SECOND note resolved to a plugin
+   *  another note already claimed. The first (in sorted glob order) keeps the
+   *  id; the loser is reported here rather than silently overwritten. It is not
+   *  an unmatched slot — it matched, and lost. */
+  collidingSlots: Array<[string, string]>;
+  /** id → the version the matched NOTE recorded, for the ids that recorded one.
+   *  Exposed so the renderer can tell "nothing has drifted" from "no note
+   *  records a version, so drift cannot be computed" — rendering those the same
+   *  is how a dead comparison reads as a clean vault. */
+  notedVersions: Record<string, string>;
 }
 
 async function readInstalled(source: ProvenanceSource): Promise<Record<string, PluginManifest>> {
@@ -128,37 +138,58 @@ export async function reconcile(
   const noted: Record<string, string> = {};
   const notedVersion: Record<string, string> = {};
   const unmatchedSlots: string[] = [];
+  const collidingSlots: Array<[string, string]> = [];
   const installedIds = new Set(Object.keys(installed));
+  const paths = await source.glob(notesGlob(notesDir, notesSource));
 
-  for (const path of await source.glob(notesGlob(notesDir, notesSource))) {
-    const fm = source.noteFrontmatter(path);
-    const p = pluginFm(fm);
-
-    // An explicit `plugin.id` is authoritative in BOTH layouts — it is the note
-    // saying what it is, rather than this code inferring it from a repo name.
-    if (typeof p.id === "string" && p.id) {
-      noted[p.id] = path;
-      if (p.version !== undefined) notedVersion[p.id] = String(p.version);
-      continue;
-    }
-
-    if (notesSource !== "jd-slots") continue;
-    // A slot folder holds more than its folder note; only the folder note
-    // represents the repo.
-    if (!isFolderNote(path)) continue;
-
-    const repo = repoNameOf(fm);
-    if (repo === null) continue; // not a repo slot at all (an inbox, an index) — not a finding
-    const id = matchInstalledId(repo, installedIds);
-    if (id === null) {
-      unmatchedSlots.push(path);
-      continue;
+  // TWO PASSES, because precedence must be a rule and not an accident of glob
+  // order. A single pass writing `noted[id]` from both branches lets whichever
+  // note sorts last win, so "an explicit `plugin.id` always wins" was true only
+  // when the explicit note happened to come second. It is the documented escape
+  // hatch for a slot the matcher cannot place, so it has to hold regardless of
+  // filename.
+  const claim = (id: string, path: string, version: unknown) => {
+    if (Object.prototype.hasOwnProperty.call(noted, id)) {
+      // Two notes for one plugin. Keep the first (glob order is sorted, so this
+      // is deterministic) and REPORT the loser. Silently dropping it is the
+      // failure this module exists to stop, and it is not an "unmatched slot" —
+      // it matched, it just lost.
+      collidingSlots.push([id, path]);
+      return;
     }
     noted[id] = path;
-    const v = p.version ?? fm?.["plugin-version"];
-    if (v !== undefined) notedVersion[id] = String(v);
+    if (version !== undefined) notedVersion[id] = String(version);
+  };
+
+  // Pass 1 — explicit `plugin.id`, in BOTH layouts: the note saying what it is.
+  const explicit = new Set<string>();
+  for (const path of paths) {
+    const fm = source.noteFrontmatter(path);
+    const p = pluginFm(fm);
+    if (typeof p.id === "string" && p.id) {
+      explicit.add(path);
+      claim(p.id, path, p.version);
+    }
+  }
+
+  // Pass 2 — jd-slots only: infer from `github-repo:`, never overriding pass 1.
+  if (notesSource === "jd-slots") {
+    for (const path of paths) {
+      if (explicit.has(path)) continue;
+      if (!isFolderNote(path)) continue; // a slot folder holds more than its folder note
+      const fm = source.noteFrontmatter(path);
+      const repo = repoNameOf(fm);
+      if (repo === null) continue; // not a repo slot at all (an inbox, an index) — not a finding
+      const id = matchInstalledId(repo, installedIds);
+      if (id === null) {
+        unmatchedSlots.push(path);
+        continue;
+      }
+      claim(id, path, pluginFm(fm).version);
+    }
   }
   unmatchedSlots.sort();
+  collidingSlots.sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]));
 
   const unnoted = Object.keys(installed).filter((id) => !(id in noted)).sort();
 
@@ -172,5 +203,5 @@ export async function reconcile(
   }
   staleVersion.sort((a, b) => a[0].localeCompare(b[0]));
 
-  return { installed, enabled, noted, unnoted, staleVersion, unmatchedSlots };
+  return { installed, enabled, noted, unnoted, staleVersion, unmatchedSlots, collidingSlots, notedVersions: notedVersion };
 }

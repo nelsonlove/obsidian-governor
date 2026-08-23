@@ -10,6 +10,8 @@ import {
   DEFAULT_NOTES_SOURCE,
   DEFAULT_AUDIT_NOTE,
   auditDerivedFrom,
+  notesGlob,
+  globMatchesPath,
   type NotesSource,
 } from "./provenance-config.js";
 
@@ -68,12 +70,19 @@ export async function regenerateAudit(
   // deletion. Once the note exists, `files` already contains it and this is a
   // no-op.
   // The audit note may or may not sit inside its own source glob: in `flat`
-  // mode it always does (it lives in the notes dir); with a configured
-  // `auditNote` it usually does NOT. `files.includes` decides per-run rather
-  // than either mode assuming — an assumption here is an off-by-one in the
-  // witness, which is exactly the deletion signal it exists to carry.
-  const self = notesSource === "jd-slots" ? auditNote : auditPath(notesDir);
-  const sourceCount = files.includes(self) ? files.length : files.length + 1;
+  // mode it always does (it lives in the notes dir); with the shipped jd-slots
+  // default it NEVER does (it sits beside the slots, not inside
+  // `{root}/<slot>/`).
+  //
+  // The +1 exists for one case only: a FIRST-EVER regen, where the note does not
+  // exist yet and so resolves one low. Asking `files.includes(self)` conflates
+  // that with "structurally outside the glob", so under the default it added +1
+  // on every regen forever and the audit read permanently STALE — turning the
+  // deletion signal the witness carries into a constant false alarm. Ask the
+  // structural question instead.
+  const self = auditNote;
+  const inOwnGlob = globMatchesPath(notesGlob(notesDir, notesSource), self);
+  const sourceCount = inOwnGlob && !files.includes(self) ? files.length + 1 : files.length;
   let rendered = renderAudit(recon, generated, notesDir, sourceCount, notesSource);
   const existing = await source.read(self);
   if (existing !== null) rendered = reinsertSections(rendered, extractSections(existing));
