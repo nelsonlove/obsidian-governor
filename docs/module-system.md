@@ -163,4 +163,3 @@ The first two (`scheme`, `vocab`) pre-date the host, so their config rows still 
 `getSettings` + guard imports — preserved verbatim so the mount is a pure re-wiring with **zero
 behavior change**. A *new* module should instead read `host`/`config` and use `host.visible`,
 per the module-host adapters convention.
-</content>

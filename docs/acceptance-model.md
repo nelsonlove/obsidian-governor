@@ -479,4 +479,3 @@ simultaneously.
 
 The human's accept gesture stays exactly where it belongs: in a person's hands, in the review
 pane.
-</content>

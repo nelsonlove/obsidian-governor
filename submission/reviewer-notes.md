@@ -108,7 +108,7 @@ Any intentional non-public API hop must be feature-checked, isolated, documented
 
 ### 11. Optional dependencies
 
-For Bases, vocabulary, schemes, conformance, and external publishers, verify disabled/missing/incompatible/unavailable behavior. A missing source must not become a convincing empty result. (Triage mutations and cross-session coordination are a stronger check: per [Status and compatibility](../docs/status-and-compatibility.md), they are target-private in the first release — verify they are ABSENT from the Community bundle, as the [release checklist](release-checklist.md) states, not merely disabled.)
+For Bases, vocabulary, schemes, conformance, and external publishers, verify disabled/missing/incompatible/unavailable behavior. A missing source must not become a convincing empty result. (Triage mutations and cross-session coordination are a stronger check: per [Status and compatibility](../docs/status-and-compatibility.md), they are target-private in the first release — verify they are ABSENT from the Community bundle (the requirement comes from the status page's matrix; the [release checklist](release-checklist.md)'s excluded-capabilities checks are where it is exercised), not merely disabled.)
 
 ### 12. Startup and large-vault cost
 
