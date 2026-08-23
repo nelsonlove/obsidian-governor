@@ -625,7 +625,14 @@ export default class VaultMcpPlugin extends Plugin {
       storeIdIo: {
         read: async () => {
           try {
-            const raw = await import("node:fs/promises").then((fs) => fs.readFile(storeIdPath, "utf8"));
+            // STATIC fs, not a dynamic import (live incident, 2026-08-23):
+            // a runtime import("node:fs/promises") goes through the
+            // renderer's module loader and is CORS-blocked
+            // (app://obsidian.md cannot fetch node: URLs) — the bind click
+            // failed live on exactly this line's sibling. The bundled
+            // static `node:fs` is the mechanism every other node API in
+            // this plugin already uses.
+            const raw = await fs.promises.readFile(storeIdPath, "utf8");
             const parsed = JSON.parse(raw) as { storeId?: unknown };
             return typeof parsed.storeId === "string" && parsed.storeId ? parsed.storeId : null;
           } catch {
@@ -633,9 +640,8 @@ export default class VaultMcpPlugin extends Plugin {
           }
         },
         write: async (id) => {
-          const fs = await import("node:fs/promises");
-          await fs.mkdir(historyDir(vaultSlug(vaultName)), { recursive: true });
-          await fs.writeFile(storeIdPath, JSON.stringify({ storeId: id, mintedAt: new Date().toISOString() }, null, 2));
+          await fs.promises.mkdir(historyDir(vaultSlug(vaultName)), { recursive: true });
+          await fs.promises.writeFile(storeIdPath, JSON.stringify({ storeId: id, mintedAt: new Date().toISOString() }, null, 2));
         },
       },
       mintId: () => uuidv7(Date.now()),
