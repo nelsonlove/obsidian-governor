@@ -478,7 +478,37 @@ test("VACUITY: the pending-section pins catch the planted 49th and the missing e
   assert.equal(parsePendingSection(plantedWithNote).length, PENDING_IMPORT_ENTRIES + 1, "a note-carrying plant still trips the exact count");
 });
 
-test("allowlist has no duplicate entries and no dead (no-longer-flaggable) entries", () => {
+test("every allowlist entry appears in some doc — an orphaned entry is a standing pre-approval for a sentence nobody has written", () => {
+  // Fourteenth instance (governor-lead): a reworded doc span left its old
+  // allowlist entry behind, and the "no dead entries" test's TITLE promised
+  // orphan coverage while its code only checked text-liveness — the
+  // docs→allowlist direction ran, the allowlist→docs direction did not
+  // exist. An orphan is exempt-forever: if anyone ever re-writes that exact
+  // sentence (an old-copy restore, an agent "fixing" a path back), it lands
+  // pre-approved and the ratchet stays silent. So: every entry, both tiers,
+  // must appear verbatim (normalized) in at least one scanned doc.
+  const raw = readFileSync(ALLOWLIST_PATH, "utf8");
+  const docs = INVARIANT_CHECK_FILES.map((f) => normalizeClaim(readFileSync(f, "utf8")));
+  const orphans = [];
+  for (const line of raw.split("\n")) {
+    const m = /^-\s+(.*)$/.exec(line);
+    if (!m) continue;
+    const claim = normalizeClaim(m[1]);
+    if (!docs.some((d) => d.includes(claim))) orphans.push(claim.slice(0, 90));
+  }
+  assert.deepEqual(orphans, [], "orphaned allowlist entries (in no doc) — delete them or restore their sentence:\n" + orphans.join("\n"));
+});
+
+test("VACUITY: the orphan check catches a planted entry that no doc contains", () => {
+  const docs = INVARIANT_CHECK_FILES.map((f) => normalizeClaim(readFileSync(f, "utf8")));
+  const planted = normalizeClaim("This exact sentence about the journal guard never appearing in any accepted doc anywhere.");
+  assert.ok(!docs.some((d) => d.includes(planted)), "the plant is genuinely absent from the docs");
+  // The check's own predicate, applied to the plant, must flag it.
+  const flagged = !docs.some((d) => d.includes(planted));
+  assert.ok(flagged, "the orphan predicate fires on the plant");
+});
+
+test("allowlist entries are unique and each still reads as an invariant claim (text-liveness, not doc-presence — orphans are the NEXT test)", () => {
   const raw = readFileSync(ALLOWLIST_PATH, "utf8");
   const seen = new Set();
   const dupes = [];

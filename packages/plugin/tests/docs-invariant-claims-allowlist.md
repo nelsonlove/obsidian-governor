@@ -41,24 +41,9 @@ Known-overstated section instead — see its header for the format.
 
 ## README.md
 
-- Governor is an Obsidian plugin that connects AI agents (Claude Code, or anything that speaks MCP) to your vault the *governed* way: agents see your vault the way Obsidian does, every change they make is recorded and attributed, and one rule is enforced at the shared write primitive: **an agent cannot mark its own work as accepted through it.
-- **A paper trail for everything.** Every mutating operation through the plugin's guarded path lands in an append-only journal: what happened, to which note, by which agent, in which session — and, when the agent says so, *why*. (The optional headless FS-fallback mode is a documented exception — see [Honest limits](#honest-limits).) "What did it do while I was out" becomes a file you can read.
-- Reviewing and accepting is meant to happen only in the plugin's human-only review pane (the **acceptance module**) — never through the API on the surfaces the guard covers today; the surfaces it doesn't cover yet are named, tracked gaps, not silent ones (see [Honest limits](#honest-limits)).
-- Open the journal (or the review pane, if the acceptance module is enabled): every change is there, attributed, diffable, waiting for your verdict.
-- **Acceptance is a human gesture, and it goes in no API.** There is no accept tool, no accept argument, and no way to smuggle acceptance in as data **through the shared write primitive**: it rejects any write that would introduce `acceptance-status: accepted` (or `accepted-by` / `accepted-on`), on every write surface that routes through it — including the CLI proxy — while leaving your own existing accepted values untouched.
-- The guarantee is narrower and real: nothing arriving through a surface the guard covers can forge acceptance, every write on the plugin's guarded path is journaled, and out-of-band changes surface as drift.
-- Every claim above about journaling is scoped to the plugin's guarded path, not this fallback.
-- **The guard doesn't cover every surface yet — named, not papered over.** Templated note creation ([#137](https://github.com/nelsonlove/obsidian-governor/issues/137), [#105](https://github.com/nelsonlove/obsidian-governor/issues/105)), CLI flag-form arguments ([#107](https://github.com/nelsonlove/obsidian-governor/issues/107)), and a couple of lower-severity paths can currently introduce or resurrect acceptance without going through the guarded primitive.
-- Context-conscious sessions can use **Code Mode** (`--code-mode` on the bridge command): three meta-tools — search, describe, call — over the same registry, with every guard binding on the target tool exactly as on the full surface.
 
 ## docs/README.md
 
-- | **[acceptance-model.md](acceptance-model.md)** | **The heart of the design.** Acceptance is human-only — "the accept verb goes in no API." The accept-forbidden guard at the shared write primitive, on every write surface that routes through it (including the CLI proxy), and its documented residuals (tracked publicly; not yet all closed). |
-- **Agents can stamp identity** (a created-seeded UUIDv7 `uid`, `created`/`modified`, canonical frontmatter order) and **attach an advisory `intent`** ("why I'm making this change") that rides the journal record — but stamping itself **never writes acceptance** (it defaults and preserves `acceptance-status`, never mints or elevates it); the guard against acceptance arriving by other routes is the shared write primitive, and its known gaps are tracked (see the top-level [README's Honest limits](../README.md#honest-limits)).
-- **The human keeps the sole accept veto — by design, and by enforcement on the surfaces the guard covers.** Acceptance is a gesture made in the **[acceptance module](#the-acceptance-module)** — never through a tool, agent, or CLI call the guard sees.
-- The acceptance model's guarantees below are stated for the **plugin's guarded write surfaces**; these issues are the honest boundary of that claim until closed.
-- "Every write is journaled" is true of the **plugin's kernel-guarded path** only, never of this fallback.
-- | [provenance.md](provenance.md) | The provenance module: derived-content freshness — what `derived-from` + `generated` detect, the two-tier deleted-source detection (missing plain paths always; glob deletions via the opt-in `derived-source-count` witness), and the honest limits of an mtime-based check. |
 
 ## docs/acceptance-model.md
 
@@ -150,7 +135,6 @@ Known-overstated section instead — see its header for the format.
 
 ## docs/conformance.md
 
-- An explicit `--baseline=` fixture path is always allowed; the guard flips once the port set is complete and the cutover rebaseline is reviewed.
 - Frontmatter is a `generated`/`generator` derivation stamp, never an acceptance field (accept-guard-checked before every write).
   substantiated 2026-08-17: `renderDebtRegister` emits a fixed two-key frontmatter block
   (nothing from the sidecar reaches frontmatter), and BOTH write paths —
@@ -168,15 +152,11 @@ Known-overstated section instead — see its header for the format.
 - Every mutating operation appends **one JSONL line** to `.obsidian/plugins/governor/journal/YYYY-MM.jsonl` (rolled monthly, inside the plugin's own folder, not the note tree).
 - A failed journal write is logged to console and dropped; it never fails the vault operation.
 - Claiming and releasing are treated as **mutating** (journaled with `target.ref = scope:<prefix>` / `lock:<id>`), so **read-only mode blocks claiming and releasing** — there is nothing for a claim to disclose in a session that cannot write.
-- Every journal record's `actor.server` carries a persistent **install id** — minted once and kept beside the journal in `.obsidian/plugins/governor/install-id.json` (`packages/plugin/src/kernel/install-id.js`) — plus the **vault name** and plugin **version**.
 - They are declared generically on **every mutating registration** (`withKernelArgs` in `packages/plugin/src/mcp/guarded.ts`) and consumed generically (stripped from args and passed to `Kernel.runMutation`).
 
 ## docs/module-system.md (formerly docs/modules.md — renamed 2026-08-23; spans match by text, headings are organizational)
 
 - Because the registrar it forwards to is the **guard-patched `server.registerTool`**, every module tool lands at the **same interception point** as every hand-registered tool — guarded, queued, journaled, kernel-args-declared, Code Mode captured — with **no module-specific bypass possible**.
-- The enforcement lives in the mount's gate (a bare `registerAll` with no gate would allow mutating tools) — but the sole `registerAll` caller is `mountModules`, which always passes it, and the guard-patched `registerTool` is the backstop underneath.
-- There is **no `kernel`, no raw server, no `registerTool`, no baseline/accept primitive**. (The `ModuleHostCtx` *type* permits optional `kernel?`/`sources?` for future use, but the mount populates neither.) The only registrar a module holds is the wrapped `scoped` registrar, which runs the forbidden-name + collision + read-only checks before forwarding — a module cannot walk it to a raw `registerTool` or to any write/accept surface.
-- Every mounted handler's own context carries only read-only closures; no mounted handler can reach a write, accept, or baseline surface.
 
 ## docs/reference.md
 
@@ -218,6 +198,15 @@ shared `moveOne` seam pinned by `tests/link-healing.test.mjs`'s source scan.
 - A patch carrying an acceptance field is refused at validation AND sanitized/dropped at coercion — it can never reach a note.
 - Moves ride the shared link-healing move primitive (`moveOne` — `fileManager.renameFile`, parents created, **never an overwrite**: `destination_occupied`); trash is Obsidian's trash; frontmatter transitions go through `processFrontMatter` with the shared accept-forbidden rule re-checked over every effective patch.
 
+
+Orphan purge (2026-08-23): the allowlist→docs direction was added to
+docs-drift.test.mjs (fourteenth instance — the old "no dead entries" title
+promised orphan coverage its code never ran), and its first run found the
+entries below the docs had outgrown: sentences from the pre-corpus README /
+docs family that PR #340 replaced, plus spans reworded by the coherence-fix
+pass. Each was a standing pre-approval for a sentence nobody has written —
+exempt-forever if ever re-written. Deleted rather than kept: an approval
+belongs to a living sentence. (Count: see the purge commit.)
 
 ## Known-overstated (tracked, not approved-as-true)
 
