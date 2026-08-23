@@ -427,6 +427,57 @@ test("the invariant-claims check covers EVERY docs file — the retired vision-d
   assert.ok(!existsSync(join(DOCS_DIR, "vision-walkthrough.md")), "vision-walkthrough.md stays retired (owned by getting-started/user-guide per the migration map)");
 });
 
+// The imported-corpus pending section is a DIFFERENT TIER from the approved sections, and the
+// parser is flat — so without these pins the distinction lives only in prose (twelfth instance:
+// a header stating a distinction the mechanism does not make, inside the control whose job is
+// stopping documentation from claiming more than the code does; governor-lead planted a fresh
+// no-evidence overclaim in the pending section and the suite stayed green). The pins: the
+// pending section's entry count is EXACT (a 49th entry is a visible decision, not a quiet ride;
+// promotions decrement it; zero retires the section), and every pending entry carries its
+// evidence note.
+const PENDING_SECTION_HEADING = "## Imported documentation corpus (2026-08-23)";
+const PENDING_IMPORT_ENTRIES = 48; // decrement as the operator promotes entries; delete section + pins at zero
+
+function parsePendingSection(raw) {
+  const at = raw.indexOf(PENDING_SECTION_HEADING);
+  if (at === -1) return null;
+  const rest = raw.slice(at);
+  const next = rest.indexOf("\n## ", 1);
+  const body = next === -1 ? rest : rest.slice(0, next);
+  const lines = body.split("\n");
+  const entries = [];
+  lines.forEach((line, i) => {
+    const m = /^-\s+(.*)$/.exec(line);
+    if (m) entries.push({ text: m[1], hasNote: /^\s+tracked by:/.test(lines[i + 1] ?? "") });
+  });
+  return entries;
+}
+
+test("the pending-import section is pinned: exact entry count, every entry carries its evidence note", () => {
+  const raw = readFileSync(ALLOWLIST_PATH, "utf8");
+  const entries = parsePendingSection(raw);
+  assert.ok(entries !== null, "the pending-import section exists (retire these pins when the operator's promotion review empties it)");
+  assert.equal(
+    entries.length,
+    PENDING_IMPORT_ENTRIES,
+    `the pending section holds exactly ${PENDING_IMPORT_ENTRIES} entries — adding one is a visible decision (bump the pin consciously); promoting one decrements it`
+  );
+  const noteless = entries.filter((e) => !e.hasNote).map((e) => e.text.slice(0, 80));
+  assert.deepEqual(noteless, [], "every pending entry must carry its indented 'tracked by:' evidence note");
+});
+
+test("VACUITY: the pending-section pins catch the planted 49th and the missing evidence note", () => {
+  const raw = readFileSync(ALLOWLIST_PATH, "utf8");
+  // Governor-lead's exact plant: a fresh overclaim appended to the pending section, no note.
+  const planted = raw + "\n- Governor guarantees that no agent can ever bypass the acceptance perimeter under any circumstances\n";
+  const entries = parsePendingSection(planted);
+  assert.equal(entries.length, PENDING_IMPORT_ENTRIES + 1, "the count pin sees the 49th");
+  assert.ok(entries.some((e) => !e.hasNote), "the evidence-note pin sees the noteless plant");
+  // And a plant WITH a forged note still trips the count pin — the note check alone is not the defence.
+  const plantedWithNote = raw + "\n- Another overclaim\n  tracked by: nothing real\n";
+  assert.equal(parsePendingSection(plantedWithNote).length, PENDING_IMPORT_ENTRIES + 1, "a note-carrying plant still trips the exact count");
+});
+
 test("allowlist has no duplicate entries and no dead (no-longer-flaggable) entries", () => {
   const raw = readFileSync(ALLOWLIST_PATH, "utf8");
   const seen = new Set();
