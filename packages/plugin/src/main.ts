@@ -15,6 +15,7 @@ import { createProposalStore } from "./kernel/governance/proposals/proposal-stor
 import { buildAdmission, type AdmissionUiDeps } from "./governance/admission-wiring.js";
 import { openGitRepository } from "./governance/history-store/git-repository.js";
 import { historyDir } from "./governance/history-store/local-data-root.js";
+import { uuidv7 } from "./kernel/uuidv7.js";
 import { effectiveScope, isTracked } from "./kernel/governance/history-store/history-scope.js";
 import { proposalRef } from "./kernel/governance/history-store/refs.js";
 import { EXCLUDED_PREFIXES } from "./governance/territories.js";
@@ -599,6 +600,7 @@ export default class VaultMcpPlugin extends Plugin {
     // obsidian-backup net), state loaded before the guard is set so the
     // BaselineStore's live guard reflects the persisted flip from the first
     // write after load.
+    const storeIdPath = `${historyDir(vaultSlug(vaultName))}/governor-store-id.json`;
     const migration: Migration = buildMigration({
       io: {
         exists: (p) => sessionAdapter.exists(p),
@@ -617,6 +619,26 @@ export default class VaultMcpPlugin extends Plugin {
       },
       baselines: () => baselinesOf(this),
       now: () => Date.now(),
+      // The store-id lives INSIDE the machine-local history dir (node fs —
+      // outside the vault, outside the adapter): it rides the #337 chain
+      // backup and nothing else, which is the whole binding (store-binding.ts).
+      storeIdIo: {
+        read: async () => {
+          try {
+            const raw = await import("node:fs/promises").then((fs) => fs.readFile(storeIdPath, "utf8"));
+            const parsed = JSON.parse(raw) as { storeId?: unknown };
+            return typeof parsed.storeId === "string" && parsed.storeId ? parsed.storeId : null;
+          } catch {
+            return null;
+          }
+        },
+        write: async (id) => {
+          const fs = await import("node:fs/promises");
+          await fs.mkdir(historyDir(vaultSlug(vaultName)), { recursive: true });
+          await fs.writeFile(storeIdPath, JSON.stringify({ storeId: id, mintedAt: new Date().toISOString() }, null, 2));
+        },
+      },
+      mintId: () => uuidv7(Date.now()),
     });
     migrations.set(this, migration);
     // AWAITED, not fire-and-forget: until the persisted state is read,
@@ -665,6 +687,11 @@ export default class VaultMcpPlugin extends Plugin {
           return next;
         },
         refreshProjections: async () => nudgeGovernanceQueue(this),
+        bindingGate: async () => {
+          const verdict = await migration.binding();
+          if (verdict.state === "pre-cutover" || verdict.state === "bound") return { ok: true } as const;
+          return { ok: false as const, code: verdict.state === "marker-unbound" ? "marker_unbound" : "store_mismatch", detail: verdict.detail };
+        },
       })
     );
 

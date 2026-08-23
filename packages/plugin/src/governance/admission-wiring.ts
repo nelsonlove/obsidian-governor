@@ -108,6 +108,22 @@ export interface BuildAdmissionDeps {
   /** Append one settlement line to the acceptance log. */
   appendSettlement(record: { event: "admission-settlement"; claimId: string; subjectDigest: string; ts: string }): Promise<void>;
   /** Rebuildable projections refresh (the pane nudge). Optional. */
+  /**
+   * The cutover marker↔store binding gate (store-binding.ts). When present
+   * and not ok, BOTH admit paths refuse before any work: on a machine whose
+   * local store is not the one the marker authorizes (a restore without its
+   * chain, an unbound pre-binding marker), admitting would silently grow a
+   * NEW chain beside a marker naming another — the exact split the binding
+   * exists to prevent. Refusing both ways: legacy already refuses (cutOver),
+   * and admission refuses HERE with the verdict's own honest detail.
+   *
+   * REQUIRED and called unconditionally (review finding - fourth
+   * guard-exists-path-doesn't-run of the week): as an optional field, the
+   * one production wiring in main.ts was unpinned and deletable with a
+   * green suite. Required means the COMPILER pins the wiring: a .ts caller
+   * cannot build without providing the gate.
+   */
+  bindingGate: () => Promise<{ ok: true } | { ok: false; code: string; detail: string }>;
   refreshProjections?: () => Promise<void>;
   now?: () => number;
 }
@@ -303,6 +319,14 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
       let preHead: string | null = null;
       let preHeadKnown = false;
       try {
+        // Inside the try (review symmetry): a THROWING gate degrades to the
+        // caught admission_error like the item path's — never an unhandled
+        // rejection in a click handler. Unreachable with today's
+        // swallow-everything reads; pinned by shape, not by reachability.
+        {
+          const gate = await deps.bindingGate();
+          if (!gate.ok) return { ok: false, code: gate.code, detail: gate.detail };
+        }
         // RE-FETCH EVERY MEMBER at click time: the caller's array is a
         // freeze-time snapshot, and an authority/development flip that
         // changes no note bytes (a revision request, a concurrent admission)
@@ -435,6 +459,10 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
       let preHead: string | null = null;
       let preHeadKnown = false;
       try {
+        {
+          const gate = await deps.bindingGate();
+          if (!gate.ok) return { ok: false, code: gate.code, detail: gate.detail };
+        }
         const proposal = await deps.proposals.get(proposalId);
         if (!proposal) return { ok: false, code: "proposal_unknown", detail: `no proposal ${proposalId}` };
         if (proposal.subject.path === null) return { ok: false, code: "path_missing", detail: "this proposal has no path to re-observe" };

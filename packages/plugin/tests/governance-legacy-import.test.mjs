@@ -325,6 +325,8 @@ describe("migration wiring — import, cutover, rollback, status", () => {
       },
       baselines: () => baselines,
       now: () => T0,
+      storeIdIo: (() => { let id = null; return { read: async () => id, write: async (v) => { id = v; } }; })(),
+      mintId: () => "s-test",
     });
   }
 
