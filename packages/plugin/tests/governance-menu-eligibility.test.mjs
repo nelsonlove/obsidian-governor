@@ -14,6 +14,7 @@ function ctx({ pending = [], status = {}, excluded = ["80-89"] } = {}) {
     pendingPaths: new Set(pending),
     statusOf: (p) => status[p] ?? null,
     isExcluded: (p) => excluded.some((prefix) => p.startsWith(prefix)),
+    legacyRetired: false,
   };
 }
 
@@ -93,5 +94,39 @@ describe("selectAcceptEligible", () => {
     const file = { path: "Notes/P.md", basename: "P" };
     const out = selectAcceptEligible([file], ctx({ status: { "Notes/P.md": "proposed" } }));
     assert.equal(out[0], file);
+  });
+});
+
+// ── the cutover gate (live incident, 2026-08-24) ────────────────────────────
+
+describe("after the authority cutover, nothing is eligible for LEGACY accept", () => {
+  // Nelson cut over, right-clicked a proposed note, and got
+  // `legacy_writer_disabled`. The pane consulted `legacyRetired()` and rendered
+  // the retired notice; the context menu never asked, so it kept offering
+  // "Accept…" on every eligible note — a control that could only fail. This
+  // rule's own doc promises the opposite: omitted, not offered-and-failing.
+  const base = {
+    pendingPaths: new Set(["Notes/pending.md"]),
+    statusOf: (p) => (p === "Notes/proposed.md" ? "proposed" : p === "Notes/revising.md" ? "revising" : null),
+    isExcluded: () => false,
+  };
+
+  test("every previously-eligible note becomes ineligible once legacy is retired", () => {
+    const live = { ...base, legacyRetired: false };
+    const retired = { ...base, legacyRetired: true };
+    for (const path of ["Notes/pending.md", "Notes/proposed.md", "Notes/revising.md"]) {
+      // VACUITY: each of these IS eligible while legacy is authoritative, so a
+      // green "ineligible after cutover" is about the gate and not about a
+      // fixture that was never eligible in the first place.
+      assert.equal(isAcceptEligible(path, live), true, `${path} eligible pre-cutover`);
+      assert.equal(isAcceptEligible(path, retired), false, `${path} must be ineligible post-cutover`);
+    }
+  });
+
+  test("a multi-select offers no item at all after the cutover", () => {
+    const items = [{ path: "Notes/pending.md" }, { path: "Notes/proposed.md" }];
+    assert.equal(selectAcceptEligible(items, { ...base, legacyRetired: false }).length, 2);
+    assert.deepEqual(selectAcceptEligible(items, { ...base, legacyRetired: true }), [],
+      "an empty selection is what makes the caller add no menu item");
   });
 });

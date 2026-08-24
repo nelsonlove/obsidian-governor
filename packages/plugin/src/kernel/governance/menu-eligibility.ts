@@ -32,15 +32,34 @@ export interface AcceptEligibilityCtx {
   statusOf: (path: string) => string | null;
   /** Guarded territories / hold zones (wiring.ts EXCLUDED_PREFIXES) — never governed. */
   isExcluded: (path: string) => boolean;
+  /**
+   * True once the authority cutover has run: legacy acceptance is retired and
+   * its writers REFUSE, so nothing is eligible for the legacy Accept.
+   *
+   * REQUIRED, not optional. The pane already consulted `legacyRetired()` and
+   * rendered the retired notice; the context menu did not, so after Nelson's
+   * cutover the file-explorer "Accept…" item was still offered on every
+   * eligible note and could only ever fail with `legacy_writer_disabled` —
+   * which is exactly what happened. Making this a required field means the
+   * compiler refuses any future eligibility caller that forgets the question,
+   * rather than the surface silently inheriting `false`.
+   */
+  legacyRetired: boolean;
 }
 
 /**
  * Whether ONE note is eligible for the context-aware Accept: in the pending queue, or
  * frontmatter `acceptance-status: proposed`, or `acceptance-status: revising` — and inside
- * governed territory. A note NOT eligible has nothing for Accept to do (already accepted, or
- * never governed), so the menu item is omitted rather than offered and then failing.
+ * governed territory, and only while legacy acceptance is still authoritative. A note NOT
+ * eligible has nothing for Accept to do (already accepted, never governed, or the cutover has
+ * retired legacy acceptance entirely), so the menu item is omitted rather than offered and
+ * then failing.
  */
 export function isAcceptEligible(path: string, ctx: AcceptEligibilityCtx): boolean {
+  // After the cutover this rule's own promise — "omitted rather than offered
+  // and then failing" — applies to EVERY note: the legacy writer refuses
+  // unconditionally, so there is nothing Accept can do for any path.
+  if (ctx.legacyRetired) return false;
   if (ctx.isExcluded(path)) return false;
   if (ctx.pendingPaths.has(path)) return true;
   const status = ctx.statusOf(path);
