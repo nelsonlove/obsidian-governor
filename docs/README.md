@@ -3,7 +3,7 @@
 This documentation is deliberately layered. You should be able to learn the public product without inheriting the private operator system, while a developer or agent integrator can still reach the exact contracts they need.
 
 > [!note]
-> This corpus describes the coherent target product; it is not, by itself, a claim that a particular Governor build implements every described behavior. What IS shipped is owned by one section: [Current release state](status-and-compatibility.md#current-release-state--0170-2026-08-23) (Gate 1 shipped in 0.17.0, inert by default; the authority cutover has not run). [Documentation basis](documentation-basis.md) explains the evidence classes.
+> This corpus describes the coherent target product; it is not, by itself, a claim that a particular Governor build implements every described behavior. What IS shipped is owned by one section: [Current release state](status-and-compatibility.md#current-release-state) (Gate 1 shipped as 0.17.0–0.18.1; the authority cutover ran 2026-08-23 and the marker is bound — admission is the standing authority). [Documentation basis](documentation-basis.md) explains the evidence classes.
 
 ## Choose your path
 
