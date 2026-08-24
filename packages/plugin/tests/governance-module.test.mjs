@@ -320,6 +320,44 @@ describe("governance module: THE TRIPWIRE — source reachability (accept surfac
     assert.match(pane, /viewDeps\.set\(this,/, "constructor stows deps in the WeakMap");
   });
 
+  test("pane.ts: EVERY legacy accept-class control is gated on the cutover — offered, or omitted, never dead", () => {
+    // The 2026-08-24 incident: Nelson cut over, clicked Accept, and got
+    // `legacy_writer_disabled`. The refusal was right; offering the control was
+    // not. The context menu was fixed first, and an independent review then
+    // found the pane doing the SAME thing — rendering live Accept/Revert
+    // buttons directly above its own notice saying Accept is disabled.
+    const pane = code("governance/pane.ts");
+
+    // The Proposed section's accept is not created at all once retired.
+    assert.match(
+      pane,
+      /if \(!\(deps\.legacyRetired\?\.\(\) \?\? false\)\) \{\s*\n\s*const proposedAcceptBtn/,
+      "the Proposed-section Accept must be inside a legacyRetired guard",
+    );
+
+    // The queue detail's accept + revert are removed once retired.
+    const detailGuard = /if \(deps\.legacyRetired\?\.\(\) \?\? false\) \{[\s\S]{0,400}?acceptBtn\.remove\(\);[\s\S]{0,200}?revertBtn\.remove\(\);/;
+    assert.match(pane, detailGuard, "the queue-detail Accept and Revert must be removed when legacy is retired");
+
+    // Request-changes is deliberately NOT retired — it advances no baseline.
+    assert.ok(
+      !/legacyRetired[\s\S]{0,200}?requestBtn\.remove\(\)/.test(pane),
+      "request-changes advances no baseline and must survive the cutover",
+    );
+  });
+
+  test("VACUITY: the cutover-gate scan can fail — it is not matching on prose", () => {
+    // Strip the guards and every assertion above must stop matching. Without
+    // this, a regex drifting to match a comment would keep the suite green
+    // while the buttons went back to being live.
+    const stripped = code("governance/pane.ts")
+      .replace(/if \(!\(deps\.legacyRetired\?\.\(\) \?\? false\)\) \{\s*\n\s*const proposedAcceptBtn/g, "const proposedAcceptBtn")
+      .replace(/acceptBtn\.remove\(\);/g, "")
+      .replace(/revertBtn\.remove\(\);/g, "");
+    assert.ok(!/if \(!\(deps\.legacyRetired\?\.\(\) \?\? false\)\) \{\s*\n\s*const proposedAcceptBtn/.test(stripped));
+    assert.ok(!/acceptBtn\.remove\(\);/.test(stripped));
+  });
+
   test("pane.ts: every accept-class button is addEventListener-wired, NEVER via .onclick = (so .onclick stays null)", () => {
     const pane = code("governance/pane.ts");
     for (const el of ["acceptBtn", "revertBtn", "adoptBtn", "checkbox", "confirm", "proposedAcceptBtn", "proposedRequestBtn"]) {

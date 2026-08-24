@@ -1402,6 +1402,10 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
     pendingPaths: new Set(getCachedPending(plugin).map((p) => p.path)),
     statusOf: (p) => acceptanceStatusFor(plugin, p),
     isExcluded,
+    // Read at menu-OPEN time, not at registration: the cutover can happen while
+    // the plugin stays loaded, and a value captured once would keep offering a
+    // control the store has already retired.
+    legacyRetired: legacyRetired(plugin),
   });
   // ONE file's accept attempt. Every failure mode is contained HERE — a gate cancel returns, a
   // throw becomes a Notice — so a batch loop over this never aborts on one file (the guarantee

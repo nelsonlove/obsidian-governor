@@ -502,6 +502,10 @@ export const LEGACY_RETIRED_TEXT =
   "Legacy acceptance is retired: the authority cutover has run, so Accept, adopt-baseline and " +
   "auto-accept are disabled and standing advances only through admission. Rollback (a human act) " +
   "is available in the plugin settings.";
+/** The one-line form, shown where a retired control used to sit. */
+export const LEGACY_RETIRED_INLINE =
+  "Accept and Revert are retired — the authority cutover has run; standing advances through Admit.";
+
 export function renderLegacyRetiredNotice(root: HTMLElement): void {
   root.createDiv({ cls: "governance-legacy-retired", text: LEGACY_RETIRED_TEXT });
 }
@@ -972,6 +976,14 @@ export class GovernanceReviewView extends ItemView {
         if (file instanceof TFile) await this.app.workspace.getLeaf(false).openFile(file);
       };
       // Accept — the ONE context-aware accept, gesture-gated exactly like the queue's.
+      // RETIRED BY THE CUTOVER. Rendering it after the cutover offers a control
+      // whose writer refuses unconditionally: the 2026-08-24 incident was this
+      // exact button's sibling in the file-explorer menu, and this pane was
+      // printing LEGACY_RETIRED_TEXT ("Accept … disabled") at its own bottom
+      // while keeping the Accept buttons live above it. Omitted, not disabled —
+      // the pane's rule everywhere else is that a control it cannot honour is
+      // not drawn.
+      if (!(deps.legacyRetired?.() ?? false)) {
       const proposedAcceptBtn = controls.createEl("button", {
         cls: "mod-cta governance-proposed-accept",
         text: acceptDesc.label,
@@ -994,7 +1006,10 @@ export class GovernanceReviewView extends ItemView {
           proposedAcceptBtn.disabled = false;
         }
       });
+      }
       // Request changes… — the existing disposition, same modal + gesture perimeter.
+      // NOT retired: it records a human's request on a proposal and never
+      // advances a baseline, so the cutover does not silence it.
       const proposedRequestBtn = controls.createEl("button", {
         cls: "governance-request-changes",
         text: requestDesc.label,
@@ -1194,6 +1209,17 @@ export class GovernanceReviewView extends ItemView {
     const acceptBtn = btnFor.get("accept")!;
     const revertBtn = btnFor.get("revert")!;
     const requestBtn = btnFor.get("request-changes")!;
+    // The descriptors declare MEMBERSHIP; the cutover decides which of them can
+    // still be honoured. Accept and Revert both reach legacy writers that now
+    // refuse, so they are removed from the DOM rather than left clickable — the
+    // descriptor table stays the single source of what exists, and this is the
+    // one era-dependent subtraction from it. Request-changes is untouched: it
+    // advances no baseline.
+    if (deps.legacyRetired?.() ?? false) {
+      acceptBtn.remove();
+      revertBtn.remove();
+      actions.createDiv({ cls: "governance-legacy-retired-inline", text: LEGACY_RETIRED_INLINE });
+    }
     // Context-aware surfacing (#221/#164): the Accept tooltip says what THIS click will do —
     // for a `proposed` note, that it stamps the accepted family with the configured identity;
     // otherwise that it advances the baseline only. Plain display data; still one click.
