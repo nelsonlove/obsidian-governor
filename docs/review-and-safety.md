@@ -1,7 +1,7 @@
 # Review and safety
 
 > [!note] Target-state document
-> This page describes the target product. Not every behavior below is shipped — what IS shipped is owned by [Current release state](status-and-compatibility.md#current-release-state--0170-2026-08-23).
+> This page describes the target product. Not every behavior below is shipped — what IS shipped is owned by [Current release state](status-and-compatibility.md#current-release-state).
 
 Governor treats AI-assisted vault work as a governance problem, not merely a file-access problem. The important question is not only “Can the assistant make this change?” but “Who decided it should have standing, how can the result be checked, and what happens when the operation is wrong or incomplete?”
 

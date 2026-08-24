@@ -1,7 +1,7 @@
 # Capability directory
 
 > [!note] Target-state document
-> This page describes the target product. Not every behavior below is shipped — what IS shipped is owned by [Current release state](status-and-compatibility.md#current-release-state--0170-2026-08-23).
+> This page describes the target product. Not every behavior below is shipped — what IS shipped is owned by [Current release state](status-and-compatibility.md#current-release-state).
 
 This directory describes what Governor can make available in terms of user outcomes. It is intentionally not a catalogue of every low-level tool. Execution semantics derive from the [Action registry](action-registry.md); runtime availability and this directory are generated through the [Capability projection](capability-manifest.md). The complete family inventory is in the [Module directory](modules.md).
 

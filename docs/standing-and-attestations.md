@@ -1,7 +1,7 @@
 # Standing and attestations
 
 > [!note] Target-state document
-> This page describes the target product. Not every behavior below is shipped — what IS shipped is owned by [Current release state](status-and-compatibility.md#current-release-state--0170-2026-08-23).
+> This page describes the target product. Not every behavior below is shipped — what IS shipped is owned by [Current release state](status-and-compatibility.md#current-release-state).
 
 Governor separates four questions:
 

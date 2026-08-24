@@ -5,7 +5,7 @@ Decision date: 2026-08-20
 Repository: `nelsonlove/obsidian-governor`
 
 > [!important] Gate 1 is COMPLETE (2026-08-22, released as 0.17.0)
-> Work packages WP0–WP8 — the action registry, executor, observation/effect substrate, canonical subjects, history store, sessions, proposals, verification, individual and cohort admission, and the legacy import + cutover — are MERGED and shipped, inert by default. Do not re-implement them; [Status and compatibility](status-and-compatibility.md#current-release-state--0170-2026-08-23) owns what is shipped. This guide remains the normative process and work-package spec for Gates 2+ (WP9 onward), and its §8–§15 disciplines (canonical subjects, the admission door, test families) bind all future work.
+> Work packages WP0–WP8 — the action registry, executor, observation/effect substrate, canonical subjects, history store, sessions, proposals, verification, individual and cohort admission, and the legacy import + cutover — are MERGED, shipped, and live (the authority cutover ran 2026-08-23). Do not re-implement them; [Status and compatibility](status-and-compatibility.md#current-release-state) owns what is shipped. This guide remains the normative process and work-package spec for Gates 2+ (WP9 onward), and its §8–§15 disciplines (canonical subjects, the admission door, test families) bind all future work.
 
 > [!important]
 > This guide tells coding agents how to implement the settled Governor design in the existing repository. It is not permission to reinterpret the authority model. When current code conflicts with the target contract, preserve working behavior long enough to migrate it safely, then retire the predecessor explicitly.
