@@ -13,7 +13,7 @@ One click in Settings → Governor → "Authority migration". After it:
 
 ## Preconditions — do these first
 
-1. **Fresh backup commit.** Confirm the `obsidian-backup` repo has a commit newer than your last vault change. It covers `.obsidian/plugins/governor/` — the claims, baselines, acceptance log, evidence, and the cutover flag itself.
+1. **Fresh backup commit.** Confirm the `obsidian-backup` repo has a commit newer than your last vault change. It covers `.obsidian/plugins/governor/` — the claims, baselines, acceptance log, evidence, and the cutover marker itself.
 2. **Confirm the chain backup covers the history store (issue #337 — ruled and implemented 2026-08-23, before the cutover click).** The **standing chain** lives at `~/.claude/governor/history/` — outside the vault. If that disk data is lost after cutover without a backup, every admitted subject silently reads as "ungoverned" (a CRITICAL banner in the review pane catches this state). The `obsidian-backup` job now commits the history store — excluding observation replay payloads (a size exclusion, not privacy) — to its own repository; verify it has a commit newer than the last chain change before proceeding.
 3. **Run "Import legacy evidence"** (same settings section) and read the numbers in the notice. The confirm dialog shows them again. Import is idempotent — running it twice adds nothing.
 

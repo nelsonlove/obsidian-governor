@@ -3,7 +3,7 @@
 This documentation is deliberately layered. You should be able to learn the public product without inheriting the private operator system, while a developer or agent integrator can still reach the exact contracts they need.
 
 > [!note]
-> This corpus describes the coherent target product; it is not, by itself, a claim that a particular Governor build implements every described behavior. What IS shipped is owned by one section: [Current release state](status-and-compatibility.md#current-release-state) (Gate 1 shipped as 0.17.0–0.18.1; the authority cutover ran 2026-08-23 and the marker is bound — admission is the standing authority). [Documentation basis](documentation-basis.md) explains the evidence classes.
+> This corpus describes the coherent target product; it is not, by itself, a claim that a particular Governor build implements every described behavior. What IS shipped is owned by one section: [Current release state](status-and-compatibility.md#current-release-state) (Gate 1 shipped as 0.17.0–0.18.2; the authority cutover ran 2026-08-23 and the marker is bound — admission is the standing authority). [Documentation basis](documentation-basis.md) explains the evidence classes.
 
 ## Choose your path
 
@@ -107,7 +107,7 @@ The documents above own the concepts and the target design. The shipped implemen
 - [Kernel v0](kernel-v0.md) — the transport-hardening kernel: write queue, journal, if_rev/idempotency, locks, uid index and addressing, record immutability
 - [Tool reference](reference.md) and [Tool runner](tool-runner.md) — the full shipped tool surface
 - [Agent writes](agent-writes.md) — how agent writes behave under the shipped guard
-- [Acceptance model](acceptance-model.md) — **the legacy acceptance system**, still the live authority until the cutover runs (see its banner)
+- [Acceptance model](acceptance-model.md) — **the legacy acceptance system**, the standing authority until the 2026-08-23 cutover; its writers now refuse (see its banner)
 - [Review SOP](review-sop.md) — the shipped review workflow
 - [Module system](module-system.md) — how capability modules register and gate (the mechanism; the [module directory](modules.md) is the inventory)
 - Module deep references: [conformance](conformance.md), [triage](triage.md), [cross-session](crosssession.md), [provenance](provenance.md), [Bases](bases.md), [skills](skills.md), [vocabulary provider](vocabulary-module.md), [scope provider](scope-provider.md), [identity and links](identity-and-links.md)
