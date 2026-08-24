@@ -3,7 +3,7 @@
 These notes orient an Obsidian Community Plugin or security reviewer to Governor's highest-consequence boundaries. They are a review map, not a substitute for source inspection or release evidence.
 
 > [!important]
-> Like the rest of this packet, these notes describe the TARGET submission. What is shipped today is owned by [Status and compatibility](../docs/status-and-compatibility.md#current-release-state--0170-2026-08-23) — as of 0.17.0, mandates, signing/attestation envelopes, and Sync replica reconciliation named below are Gates 2+ target state, not inspectable behavior. A reviewer of the current build should read the checks below as the acceptance criteria those gates must meet, not as claims about 0.17.0.
+> Like the rest of this packet, these notes describe the TARGET submission. What is shipped today is owned by [Status and compatibility](../docs/status-and-compatibility.md#current-release-state) — as of the current release, mandates, signing/attestation envelopes, and Sync replica reconciliation named below are Gates 2+ target state, not inspectable behavior. A reviewer of the current build should read the checks below as the acceptance criteria those gates must meet, not as claims about 0.17.0.
 
 ## Why the plugin has broad local authority
 
