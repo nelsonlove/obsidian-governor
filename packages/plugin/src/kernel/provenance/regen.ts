@@ -10,6 +10,7 @@ import {
   DEFAULT_NOTES_SOURCE,
   DEFAULT_AUDIT_NOTE,
   auditDerivedFrom,
+  flatAuditPath,
   notesGlob,
   globMatchesPath,
   type NotesSource,
@@ -27,15 +28,12 @@ import {
  * {@link DEFAULT_AUDIT_NOTE}.
  */
 export function auditPath(notesDir: string = DEFAULT_NOTES_DIR): string {
-  // Trailing slashes are stripped from the DIRECTORY too, not just when deriving
-  // the basename: `provenanceConfigOf` normalizes what reaches the tool, but this
-  // is an exported kernel function with a defaulted argument, and a
-  // `Meta/Plugins//Plugins.md` here would disagree with `auditDerivedFrom`'s
-  // single-slash glob — enough to make the audit's own source count off by one.
-  const dir = notesDir.replace(/\/+$/, "") || notesDir;
-  const base = dir.split("/").pop() || dir;
-  return `${dir}/${base}.md`;
+  // Alias of the kernel definition. It had drifted into a byte-identical second
+  // copy of `flatAuditPath` with no production caller left — the same duplicate
+  // shape this branch removed for `globSegmentRe`, so it gets the same cure.
+  return flatAuditPath(notesDir);
 }
+
 
 /**
  * Render the audit note for the current vault state, carrying any existing

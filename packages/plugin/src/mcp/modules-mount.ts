@@ -511,7 +511,8 @@ const PROVENANCE_CONFIG_FIELDS: ConfigField[] = [
     type: "text",
     help:
       "Vault-relative path of the audit note itself — a NOTE path including the .md filename, not a folder. " +
-      `Blank ⇒ the default (${DEFAULT_AUDIT_NOTE}). It is a path rather than a folder because naming a note ` +
+      `Blank ⇒ ${DEFAULT_AUDIT_NOTE} in jd-slots mode; in FLAT mode blank derives the name from the notes root instead. ` +
+      "It is a path rather than a folder because naming a note " +
       "after its folder is the JD folder-note convention: derived from a slot root it would resolve onto that " +
       "folder's own note and rewrite it.",
   },

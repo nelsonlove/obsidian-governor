@@ -126,6 +126,9 @@ export function globSegmentRe(seg: string): RegExp {
  *  the derived artifact. Constant (Python `render.py`). */
 export const AUDIT_GENERATOR = "obsidian-plugin-audit";
 
+/** The frontmatter key carrying {@link AUDIT_GENERATOR} on a produced audit. */
+export const GENERATOR_FIELD = "generator";
+
 /** The `derivation-mode:` stamp on the rendered audit note. Constant. A
  *  DERIVATION field — orthogonal to acceptance; the accept-guard never lets a
  *  regen write an `accepted`-family field. */
@@ -234,14 +237,14 @@ export function provenanceConfigOf(config: Record<string, unknown>): ProvenanceC
   const explicit =
     typeof rawAudit === "string" && rawAudit.trim() !== "" && !rawAudit.trim().endsWith("/") ? rawAudit.trim() : null;
   const fallback = notesSource === "flat" ? flatAuditPath(notesDir) : DEFAULT_AUDIT_NOTE;
-  // Append `.md` only when there is no extension at all: `Audit.markdown` is a
-  // deliberate filename, and `Audit.markdown.md` is nobody's intent.
-  // Only a MARKDOWN extension counts as "already has one". A generic
-  // dot-suffix test drops `.md` from names this vault actually produces —
-  // `Meta/Plugin audit 00.18` and `Some/v1.2` both end in a dot-alnum run and
-  // are not extensions — leaving a file Obsidian will not treat as a note.
-  const auditNote =
-    explicit === null ? fallback : /\.(md|markdown)$/i.test(explicit) ? explicit : `${explicit}.md`;
+  // Only a lowercase `.md` counts as "already a note path". `.markdown` and
+  // `.MD` are real markdown to a human and invisible to every other Governor
+  // write path (all of which require lowercase `.md`), so an audit parked there
+  // is a file nothing else in this plugin will read or move — a quieter version
+  // of the "Obsidian will not treat it as a note" problem this rule exists for.
+  // Everything else gains `.md`, including `Meta/Plugin audit 00.18` and
+  // `Some/v1.2`, whose trailing dot-runs are not extensions.
+  const auditNote = explicit === null ? fallback : explicit.endsWith(".md") ? explicit : `${explicit}.md`;
 
   return { notesDir, notesSource, auditNote };
 }
@@ -278,7 +281,12 @@ export function validateProvenanceConfig(config: Record<string, unknown>): strin
       problems.push("auditNote must be vault-relative, not an absolute filesystem path");
     } else if (audit.trim().endsWith("/")) {
       problems.push("auditNote is a NOTE path, not a folder — give the full path including the .md filename");
+    } else if (!audit.trim().endsWith(".md")) {
+      problems.push(
+        `auditNote will be written as "${audit.trim()}.md" — only a lowercase .md path is one the rest of Governor reads`,
+      );
     }
   }
+
   return problems;
 }
