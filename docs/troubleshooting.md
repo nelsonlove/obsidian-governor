@@ -6,10 +6,10 @@ This machine's vault copy says the authority cutover ran, but the standing chain
 
 ## A button in Governor does nothing when clicked
 
-If a Governor control (Accept, Admit, Cut over, adopt-baseline, the auto-accept checkboxes) produces no dialog and no notice, check whether the view lives in a popout window. On 0.15.0–0.17.0 the gesture gate refused clicks from popout windows silently (see [Status and compatibility](status-and-compatibility.md#current-release-state--0170-2026-08-23)); use the main window there. On later builds popout clicks work, and a genuinely blocked click shows a notice instead of doing nothing.
+If a Governor control (Accept, Admit, Cut over, adopt-baseline, the auto-accept checkboxes) produces no dialog and no notice, check whether the view lives in a popout window. On 0.15.0–0.17.0 the gesture gate refused clicks from popout windows silently (see [Status and compatibility](status-and-compatibility.md#current-release-state)); use the main window there. On later builds popout clicks work, and a genuinely blocked click shows a notice instead of doing nothing.
 
 > [!note] Target-state document
-> This page describes the target product. Not every behavior below is shipped — what IS shipped is owned by [Current release state](status-and-compatibility.md#current-release-state--0170-2026-08-23).
+> This page describes the target product. Not every behavior below is shipped — what IS shipped is owned by [Current release state](status-and-compatibility.md#current-release-state).
 
 Start with the symptom. Do not widen scope, enable a private pack, or retry an uncertain mutation merely to see whether the error disappears.
 

@@ -1,6 +1,6 @@
 # The acceptance model
 
-> **This documents the LEGACY acceptance system.** It remains the live authority until the WP8 cutover runs (a human-confirmed act; see the [cutover runbook](../packages/plugin/docs/wp8-cutover-runbook.md)). After the cutover its writers refuse and the successor model is [standing-and-attestations.md](standing-and-attestations.md). Current state: [status-and-compatibility.md](status-and-compatibility.md).
+> **This documents the LEGACY acceptance system.** It was the live authority until the WP8 cutover ran (a human-confirmed act, taken 2026-08-23; see the [cutover runbook](../packages/plugin/docs/wp8-cutover-runbook.md)). Post-cutover its writers refuse and the successor model is [standing-and-attestations.md](standing-and-attestations.md). Current state: [status-and-compatibility.md](status-and-compatibility.md).
 
 
 > **This is the heart of the design.** Everything else in the kernel — the queue, the
