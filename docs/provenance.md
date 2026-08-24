@@ -24,7 +24,7 @@ accept-forbidden guard — see [acceptance-model.md](acceptance-model.md).
 ```yaml
 ---
 derived-from:                        # vault-relative plain paths and/or globs
-  - "08.10 Obsidian plugins/*.md"
+  - "00-09 System/07 Repositories/*/*.md"
   - ".obsidian/community-plugins.json"
 generated: 2026-08-19T11:04:00       # when the artifact was produced
 derived-source-count: 48             # OPTIONAL witness — see tier 2 below
@@ -127,17 +127,31 @@ rendered frontmatter list also comes from) and stamps
 
 Three details of that note in particular:
 
-- **The audit is a source of itself.** It lives at `{notesDir}/<basename>.md`,
-  which its own `{notesDir}/*.md` glob matches. So the count is stamped for the
-  set as it will be *after* the write lands (a first-ever regen adds one for the
-  note about to be created) — otherwise the first deletion after a first regen
-  would be masked by a witness that was one low.
-- **Consequence of the same self-inclusion, pre-existing and not fixed here:** the
-  audit note's own mtime moves when the regen writes it, which is later than the
-  `generated:` it just stamped, so `provenance_check` on the audit reports itself
-  in `changed` and reads STALE immediately after a regen. That is a wart of
-  that particular `derived-from` list — a glob cannot say "everything here except
-  me" — not of the deletion detection above.
+- **Whether the audit is a source of itself depends on the layout, and the
+  witness asks that question structurally.** In `flat` mode the audit lives at
+  `{notesDir}/<basename>.md` and its own `{notesDir}/*.md` glob matches it, so
+  the count is stamped for the set as it will be *after* the write lands (a
+  first-ever regen adds one for the note about to be created) — otherwise the
+  first deletion after a first regen would be masked by a witness one low. Under
+  the shipped `jd-slots` default the audit sits *beside* the slots
+  (`{root}/Plugin audit.md`, glob `{root}/*/*.md`), so its own glob does not
+  match it and nothing is added. That follows from the configured path, not
+  from the mode: point `auditNote` inside a slot folder and it would be matched
+  again — the witness asks the glob, never the layout name.
+
+  The distinction is load-bearing. An earlier revision asked "is it in the
+  resolved set right now", which conflates *not written yet* with *structurally
+  outside the glob*: under the default that added one on **every** regen, and
+  the note then read permanently STALE — turning the deletion signal this
+  witness exists to carry into a constant false alarm. `globMatchesPath` asks
+  the structural question instead.
+- **Consequence of self-inclusion where it applies (`flat`), pre-existing and not
+  fixed here:** the audit note's own mtime moves when the regen writes it, which
+  is later than the `generated:` it just stamped, so `provenance_check` on the
+  audit reports itself in `changed` and reads STALE immediately after a regen.
+  That is a wart of that particular `derived-from` list — a glob cannot say
+  "everything here except me" — not of the deletion detection above. It does not
+  arise under the `jd-slots` default, where the audit is outside its own glob.
 
 - **The audit declares one source that is really optional.**
   `.obsidian/community-plugins.json` is a plain-path entry, but `reconcile` treats

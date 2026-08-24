@@ -22,7 +22,14 @@ export { renderAudit, extractSections, reinsertSections } from "./render.js";
 export { regenerateAudit, auditPath } from "./regen.js";
 export {
   DEFAULT_NOTES_DIR,
+  DEFAULT_NOTES_SOURCE,
+  DEFAULT_AUDIT_NOTE,
+  notesGlob,
+  globMatchesPath,
+  globSegmentRe,
+  flatAuditPath,
   AUDIT_GENERATOR,
+  GENERATOR_FIELD,
   AUDIT_DERIVATION_MODE,
   SOURCE_COUNT_FIELD,
   DEFAULT_PROVENANCE_CONFIG,
@@ -30,4 +37,5 @@ export {
   provenanceConfigOf,
   validateProvenanceConfig,
   type ProvenanceConfig,
+  type NotesSource,
 } from "./provenance-config.js";
