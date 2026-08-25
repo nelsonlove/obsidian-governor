@@ -1434,7 +1434,10 @@ export class GovernanceReviewView extends ItemView {
     // #135 read-only policy badge: the HONORED per-note auto-accept policy, if any.
     const honoredPolicy = deps.honoredAutoAccept(item.path);
     if (honoredPolicy) {
-      title.createDiv({ cls: "governance-detail-sub", text: `auto-accept policy (honored): ${honoredPolicy}` });
+      // WP10c: the policy is retired — the badge says what the note once
+      // delegated and what happens NOW, so the human is never surprised that
+      // an appends note's appends sit in the queue.
+      title.createDiv({ cls: "governance-detail-sub", text: `legacy auto-accept policy: ${honoredPolicy} (retired — appends now propose for review)` });
     }
     // UNTRUSTED agent-authored text — see kernel/governance/intent-view.ts for the text-node-only
     // render path and its behavioral escaping test.

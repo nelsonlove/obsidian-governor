@@ -79,11 +79,15 @@ describe("honoredValueFromBlessed", () => {
   });
 });
 
-describe("autoAcceptPolicyOf", () => {
-  test("appends / all (case-insensitive, trimmed)", () => {
+describe("autoAcceptPolicyOf — RETIRED (WP10c): a badge, never a grant", () => {
+  test("appends still parses (display + drift protection); ALL no longer parses AT ALL", () => {
     assert.equal(autoAcceptPolicyOf("---\nauto-accept: appends\n---\n"), "appends");
-    assert.equal(autoAcceptPolicyOf("---\nauto-accept: ALL\n---\n"), "all");
     assert.equal(autoAcceptPolicyOf("---\nauto_accept: Appends\n---\n"), "appends");
+    // The guide's order, literal: delete the `all` policy. Even a blessed
+    // `all` reads as NO policy — under any authority era, including a
+    // post-rollback legacy one. The blank check does not come back.
+    assert.equal(autoAcceptPolicyOf("---\nauto-accept: ALL\n---\n"), null);
+    assert.equal(autoAcceptPolicyOf("---\nauto-accept: all\n---\n"), null);
   });
 
   test("anything else is NO policy", () => {
@@ -94,79 +98,52 @@ describe("autoAcceptPolicyOf", () => {
   });
 });
 
-describe("eligibility — the per-note policy branch (#135)", () => {
+describe("eligibility — the policy arms are DELETED (WP10c; condition 9's subset assertion)", () => {
   const base = "---\nauto-accept: appends\n---\nlog\n";
 
-  test("appends honored + pure append → eligible, policy logged", () => {
-    const cur = base + "new line\n";
-    const r = evaluate(base, cur, { enabled: ALL, policy: "appends" });
-    assert.equal(r.eligible, true, r.reason);
-    assert.equal(r.policy, "appends");
-    assert.equal(r.reason, "policy-appends");
-    assert.deepEqual(r.classes, []);
-    const rec = autoAcceptRecord({
-      ts: "t", path: "p", fromHash: "a", toHash: "b", classes: r.classes, railResult: r.rail, policy: r.policy,
-    });
-    assert.equal(rec.policy, "appends");
+  // CONDITION 9, in behavior: for every legacy policy value, the set of
+  // auto-acceptable changes is now a SUBSET of what it was — because the
+  // policy arms conferred eligibility and now nothing does. Each case below
+  // was ELIGIBLE pre-WP10c solely because of its policy; each must now stay
+  // pending. (evaluate's ctx no longer has a policy field; passing one is an
+  // ignored extra property, which the last leg pins.)
+  test("a pure append on an appends note is RESIDUAL now — content proposes", () => {
+    const r = evaluate(base, base + "new line\n", { enabled: ALL });
+    assert.equal(r.eligible, false);
+    assert.match(r.reason, /^body:/, "the tail is a body residual, whatever the strict evaluator names it");
   });
 
-  test("append AND edit of existing content → NOT an append → stays pending", () => {
-    const cur = base.replace("log", "log EDITED") + "new line\n";
-    const r = evaluate(base, cur, { enabled: ALL, policy: "appends" });
+  test("an arbitrary rewrite on an `all` note stays pending — the blank check is dead", () => {
+    const cur = "---\nauto-accept: all\ntotally: rewritten\n---\ndifferent\n";
+    const r = evaluate(base, cur, { enabled: ALL });
     assert.equal(r.eligible, false);
   });
 
-  test("`all` accepts any pending change", () => {
-    const cur = "---\nauto-accept: all\ntotally: rewritten\n---\ndifferent\n";
-    const r = evaluate(base, cur, { enabled: ALL, policy: "all" });
-    assert.equal(r.eligible, true);
-    assert.equal(r.policy, "all");
-    assert.equal(r.reason, "policy-all");
-  });
-
-  test("policy works even with the class allowlist EMPTY (orthogonal delegations)", () => {
-    const r = evaluate(base, base + "x\n", { enabled: [], policy: "appends" });
-    assert.equal(r.eligible, true);
-  });
-
-  test("appends policy that fails the detector still falls through to class evaluation", () => {
+  test("class-driven accepts are UNCHANGED — the subset kept everything the classes granted", () => {
     const b = "---\ntitle: N\n---\nbody\n";
     const c = "---\ntitle: N\nuid: 019fea8c-2093-758a-8da2-e8dbcddda6b4\n---\nbody\n";
-    const r = evaluate(b, c, { enabled: ALL, policy: "appends" });
+    const r = evaluate(b, c, { enabled: ALL });
     assert.equal(r.eligible, true, r.reason);
     assert.deepEqual(r.classes, ["uid-stamp"]);
-    assert.equal(r.policy, undefined, "class-driven accept carries no policy");
   });
 
-  test("no policy → class-allowlist only (content edit stays pending)", () => {
-    const r = evaluate(base, base + "x\n", { enabled: ALL, policy: null });
-    assert.equal(r.eligible, false);
-    const r2 = evaluate(base, base + "x\n", { enabled: ALL });
-    assert.equal(r2.eligible, false);
+  test("a smuggled legacy `policy` context field is IGNORED — no caller can re-arm the arms", () => {
+    const withAll = evaluate(base, base + "x\n", { enabled: ALL, policy: "all" });
+    assert.equal(withAll.eligible, false, "policy: 'all' in the ctx confers nothing");
+    const withAppends = evaluate(base, base + "x\n", { enabled: ALL, policy: "appends" });
+    assert.equal(withAppends.eligible, false, "policy: 'appends' in the ctx confers nothing");
   });
 
-  test("no-change short-circuits before the policy branch", () => {
-    const r = evaluate(base, base, { enabled: ALL, policy: "all" });
-    assert.equal(r.eligible, false);
-    assert.equal(r.reason, "no-change");
+  test("results carry no policy field — nothing downstream can act on one", () => {
+    const b = "---\ntitle: N\n---\nbody\n";
+    const c = "---\ntitle: N\nuid: 019fea8c-2093-758a-8da2-e8dbcddda6b4\n---\nbody\n";
+    const r = evaluate(b, c, { enabled: ALL });
+    assert.equal("policy" in r, false);
   });
 });
 
-// ---------------------------------------------------------------------------
-// #261 — the appends policy COMPOSES with the mechanical classes.
-//
-// The live failure this pins: CROSS-SESSION.md carried an honored
-// `auto-accept: appends`; between the blessing and the agent appends, two
-// non-agent mechanical mutations landed (an update-time `modified:` stamp and
-// Obsidian's rename-driven wikilink rewrites), so the baseline was no longer a
-// byte-prefix of the current content. The old evaluate() refused BOTH ways:
-// byte-prefix failed (policy branch) AND the class path treated the appended
-// tail as body residual — each half individually blessed, the combination
-// wedged pending forever, silently (zero auto-accept records ever).
-// ---------------------------------------------------------------------------
-describe("eligibility — appends policy composes with mechanical classes (#261)", () => {
+describe("#261 composition — RETIRED with the appends policy (WP10c)", () => {
   const RENAMED = { confirms: (from, to) => from === "Vault machinery" && to === "00.16 Vault machinery" };
-
   // The live repro's shape, miniaturized byte-for-byte in kind:
   const base =
     "---\nname: CROSS-SESSION\nmodified: 2026-08-19T01:37\nauto-accept: appends\n---\n" +
@@ -175,54 +152,18 @@ describe("eligibility — appends policy composes with mechanical classes (#261)
     "---\nname: CROSS-SESSION\nmodified: 2026-08-19T06:40\nauto-accept: appends\n---\n" +
     "# Log\n\nSee the [[00.16 Vault machinery]] index.\n\n## probe append\n\nentry body\n";
 
-  test("timestamp change + confirmed link rewrite + appended tail → eligible, policy + classes", () => {
-    const r = evaluate(base, cur, { enabled: ALL, renameIndex: RENAMED, policy: "appends" });
+  test("the #261 composed case (classes + appended tail) now stays PENDING — the tail is residual content", () => {
+    const r = evaluate(base, cur, { enabled: ALL, renameIndex: RENAMED });
+    assert.equal(r.eligible, false, "the composed accept died with the policy; the wedge cannot recur because nothing waits on a policy-accept");
+  });
+
+  test("the class-only halves still work exactly as before: timestamp + confirmed link-heal WITHOUT a tail → eligible", () => {
+    const noTail =
+      "---\nname: CROSS-SESSION\nmodified: 2026-08-19T06:40\nauto-accept: appends\n---\n" +
+      "# Log\n\nSee the [[00.16 Vault machinery]] index.\n";
+    const r = evaluate(base, noTail, { enabled: ALL, renameIndex: RENAMED });
     assert.equal(r.eligible, true, r.reason);
-    assert.equal(r.reason, "policy-appends+classes");
-    assert.equal(r.policy, "appends", "the policy did real work (covered the tail) so it is recorded");
     assert.deepEqual(r.classes, ["timestamp", "link-heal"]);
-    assert.equal(r.rail.clean, true);
-  });
-
-  test("same diff with an UNCONFIRMED rename → NOT eligible (the live wedge after a reload with no rename records)", () => {
-    const r = evaluate(base, cur, { enabled: ALL, renameIndex: { confirms: () => false }, policy: "appends" });
-    assert.equal(r.eligible, false);
-    assert.equal(r.reason, "body:unconfirmed-link");
-  });
-
-  test("same diff WITHOUT the policy → NOT eligible (the appended tail is residual for classes)", () => {
-    const r = evaluate(base, cur, { enabled: ALL, renameIndex: RENAMED, policy: null });
-    assert.equal(r.eligible, false);
-  });
-
-  test("timestamp change + appended tail (no link rewrites) → eligible without any rename index", () => {
-    const b = "---\nmodified: 2026-01-01\nauto-accept: appends\n---\nlog\n";
-    const c = "---\nmodified: 2026-08-19\nauto-accept: appends\n---\nlog\nnew entry\n";
-    const r = evaluate(b, c, { enabled: ALL, policy: "appends" });
-    assert.equal(r.eligible, true, r.reason);
-    assert.deepEqual(r.classes, ["timestamp"]);
-    assert.equal(r.policy, "appends");
-  });
-
-  test("composition never loosens the tail rule: append that ALSO edits existing body → still pending", () => {
-    const b = "---\nmodified: 2026-01-01\n---\nlog line\n";
-    const c = "---\nmodified: 2026-08-19\n---\nlog line EDITED\nnew entry\n";
-    const r = evaluate(b, c, { enabled: ALL, policy: "appends" });
-    assert.equal(r.eligible, false);
-  });
-
-  test("composition never loosens the frontmatter rule: append + non-mechanical fm change → pending", () => {
-    const b = "---\nstatus: draft\n---\nlog\n";
-    const c = "---\nstatus: final\n---\nlog\nnew entry\n";
-    const r = evaluate(b, c, { enabled: ALL, policy: "appends" });
-    assert.equal(r.eligible, false);
-  });
-
-  test("classes still gate on the allowlist under the policy: timestamp disabled → pending", () => {
-    const b = "---\nmodified: 2026-01-01\n---\nlog\n";
-    const c = "---\nmodified: 2026-08-19\n---\nlog\nnew entry\n";
-    const r = evaluate(b, c, { enabled: ["uid-stamp"], policy: "appends" });
-    assert.equal(r.eligible, false);
   });
 });
 
@@ -338,22 +279,27 @@ describe("the HONOR-RULE SCENARIO — side-door writes are inert until blessed",
     assert.equal(r.eligible, false, "raw frontmatter must never be honored unblessed");
   });
 
-  test("human-attributed edit: classify → silent advance → the SAME value is now honored", () => {
+  test("human-attributed edit: the silent advance still blesses — but a blessed `all` is STILL no policy (WP10c)", () => {
     const cls = classifyModify({ recentAgentWrite: false, recentGenuineHumanInput: true });
     assert.equal(shouldAdvanceBaselineSilently(cls), true);
-    // wiring.ts: setBaseline(path, current) — the blessed content is now sideDoor.
-    assert.equal(autoAcceptPolicyOf(sideDoor), "all");
-    const r = evaluate(sideDoor, sideDoor + "agent line\n", { enabled: [], policy: autoAcceptPolicyOf(sideDoor) });
-    assert.equal(r.eligible, true);
-    assert.equal(r.policy, "all");
+    // wiring.ts: setBaseline(path, current) — the blessed content is now
+    // sideDoor. Pre-WP10c this leg proved the honor-boundary ARMS the
+    // policy; post-WP10c the stronger fact holds: even blessing cannot
+    // resurrect `all` — the deletion is at the parser, upstream of honor.
+    assert.equal(autoAcceptPolicyOf(sideDoor), null);
+    const r = evaluate(sideDoor, sideDoor + "agent line\n", { enabled: [] });
+    assert.equal(r.eligible, false, "nothing auto-accepts on an `all` note, blessed or not");
   });
 
-  test("accept in review: baseline advance covering the write blesses it identically", () => {
+  test("accept in review: blessing still flips honor for APPENDS' badge; `all` stays dead through every door (WP10c)", () => {
     // performAccept → acceptNote → store.setBaseline(path, current): blessed
-    // content becomes the reviewed bytes. The policy read flips from null to
-    // honored at exactly that boundary — no other path does.
+    // content becomes the reviewed bytes. Post-WP10c the honor boundary only
+    // matters for the appends BADGE — and `all` reads as no policy on both
+    // sides of it, because the deletion is at the parser.
     assert.equal(autoAcceptPolicyOf(before), null);
     const blessedAfterAccept = sideDoor; // what setBaseline stored
-    assert.equal(autoAcceptPolicyOf(blessedAfterAccept), "all");
+    assert.equal(autoAcceptPolicyOf(blessedAfterAccept), null, "blessed `all` is still nothing");
+    const appendsNote = "---\nauto-accept: appends\ntitle: T\n---\nbody\n";
+    assert.equal(autoAcceptPolicyOf(appendsNote), "appends", "the appends badge still honors — display only");
   });
 });

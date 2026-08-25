@@ -76,21 +76,32 @@ export function honoredValueFromBlessed(blessed: string | null | undefined, key:
   return hits[0].value;
 }
 
-// ── the first consumer: the per-note auto-accept policy (#135) ───────────────
+// ── the first consumer: the per-note auto-accept policy (#135 — RETIRED) ─────
+//
+// WP10c deleted the policy's OPERATIONAL half (guide §654): `all` is gone
+// outright ("delete the `all` policy" — a whole-note blank check never
+// belonged in frontmatter), and `appends` is migrated to content proposals —
+// an appended tail lands as an ordinary proposal for the human's decision,
+// which the admission era already made true for every write. What remains is
+// the BADGE: `appends` still parses so the pane can say "this note once
+// delegated appends" and so protected-property drift detection keeps
+// guarding the key (agents must not toggle it — historical notes carry it,
+// and a rollback must not resurrect a policy through frontmatter nobody
+// re-reviewed). `all` no longer parses AT ALL: it reads as no-policy, so
+// even under rollback the blank check stays dead.
 
-export type AutoAcceptPolicy = "appends" | "all";
+export type AutoAcceptPolicy = "appends";
 
 /**
  * The HONORED per-note auto-accept policy carried by the blessed content, or
- * null when there is none. Only the two spec'd string values count
- * (case-insensitive, trimmed); any other shape — arrays, maps, other strings —
- * is no policy (fail safe, the detector discipline).
+ * null when there is none. DISPLAY DATA ONLY since WP10c — nothing consults
+ * this for eligibility. Only "appends" parses (case-insensitive, trimmed);
+ * "all" and every other shape are no policy (fail safe).
  */
 export function autoAcceptPolicyOf(blessed: string | null | undefined): AutoAcceptPolicy | null {
   const v = honoredValueFromBlessed(blessed, "auto-accept");
   if (typeof v !== "string") return null;
-  const s = v.trim().toLowerCase();
-  return s === "appends" || s === "all" ? s : null;
+  return v.trim().toLowerCase() === "appends" ? "appends" : null;
 }
 
 // ── governance watch: side-door drift over declared properties (#224 §3) ─────

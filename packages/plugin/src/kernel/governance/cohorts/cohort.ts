@@ -28,6 +28,8 @@ export interface CohortSelector {
   transformation?: { id: string; version?: string };
   /** The proposal's verification axis. */
   verification?: VerificationState;
+  /** WP10c: proposals stamped with this governing mandate (the mandated sweep's selector). */
+  mandateId?: string;
 }
 
 /**
@@ -58,6 +60,7 @@ export function selectProposals(proposals: readonly ProposalV1[], selector: Coho
       if (selector.transformation.version !== undefined && p.subject.transformation.version !== selector.transformation.version) return false;
     }
     if (selector.verification !== undefined && p.verification !== selector.verification) return false;
+    if (selector.mandateId !== undefined && p.subject.mandateId !== selector.mandateId) return false;
     return true;
   });
 }

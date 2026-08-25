@@ -265,33 +265,21 @@ export function evaluateLinkHeal(
   curBody: string,
   index: RenameIndex | null | undefined,
 ): BodyEvalResult {
-  const r = evaluateBodyChange(baseBody, curBody, index, false);
+  const r = evaluateBodyChange(baseBody, curBody, index);
   return { ok: r.ok, healed: r.healed, reason: r.reason };
 }
 
-// The append-composing variant (see BodyAppendEvalResult). `allowAppend` callers get the
-// EXTRA acceptance mode; `evaluateLinkHeal` above delegates with allowAppend=false and is
-// byte-identical to its historical behavior.
-export function evaluateBodyWithAppend(
-  baseBody: string,
-  curBody: string,
-  index: RenameIndex | null | undefined,
-): BodyAppendEvalResult {
-  return evaluateBodyChange(baseBody, curBody, index, true);
-}
-
+// The append-composing variant (evaluateBodyWithAppend / allowAppend) was
+// DELETED in WP10c with the `appends` policy it served (guide §654: appends
+// migrated to content proposals — an appended tail is residual content, and
+// content proposes). This is the strict evaluator, the only mode left.
 function evaluateBodyChange(
   baseBody: string,
   curBody: string,
   index: RenameIndex | null | undefined,
-  allowAppend: boolean,
 ): BodyAppendEvalResult {
   const fail = (reason: string): BodyAppendEvalResult => ({ ok: false, healed: false, appended: false, reason });
   if (baseBody === curBody) return { ok: true, healed: false, appended: false, reason: "body-identical" };
-  // Pure byte-append: needs no rename index — nothing existing was touched.
-  if (allowAppend && curBody.length > baseBody.length && curBody.startsWith(baseBody)) {
-    return { ok: true, healed: false, appended: true, reason: "body-appended" };
-  }
   if (!index) return fail("no-rename-index");
 
   let baseSegs: Seg[];
@@ -302,10 +290,8 @@ function evaluateBodyChange(
   } catch {
     return fail("segmentize-error");
   }
-  // Structure (count + link-vs-text at each position) must match exactly — except that under
-  // allowAppend the CURRENT body may carry EXTRA trailing segments (the appended tail).
-  if (!allowAppend && baseSegs.length !== curSegs.length) return fail("structure-changed");
-  if (allowAppend && curSegs.length < baseSegs.length) return fail("structure-changed");
+  // Structure (count + link-vs-text at each position) must match exactly.
+  if (baseSegs.length !== curSegs.length) return fail("structure-changed");
 
   // Every base segment except the FINAL one (segmentize always ends with a text segment) must
   // match positionally: text byte-identical, links unchanged or confirmed-rewrite only.
@@ -338,27 +324,14 @@ function evaluateBodyChange(
     healed = true;
   }
 
-  // The final base segment is always TEXT (possibly empty). Strict mode: the current final
-  // segment must be the identical text. Append mode: the REMAINDER of the current body
-  // (reconstructed losslessly from the current segments at and after this position) must
-  // START with that text — anything beyond it is the appended tail.
+  // The final base segment is always TEXT (possibly empty): the current final
+  // segment must be the identical text — an appended tail is residual (WP10c).
   const baseTail = baseSegs[n - 1].text;
-  if (!allowAppend) {
-    const c = curSegs[n - 1];
-    if (c.link !== null) return fail("structure-changed");
-    if (c.text !== baseTail) return fail("body-text-changed");
-    if (!healed) return fail("body-changed-no-heal");
-    return { ok: true, healed: true, appended: false, reason: "ok" };
-  }
-  let remainder = "";
-  for (let i = n - 1; i < curSegs.length; i++) {
-    const s = curSegs[i];
-    remainder += s.link !== null ? s.link.raw : s.text;
-  }
-  if (!remainder.startsWith(baseTail)) return fail("body-text-changed");
-  const appended = remainder.length > baseTail.length;
-  if (!healed && !appended) return fail("body-changed-no-heal");
-  return { ok: true, healed, appended, reason: healed && appended ? "healed+appended" : healed ? "ok" : "body-appended" };
+  const c = curSegs[n - 1];
+  if (c.link !== null) return fail("structure-changed");
+  if (c.text !== baseTail) return fail("body-text-changed");
+  if (!healed) return fail("body-changed-no-heal");
+  return { ok: true, healed: true, appended: false, reason: "ok" };
 }
 
 // ---------------------------------------------------------------------------

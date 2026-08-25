@@ -793,3 +793,118 @@ describe("review-of-#358 fixes", () => {
     }
   });
 });
+
+// ── WP10c: the mandated sweep — the door's production caller ─────────────────
+
+describe("sweepMandated — automatic admission arrives as a sweep, fully gated", () => {
+  test("the eligible world: stamped proposals sweep straight through the door; the pane's queue empties", async () => {
+    const w = await world();
+    try {
+      await w.produce("Notes/s1.md", "old 1\n", "new 1\n");
+      await w.produce("Notes/s2.md", "old 2\n", "new 2\n");
+      const admitted = await w.admission.sweepMandated();
+      assert.equal(admitted, 1, "one cohort admitted (both members in one decision)");
+      const claims = await createClaimStore(w.claimIo).all();
+      assert.equal(claims.length, 1);
+      assert.equal(claims[0].authority.kind, "mandate");
+      assert.equal((await w.admission.pending()).length, 0, "the swept members left the decision space");
+      assert.equal((await w.mandateStore.usageOf(w.mandate.id)).items, 2);
+    } finally {
+      w.cleanup();
+    }
+  });
+
+  test("an unpromoted tuple refuses at the door; the proposals STAY PENDING — the cohort-decision route", async () => {
+    const w = await world({ promote: false });
+    try {
+      await w.produce("Notes/u1.md", "old\n", "new\n");
+      const admitted = await w.admission.sweepMandated();
+      assert.equal(admitted, 0);
+      assert.equal((await w.admission.pending()).length, 1, "refused work waits for the human, never vanishes");
+      assert.equal((await createClaimStore(w.claimIo).all()).length, 0);
+    } finally {
+      w.cleanup();
+    }
+  });
+
+  test("ATTEMPT-DEDUPE: an unchanged member set is tried once, not once per poll; a member change re-arms", async () => {
+    const w = await world({ promote: false });
+    try {
+      await w.produce("Notes/d1.md", "old\n", "new\n");
+      // Count door attempts through the promotion verdict reads (one per attempt).
+      let verdictReads = 0;
+      const origVerdictOf = w.promotionStore.verdictOf.bind(w.promotionStore);
+      w.promotionStore.verdictOf = (t) => { verdictReads++; return origVerdictOf(t); };
+      await w.admission.sweepMandated();
+      const after1 = verdictReads;
+      assert.ok(after1 >= 1, "the first sweep reached the door");
+      await w.admission.sweepMandated();
+      await w.admission.sweepMandated();
+      assert.equal(verdictReads, after1, "identical member sets do not re-run the door");
+      await w.produce("Notes/d2.md", "old 2\n", "new 2\n");
+      await w.admission.sweepMandated();
+      assert.ok(verdictReads > after1, "a changed member set re-arms the attempt");
+    } finally {
+      w.cleanup();
+    }
+  });
+
+  test("a mayProduce-only mandate's work is never even attempted — the pre-check skips it; unstamped work is invisible to the sweep", async () => {
+    const w = await world({ terms: { admission: { mayProduce: true, mayAdmit: false } } });
+    try {
+      await w.produce("Notes/p1.md", "old\n", "new\n");
+      await w.produce("Notes/p2.md", "old\n", "new\n", { mandateId: null }); // unstamped
+      let verdictReads = 0;
+      const origVerdictOf = w.promotionStore.verdictOf.bind(w.promotionStore);
+      w.promotionStore.verdictOf = (t) => { verdictReads++; return origVerdictOf(t); };
+      const admitted = await w.admission.sweepMandated();
+      assert.equal(admitted, 0);
+      assert.equal(verdictReads, 0, "no door attempt for a produce-only mandate");
+      assert.equal((await w.admission.pending()).length, 2, "everything waits for the human");
+    } finally {
+      w.cleanup();
+    }
+  });
+
+  test("no mandate machinery wired: the sweep is a quiet zero, never a crash", async () => {
+    const w = await world();
+    try {
+      const bare = buildAdmission({
+        repo: async () => w.repo,
+        claimIo: memoryIo(),
+        proposals: w.proposals,
+        readNoteBytes: async () => null,
+        writeNoteBytes: async () => {},
+        bindingGate: async () => ({ ok: true }),
+        appendSettlement: async () => {},
+        now: () => T0 + 1000,
+      });
+      assert.equal(await bare.sweepMandated(), 0);
+    } finally {
+      w.cleanup();
+    }
+  });
+});
+
+// ── WP10c source pins: the poll's era swap and the reconcile gate ────────────
+
+describe("the era swap, pinned at the source (wiring.ts is plugin-bound; the scan proves the paths RUN the guards)", () => {
+  const wiringSrc = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), "../src/governance/wiring.ts"), "utf8");
+
+  test("pollJournal runs the LEGACY sweep only pre-retirement, and the MANDATED sweep only post", () => {
+    assert.match(wiringSrc, /if \(!legacyRetired\(plugin\)\) \{\s*\n\s*const accepted = await sweepAutoAccept\(plugin\);/, "the legacy sweep is behind !legacyRetired");
+    assert.match(wiringSrc, /\} else \{\s*\n\s*const admission = admissionDeps\.get\(plugin\);\s*\n\s*if \(admission\) \{\s*\n\s*const admitted = await admission\.sweepMandated\(\);/, "the mandated sweep is the else arm");
+  });
+
+  test("reconcile's silent advance is gated: post-cutover a human edit no-ops quietly instead of throwing per edit", () => {
+    assert.match(wiringSrc, /if \(shouldAdvanceBaselineSilently\(cls\)\) \{[\s\S]{0,700}?if \(legacyRetired\(plugin\)\) \{ await refresh\(plugin\); return; \}/, "the guard sits inside the silent-advance branch, before setBaseline");
+  });
+
+  test("maybeAutoAccept consults NO per-note policy anymore — the read is gone from the wiring", () => {
+    assert.ok(!/autoAcceptPolicyOf\(baseline\.content\)/.test(wiringSrc), "the eligibility path reads no policy");
+    assert.ok(!/logRefusalOnce/.test(wiringSrc), "the policy refusal logger died with the policy");
+    // The one surviving read is the display badge (honoredAutoAccept).
+    const reads = wiringSrc.match(/autoAcceptPolicyOf\(/g) ?? [];
+    assert.equal(reads.length, 1, "exactly one read: the badge thunk");
+  });
+});

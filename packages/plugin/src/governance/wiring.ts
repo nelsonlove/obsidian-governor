@@ -104,7 +104,7 @@ import {
   RENAME_RECORD_TTL_MS,
   type RenameRecordData,
 } from "../kernel/governance/rename-records.js";
-import { autoAcceptPolicyOf, protectedPropertyDrift, type AutoAcceptPolicy } from "../kernel/governance/protected-policy.js";
+import { autoAcceptPolicyOf, protectedPropertyDrift } from "../kernel/governance/protected-policy.js";
 import type { RenameIndex } from "../kernel/governance/auto-accept/detectors.js";
 import { badgeVisible } from "../kernel/governance/badge.js";
 import { governanceDisplaySettings, governanceAcceptanceSettings } from "../kernel/governance/settings.js";
@@ -160,6 +160,10 @@ export interface GovernanceWireDeps {
 // legacy is authoritative, false after the cutover (then setBaseline/rekey
 // REFUSE). Set by main.ts from the migration wiring's isCutOver().
 const legacyWriteGuards = new WeakMap<Plugin, () => boolean>();
+// WP10c: the admission surface, stored at mount so the journal poll can run
+// the MANDATED sweep post-cutover (the legacy sweep's successor). Same
+// module-private WeakMap discipline as everything else here.
+const admissionDeps = new WeakMap<Plugin, import("./admission-wiring.js").AdmissionUiDeps>();
 export function setLegacyWriteGuard(plugin: Plugin, writeAllowed: () => boolean): void {
   legacyWriteGuards.set(plugin, writeAllowed);
 }
@@ -766,6 +770,13 @@ async function reconcile(plugin: Plugin, file: TFile): Promise<void> {
   });
 
   if (shouldAdvanceBaselineSilently(cls)) {
+    // POST-cutover the silent advance retires WITH its writer (WP10c): the
+    // baseline store refuses anyway, and before this guard the refusal threw
+    // through scheduleReconcile's catch as one console.error per debounced
+    // human edit, forever. A human edit after the cutover is governed by
+    // admission like everything else; skipping here is the quiet, honest
+    // no-op — nothing is lost, because nothing could have been written.
+    if (legacyRetired(plugin)) { await refresh(plugin); return; }
     // Human-attributed change → advance the baseline silently (it must never queue). Log it (D2 —
     // audit completeness). NOT app-reachable: invoked only by the debounced vault "modify" event.
     const toHash = contentHash(current);
@@ -809,25 +820,20 @@ async function maybeAutoAccept(plugin: Plugin, path: string): Promise<boolean> {
     const journal = await readJournal(plugin);
     if (agentWritesSince(journal, path, baseline.acceptedAt).length === 0) return false;
 
-    // The per-note policy (#135) is the HONORED one — derived from the blessed
-    // BASELINE frontmatter, never the raw current note (honor-only-if-blessed,
-    // #224). A side-door `auto-accept` sitting only in the current bytes
-    // therefore confers nothing here.
-    const policy = autoAcceptPolicyOf(baseline.content);
+    // WP10c: the per-note policy is DELETED — `all` (the guide's explicit
+    // order) and `appends` (migrated: an append lands as an ordinary content
+    // proposal for the human's decision, which post-cutover it already did).
+    // Eligibility is the reviewed mechanical classes alone; a note's
+    // frontmatter can no longer widen what auto-accepts, under any authority
+    // era. Post-migration grant set ⊂ pre-migration, per policy, by
+    // construction: the policy arms conferred eligibility and now nothing
+    // does. (The `auto-accept` KEY stays a protected property — historical
+    // notes carry it, and agents still must not toggle it.)
     const result = evaluate(baseline.content, current, {
       enabled: getEnabledClasses(plugin),
       renameIndex: getRenameIndex(plugin),
-      policy,
     });
-    if (!result.eligible) {
-      // #261 visibility: when the HUMAN delegated (an honored per-note policy exists) and the
-      // machine still declines, that is the surprising case — say WHY, once per content-state
-      // (fromHash:toHash:reason), so a wedged note is diagnosable from the console instead of
-      // silently pending forever. Class-only refusals stay quiet (every ordinary agent edit
-      // is "not eligible" by design — logging those would be noise).
-      if (policy) logRefusalOnce(plugin, path, `${fromHash}:${toHash}:${result.reason}`, policy, result.reason);
-      return false;
-    }
+    if (!result.eligible) return false;
 
     const nowIso = new Date().toISOString();
     await store.setBaseline(path, current, "auto-accept", nowIso);
@@ -838,8 +844,6 @@ async function maybeAutoAccept(plugin: Plugin, path: string): Promise<boolean> {
       toHash,
       classes: result.classes,
       railResult: result.rail,
-      // Audit which policy drove a policy-accept (#135) — like class accepts log their classes.
-      policy: result.policy,
     }));
     return true;
   } catch (e) {
@@ -850,15 +854,6 @@ async function maybeAutoAccept(plugin: Plugin, path: string): Promise<boolean> {
   }
 }
 
-// One console.warn per (path → content-state) policy refusal — see maybeAutoAccept.
-const refusalLogState = new WeakMap<Plugin, Map<string, string>>();
-function logRefusalOnce(plugin: Plugin, path: string, key: string, policy: AutoAcceptPolicy, reason: string): void {
-  let m = refusalLogState.get(plugin);
-  if (!m) { m = new Map(); refusalLogState.set(plugin, m); }
-  if (m.get(path) === key) return;
-  m.set(path, key);
-  console.warn(`governor acceptance: auto-accept (policy: ${policy}) declined for ${path}: ${reason}`);
-}
 // Sweep the (agent-attributed) pending queue for auto-accept-eligible changes. Driven by the
 // journal-growth poll — the interval timer plus, since #261, the kernel's post-append nudge
 // (nudgeGovernanceQueue below; still not agent-reachable as a callable — an agent can only
@@ -1032,11 +1027,24 @@ async function pollJournal(plugin: Plugin): Promise<void> {
   state.inFlight = true;
   try {
     await refresh(plugin);
-    // After the queue is recomputed (agent write now visible in the flushed journal), try the ONE
-    // automated exception on the freshly-known pending items. Any auto-accepts advance the
-    // baseline via the same primitive Accept uses; refresh again so they leave the queue.
-    const accepted = await sweepAutoAccept(plugin);
-    if (accepted > 0) await refresh(plugin);
+    // The poll's automated arm, one per authority era (WP10c):
+    //   * PRE-cutover, legacy authoritative — the auto-accept sweep, as ever.
+    //   * POST-cutover — the legacy sweep DOES NOT RUN (its writer refuses;
+    //     running it was pure work + one console.error per eligible note per
+    //     tick, forever — the noise the transformation tests cite as
+    //     precedent). Its successor runs instead: the MANDATED-ADMISSION
+    //     sweep, the production caller for the WP10b door — every automatic
+    //     advance goes through the full refusal table or not at all.
+    if (!legacyRetired(plugin)) {
+      const accepted = await sweepAutoAccept(plugin);
+      if (accepted > 0) await refresh(plugin);
+    } else {
+      const admission = admissionDeps.get(plugin);
+      if (admission) {
+        const admitted = await admission.sweepMandated();
+        if (admitted > 0) await refresh(plugin);
+      }
+    }
   } finally {
     state.inFlight = false;
   }
@@ -1230,6 +1238,7 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
   });
   configReaders.set(plugin, deps.getConfig);
   if (deps.migration) migrations.set(plugin, deps.migration);
+  if (deps.admission) admissionDeps.set(plugin, deps.admission);
 
   // The governance dir must exist before anything beside the baselines writes into it
   // (acceptance log appends, the published pending index, rename records).
