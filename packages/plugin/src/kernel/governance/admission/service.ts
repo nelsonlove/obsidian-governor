@@ -180,14 +180,19 @@ export function createAdmissionService(deps: AdmissionDeps): AdmissionService {
         requireCohortAdmissible(request, coverage, now, mandateCtx);
         if (request.authority.kind === "human-gesture") await requireGestureUnused(request.authority.gestureRef);
 
-        // Duplicate check inside the serialized chain, cohort-shaped: if what
-        // stands already covers this exact cohort digest, refuse truthfully.
+        // Duplicate check inside the serialized chain — over the WHOLE claim
+        // store, not the head (#358 review B1): a head-only check let the
+        // same cohort admit twice whenever an unrelated admission moved the
+        // head between attempts and the members' projections lagged — with
+        // no fresh gesture gating the repeat on the automatic door. Same
+        // shape as requireGestureUnused: the store scan IS the one-shot. A
+        // digest that ever stood refuses truthfully; if content genuinely
+        // recurs after supersession, it recurs as a NEW base and therefore a
+        // new digest.
         const expected = await deps.currentStanding();
-        if (expected !== null) {
-          const standingClaim = await deps.claims.byId(expected);
-          if (standingClaim && standingClaim.subjectDigest.value === cohortDigest.value) {
-            throw new AdmissionRefusedError("already_admitted", `this exact cohort already stands as claim ${standingClaim.id}`);
-          }
+        const priorSame = await deps.claims.bySubject(cohortDigest.value);
+        if (priorSame.length > 0) {
+          throw new AdmissionRefusedError("already_admitted", `this exact cohort was already admitted as claim ${priorSame[priorSame.length - 1].id}; a decision covers its digest once`);
         }
 
         const claim = buildAdmissionClaim({
@@ -264,15 +269,16 @@ export function createAdmissionService(deps: AdmissionDeps): AdmissionService {
         const expected = await deps.currentStanding();
         // Duplicate-admission check INSIDE the serialized chain (the wiring's
         // own pre-check runs outside it, so two genuinely concurrent trusted
-        // clicks could both pass it): if what currently stands already covers
-        // this exact subject, a second admission would chain a duplicate
-        // commit recording nothing new. Refused, truthfully.
-        if (expected !== null) {
-          const standingClaim = await deps.claims.byId(expected);
-          if (standingClaim && standingClaim.subjectDigest.value === request.proposal.subjectDigest.value) {
+        // clicks could both pass it) — over the WHOLE claim store, not the
+        // head (#358 review B1, same reasoning as the cohort path): a lagged
+        // projection plus an interleaved unrelated admission must not turn a
+        // retry into a duplicate claim and a double budget charge.
+        {
+          const priorSame = await deps.claims.bySubject(request.proposal.subjectDigest.value);
+          if (priorSame.length > 0) {
             throw new AdmissionRefusedError(
               "already_admitted",
-              `this exact subject already stands as claim ${standingClaim.id}; a second admission would record nothing new`
+              `this exact subject was already admitted as claim ${priorSame[priorSame.length - 1].id}; a second admission would record nothing new`
             );
           }
         }

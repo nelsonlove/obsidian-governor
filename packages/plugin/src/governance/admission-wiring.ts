@@ -442,22 +442,28 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
         } catch {
           preHead = null;
         }
-        if (preHead !== null) {
-          const headClaim = await claims.byId(preHead);
-          // Compared against the RECOMPUTED cohort digest, never the caller's
-          // precomputed frozen.digest (freeze.ts's own obligation): a
-          // mis-correlated frozen/members pair must not stamp never-admitted
-          // members "admitted" under a claim that does not cover them.
-          if (headClaim && headClaim.subjectDigest.value === subjectDigest(frozen.subject).value) {
+        {
+          // The self-heal scans the WHOLE claim store, not the head (#358
+          // review B1's wiring half): a lagged projection plus an interleaved
+          // unrelated admission left the pane offering this cohort forever —
+          // the service now refuses the duplicate either way; this makes the
+          // refusal also CATCH THE PROJECTIONS UP. Compared against the
+          // RECOMPUTED cohort digest, never the caller's precomputed
+          // frozen.digest (freeze.ts's obligation): a mis-correlated
+          // frozen/members pair must not stamp never-admitted members
+          // "admitted" under a claim that does not cover them.
+          const priorSame = await claims.bySubject(subjectDigest(frozen.subject).value);
+          if (priorSame.length > 0) {
+            const prior = priorSame[priorSame.length - 1];
             for (const m of fresh) {
               try {
                 await deps.proposals.setVerification(m.id, "passed", now());
-                await deps.proposals.markAdmitted(m.id, headClaim.id, now());
+                await deps.proposals.markAdmitted(m.id, prior.id, now());
               } catch {
                 /* projection remains behind; the refusal still tells the truth */
               }
             }
-            return { ok: false, code: "already_admitted", detail: `this exact cohort already stands as claim ${headClaim.id}; nothing further to admit` };
+            return { ok: false, code: "already_admitted", detail: `this exact cohort was already admitted as claim ${prior.id}; nothing further to admit` };
           }
         }
 

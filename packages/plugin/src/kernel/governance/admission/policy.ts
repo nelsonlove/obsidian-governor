@@ -12,6 +12,7 @@ import { subjectDigest, type CohortSubjectV1, type ProposalItemSubjectV1 } from 
 import type { ProposalV1 } from "../proposals/proposal.js";
 import type { VerificationRecord } from "../verification/predicate.js";
 import type { CohortCoverageOutcome } from "../cohorts/coverage.js";
+import { groupIneligibilityOf } from "../cohorts/cohort.js";
 import type { MandateV1 } from "../mandates/mandate.js";
 import type { MandateUsage } from "../mandates/budgets.js";
 import { budgetBreach } from "../mandates/budgets.js";
@@ -315,6 +316,17 @@ function requireMandateCohortAdmissible(request: CohortAdmissionRequest, ctx: Ma
     throw new AdmissionRefusedError("admission_not_authorized", `mandate ${m.id} authorizes production only (mayProduce without mayAdmit); its results return for the human cohort decision`);
   }
 
+  // 1b. Group eligibility, re-checked AT THE DOOR (#358 review S1): the
+  // freeze already refuses mixed class-combinations / transformations /
+  // verifier policies, but this table's own principle is that doors do not
+  // trust hallways — a hand-built frozen structure must meet the same bar
+  // here, where standing actually advances with no human to notice. D02's
+  // "mixed-class results split before admission", enforced at admission.
+  const grouped = groupIneligibilityOf(request.memberProposals);
+  if (grouped !== null) {
+    throw new AdmissionRefusedError("cohort_ineligible", `the member group is not one decision: ${grouped}`);
+  }
+
   // 2. Every member was produced under THIS mandate — named misses, whole-abort.
   const foreign = frozenSubject.items.filter((i) => i.mandateId !== m.id).map((i) => i.noteId);
   if (foreign.length > 0) {
@@ -384,14 +396,22 @@ function requireMandateCohortAdmissible(request: CohortAdmissionRequest, ctx: Ma
   }
 
   // 7. Promotion — the live-evidence gate's verdict, three-state and loud.
+  // A verdict outside the known shapes is UNAVAILABLE, typed (#358 review
+  // S2): the wrong-shaped answer must not surface as a TypeError laundered
+  // into admission_error — the comment above promised its own refusal, and
+  // now the code keeps it.
   const promo = ctx.promotion;
+  if (promo === null || typeof promo !== "object" || (promo.state !== "promoted" && promo.state !== "unpromoted" && promo.state !== "unavailable")) {
+    throw new AdmissionRefusedError("promotion_unavailable", "the promotion verdict was not a recognized shape; a broken evidence answer authorizes nothing");
+  }
   if (promo.state === "unavailable") {
     throw new AdmissionRefusedError("promotion_unavailable", `the promotion evidence could not be read (${promo.detail}); a broken evidence store authorizes nothing`);
   }
   if (promo.state !== "promoted") {
+    const missing = Array.isArray(promo.missing) ? promo.missing : [];
     throw new AdmissionRefusedError(
       "promotion_missing",
-      `${t.id}@${t.version} is not promoted for automatic admission — ${promo.missing.length > 0 ? `missing live evidence: ${promo.missing.join("; ")}` : "the evidence gate is met but no human has promoted it"}`
+      `${t.id}@${t.version} is not promoted for automatic admission — ${missing.length > 0 ? `missing live evidence: ${missing.join("; ")}` : "the evidence gate is met but no human has promoted it"}`
     );
   }
 

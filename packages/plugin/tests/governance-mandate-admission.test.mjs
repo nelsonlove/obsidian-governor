@@ -658,3 +658,138 @@ describe("replay, budgets, and the producer", () => {
     }
   });
 });
+
+// ── Review-of-#358 fixes, pinned ─────────────────────────────────────────────
+
+describe("review-of-#358 fixes", () => {
+  test("B1: INTERLEAVED REPLAY refuses — lagged projections + a moved head no longer admit the same cohort twice", async () => {
+    const w = await world();
+    try {
+      // Build admission whose markAdmitted ALWAYS fails: the projection lags
+      // by design (rebuildable), which is the realistic WP10c-sweep-retry
+      // trigger the review named.
+      const laggy = buildAdmission({
+        repo: async () => w.repo,
+        claimIo: w.claimIo,
+        proposals: {
+          ...w.proposals,
+          pending: () => w.proposals.pending(),
+          get: (id) => w.proposals.get(id),
+          setVerification: (id, v, at) => w.proposals.setVerification(id, v, at),
+          markAdmitted: async () => {
+            throw new Error("projection store down");
+          },
+          supersede: (id, at) => w.proposals.supersede(id, at),
+          open: (p, at) => w.proposals.open(p, at),
+        },
+        readNoteBytes: async (p) => (w.vault.has(p) ? enc(w.vault.get(p)) : null),
+        writeNoteBytes: async () => {},
+        bindingGate: async () => ({ ok: true }),
+        appendSettlement: async () => {},
+        predicates: w.sharedPredicates,
+        promotion: {
+          transformationOf: (id, version) => w.registry.get(id, version),
+          recordEvidence: async () => {},
+          verdictOf: (t) => w.promotionStore.verdictOf(t),
+        },
+        mandates: {
+          get: (id) => w.mandateStore.getMandate(id),
+          usageOf: (id) => w.mandateStore.usageOf(id),
+          charge: (id, d, at) => w.mandateStore.charge(id, d, at),
+          markExhausted: (id, b, at) => w.mandateStore.markExhausted(id, b, at),
+        },
+        now: () => T0 + 1000,
+      });
+
+      // Cohort X admits (projection catch-up fails silently — by design).
+      await w.produce("Notes/x1.md", "old x\n", "new x\n");
+      const selX = await laggy.freezeSelection({ folder: "Notes" }, "item");
+      assert.ok(selX.ok);
+      const first = await laggy.admitCohortUnderMandate(selX.frozen, selX.members, w.mandate.id);
+      assert.ok(first.ok, JSON.stringify(first));
+
+      // Unrelated cohort Y admits — the head MOVES past X.
+      await w.produce("Other/y1.md", "old y\n", "new y\n", {});
+      // (Other/ is outside the mandate's scope; admit Y under human gesture.)
+      const selY = await laggy.freezeSelection({ folder: "Other" }, "item");
+      assert.ok(selY.ok);
+      const second = await laggy.admitCohortWithGesture(selY.frozen, selY.members, "gesture-y");
+      assert.ok(second.ok, JSON.stringify(second));
+
+      // X re-submitted: members still read "proposed" (projection lagged),
+      // bytes unchanged, head ≠ X — the review's exploit. It must refuse.
+      const replay = await laggy.admitCohortUnderMandate(selX.frozen, selX.members, w.mandate.id);
+      assert.equal(replay.ok, false);
+      assert.equal(replay.code, "already_admitted", "the claim store is the one-shot, not the head");
+      // And exactly ONE claim covers X's digest — no duplicate landed.
+      const claims = await createClaimStore(w.claimIo).all();
+      assert.equal(claims.filter((c) => c.subjectDigest.value === selX.frozen.digest.value).length, 1);
+      // Usage charged once, not twice.
+      assert.equal((await w.mandateStore.usageOf(w.mandate.id)).items, 1);
+    } finally {
+      w.cleanup();
+    }
+  });
+
+  test("S1: a hand-built MIXED-CLASS frozen cohort refuses at the mandate door — the door does not trust the freeze", async () => {
+    const w = await world({ terms: { allowedClasses: ["representation", "presentation"] } });
+    try {
+      // Two members, both automatable, both granted — but MIXED combinations.
+      const pA = await w.produce("Notes/m1.md", "old 1\n", "new 1\n");
+      const pB = await w.produce("Notes/m2.md", "old 2\n", "new 2\n", { classes: ["presentation"] });
+      // Bypass freezeCohort's group check by hand-building the frozen shape
+      // the way a hostile in-process caller would.
+      const { buildCohortSubject } = await import("../src/kernel/governance/contracts/subject-v1.ts");
+      const cohortSubject = buildCohortSubject({ items: [pA.subject, pB.subject], resolvedScope: { include: ["Notes"], exclude: [] }, recoveryUnit: "item", excludedProposalIds: [] });
+      const frozen = { subject: cohortSubject, digest: subjectDigest(cohortSubject), memberProposalIds: [pA.id, pB.id] };
+      const outcome = await w.admission.admitCohortUnderMandate(frozen, [pA, pB], w.mandate.id);
+      assert.equal(outcome.ok, false);
+      assert.equal(outcome.code, "cohort_ineligible", "mixed-class results split BEFORE admission — enforced at admission");
+      assert.match(outcome.detail, /mixed class combinations/);
+    } finally {
+      w.cleanup();
+    }
+  });
+
+  test("S2: a garbage promotion verdict refuses promotion_unavailable — typed, never a laundered TypeError", async () => {
+    for (const garbage of [null, {}, { state: "???" }, { state: 42 }]) {
+      const store = {
+        recordEvidence: async () => {},
+        promote: async () => {},
+        demote: async () => {},
+        verdictOf: async () => garbage,
+        all: async () => [],
+      };
+      const w = await world({ promotionStore: store });
+      try {
+        await w.produce("Notes/g.md", "old\n", "new\n");
+        const sel = await w.admission.freezeSelection({ folder: "Notes" }, "item");
+        const outcome = await w.admission.admitCohortUnderMandate(sel.frozen, sel.members, w.mandate.id);
+        assert.equal(outcome.ok, false);
+        assert.equal(outcome.code, "promotion_unavailable", `garbage ${JSON.stringify(garbage)} must refuse typed`);
+      } finally {
+        w.cleanup();
+      }
+    }
+  });
+
+  test("S2 sibling: an unpromoted verdict with a MISSING `missing` array still refuses promotion_missing without throwing", async () => {
+    const store = {
+      recordEvidence: async () => {},
+      promote: async () => {},
+      demote: async () => {},
+      verdictOf: async () => ({ state: "unpromoted", counts: { individualAdmits: 0, cohortAdmits: 0, reverts: 0 } }),
+      all: async () => [],
+    };
+    const w = await world({ promotionStore: store });
+    try {
+      await w.produce("Notes/s.md", "old\n", "new\n");
+      const sel = await w.admission.freezeSelection({ folder: "Notes" }, "item");
+      const outcome = await w.admission.admitCohortUnderMandate(sel.frozen, sel.members, w.mandate.id);
+      assert.equal(outcome.ok, false);
+      assert.equal(outcome.code, "promotion_missing", "a recognized state with a malformed detail field keeps its own code");
+    } finally {
+      w.cleanup();
+    }
+  });
+});
