@@ -119,6 +119,18 @@ Known-overstated section instead — see its header for the format.
 - `readOnlyHint: true`, empty input schema, no write and no accept/baseline verb: it reports pending-ness; it cannot accept ("the accept verb is in no API").
 - **Allowlist-filtered.** The index is written from the whole vault, so every returned entry is filtered through the **same `isVisible` guard** the uid/read tools use, *before* it is reported — a sandboxed session that could learn about pending notes in territory it cannot read would have a path oracle otherwise.
 
+## docs/suite-split-design.md (PROPOSAL — see the doc's status banner)
+
+- The §9 reachability invariant says accept-class capabilities must never be reachable from `app`.
+  approved 2026-08-25: a restatement of the standing invariant, already pinned by the
+  governance reachability/tripwire suites (governance-module.test.mjs) — the proposal cites
+  it, it does not extend it.
+- What the seam must NEVER offer is the third hook class: anything that can **mutate a write in flight or assert acceptance**.
+  approved 2026-08-25 AS A DESIGN RULE OF AN UNBUILT SEAM: no code exists yet; the doc itself
+  says the prohibition "is a load-bearing design rule, to be pinned by test" in the S2
+  package. The gap is declared in the sentence's own home; when S2 lands, this entry gains
+  its test citation or the suite catches the lie.
+
 ## docs/acceptance-model.md (WP10c retirement)
 
 - **The first consumer — the per-note auto-accept policy (#135) — RETIRED (WP10c, 2026-08-25).** `auto-accept` remains in the default declared list as authority-conferring, but the policy's operational half is deleted per the development guide's order: `auto-accept: all` no longer parses at all (a whole-note blank check never belonged in frontmatter — it reads as no policy under every authority era, including after a cutover rollback), and `auto-accept: appends` is migrated to content proposals — an appended tail is residual content like any other edit, and lands as an ordinary proposal for the human's decision.
