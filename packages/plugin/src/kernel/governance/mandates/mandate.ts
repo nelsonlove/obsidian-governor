@@ -4,11 +4,11 @@
 // ADMITTED after verification — never "do whatever is necessary". The two
 // authorities are separate fields (D02): `mayProduce` covers producing
 // proposals under the mandate; `mayAdmit` covers Governor admitting verified
-// cohorts without a per-cohort click. In this first implementation `mayAdmit`
-// is recorded but NEVER exercised — the admission door still refuses mandate
-// authority (policy.ts `mandate_not_supported` sites), and promotion to
-// automatic admission is WP10's evidence gate. Recording the human's intent
-// now and exercising it later beats retrofitting the schema.
+// cohorts without a per-cohort click. As of WP10b `mayAdmit` is EXERCISED at
+// the admission door (admission/policy.ts requireMandateCohortAdmissible),
+// behind the promotion evidence gate — a mayAdmit grant means nothing until
+// the exact transformation/verifier/recovery tuple is promoted on live
+// evidence.
 //
 // IMMUTABILITY: an active mandate is never edited. Scope, classes,
 // transformation, predicate versions, budgets, expiry, recovery — all frozen

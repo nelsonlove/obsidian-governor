@@ -7,11 +7,12 @@
 // work's facts, and the clock. Nothing here reads stores or wall clocks.
 //
 // This is the production-side gate (`mayProduce`). The admission-side gate
-// (`mayAdmit`, D02's other half) deliberately does NOT exist yet: the
-// admission door's mandate arm still refuses `mandate_not_supported`, and
-// WP10's promotion-evidence machinery is what will call a future
-// `admissionFitOf` — after live evidence, per D14. Building the admit gate
-// before the evidence gate would be authority ahead of proof.
+// (`mayAdmit`, D02's other half) lives at the DOOR — admission/policy.ts's
+// requireMandateCohortAdmissible (WP10b), which owns its own table because
+// doors do not trust hallways: it re-checks liveness/expiry/scope/classes
+// itself and adds what only the door can know (the promoted tuple, the
+// declared verifier's coverage, the recovery unit). This file stays the
+// producer's half; productionStampOf below is its one production consumer.
 //
 // FAIL DIRECTION: every uncertain input refuses. A missing transformation,
 // an unknown durability, an absent action — each reads as "outside the
@@ -155,4 +156,34 @@ export function mandateFitOf(mandate: MandateV1, usage: MandateUsage, ctx: Manda
   }
 
   return { ok: true };
+}
+
+/** What the producer does about a session's governing mandate for one write (WP10b). */
+export interface ProductionStampDecision {
+  /** The mandate id to stamp on the subject, or null (unfit / no mandate). */
+  mandateId: string | null;
+  /** The usage to charge iff stamped — items, proposals, and the written bytes. */
+  charge: { items: number; proposals: number; bytes: number } | null;
+  /** The fit refusal when a LIVE mandate did not fit this work — observability, never a gate: the proposal proceeds unstamped. */
+  refusal: MandateFit | null;
+}
+
+/**
+ * The producer's stamp decision, pure (WP10b). A mandate never BLOCKS
+ * production — proposals are safe, and an unfit write simply proposes
+ * ungoverned-by-mandate — but the stamp is granted only through the full
+ * production fit, and a stamp implies a charge: work counted under the
+ * mandate is work that spends its budgets.
+ */
+export function productionStampOf(
+  mandate: MandateV1 | null,
+  usage: MandateUsage,
+  ctx: MandateFitContext,
+  bytes: number,
+  now: number
+): ProductionStampDecision {
+  if (mandate === null) return { mandateId: null, charge: null, refusal: null };
+  const fit = mandateFitOf(mandate, usage, ctx, now);
+  if (!fit.ok) return { mandateId: null, charge: null, refusal: fit };
+  return { mandateId: mandate.id, charge: { items: 1, proposals: 1, bytes: Math.max(0, Math.floor(bytes)) }, refusal: fit };
 }

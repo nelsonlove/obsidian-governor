@@ -15,6 +15,7 @@ import { createProposalStore } from "./kernel/governance/proposals/proposal-stor
 import { buildAdmission, type AdmissionUiDeps } from "./governance/admission-wiring.js";
 import { buildMandateUi, type MandateUiDeps } from "./governance/mandate-wiring.js";
 import { createMandateStore } from "./kernel/governance/mandates/lifecycle.js";
+import { budgetBreach } from "./kernel/governance/mandates/budgets.js";
 import { governanceAcceptanceSettings } from "./kernel/governance/settings.js";
 import { buildPromotionUi, type PromotionUiDeps } from "./governance/promotion-wiring.js";
 import { createTransformationRegistry } from "./kernel/governance/transformations/transformation.js";
@@ -713,6 +714,15 @@ export default class VaultMcpPlugin extends Plugin {
         promotion: {
           transformationOf: (id, version) => transformationRegistry.get(id, version),
           recordEvidence: (tuple, evidence, at) => promotionStore.recordEvidence(tuple, evidence, at),
+          verdictOf: (tuple) => promotionStore.verdictOf(tuple),
+        },
+        // WP10b: the mandate door's stores. The wiring's context resolver
+        // reads these; every failure refuses the automatic path, loudly.
+        mandates: {
+          get: (id) => mandateStore.getMandate(id),
+          usageOf: (id) => mandateStore.usageOf(id),
+          charge: (id, delta, at) => mandateStore.charge(id, delta, at),
+          markExhausted: (id, breach, at) => mandateStore.markExhausted(id, breach, at),
         },
         claimIo,
         proposals: proposalStore,
@@ -846,6 +856,19 @@ export default class VaultMcpPlugin extends Plugin {
         allDrafts: () => mandateStore.allDrafts(),
         allMandates: () => mandateStore.allMandates(),
         usageOf: (id: string) => mandateStore.usageOf(id),
+        getMandate: (id: string) => mandateStore.getMandate(id),
+        // WP10b producer charge: usage recorded, then the breach observed
+        // into the durable `exhausted` transition — a spent budget STOPS
+        // (normal stop), it never silently keeps counting.
+        chargeAndObserve: async (id: string, delta: { items: number; proposals: number; bytes: number }) => {
+          const at = Date.now();
+          await mandateStore.charge(id, delta, at);
+          const m = await mandateStore.getMandate(id);
+          if (m && m.status === "active") {
+            const breach = budgetBreach(m.terms.budgets, await mandateStore.usageOf(id), m.activatedAt, at);
+            if (breach !== null) await mandateStore.markExhausted(id, breach.detail, at);
+          }
+        },
       },
       proposals: {
         open: (proposal: import("./kernel/governance/proposals/proposal.js").ProposalV1, now: number) => proposalStore.open(proposal, now),

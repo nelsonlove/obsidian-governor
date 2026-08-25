@@ -67,7 +67,7 @@ describe("settlement decisions — the two asymmetric rules", () => {
   const claim = buildAdmissionClaim({
     subjectDigest: d("x"),
     proposalId: "p-1",
-    gestureRef: "g",
+    authority: { kind: "human-gesture", gestureRef: "g" },
     verification: [],
     expectedStanding: null,
     coveredNotes: [{ vaultId: "v", noteId: "n", subjectDigest: d("x").value }],
@@ -197,7 +197,7 @@ describe("standing resolver — a ref naming a missing claim is unresolvable, no
   test("claim-store garbage does not corrupt neighbors", async () => {
     const io = memoryIo();
     const claims = createClaimStore(io);
-    const claim = buildAdmissionClaim({ subjectDigest: d("x"), proposalId: "p", gestureRef: "g", verification: [], expectedStanding: null, coveredNotes: [{ vaultId: "v", noteId: "n", subjectDigest: d("x").value }], now: T0, rand: RAND });
+    const claim = buildAdmissionClaim({ subjectDigest: d("x"), proposalId: "p", authority: { kind: "human-gesture", gestureRef: "g" }, verification: [], expectedStanding: null, coveredNotes: [{ vaultId: "v", noteId: "n", subjectDigest: d("x").value }], now: T0, rand: RAND });
     await claims.append(claim);
     io.lines.push("{corrupt json");
     const rebooted = createClaimStore(io);
