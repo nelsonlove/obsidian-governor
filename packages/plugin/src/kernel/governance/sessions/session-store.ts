@@ -15,13 +15,15 @@
 // carries identifiers and digests, never note bodies, so the
 // outlives-its-source argument does not apply and auditability wins.
 
-import { SessionNotLiveError, closeSession, expireSession, revokeSession, type SessionV1 } from "./session.js";
+import { SessionNotLiveError, attachMandate, closeSession, expireSession, revokeSession, type SessionV1 } from "./session.js";
 
 export type SessionEvent =
   | { kind: "opened"; at: number; session: SessionV1 }
   | { kind: "closed"; at: number; sessionId: string }
   | { kind: "revoked"; at: number; sessionId: string; reason: string }
-  | { kind: "expired"; at: number; sessionId: string };
+  | { kind: "expired"; at: number; sessionId: string }
+  /** WP9: mandate activation binds the granted mandate to its delegate session. */
+  | { kind: "mandated"; at: number; sessionId: string; mandateId: string };
 
 export interface SessionEventIo {
   /** Atomically append one line. */
@@ -36,6 +38,8 @@ export interface SessionStore {
   revoke(sessionId: string, reason: string, now: number): Promise<void>;
   /** Record an observed expiry, so the durable state matches what liveness already decided. */
   markExpired(sessionId: string, now: number): Promise<void>;
+  /** WP9: bind a granted mandate to its delegate session — refused unless the session is open and unmandated. */
+  attachMandate(sessionId: string, mandateId: string, now: number): Promise<void>;
   /** Current folded state of one session, or null. */
   get(sessionId: string): Promise<SessionV1 | null>;
   /** All sessions in their current folded state. */
@@ -68,6 +72,7 @@ export function foldSessionEvents(lines: readonly string[]): Map<string, Session
       if (ev.kind === "closed") out.set(cur.id, closeSession(cur));
       else if (ev.kind === "revoked") out.set(cur.id, revokeSession(cur, ev.reason));
       else if (ev.kind === "expired" && cur.status === "open") out.set(cur.id, expireSession(cur, Math.max(ev.at, cur.expiresAt)));
+      else if (ev.kind === "mandated") out.set(cur.id, attachMandate(cur, ev.mandateId));
     } catch {
       // A transition invalid against folded state (close of a revoked
       // session, say) is recorded history colliding with itself — keep the
@@ -128,6 +133,15 @@ export function createSessionStore(io: SessionEventIo): SessionStore {
       const cur = m.get(sessionId);
       if (!cur || cur.status !== "open") return;
       await append({ kind: "expired", at: now, sessionId });
+    },
+    async attachMandate(sessionId, mandateId, now) {
+      const m = await state();
+      const cur = m.get(sessionId);
+      if (!cur) throw new SessionNotLiveError(sessionId, "closed");
+      // Run the kernel transition against folded state BEFORE appending, so a
+      // refused attach (not open, already mandated) writes nothing.
+      attachMandate(cur, mandateId);
+      await append({ kind: "mandated", at: now, sessionId, mandateId });
     },
     async get(sessionId) {
       return (await state()).get(sessionId) ?? null;

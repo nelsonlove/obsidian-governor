@@ -98,6 +98,17 @@ export interface ServerCtx {
     journalHead(): string | null;
   };
   /**
+   * Mandate negotiation (WP9): drafting and listing ONLY. Grant, decline,
+   * and revoke are deliberately absent — they are human gestures in the
+   * review pane (mandate-wiring.ts), and no ServerCtx port reaches them.
+   */
+  mandates?: {
+    draft(d: import("../kernel/governance/mandates/draft.js").MandateDraftV1, now: number): Promise<void>;
+    allDrafts(): Promise<import("../kernel/governance/mandates/draft.js").MandateDraftV1[]>;
+    allMandates(): Promise<import("../kernel/governance/mandates/mandate.js").MandateV1[]>;
+    usageOf(id: string): Promise<import("../kernel/governance/mandates/budgets.js").MandateUsage>;
+  };
+  /**
    * Proposal production (WP6b-1): the durable store plus the vault identity
    * facts the producer needs. Absent ⇒ no proposals are produced (tests,
    * bare embeds, and any build until main.ts wires it).

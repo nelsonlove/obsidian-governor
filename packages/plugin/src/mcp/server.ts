@@ -18,6 +18,7 @@ import { registerLockTools } from "./tools-locks.js";
 import { registerUidTools } from "./tools-uid.js";
 import { registerPendingReviewTools, obsidianPendingReviewSource } from "./tools-pending-review.js";
 import { registerGovernanceRevisionTool, registerGovernanceRevisionsListTool } from "./tools-governance-revision.js";
+import { registerMandateTools } from "./tools-governance-mandate.js";
 import { registerLinkTools, obsidianLinkSource } from "./tools-links.js";
 import { registerConformanceDebtTools, registerConformanceDebtRenderTool } from "./tools-conformance-debt.js";
 import { obsidianDebtRenderSource } from "./obsidian-debt-source.js";
@@ -532,6 +533,25 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
     },
     getSettings: () => ctx.getSettings(),
   });
+  // ── mandate negotiation (WP9): the agent's draft + list verbs ──────────────
+  // Draft is a MUTATING registration (read-only mode blocks negotiating
+  // authority; the queue and journal record the request); the listing is
+  // read-only. Both are candidates-only: activation has NO tool — it is the
+  // pane's gesture-gated control. Registered only when main.ts wired the
+  // mandate store; tests and bare embeds simply have no mandate surface.
+  if (ctx.mandates) {
+    const mandatesPort = ctx.mandates;
+    registerMandateTools(server, {
+      draft: (d, now) => mandatesPort.draft(d, now),
+      allDrafts: () => mandatesPort.allDrafts(),
+      allMandates: () => mandatesPort.allMandates(),
+      usageOf: (id) => mandatesPort.usageOf(id),
+      sessionId: () => session?.id ?? null,
+      client: () => opts.clientLabel ?? null,
+      now: () => Date.now(),
+      getSettings: () => ctx.getSettings(),
+    });
+  }
   // ── capability modules: scope-provider + vocab + skills ────────────────────
   // Ruled decision #2 realized: the two capability modules register THROUGH
   // the ModuleRegistry — settings-toggleable (`modules.<id>.enabled`), behind

@@ -125,6 +125,8 @@ export interface ReviewController {
   getProposed(): ProposedItem[];
   /** WP6b-2: the governed-proposals surface (list + gesture-gated admit/revert). Absent ⇒ no section. */
   admission?: import("./admission-wiring.js").AdmissionUiDeps;
+  /** WP9: the mandate surface (drafts + activate/decline/revoke — all human gestures). Absent ⇒ no section. */
+  mandates?: import("./mandate-wiring.js").MandateUiDeps;
   // The configured accepted-by identity (governance config `acceptedBy`) — display data so
   // the Accept controls can SURFACE what will be stamped before the one click.
   acceptedBy(): string;
@@ -686,6 +688,11 @@ export class GovernanceReviewView extends ItemView {
       // async (the store is durable, not cached); failures leave the section
       // absent rather than breaking the pane.
       void this.renderGovernedProposals(root, deps);
+      // WP9: mandate negotiation — agent drafts awaiting the human's grant,
+      // active mandates with usage against budgets, and the gesture-gated
+      // activate/decline/revoke verbs. Async like the governed section;
+      // failures leave the section absent rather than breaking the pane.
+      void this.renderMandates(root, deps);
       // The Revising section (#101): notes with acceptance-status: revising, whether or not
       // they are in the pending queue — the frontmatter-lifecycle visibility that makes this
       // pane a superset of the retired js-engine panel.
@@ -818,6 +825,151 @@ export class GovernanceReviewView extends ItemView {
           }
         ).then(noticeGestureBlocked);
       });
+    }
+  }
+
+  // The Mandates section (WP9). Activation is the §9 authority act for
+  // DELEGATION — it grants prospective authority — so it runs the full
+  // perimeter: addEventListener-wired, isRealGesture-gated, confirm-modal
+  // showing the EXACT terms being granted, gestureRef minted inside the gate.
+  // Decline and Revoke are gesture-gated human dispositions (no confirm for
+  // decline — it grants nothing; confirm for revoke — it kills live authority
+  // someone may be working under).
+  private async renderMandates(root: HTMLElement, deps: ReviewController): Promise<void> {
+    if (!deps.mandates) return;
+    let drafts: import("../kernel/governance/mandates/draft.js").MandateDraftV1[] = [];
+    let mandates: Array<{ mandate: import("../kernel/governance/mandates/mandate.js").MandateV1; usage: import("../kernel/governance/mandates/budgets.js").MandateUsage }> = [];
+    try {
+      drafts = await deps.mandates.drafts();
+      mandates = await deps.mandates.mandates();
+    } catch {
+      return;
+    }
+    const openDrafts = drafts.filter((d) => d.status === "open");
+    const liveMandates = mandates.filter((m) => m.mandate.status === "active");
+    const settled = mandates.length - liveMandates.length;
+    if (openDrafts.length === 0 && liveMandates.length === 0) return;
+
+    const section = root.createDiv({ cls: "governance-mandates" });
+    section.createDiv({ cls: "governance-proposed-title", text: `Mandates (${liveMandates.length} active, ${openDrafts.length} requested)` });
+    section.createDiv({
+      cls: "governance-proposed-desc",
+      text:
+        "Bounded delegation: an agent drafts exact terms; activating grants them — scope, classes, transformation, " +
+        "verification, and budgets are frozen at that click and amended only by replacement. In this release every " +
+        "mandate runs in cohort-decision mode: work still returns for your Admit.",
+    });
+
+    for (const { mandate: m, usage } of liveMandates) {
+      const row = section.createDiv({ cls: "governance-proposed-row" });
+      const main = row.createDiv({ cls: "governance-row-main" });
+      const expired = Date.now() >= m.expiresAt;
+      main.createDiv({ cls: "governance-row-title", text: `${m.terms.purpose}${expired ? " — EXPIRED (refused at use)" : ""}` });
+      main.createDiv({
+        cls: "governance-row-path",
+        text:
+          `${m.terms.delegate.kind} ${m.terms.delegate.value.slice(0, 12)}… · ${m.terms.scope.include.join(", ")} · ` +
+          `${m.terms.allowedClasses.join("+")} · ${m.terms.transformation.id}@${m.terms.transformation.version} · ` +
+          `items ${usage.items}/${m.terms.budgets.maxItems} · bytes ${usage.bytes}/${m.terms.budgets.maxBytes} · ` +
+          `proposals ${usage.proposals}/${m.terms.budgets.maxProposals} · failures ${usage.failures}/${m.terms.budgets.maxFailures} · ` +
+          `expires ${new Date(m.expiresAt).toLocaleString()}`,
+      });
+      const controls = row.createDiv({ cls: "governance-proposed-controls" });
+      const revokeBtn = controls.createEl("button", { cls: "governance-revert governance-mandate-revoke", text: "Revoke…" });
+      revokeBtn.addEventListener("click", (evt) => {
+        void runGuardedDisposition(
+          evt,
+          () =>
+            new Promise<boolean>((resolve) =>
+              new ConfirmModal(
+                this.app,
+                {
+                  title: "Revoke this mandate?",
+                  body: "Work already proposed or admitted under it stands; nothing further runs under it. Revocation is recorded and permanent — grant a new mandate to delegate again.",
+                  items: [m.terms.purpose],
+                  confirmText: "Revoke",
+                },
+                resolve
+              ).open()
+            ),
+          async (gestureRef) => {
+            const outcome = await deps.mandates!.revoke(m.id, "revoked in the review pane", gestureRef);
+            new Notice(outcome.ok ? "Mandate revoked." : `Not revoked [${outcome.code}]: ${outcome.detail}`, 8000);
+            void this.rerender();
+          }
+        ).then(noticeGestureBlocked);
+      });
+    }
+
+    for (const d of openDrafts) {
+      const row = section.createDiv({ cls: "governance-proposed-row" });
+      const main = row.createDiv({ cls: "governance-row-main" });
+      main.createDiv({ cls: "governance-row-title", text: `Requested: ${d.terms.purpose}${d.counterOf ? " (counter-proposal)" : ""}` });
+      main.createDiv({
+        cls: "governance-row-path",
+        text:
+          `${d.terms.delegate.kind} ${d.terms.delegate.value.slice(0, 12)}… · ${d.terms.scope.include.join(", ")}` +
+          `${d.terms.scope.exclude.length ? ` (excl ${d.terms.scope.exclude.join(", ")})` : ""} · ${d.terms.allowedClasses.join("+")} · ` +
+          `${d.terms.transformation.id}@${d.terms.transformation.version} · ≤${d.terms.budgets.maxItems} items, ` +
+          `≤${Math.round(d.terms.budgets.maxDurationMs / 60000)} min` +
+          `${d.terms.admission.mayAdmit ? " · REQUESTS automatic admission (inert until promoted)" : ""}`,
+      });
+      const controls = row.createDiv({ cls: "governance-proposed-controls" });
+
+      const activateBtn = controls.createEl("button", { cls: "mod-cta governance-mandate-activate", text: "Activate…" });
+      activateBtn.addEventListener("click", (evt) => {
+        void runGuardedDisposition(
+          evt,
+          () =>
+            new Promise<boolean>((resolve) =>
+              new ConfirmModal(
+                this.app,
+                {
+                  title: "Grant this mandate?",
+                  body:
+                    `Grants EXACTLY these terms, frozen until replaced: scope ${d.terms.scope.include.join(", ")}` +
+                    `${d.terms.scope.exclude.length ? ` excluding ${d.terms.scope.exclude.join(", ")}` : ""}; ` +
+                    `classes ${d.terms.allowedClasses.join(", ")}; transformation ${d.terms.transformation.id}@${d.terms.transformation.version}; ` +
+                    `verified by ${d.terms.predicates.map((p) => `${p.id}@${p.version}`).join(", ")}; ` +
+                    `actions ${d.terms.eligibleActions.map((a) => `${a.id}@${a.version}`).join(", ")}; ` +
+                    `budgets ${d.terms.budgets.maxItems} items / ${d.terms.budgets.maxBytes} bytes / ${d.terms.budgets.maxProposals} proposals / ` +
+                    `${d.terms.budgets.maxFailures} failures / ${Math.round(d.terms.budgets.maxDurationMs / 60000)} minutes. ` +
+                    "Every result still returns for your cohort decision in this release. You can revoke at any time.",
+                  items: [d.terms.purpose],
+                  confirmText: "Grant mandate",
+                },
+                resolve
+              ).open()
+            ),
+          async (gestureRef) => {
+            const outcome = await deps.mandates!.activate(d.id, gestureRef);
+            if (outcome.ok) {
+              new Notice(
+                `Mandate granted (${outcome.mandateId.slice(0, 8)}…).` +
+                  (outcome.supersededMandateId ? ` Superseded ${outcome.supersededMandateId.slice(0, 8)}… — amendment by replacement.` : "") +
+                  (outcome.sessionAttachWarning ? ` WARNING: ${outcome.sessionAttachWarning}` : ""),
+                10000
+              );
+            } else {
+              new Notice(`Not granted [${outcome.code}]: ${outcome.detail}`, 10000);
+            }
+            void this.rerender();
+          }
+        ).then(noticeGestureBlocked);
+      });
+
+      const declineBtn = controls.createEl("button", { cls: "governance-mandate-decline", text: "Decline" });
+      declineBtn.addEventListener("click", (evt) => {
+        void runGuardedDisposition(evt, null, async (gestureRef) => {
+          const outcome = await deps.mandates!.decline(d.id, "declined in the review pane", gestureRef);
+          new Notice(outcome.ok ? "Draft declined." : `Not declined [${outcome.code}]: ${outcome.detail}`, 8000);
+          void this.rerender();
+        }).then(noticeGestureBlocked);
+      });
+    }
+
+    if (settled > 0) {
+      section.createDiv({ cls: "governance-row-path", text: `${settled} settled mandate${settled === 1 ? "" : "s"} (revoked/expired/exhausted/superseded) in the record.` });
     }
   }
 

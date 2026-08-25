@@ -13,6 +13,9 @@ import { Kernel, WriteQueue, WriteJournal, IdempotencyStore, LockStore, UidIndex
 import { createSessionStore } from "./kernel/governance/sessions/session-store.js";
 import { createProposalStore } from "./kernel/governance/proposals/proposal-store.js";
 import { buildAdmission, type AdmissionUiDeps } from "./governance/admission-wiring.js";
+import { buildMandateUi, type MandateUiDeps } from "./governance/mandate-wiring.js";
+import { createMandateStore } from "./kernel/governance/mandates/lifecycle.js";
+import { governanceAcceptanceSettings } from "./kernel/governance/settings.js";
 import { openGitRepository } from "./governance/history-store/git-repository.js";
 import { historyDir } from "./governance/history-store/local-data-root.js";
 import { uuidv7 } from "./kernel/uuidv7.js";
@@ -151,6 +154,8 @@ interface VaultMcpSettings {
 // module-local WeakMap (the wiring.ts pattern) — NOT a plugin property, so
 // renderer JS walking `app.plugins` finds no admit-capable function (§9).
 const admissionFactories = new WeakMap<Plugin, () => AdmissionUiDeps>();
+// WP9: the mandate surface factory — same shape and reasoning as admission's.
+const mandateUiFactories = new WeakMap<Plugin, () => MandateUiDeps>();
 // WP8: per-plugin migration surface (import / cutover / rollback), built in onload.
 const migrations = new WeakMap<Plugin, Migration>();
 
@@ -720,6 +725,39 @@ export default class VaultMcpPlugin extends Plugin {
       },
     });
 
+    // ── the mandate store (WP9) ─────────────────────────────────────────────
+    // Bounded-delegation records: drafts, grants, usage, transitions. Same
+    // shape and reasoning as sessions.jsonl — identifiers, terms, and digests,
+    // never note bodies; in-vault evidence inside the obsidian-backup net.
+    const mandatesFile = `${pluginDir}/governance/mandates.jsonl`;
+    let mandateIoChain: Promise<unknown> = Promise.resolve();
+    const mandateStore = createMandateStore({
+      appendLine: (line) => {
+        const task = async () => {
+          const dir = `${pluginDir}/governance`;
+          if (!(await sessionAdapter.exists(dir))) await sessionAdapter.mkdir(dir);
+          if (await sessionAdapter.exists(mandatesFile)) await sessionAdapter.append(mandatesFile, line + "\n");
+          else await sessionAdapter.write(mandatesFile, line + "\n");
+        };
+        const next = mandateIoChain.then(task, task);
+        mandateIoChain = next.catch(() => undefined);
+        return next;
+      },
+      readLines: async () => {
+        if (!(await sessionAdapter.exists(mandatesFile))) return [];
+        const raw = await sessionAdapter.read(mandatesFile);
+        return raw.split("\n").filter(Boolean);
+      },
+    });
+    mandateUiFactories.set(this, () =>
+      buildMandateUi({
+        store: mandateStore,
+        attachSessionMandate: (sessionId, mandateId, now) => sessionStore.attachMandate(sessionId, mandateId, now),
+        // The grant records the same configured human identity acceptance stamps.
+        principal: () => governanceAcceptanceSettings((this.settings.modules?.acceptance?.config ?? {}) as Record<string, unknown>).acceptedBy,
+      })
+    );
+
     const ctx = {
       pluginVersion: this.manifest.version,
       socketPath: sock,
@@ -749,6 +787,15 @@ export default class VaultMcpPlugin extends Plugin {
         replicaId: install,
         vaultId: vaultName,
         journalHead: () => journalHeadMarker(),
+      },
+      // WP9: the mandate negotiation port — drafting and listing only. The
+      // store's grant/decline/revoke verbs are NOT exposed here: they belong
+      // to the pane's gesture-gated surface (mandate-wiring.ts).
+      mandates: {
+        draft: (d: import("./kernel/governance/mandates/draft.js").MandateDraftV1, now: number) => mandateStore.draft(d, now),
+        allDrafts: () => mandateStore.allDrafts(),
+        allMandates: () => mandateStore.allMandates(),
+        usageOf: (id: string) => mandateStore.usageOf(id),
       },
       proposals: {
         open: (proposal: import("./kernel/governance/proposals/proposal.js").ProposalV1, now: number) => proposalStore.open(proposal, now),
@@ -1001,6 +1048,7 @@ export default class VaultMcpPlugin extends Plugin {
           getConfig: () => (this.settings.modules?.acceptance?.config ?? {}) as Record<string, unknown>,
           // Built fresh per mount, handed as an argument (§9: never a property).
           admission: admissionFactories.get(this)?.(),
+          mandates: mandateUiFactories.get(this)?.(),
           migration: migrations.get(this),
         });
       } catch (e) {

@@ -360,10 +360,22 @@ describe("governance module: THE TRIPWIRE — source reachability (accept surfac
 
   test("pane.ts: every accept-class button is addEventListener-wired, NEVER via .onclick = (so .onclick stays null)", () => {
     const pane = code("governance/pane.ts");
-    for (const el of ["acceptBtn", "revertBtn", "adoptBtn", "checkbox", "confirm", "proposedAcceptBtn", "proposedRequestBtn"]) {
+    // WP9's three mandate controls are on this list because activation GRANTS
+    // PROSPECTIVE AUTHORITY — a stronger act than a single admission — and
+    // revoke/decline are human dispositions on the same surface. (Review of
+    // #356: the buttons shipped correctly wired but unpinned; an onclick
+    // rewrite of Activate survived the whole suite. Guard-exists-path-
+    // doesn't-run, the family's canonical shape.)
+    for (const el of [
+      "acceptBtn", "revertBtn", "adoptBtn", "checkbox", "confirm", "proposedAcceptBtn", "proposedRequestBtn",
+      "activateBtn", "revokeBtn", "declineBtn",
+    ]) {
       assert.ok(!new RegExp(`\\b${el}\\.onclick\\s*=`).test(pane),
         `${el}.onclick = … is the forgeable wiring — must use addEventListener`);
     }
+    assert.match(pane, /activateBtn\.addEventListener\(\s*["']click["']/, "mandate Activate via addEventListener");
+    assert.match(pane, /revokeBtn\.addEventListener\(\s*["']click["']/, "mandate Revoke via addEventListener");
+    assert.match(pane, /declineBtn\.addEventListener\(\s*["']click["']/, "mandate Decline via addEventListener");
     assert.match(pane, /acceptBtn\.addEventListener\(\s*["']click["']/, "accept via addEventListener");
     assert.match(pane, /revertBtn\.addEventListener\(\s*["']click["']/, "revert via addEventListener");
     // The Proposed section's two controls (#221/#164) keep the same wiring discipline.
@@ -392,7 +404,7 @@ describe("governance module: THE TRIPWIRE — source reachability (accept surfac
     // gate by name, same as it always accepted runGuardedAdopt (its wrapper).
     // admitBtn is on the list because ADMISSION advances standing — the §9
     // authority act — and the WP6b-2 revert button shares revertBtn's name.
-    for (const el of ["acceptBtn", "revertBtn", "proposedAcceptBtn", "proposedRequestBtn", "admitBtn"]) {
+    for (const el of ["acceptBtn", "revertBtn", "proposedAcceptBtn", "proposedRequestBtn", "admitBtn", "activateBtn", "revokeBtn", "declineBtn"]) {
       let found = false;
       for (let i = 0; i < lines.length; i++) {
         if (new RegExp(`${el}\\.addEventListener\\(`).test(lines[i])) {
