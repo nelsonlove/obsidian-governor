@@ -88,8 +88,14 @@ export function mandateFitOf(mandate: MandateV1, usage: MandateUsage, ctx: Manda
     );
   }
 
-  // 4. Scope: inside some include, outside every exclude.
+  // 4. Scope: inside some include, outside every exclude. A path this
+  // function cannot reason about prefix-wise — traversal segments, absolute
+  // form — refuses BEFORE matching (the file's fail direction): vault paths
+  // never carry these, so their presence means the input is not a vault path.
   const t = mandate.terms;
+  if (ctx.notePath.startsWith("/") || ctx.notePath.split("/").includes("..") || ctx.notePath.split("/").includes(".")) {
+    return refuse("scope_escape", `'${ctx.notePath}' is not a plain vault-relative path; scope cannot be decided over it`);
+  }
   if (!t.scope.include.some((p) => pathWithin(ctx.notePath, p))) {
     return refuse("scope_escape", `'${ctx.notePath}' is outside the mandate's scope (${t.scope.include.join(", ")})`);
   }
@@ -138,7 +144,11 @@ export function mandateFitOf(mandate: MandateV1, usage: MandateUsage, ctx: Manda
     );
   }
 
-  // 10. Budgets — reaching one is a normal stop.
+  // 10. Budgets — reaching one is a normal stop. The duration axis is
+  // DELIBERATELY shadowed here: expiresAt = activatedAt + maxDurationMs, and
+  // the expiry check above refuses first at the same instant, so a duration
+  // breach can only surface through budgetBreach's direct callers (the
+  // exhaustion-observation flow). Same clock tick, same refusal either way.
   const breach = budgetBreach(t.budgets, usage, mandate.activatedAt, now);
   if (breach !== null) {
     return refuse("budget_exhausted", `mandate ${mandate.id}: ${breach.detail}`);

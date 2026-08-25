@@ -467,7 +467,8 @@ describe("buildMandateUi — the pane's three verbs", () => {
     await store.draft(d2, T0 + 1);
     const second = await ui.activate(d2.id, "gesture-ui-2");
     assert.equal(second.ok, true);
-    assert.match(second.sessionAttachWarning, /did not record it/);
+    assert.match(second.sessionAttachWarning, /did not take the binding/);
+    assert.match(second.sessionAttachWarning, /provenance, not a gate/, "the warning claims exactly what the kernel enforces — no more");
     assert.equal((await sessions.get(sess.id)).mandateId, granted.mandateId, "the first binding stands");
   });
 
@@ -541,5 +542,150 @@ describe("session ⇄ mandate binding (session-store 'mandated' event)", () => {
     await sessions.open(closed, T0);
     await sessions.close(closed.id, T0 + 1);
     await assert.rejects(() => sessions.attachMandate(closed.id, "m-3", T0 + 4), /session_not_live|is closed/);
+  });
+});
+
+// ── The MCP surface: tools-governance-mandate.ts (review of #356: the
+// allowlist gate and the no-session default were shipped untested — a
+// neutered scopeRefusal survived the full suite. These legs close that.) ────
+
+const { registerMandateTools } = await import("../src/mcp/tools-governance-mandate.ts");
+
+function mountedTools({ sessionId = "sess-1", allowlist } = {}) {
+  const tools = new Map();
+  const server = { registerTool: (name, def, handler) => tools.set(name, { def, handler }) };
+  const { store } = { store: createMandateStore(memoryIo()) };
+  registerMandateTools(server, {
+    draft: (d, now) => store.draft(d, now),
+    allDrafts: () => store.allDrafts(),
+    allMandates: () => store.allMandates(),
+    usageOf: (id) => store.usageOf(id),
+    sessionId: () => sessionId,
+    client: () => "claude",
+    now: () => T0,
+    getSettings: allowlist ? () => ({ readOnly: false, allowlist }) : undefined,
+  });
+  return { tools, store };
+}
+
+/** The draft tool's args, matching the baseline terms() shape. */
+function draftArgs(over = {}) {
+  return {
+    purpose: "normalize carriers",
+    scope_include: ["Projects"],
+    allowed_classes: ["presentation"],
+    transformation: { id: "carrier-normalize", version: "1" },
+    predicates: [{ id: "info-preserved", version: "2" }],
+    eligible_actions: [{ id: "note.write", version: "1" }],
+    budgets: { max_items: 10, max_bytes: 1000, max_duration_ms: 60000, max_proposals: 10, max_failures: 0 },
+    ...over,
+  };
+}
+
+function structured(res) {
+  return res.structuredContent ?? JSON.parse(res.content[0].text);
+}
+
+describe("MCP mandate tools — draft-and-list only, allowlist-disciplined", () => {
+  test("exactly two tools register; draft is mutating, the listing read-only; no verb grants", () => {
+    const { tools } = mountedTools();
+    assert.deepEqual([...tools.keys()].sort(), ["governance_mandate_draft", "governance_mandates"]);
+    assert.equal(tools.get("governance_mandate_draft").def.annotations.readOnlyHint, false);
+    assert.equal(tools.get("governance_mandates").def.annotations.readOnlyHint, true);
+    for (const name of tools.keys()) {
+      assert.ok(!/activate|grant|revoke|decline/.test(name), "no agent verb may look like a grant");
+    }
+  });
+
+  test("drafting lands in the store bound to the calling session; kernel refusals surface as coded errors", async () => {
+    const { tools, store } = mountedTools();
+    const res = await tools.get("governance_mandate_draft").handler(draftArgs());
+    assert.notEqual(res.isError, true);
+    const body = structured(res);
+    const d = await store.getDraft(body.draft_id);
+    assert.equal(d.status, "open");
+    assert.deepEqual(d.terms.delegate, { kind: "session", value: "sess-1" }, "the default delegate is the calling session");
+    assert.equal(d.authoredBy.client, "claude");
+
+    const bad = await tools.get("governance_mandate_draft").handler(draftArgs({ allowed_classes: ["authority"] }));
+    assert.equal(bad.isError, true);
+    assert.match(bad.content[0].text, /never delegable/);
+    assert.equal((await store.allDrafts()).length, 1, "a refused draft wrote nothing");
+  });
+
+  test("no session and no explicit delegate: refuses rather than minting an unbound delegation", async () => {
+    const { tools, store } = mountedTools({ sessionId: null });
+    const res = await tools.get("governance_mandate_draft").handler(draftArgs());
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, /no_session/);
+    assert.equal((await store.allDrafts()).length, 0);
+    // An explicit delegate unblocks it.
+    const ok2 = await tools.get("governance_mandate_draft").handler(draftArgs({ delegate: { kind: "role", value: "curator" } }));
+    assert.notEqual(ok2.isError, true);
+  });
+
+  test("THE ALLOWLIST GATE RUNS: a sandboxed session cannot draft over hidden territory, in include OR exclude position", async () => {
+    const { tools, store } = mountedTools({ allowlist: ["Projects"] });
+    const hidden = await tools.get("governance_mandate_draft").handler(draftArgs({ scope_include: ["Secrets"] }));
+    assert.equal(hidden.isError, true);
+    assert.match(hidden.content[0].text, /out_of_allowlist/);
+    assert.equal((await store.allDrafts()).length, 0, "the refused draft wrote nothing");
+    // A broader-than-allowlist prefix refuses too — 'Projects' under allowlist ['Projects/Sub'] is not visible.
+    const { tools: narrow } = mountedTools({ allowlist: ["Projects/Sub"] });
+    const broad = await narrow.get("governance_mandate_draft").handler(draftArgs());
+    assert.equal(broad.isError, true);
+    // And the fitting case passes (vacuity: the gate is the only variable).
+    const ok2 = await tools.get("governance_mandate_draft").handler(draftArgs());
+    assert.notEqual(ok2.isError, true);
+  });
+
+  test("the listing counts hidden-scope records without naming them — exclude entries count as scope too", async () => {
+    const { tools, store } = mountedTools({ allowlist: ["Projects"] });
+    const seed = createMandateStore(memoryIo()); // unused; keep symmetry obvious
+    void seed;
+    const visible = openDraft({ authoredBy: { sessionId: "s", client: "c" }, terms: terms({ scope: { include: ["Projects"], exclude: [] } }) }, T0, RAND_A);
+    const hiddenInclude = openDraft({ authoredBy: { sessionId: "s", client: "c" }, terms: terms({ scope: { include: ["Secrets"], exclude: [] } }) }, T0, RAND_B);
+    const hiddenExclude = openDraft(
+      { authoredBy: { sessionId: "s", client: "c" }, terms: terms({ scope: { include: ["Projects"], exclude: ["Secrets/Deep"] } }) },
+      T0,
+      RAND_C
+    );
+    await store.draft(visible, T0);
+    await store.draft(hiddenInclude, T0 + 1);
+    await store.draft(hiddenExclude, T0 + 2);
+    const res = structured(await tools.get("governance_mandates").handler({}));
+    assert.equal(res.drafts.length, 1);
+    assert.equal(res.drafts[0].draft_id, visible.id);
+    assert.equal(res.hidden_drafts, 2, "hidden include AND hidden exclude are both counted, never named");
+    const text = JSON.stringify(res);
+    assert.ok(!text.includes("Secrets"), "no hidden path appears anywhere in the listing");
+  });
+});
+
+describe("review-of-#356 fixes, pinned", () => {
+  test("counter-supersession walks the WHOLE chain: d3 counters d2 counters d1; activating d3 retires d1's grant", async () => {
+    const { store, ui } = wiredWorld();
+    const d1 = draft({}, RAND_A);
+    await store.draft(d1, T0);
+    const g1 = await ui.activate(d1.id, "gesture-1");
+    const d2 = openDraft({ authoredBy: { sessionId: "sess-1", client: "claude" }, terms: terms(), counterOf: d1.id }, T0 + 1, RAND_B);
+    await store.draft(d2, T0 + 1);
+    const d3 = openDraft({ authoredBy: { sessionId: "sess-1", client: "claude" }, terms: terms(), counterOf: d2.id }, T0 + 2, RAND_C);
+    await store.draft(d3, T0 + 2);
+    const g3 = await ui.activate(d3.id, "gesture-3");
+    assert.equal(g3.ok, true);
+    assert.equal(g3.supersededMandateId, g1.mandateId, "the grant two links up the chain is the one being replaced");
+    assert.equal((await store.getMandate(g1.mandateId)).status, "superseded", "the broad grant does not survive the narrowing");
+  });
+
+  test("mandateFitOf refuses a traversal or absolute notePath before any prefix match", () => {
+    const m = activeMandate();
+    const at = T0 + 2000;
+    for (const p of ["Projects/../Secrets/x.md", "/Projects/alpha.md", "Projects/./x.md", "../x.md"]) {
+      const v = mandateFitOf(m, ZERO_USAGE, fitCtx({ notePath: p }), at);
+      assert.equal(v.code, "scope_escape", `'${p}' must refuse`);
+    }
+    // Vacuity: the plain path still fits — the traversal check is the only variable.
+    assert.deepEqual(mandateFitOf(m, ZERO_USAGE, fitCtx(), at), { ok: true });
   });
 });

@@ -77,11 +77,26 @@ export function buildMandateUi(deps: BuildMandateUiDeps): MandateUiDeps {
         if (!draft) throw new MandateRefusedError("mandate_unknown", `no draft ${draftId}`);
 
         // Amendment by replacement: a counter's activation retires the grant
-        // it narrows, iff that grant is still active. Derived, not guessed.
+        // it narrows — following the WHOLE counterOf chain, because a
+        // negotiation can run more than one round (d3 counters d2 counters
+        // d1; if d1 was granted, activating d3 replaces that grant). Derived,
+        // not guessed: an unrelated draft supersedes nothing. Cycle-guarded —
+        // a corrupt chain terminates instead of hanging the grant.
         let supersedes: MandateV1["id"] | null = null;
         if (draft.counterOf !== null) {
-          const prior = (await deps.store.allMandates()).find((m) => m.draftId === draft.counterOf && m.status === "active");
-          if (prior) supersedes = prior.id;
+          const mandates = await deps.store.allMandates();
+          const drafts = new Map((await deps.store.allDrafts()).map((d) => [d.id, d]));
+          const seen = new Set<string>();
+          let link: string | null = draft.counterOf;
+          while (link !== null && !seen.has(link)) {
+            seen.add(link);
+            const prior = mandates.find((m) => m.draftId === link && m.status === "active");
+            if (prior) {
+              supersedes = prior.id;
+              break;
+            }
+            link = drafts.get(link)?.counterOf ?? null;
+          }
         }
 
         const at = now();
@@ -96,9 +111,18 @@ export function buildMandateUi(deps: BuildMandateUiDeps): MandateUiDeps {
             try {
               await deps.attachSessionMandate(mandate.terms.delegate.value, mandate.id, at);
             } catch (e) {
+              // HONEST about what the kernel enforces (review of #356): fit
+              // binds by SESSION ID, not by the session record's mandateId —
+              // so work from this session can still fit the new mandate. The
+              // failure here means only that the session's own durable record
+              // keeps its earlier state; nothing in this warning may claim an
+              // enforcement that does not exist yet (WP10 decides whether the
+              // producer resolves the governing mandate from the session
+              // record — until then the record is provenance, not a gate).
               warning =
-                `the mandate is active but session ${mandate.terms.delegate.value} did not record it ` +
-                `(${e instanceof Error ? e.message : String(e)}) — a session that cannot present the binding runs nothing under it`;
+                `the mandate is active and binds session ${mandate.terms.delegate.value} by id, but the session's own ` +
+                `record did not take the binding (${e instanceof Error ? e.message : String(e)}) — the session record keeps ` +
+                "its earlier state; it is provenance, not a gate, so work presenting this session id still fits this mandate";
             }
           }
         }

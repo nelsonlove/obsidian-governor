@@ -193,7 +193,9 @@ export function registerMandateTools(server: McpServer, source: MandateToolsSour
     },
     async () => {
       const settings = source.getSettings?.();
-      const visible = (scope: { include: string[] }) => scopeRefusal(scope.include, settings) === null;
+      // Include AND exclude entries: an exclude naming hidden territory would
+      // otherwise print a path the session cannot see (review of #356).
+      const visible = (scope: { include: string[]; exclude: string[] }) => scopeRefusal([...scope.include, ...scope.exclude], settings) === null;
       const drafts = await source.allDrafts();
       const mandates = await source.allMandates();
       const visibleDrafts = drafts.filter((d) => visible(d.terms.scope));
