@@ -127,6 +127,22 @@ export function livenessOf(session: SessionV1, now: number): SessionStatus {
   return now < session.expiresAt ? "open" : "expired";
 }
 
+/**
+ * Bind a governing mandate to a live session (WP9). Set ONCE, by mandate
+ * activation only — the pane's activation gesture is the sole caller path.
+ * A session cannot swap mandates mid-flight: replacing the mandate is
+ * amendment-by-replacement on the MANDATE side, and the successor mandate's
+ * delegate binding decides which sessions run under it.
+ */
+export function attachMandate(session: SessionV1, mandateId: string): SessionV1 {
+  if (session.status !== "open") throw new SessionNotLiveError(session.id, session.status);
+  if (!mandateId) throw new Error("attachMandate requires a mandate id");
+  if (session.mandateId !== null) {
+    throw new Error(`session ${session.id} already runs under mandate ${session.mandateId}; a session's mandate is set once`);
+  }
+  return { ...session, mandateId };
+}
+
 export function closeSession(session: SessionV1): SessionV1 {
   if (session.status !== "open") throw new SessionNotLiveError(session.id, session.status);
   return { ...session, status: "closed" };
