@@ -102,11 +102,6 @@ Known-overstated section instead — see its header for the format.
   only via Accept / attributed human edit / adopt / auto-accept, each blessed by
   construction. governance-protected-policy.test.mjs's honor-rule scenario pins side-door
   inertness and the bless-then-honor flip.
-- The eligibility engine consults the **honored** policy (from the blessed baseline) before the class allowlist, and every policy-driven auto-accept logs `policy: appends|all` in the acceptance log beside the class-driven records.
-  substantiated 2026-08-18 (#135): eligibility.ts's policy branch precedes the allowlist
-  gate; wiring.ts passes autoAcceptPolicyOf(baseline.content) and forwards result.policy
-  into autoAcceptRecord; governance-protected-policy.test.mjs pins the branch and the
-  record's policy field.
 
 ## docs/agent-writes.md
 
@@ -124,10 +119,28 @@ Known-overstated section instead — see its header for the format.
 - `readOnlyHint: true`, empty input schema, no write and no accept/baseline verb: it reports pending-ness; it cannot accept ("the accept verb is in no API").
 - **Allowlist-filtered.** The index is written from the whole vault, so every returned entry is filtered through the **same `isVisible` guard** the uid/read tools use, *before* it is reported — a sandboxed session that could learn about pending notes in territory it cannot read would have a path oracle otherwise.
 
+## docs/acceptance-model.md (WP10c retirement)
+
+- **The first consumer — the per-note auto-accept policy (#135) — RETIRED (WP10c, 2026-08-25).** `auto-accept` remains in the default declared list as authority-conferring, but the policy's operational half is deleted per the development guide's order: `auto-accept: all` no longer parses at all (a whole-note blank check never belonged in frontmatter — it reads as no policy under every authority era, including after a cutover rollback), and `auto-accept: appends` is migrated to content proposals — an appended tail is residual content like any other edit, and lands as an ordinary proposal for the human's decision.
+  approved 2026-08-25 (WP10c): autoAcceptPolicyOf parses only "appends" (protected-policy.ts);
+  governance-protected-policy.test.mjs pins that a blessed `all` is STILL no policy (the
+  deletion is at the parser, upstream of the honor boundary) and was mutation-verified by
+  resurrecting the `all` parse (9 ✖).
+- The #261 composition machinery (mechanical classes plus an appended tail) was deleted with the policy; its wedge cannot recur, because nothing waits on a policy-accept anymore.
+  approved 2026-08-25 (WP10c): evaluateBodyWithAppend and the allowAppend evaluator arm are
+  deleted from detectors.ts; the rewritten composition suite pins the composed case now
+  refuses while the class-only halves still pass.
+- **The legacy sweep's event-driven design (#261), retained for the pre-cutover/rollback era.** Live diagnosis showed Chromium suspends renderer timers while the Obsidian window is occluded — the 2.5s journal poll simply never ticked during unattended sessions, which is exactly when agents write (the observed "zero auto-accept records ever").
+  approved 2026-08-19 (#261), retitled 2026-08-25 (WP10c): the diagnosis stands unchanged; the
+  heading now scopes it to the era whose sweep it drives.
+
 ## docs/acceptance-model.md (#261 additions)
 
-- **The sweep is event-driven, not timer-only (#261).** Live diagnosis showed Chromium suspends renderer timers while the Obsidian window is occluded — the 2.5s journal poll simply never ticked during unattended sessions, which is exactly when agents write (the observed "zero auto-accept records ever").
-  approved 2026-08-19 (#261): the "never ticked" is a live observation (armed interval, grown journal, zero ticks over minutes with the window occluded), recorded in the PR's live-verification log — a diagnosis statement, not a security guarantee.
+- **The sweep is event-driven, not timer-only (#261) — and era-scoped (WP10c).** Post-cutover the legacy auto-accept sweep never runs (its writer refuses; running it was pure work and noise); the poll's automated arm is the **mandated-admission sweep** instead, which puts mandate-stamped proposal cohorts through the full admission refusal table — promotion evidence, scope, classes, verifier coverage, budgets — or leaves them for the human.
+  approved 2026-08-19 (#261), era-scoped 2026-08-25 (WP10c): the #261 diagnosis stands as a
+  live observation; the era swap is pinned by governance-mandate-admission.test.mjs's
+  source-scan legs (the legacy sweep behind !legacyRetired, the mandated sweep as the else
+  arm) and the sweep suite (the door gates every attempt).
 - The kernel now nudges the governance poll after **every journal append** (`nudgeGovernanceQueue`, wired in `main.ts`), so queue refresh + sweep run within seconds of an agent write even with the window buried; the interval remains as foreground catch-up.
   approved 2026-08-19 (#261): substantiated by the main.ts append wrapper + the
   governance-module source pins ("main.ts nudges the governance queue after every journal

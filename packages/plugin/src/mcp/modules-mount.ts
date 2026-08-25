@@ -867,8 +867,8 @@ const ACCEPTANCE_MANIFEST: ModuleManifest = {
     "review pane where a human reviews agent changes and Accepts / Reverts / Requests changes / Adopts a " +
     "baseline, plus a Proposed section (the context-aware Accept: accepting a proposed note also stamps " +
     "the accepted family into its frontmatter — the ONE accept across both lifecycles), a Revising section " +
-    "(withdraw a revision request) and an auto-accept allowlist for " +
-    "provably-mechanical changes. Every state-changing control is a real-click gesture in the pane — never " +
+    "(withdraw a revision request) and — pre-cutover only — an auto-accept allowlist for " +
+    "provably-mechanical changes (retired with the legacy era; the per-note policies are deleted, WP10c). Every state-changing control is a real-click gesture in the pane — never " +
     "a command, never an MCP tool, never a method on any object reachable from `app`. This module " +
     "contributes ZERO tools to the MCP transport: the read-only obsidian_pending_review view and the " +
     "guarded governance_submit_revision resubmit verb (which can never accept) are registered always-on in " +

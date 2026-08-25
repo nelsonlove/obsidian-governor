@@ -87,6 +87,17 @@ export interface AdmissionUiDeps {
    * then this is the door, shipped closed and fully gated, the WP6 shape.
    */
   admitCohortUnderMandate(frozen: FrozenCohort, members: ProposalV1[], mandateId: string): Promise<CohortAdmitOutcome>;
+  /**
+   * WP10c: the mandated-admission sweep — the door's ONE production caller.
+   * Groups pending mandate-stamped proposals per mandate, freezes each group,
+   * and puts it through admitCohortUnderMandate; the whole refusal table
+   * gates every attempt. Returns how many cohorts ADMITTED. Refusals leave
+   * the proposals pending — the cohort-decision route to the pane — and are
+   * attempt-deduped per (mandate, member-set) so a standing refusal is tried
+   * once per member-set change, not once per poll. Quiet when there is
+   * nothing to do; absent mandate machinery sweeps nothing.
+   */
+  sweepMandated(): Promise<number>;
 }
 
 export type CohortAdmitOutcome =
@@ -188,6 +199,11 @@ const STANDING_MESSAGE = /^admission ([0-9a-f-]+)\n/;
 
 export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
   const now = deps.now ?? (() => Date.now());
+  // WP10c sweep state, closure-held (never on the plugin/app): the last
+  // attempted member-set per mandate, and the last refusal logged per
+  // mandate — dedupe, not authority; losing them on reload costs one retry.
+  const sweepAttempts = new Map<string, string>();
+  const logOnceKeys = new Map<string, string>();
   const claims = createClaimStore(deps.claimIo);
   const registry = deps.predicates ?? createDefaultPredicateRegistry();
 
@@ -615,9 +631,68 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
     },
 
     // WP10b: the mandate door. Same core, no gesture — the refusal table is
-    // the gate. NO production caller until WP10c's sweep.
+    // the gate. WP10c's sweep below is its one production caller.
     async admitCohortUnderMandate(frozen, members, mandateId) {
       return decideCohortAdmission(frozen, members, { kind: "mandate", mandateId });
+    },
+
+    async sweepMandated() {
+      // No mandate machinery ⇒ nothing can pass the door; don't even look.
+      if (!deps.mandates) return 0;
+      let admitted = 0;
+      try {
+        const pending = await deps.proposals.pending();
+        const byMandate = new Map<string, ProposalV1[]>();
+        for (const p of pending) {
+          const id = p.subject.mandateId;
+          if (id !== null) (byMandate.get(id) ?? byMandate.set(id, []).get(id)!).push(p);
+        }
+        for (const [mandateId, members] of byMandate) {
+          try {
+            // Cheap pre-checks — the DOOR stays authoritative; these only
+            // avoid freezing+verifying cohorts that cannot possibly pass.
+            const mandate = await deps.mandates.get(mandateId);
+            if (!mandate || mandate.status !== "active" || !mandate.terms.admission.mayAdmit) continue;
+
+            // Attempt-dedupe: one try per exact member-set. A refused cohort
+            // whose members have not changed is not retried every poll —
+            // per-poll coverage verification would be real work and the
+            // refusal deterministic. Any member change (new proposal, admit,
+            // supersede) changes the key and re-arms the attempt.
+            const attemptKey = members.map((m) => `${m.id}:${m.subjectDigest.value}`).sort().join(",");
+            if (sweepAttempts.get(mandateId) === attemptKey) continue;
+            sweepAttempts.set(mandateId, attemptKey);
+
+            // Freeze with the TUPLE's declared recovery unit — the door
+            // refuses recovery_mismatch otherwise, so the sweep freezes what
+            // the promotion actually covers. Unregistered ⇒ the door refuses
+            // transformation_unregistered; freeze with "item" and let it say so.
+            const t = deps.promotion?.transformationOf(mandate.terms.transformation.id, mandate.terms.transformation.version) ?? null;
+            const sel = await this.freezeSelection({ mandateId }, t?.recovery.unit ?? "item");
+            if (!sel.ok) continue; // ineligible group (mixed, revising member…) — the pane's business
+            const outcome = await this.admitCohortUnderMandate(sel.frozen, sel.members, mandateId);
+            if (outcome.ok) {
+              admitted++;
+              sweepAttempts.delete(mandateId); // a success re-arms — the next batch is a new decision
+              console.log(
+                `[governor] mandated admission: ${outcome.receipt.memberCount} result(s) admitted under mandate ${mandateId.slice(0, 8)}… ` +
+                  `(claim ${outcome.claimId.slice(0, 8)}…, ${outcome.authority})`
+              );
+            } else if (logOnceKeys.get(mandateId) !== `${attemptKey}:${outcome.code}`) {
+              // A refusal is the cohort-decision route working — log once per
+              // (member-set, code) so a standing refusal is diagnosable
+              // without being noise (the legacy sweep's lesson).
+              logOnceKeys.set(mandateId, `${attemptKey}:${outcome.code}`);
+              console.log(`[governor] mandated admission declined for mandate ${mandateId.slice(0, 8)}… [${outcome.code}]: ${outcome.detail} — the cohort stays for the human decision`);
+            }
+          } catch (e) {
+            console.error(`[governor] mandated sweep failed for mandate ${mandateId} (fail closed; nothing admitted for it)`, e);
+          }
+        }
+      } catch (e) {
+        console.error("[governor] mandated sweep failed (fail closed; nothing admitted)", e);
+      }
+      return admitted;
     },
 
     async admitWithGesture(proposalId, gestureRef) {
