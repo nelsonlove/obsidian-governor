@@ -960,3 +960,36 @@ describe("per-mandate grouping (review of #359: the selector row needed a path t
     }
   });
 });
+
+// ── governor-lead's #359 post-merge ask: the leak pinned BY OUTCOME at the
+// wiring level — a cohort presented to the WRONG mandate's door refuses by
+// code, whatever upstream machinery mis-grouped it ─────────────────────────
+
+describe("cross-mandate leak, pinned by outcome", () => {
+  test("mandate B's door refuses mandate A's frozen cohort with mandate_subject_mismatch — nothing admits, nothing charges", async () => {
+    const w = await world();
+    try {
+      const d2 = openDraft(
+        { authoredBy: { sessionId: "sess-2", client: "claude" }, terms: mandateTerms({ delegate: { kind: "session", value: "sess-2" } }) },
+        T0 + 5,
+        new Uint8Array(10).fill(23)
+      );
+      await w.mandateStore.draft(d2, T0 + 5);
+      const m2 = activateDraft(d2, { principal: "nelson", gestureRef: "gesture-grant-3" }, T0 + 5, new Uint8Array(10).fill(24));
+      await w.mandateStore.activate(m2, T0 + 5);
+
+      await w.produce("Notes/leak.md", "old\n", "new\n"); // stamped under mandate 1
+      const sel = await w.admission.freezeSelection({ mandateId: w.mandate.id }, "item");
+      assert.ok(sel.ok);
+      // The hostile hand-off: mandate 1's cohort pushed through mandate 2's door.
+      const outcome = await w.admission.admitCohortUnderMandate(sel.frozen, sel.members, m2.id);
+      assert.equal(outcome.ok, false);
+      assert.equal(outcome.code, "mandate_subject_mismatch", "a mandate admits only its own work — by code, at the door, whatever mis-grouped upstream");
+      assert.equal((await createClaimStore(w.claimIo).all()).length, 0);
+      assert.equal((await w.mandateStore.usageOf(m2.id)).items, 0, "the wrong mandate's budget is untouched");
+      assert.equal((await w.admission.pending()).length, 1, "the work stays for its own mandate's sweep or the human");
+    } finally {
+      w.cleanup();
+    }
+  });
+});
