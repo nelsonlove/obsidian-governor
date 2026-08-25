@@ -165,6 +165,11 @@ const ACCEPTANCE: McpSurfaceRow[] = [
   // The revision round-trip's ONE agent verb. It moves a note from `revising`
   // back to `proposed`; it cannot write the accepted family.
   { tool: "governance_submit_revision", readOnly: false, module: "acceptance", distribution: "public-optional", paths: ["path"], discovered: "none", postcondition: "Return a revising note to proposed, removing addressed revision callouts." },
+
+  // WP9 mandate negotiation: agents draft and list; activation is the pane's
+  // gesture-gated control and deliberately has no tool.
+  { tool: "governance_mandate_draft", readOnly: false, module: "acceptance", distribution: "public-optional", discovered: "none", postcondition: "Record a mandate draft or counter-proposal — a candidate the human can activate; confers no authority." },
+  { tool: "governance_mandates", readOnly: true, module: "acceptance", distribution: "public-optional", postcondition: "List mandate drafts and mandates with usage against budgets, scope-filtered." },
 ];
 
 // ── navigation and host-plugin lifecycle ─────────────────────────────────────

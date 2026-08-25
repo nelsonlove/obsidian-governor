@@ -144,6 +144,8 @@ export interface GovernanceWireDeps {
    * Absent ⇒ the pane simply has no governed-proposals section.
    */
   admission?: import("./admission-wiring.js").AdmissionUiDeps;
+  /** WP9: the mandate surface (drafts + gesture-gated activate/decline/revoke), built in main.ts. Absent ⇒ no Mandates section. */
+  mandates?: import("./mandate-wiring.js").MandateUiDeps;
   /** WP8: the migration surface (import / cutover / rollback), built in main.ts. Absent ⇒ no migration section and legacy controls stay live. */
   migration?: import("./migration-wiring.js").Migration;
 }
@@ -676,13 +678,20 @@ function acceptanceStatusFor(plugin: Plugin, path: string): string | null {
 // The controller handed to the view. Carries accept/revert/adopt/setClassEnabled callables —
 // passed straight into the view constructor (which stows it in a module-private WeakMap) and never
 // stored on the plugin. Built fresh per view instantiation.
-function buildController(plugin: Plugin, admission?: import("./admission-wiring.js").AdmissionUiDeps): ReviewController {
+function buildController(
+  plugin: Plugin,
+  admission?: import("./admission-wiring.js").AdmissionUiDeps,
+  mandates?: import("./mandate-wiring.js").MandateUiDeps
+): ReviewController {
   return {
     legacyRetired: () => legacyRetired(plugin),
     // WP6b-2: the governed-proposals surface. Read + two gesture-gated acts,
     // reachable only through the pane rows below — the same reachability
     // class as accept/revert/adopt above.
     admission,
+    // WP9: the mandate surface — same reachability class; the grant verb is
+    // reachable only through the pane's gesture-gated Activate control.
+    mandates,
     getPending: () => getCachedPending(plugin),
     getBaselineContent: (path) => getStore(plugin).get(path)?.content ?? null,
     readCurrent: (path) => readNote(plugin, path),
@@ -1254,7 +1263,7 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
   // not unregister (an Obsidian build without viewRegistry.unregisterView) we REUSE the existing
   // registration — its factory reads live WeakMap state, so the pane still works.
   try {
-    plugin.registerView(VIEW_TYPE_GOVERNANCE, (leaf) => new GovernanceReviewView(leaf, buildController(plugin, deps.admission)));
+    plugin.registerView(VIEW_TYPE_GOVERNANCE, (leaf) => new GovernanceReviewView(leaf, buildController(plugin, deps.admission, deps.mandates)));
   } catch (e) {
     console.warn("governor acceptance: review view type already registered — reusing it", e);
   }
