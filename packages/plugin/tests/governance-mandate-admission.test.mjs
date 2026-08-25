@@ -908,3 +908,55 @@ describe("the era swap, pinned at the source (wiring.ts is plugin-bound; the sca
     assert.equal(reads.length, 1, "exactly one read: the badge thunk");
   });
 });
+
+// ── Review-of-#359 fix: the mandateId selector row, RUN ──────────────────────
+
+describe("per-mandate grouping (review of #359: the selector row needed a path that runs it)", () => {
+  test("selectProposals filters by mandateId directly", async () => {
+    const { selectProposals } = await import("../src/kernel/governance/cohorts/cohort.ts");
+    const w = await world();
+    try {
+      const pA = await w.produce("Notes/ga.md", "old a\n", "new a\n");
+      const pB = await w.produce("Notes/gb.md", "old b\n", "new b\n", { mandateId: "other-mandate" });
+      const all = [pA, pB];
+      assert.deepEqual(selectProposals(all, { mandateId: w.mandate.id }).map((p) => p.id), [pA.id]);
+      assert.deepEqual(selectProposals(all, { mandateId: "other-mandate" }).map((p) => p.id), [pB.id]);
+      assert.equal(selectProposals(all, {}).length, 2, "no selector, no filter");
+    } finally {
+      w.cleanup();
+    }
+  });
+
+  test("TWO mandates sweep as two separate cohorts — claims never cross membership", async () => {
+    const w = await world();
+    try {
+      // A second active mayAdmit mandate over the same promoted tuple.
+      const d2 = openDraft(
+        { authoredBy: { sessionId: "sess-2", client: "claude" }, terms: mandateTerms({ delegate: { kind: "session", value: "sess-2" } }) },
+        T0 + 5,
+        new Uint8Array(10).fill(21)
+      );
+      await w.mandateStore.draft(d2, T0 + 5);
+      const m2 = activateDraft(d2, { principal: "nelson", gestureRef: "gesture-grant-2" }, T0 + 5, new Uint8Array(10).fill(22));
+      await w.mandateStore.activate(m2, T0 + 5);
+
+      const pA1 = await w.produce("Notes/a1.md", "old a1\n", "new a1\n");
+      const pA2 = await w.produce("Notes/a2.md", "old a2\n", "new a2\n");
+      const pB1 = await w.produce("Notes/b1.md", "old b1\n", "new b1\n", { mandateId: m2.id });
+
+      const admitted = await w.admission.sweepMandated();
+      assert.equal(admitted, 2, "one cohort per mandate — without the selector row this is 0 (mixed-mandate freezes refuse)");
+
+      const claims = await createClaimStore(w.claimIo).all();
+      assert.equal(claims.length, 2);
+      const byMandate = new Map(claims.map((c) => [c.authority.mandateId, c.coveredNotes.map((n) => n.noteId).sort()]));
+      assert.deepEqual(byMandate.get(w.mandate.id), [pA1.subject.noteId, pA2.subject.noteId].sort(), "mandate A's claim covers exactly A's members");
+      assert.deepEqual(byMandate.get(m2.id), [pB1.subject.noteId], "mandate B's claim covers exactly B's member");
+      // And each mandate spent only ITS OWN budget.
+      assert.equal((await w.mandateStore.usageOf(w.mandate.id)).items, 2);
+      assert.equal((await w.mandateStore.usageOf(m2.id)).items, 1);
+    } finally {
+      w.cleanup();
+    }
+  });
+});

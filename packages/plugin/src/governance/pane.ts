@@ -136,7 +136,7 @@ export interface ReviewController {
   // context-aware surfacing (proposed ⇒ "will stamp", else ⇒ "baseline only").
   acceptanceStatus(path: string): string | null;
   // ── protected properties (#135/#224) — READ-ONLY display data ──────────────
-  // The HONORED per-note auto-accept policy ("appends" | "all" | null), derived from the
+  // The HONORED per-note auto-accept policy ("appends" | null — "all" no longer parses, WP10c), derived from the
   // blessed BASELINE frontmatter (honor-only-if-blessed) — never the raw current note. The
   // pane only BADGES it; the human sets it by editing the note's frontmatter (their editor
   // write is human-attributed and therefore honored). No toggle here, deliberately.
