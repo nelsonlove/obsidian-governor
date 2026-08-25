@@ -127,6 +127,8 @@ export interface ReviewController {
   admission?: import("./admission-wiring.js").AdmissionUiDeps;
   /** WP9: the mandate surface (drafts + activate/decline/revoke — all human gestures). Absent ⇒ no section. */
   mandates?: import("./mandate-wiring.js").MandateUiDeps;
+  /** WP10a: the promotion surface (tuple evidence + gesture-gated promote/demote). Absent ⇒ no section. */
+  promotion?: import("./promotion-wiring.js").PromotionUiDeps;
   // The configured accepted-by identity (governance config `acceptedBy`) — display data so
   // the Accept controls can SURFACE what will be stamped before the one click.
   acceptedBy(): string;
@@ -693,6 +695,10 @@ export class GovernanceReviewView extends ItemView {
       // activate/decline/revoke verbs. Async like the governed section;
       // failures leave the section absent rather than breaking the pane.
       void this.renderMandates(root, deps);
+      // WP10a: the promotion gate — per registered transformation, the
+      // tuple's live-evidence arithmetic and the gesture-gated promote/demote
+      // verbs. Async; failures leave the section absent.
+      void this.renderPromotion(root, deps);
       // The Revising section (#101): notes with acceptance-status: revising, whether or not
       // they are in the pending queue — the frontmatter-lifecycle visibility that makes this
       // pane a superset of the retired js-engine panel.
@@ -825,6 +831,110 @@ export class GovernanceReviewView extends ItemView {
           }
         ).then(noticeGestureBlocked);
       });
+    }
+  }
+
+  // The promotion section (WP10a). Promote is the act that arms automatic
+  // admission for one exact (transformation, verifier, recovery) tuple —
+  // authority-class, full perimeter: addEventListener-wired, isRealGesture-
+  // gated via runGuardedDisposition, confirm modal naming the tuple and its
+  // evidence, ref minted inside the gate. Demote is the brake, same
+  // perimeter. The section's honesty rule: an unmet gate SHOWS its missing
+  // evidence classes by name — absence never renders as emptiness.
+  private async renderPromotion(root: HTMLElement, deps: ReviewController): Promise<void> {
+    if (!deps.promotion) return;
+    let rows: import("./promotion-wiring.js").PromotionRow[] = [];
+    try {
+      rows = await deps.promotion.rows();
+    } catch {
+      return;
+    }
+    if (rows.length === 0) return;
+
+    const section = root.createDiv({ cls: "governance-promotion" });
+    section.createDiv({ cls: "governance-proposed-title", text: `Automatic admission (${rows.filter((r) => r.verdict.state === "promoted").length} promoted of ${rows.length} registered)` });
+    section.createDiv({
+      cls: "governance-proposed-desc",
+      text:
+        "A registered transformation becomes eligible for automatic admission only after live evidence on its exact " +
+        "tuple — one human-admitted pilot, one human-admitted verified cohort, one exercised revert — and then YOUR " +
+        "promote click. A new transformation or verifier version restarts the evidence from zero. Demote is immediate.",
+    });
+
+    for (const { transformation: t, verdict } of rows) {
+      const row = section.createDiv({ cls: "governance-proposed-row" });
+      const main = row.createDiv({ cls: "governance-row-main" });
+      main.createDiv({ cls: "governance-row-title", text: `${t.title} — ${t.id}@${t.version}` });
+      const verifier = t.verifier.predicates.map((p) => `${p.id}@${p.version}`).join(", ");
+      if (verdict.state === "promoted") {
+        main.createDiv({
+          cls: "governance-row-path",
+          text: `PROMOTED by ${verdict.promotedBy} ${new Date(verdict.promotedAt).toLocaleString()} · ${t.appliesTo.join("+")} · verified by ${verifier} · recovery per ${t.recovery.unit}`,
+        });
+      } else {
+        main.createDiv({
+          cls: "governance-row-path",
+          text:
+            `not promoted · ${t.appliesTo.join("+")} · verified by ${verifier} · recovery per ${t.recovery.unit} · ` +
+            `evidence: ${verdict.counts.individualAdmits} pilot / ${verdict.counts.cohortAdmits} cohort / ${verdict.counts.reverts} revert` +
+            (verdict.missing.length > 0 ? ` · MISSING: ${verdict.missing.map((m) => m.split(":")[0]).join(", ")}` : " · evidence gate MET — promotion available"),
+        });
+      }
+      const controls = row.createDiv({ cls: "governance-proposed-controls" });
+      if (verdict.state === "promoted") {
+        const demoteBtn = controls.createEl("button", { cls: "governance-revert governance-demote", text: "Demote…" });
+        demoteBtn.addEventListener("click", (evt) => {
+          void runGuardedDisposition(
+            evt,
+            () =>
+              new Promise<boolean>((resolve) =>
+                new ConfirmModal(
+                  this.app,
+                  {
+                    title: "Demote this transformation?",
+                    body: "Automatic admission for this exact tuple stops immediately. The evidence record survives; re-promoting is one gesture once you trust it again.",
+                    items: [`${t.title} (${t.id}@${t.version})`],
+                    confirmText: "Demote",
+                  },
+                  resolve
+                ).open()
+              ),
+            async (gestureRef) => {
+              const outcome = await deps.promotion!.demote(t.id, t.version, "demoted in the review pane", gestureRef);
+              new Notice(outcome.ok ? "Demoted — automatic admission for this tuple is off." : `Not demoted [${outcome.code}]: ${outcome.detail}`, 8000);
+              void this.rerender();
+            }
+          ).then(noticeGestureBlocked);
+        });
+      } else {
+        const promoteBtn = controls.createEl("button", { cls: "mod-cta governance-promote", text: "Promote…" });
+        promoteBtn.addEventListener("click", (evt) => {
+          void runGuardedDisposition(
+            evt,
+            () =>
+              new Promise<boolean>((resolve) =>
+                new ConfirmModal(
+                  this.app,
+                  {
+                    title: "Promote to automatic admission?",
+                    body:
+                      `Arms automatic admission for EXACTLY this tuple: ${t.id}@${t.version}, verified by ${verifier}, recovery per ${t.recovery.unit}. ` +
+                      "It applies only through a mandate you activated with automatic admission requested, and only for verified cohorts inside that mandate's " +
+                      "scope, classes, and budgets. Content and authority work can never ride this. If the evidence gate is unmet, this will refuse and name what is missing.",
+                    items: [`${t.title} (${t.id}@${t.version})`],
+                    confirmText: "Promote",
+                  },
+                  resolve
+                ).open()
+              ),
+            async (gestureRef) => {
+              const outcome = await deps.promotion!.promote(t.id, t.version, gestureRef);
+              new Notice(outcome.ok ? "Promoted — the tuple is armed for mandated automatic admission." : `Not promoted [${outcome.code}]: ${outcome.detail}`, 10000);
+              void this.rerender();
+            }
+          ).then(noticeGestureBlocked);
+        });
+      }
     }
   }
 

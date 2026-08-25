@@ -369,6 +369,8 @@ describe("governance module: THE TRIPWIRE — source reachability (accept surfac
     for (const el of [
       "acceptBtn", "revertBtn", "adoptBtn", "checkbox", "confirm", "proposedAcceptBtn", "proposedRequestBtn",
       "activateBtn", "revokeBtn", "declineBtn",
+      // WP10a: promote arms automatic admission; demote is the brake — both authority-class.
+      "promoteBtn", "demoteBtn",
     ]) {
       assert.ok(!new RegExp(`\\b${el}\\.onclick\\s*=`).test(pane),
         `${el}.onclick = … is the forgeable wiring — must use addEventListener`);
@@ -376,6 +378,8 @@ describe("governance module: THE TRIPWIRE — source reachability (accept surfac
     assert.match(pane, /activateBtn\.addEventListener\(\s*["']click["']/, "mandate Activate via addEventListener");
     assert.match(pane, /revokeBtn\.addEventListener\(\s*["']click["']/, "mandate Revoke via addEventListener");
     assert.match(pane, /declineBtn\.addEventListener\(\s*["']click["']/, "mandate Decline via addEventListener");
+    assert.match(pane, /promoteBtn\.addEventListener\(\s*["']click["']/, "promotion Promote via addEventListener");
+    assert.match(pane, /demoteBtn\.addEventListener\(\s*["']click["']/, "promotion Demote via addEventListener");
     assert.match(pane, /acceptBtn\.addEventListener\(\s*["']click["']/, "accept via addEventListener");
     assert.match(pane, /revertBtn\.addEventListener\(\s*["']click["']/, "revert via addEventListener");
     // The Proposed section's two controls (#221/#164) keep the same wiring discipline.
@@ -404,7 +408,7 @@ describe("governance module: THE TRIPWIRE — source reachability (accept surfac
     // gate by name, same as it always accepted runGuardedAdopt (its wrapper).
     // admitBtn is on the list because ADMISSION advances standing — the §9
     // authority act — and the WP6b-2 revert button shares revertBtn's name.
-    for (const el of ["acceptBtn", "revertBtn", "proposedAcceptBtn", "proposedRequestBtn", "admitBtn", "activateBtn", "revokeBtn", "declineBtn"]) {
+    for (const el of ["acceptBtn", "revertBtn", "proposedAcceptBtn", "proposedRequestBtn", "admitBtn", "activateBtn", "revokeBtn", "declineBtn", "promoteBtn", "demoteBtn"]) {
       let found = false;
       for (let i = 0; i < lines.length; i++) {
         if (new RegExp(`${el}\\.addEventListener\\(`).test(lines[i])) {
