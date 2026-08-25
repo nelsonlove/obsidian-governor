@@ -1,7 +1,7 @@
 # The suite split — core host, governance provider, satellite modules
 
-> [!warning] PROPOSAL — not adopted, not normative
-> Status: drafted 2026-08-25 at Nelson's direction, pending his adoption ruling and governor-lead's perimeter review. Nothing in this document changes what is shipped or what the register rules; on adoption, the register updates it names below are Nelson's rulings to record. [Status and compatibility](status-and-compatibility.md#current-release-state) remains the single owner of shipped truth throughout the split.
+> [!note] ADOPTED by Nelson 2026-08-25 ("looks good", after reading in full) — governor-lead's perimeter review still gates S2/S3
+> §10's decisions: (1) repo name `obsidian-mcp-suite` — decided; (2) adoption — given; (3) satellite release posture — per recommendation (private-tier satellites unreleased until independently needed) absent a contrary ruling. The register updates in §8 are Nelson's rulings, recorded by this adoption. The S1 package may begin; S2/S3 (the seam and the split) additionally require governor-lead's review of §3/§5. [Status and compatibility](status-and-compatibility.md#current-release-state) remains the single owner of shipped truth throughout the split.
 
 ## 1. Why
 
@@ -139,6 +139,7 @@ The admission perimeter's internals and doctrine. The standing chain's format an
 - **Id migration on the live vault** (§4). Shipped machinery, real click.
 - **Test-suite split.** 4,000+ tests partition along package lines; the cross-package integration tests (seam round-trips, publish round-trips) are NEW tests S2/S3 must add, not inherited coverage.
 - **Docs corpus restructure.** The corpus stays one suite-level set with per-plugin ownership marked; status-and-compatibility grows a per-plugin table. A separate small package inside S3.
+- **The master brake (governor-lead's post-#359 observation, carried here).** Today "stop all automatic admission" means revoking each mandate one at a time — and a human reaching for a brake under stress wants ONE control. The provider should grow a single gesture-gated "suspend automatic admission" switch: doctrine-clean because it only refuses MORE (a suspended state refuses the mandate door outright, mandates untouched, resumable by the same gesture class). Designed and built inside the provider during S2/S3, not bolted on after.
 
 ## 10. Open decisions (Nelson)
 
