@@ -109,6 +109,9 @@ export function foldPromotionEvents(lines: readonly string[]): Map<string, Tuple
         else if (ev.evidence.kind === "cohort-admit") s.counts.cohortAdmits++;
         else if (ev.evidence.kind === "revert") s.counts.reverts++;
       } else if (ev.kind === "promoted") {
+        // A half-shaped promoted line (hand-edited/corrupt jsonl) must not
+        // fold into "PROMOTED by undefined" — garbage stays garbage.
+        if (typeof ev.at !== "number" || typeof ev.principal !== "string" || !ev.principal) continue;
         s.promotedAt = ev.at;
         s.promotedBy = ev.principal;
       } else if (ev.kind === "demoted") {
@@ -207,6 +210,7 @@ export function createPromotionStore(io: PromotionEventIo): PromotionStore {
     },
     async demote(tuple, gestureRef, principal, reason, now) {
       if (!gestureRef) throw new PromotionRefusedError("authority_missing", "demotion is a human gesture; no gestureRef was presented");
+      if (!principal.trim()) throw new PromotionRefusedError("authority_missing", "demotion names its human principal — the brake is an authority act too");
       const verdict = promotionVerdictOf((await state()).get(tupleKeyOf(tuple)) ?? null);
       if (verdict.state !== "promoted") {
         throw new PromotionRefusedError("not_promoted", `${tupleKeyOf(tuple)} is not promoted — nothing to demote`);

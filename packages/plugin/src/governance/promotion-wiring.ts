@@ -39,14 +39,18 @@ export interface BuildPromotionUiDeps {
 export function buildPromotionUi(deps: BuildPromotionUiDeps): PromotionUiDeps {
   const now = deps.now ?? (() => Date.now());
 
-  const fail = (e: unknown): PromotionActOutcome =>
-    e instanceof PromotionRefusedError
-      ? { ok: false, code: e.code, detail: e.message }
-      : { ok: false, code: "promotion_error", detail: e instanceof Error ? e.message : String(e) };
+  const fail = (e: unknown): PromotionActOutcome => {
+    const code = e instanceof PromotionRefusedError ? e.code : ((e as { code?: string }).code ?? "promotion_error");
+    return { ok: false, code, detail: e instanceof Error ? e.message : String(e) };
+  };
 
   const resolve = (id: string, version: string): TransformationV1 => {
     const t = deps.registry.get(id, version);
-    if (t === null) throw new PromotionRefusedError("evidence_invalid", `no registered transformation ${id}@${version} — promotion is defined only over the registry`);
+    if (t === null) {
+      const e = new Error(`no registered transformation ${id}@${version} — promotion is defined only over the registry`);
+      (e as Error & { code: string }).code = "transformation_unknown";
+      throw e;
+    }
     return t;
   };
 

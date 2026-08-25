@@ -92,6 +92,20 @@ export function createTransformationRegistry(predicates: PredicateRegistry): Tra
         throw new TransformationRegistryError("shape_invalid", `unknown transformation schema '${String(t.schema)}'`);
       }
       if (!t.id.trim() || !t.version.trim()) throw new TransformationRegistryError("shape_invalid", "a transformation needs an exact id and version");
+      // Identifier charset: ids and versions feed the canonical tuple key
+      // (`id@version` joined by "," and "|"), so the separator characters are
+      // excluded here — two different verifier sets must never canonicalize
+      // to one identity (review of #357).
+      const IDENT = /^[A-Za-z0-9._-]+$/;
+      const identOk = (s: string) => IDENT.test(s);
+      if (!identOk(t.id) || !identOk(t.version)) {
+        throw new TransformationRegistryError("shape_invalid", `transformation id/version must match ${String(IDENT)} — separators would collide tuple identities`);
+      }
+      for (const p of t.verifier.predicates) {
+        if (!identOk(p.id) || !identOk(p.version)) {
+          throw new TransformationRegistryError("shape_invalid", `verifier predicate ids/versions must match ${String(IDENT)} — separators would collide tuple identities`);
+        }
+      }
       if (!t.title.trim()) throw new TransformationRegistryError("shape_invalid", `transformation ${t.id}@${t.version} needs a title`);
       if (entries.has(key(t.id, t.version))) {
         throw new TransformationRegistryError("duplicate", `transformation ${t.id}@${t.version} is already registered; versions are immutable — register a new version`);

@@ -220,6 +220,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { buildAdmission } from "../src/governance/admission-wiring.ts";
+import { createDefaultPredicateRegistry } from "../src/kernel/governance/verification/predicates.ts";
 import { buildPromotionUi } from "../src/governance/promotion-wiring.ts";
 import { openGitRepository } from "../src/governance/history-store/git-repository.ts";
 import { proposalRef } from "../src/kernel/governance/history-store/refs.ts";
@@ -236,8 +237,18 @@ async function admissionHarness({ recordEvidence } = {}) {
   const repo = await openGitRepository({ gitdir: path.join(root, "gitdir"), worktree: path.join(root, "vault") });
   const vault = new Map();
   const proposals = createProposalStore(memoryIo());
-  const registry = createTransformationRegistry(predicates());
-  registry.register(transformation()); // carrier-normalize@1 — REGISTERED
+  // ONE predicate registry shared by admission verification and the
+  // transformation registry (the production shape): the default set plus the
+  // fixture verifiers, so a subject naming info-preserved@2 has it RUN at
+  // admission — which is what makes the recorded evidence honest.
+  const sharedPredicates = createDefaultPredicateRegistry();
+  for (const [id, version, cls] of [["info-preserved", "2", "representation"], ["schema-valid", "1", "structural"]]) {
+    sharedPredicates.register({ id, version, appliesTo: [cls], proves: `${id} holds`, evaluate: async () => ({ passed: true, detail: "fixture" }) });
+  }
+  const registry = createTransformationRegistry(sharedPredicates);
+  // recovery per ITEM: revertToBase is an item-level drill, and the recorder
+  // refuses to count it for a cohort-unit tuple (the honesty containment).
+  registry.register(transformation({ recovery: { unit: "item" } })); // carrier-normalize@1 — REGISTERED
   const promotionStore = createPromotionStore(memoryIo());
   const recorded = [];
   const admission = buildAdmission({
@@ -248,6 +259,7 @@ async function admissionHarness({ recordEvidence } = {}) {
     writeNoteBytes: async (p, bytes) => void vault.set(p, new TextDecoder().decode(bytes)),
     bindingGate: async () => ({ ok: true }),
     appendSettlement: async () => {},
+    predicates: sharedPredicates,
     promotion: {
       transformationOf: (id, version) => registry.get(id, version),
       recordEvidence:
@@ -260,7 +272,7 @@ async function admissionHarness({ recordEvidence } = {}) {
     now: () => T0,
   });
   let seq = 0;
-  async function produce(notePath, baseText, proposedText, transformationRef) {
+  async function produce(notePath, baseText, proposedText, transformationRef, { classes, preds } = {}) {
     seq++;
     vault.set(notePath, proposedText);
     const subject = buildProposalSubjectFromOperation({
@@ -270,9 +282,10 @@ async function admissionHarness({ recordEvidence } = {}) {
       pathSemanticallyRelevant: false,
       base: baseText === null ? null : digestBytes(enc(baseText)),
       proposed: digestBytes(enc(proposedText)),
-      changeClasses: ["content"],
+      changeClasses: classes ?? ["representation"],
       transformation: transformationRef,
-      predicates: [{ id: "content-diff", version: "1" }],
+      // The declared verifier must be COVERED for evidence to count (review of #357).
+      predicates: preds ?? [{ id: "content-diff", version: "1" }, { id: "info-preserved", version: "2" }],
       producingOperation: { id: `op-${seq}`, action: "note.write", actionVersion: 1 },
       observations: [],
       sessionId: "sess-1",
@@ -329,7 +342,7 @@ describe("evidence flows from real admissions — and only for registered transf
       assert.equal(cohortEv.evidence.ref, sel.frozen.digest.value, "cohort evidence references the frozen digest");
       for (const r of h.recorded) {
         assert.equal(r.tuple.transformationId, "carrier-normalize");
-        assert.equal(r.tuple.recoveryUnit, "cohort", "the tuple comes from the REGISTERED declaration, not the subject");
+        assert.equal(r.tuple.recoveryUnit, "item", "the tuple comes from the REGISTERED declaration, not the subject");
       }
 
       // THE GATE OPENS ON FACTS: promote now succeeds through the UI wiring.
@@ -342,7 +355,7 @@ describe("evidence flows from real admissions — and only for registered transf
       assert.equal((await ui.rows())[0].verdict.state, "promoted");
       // And the UI refuses without a gesture, and over unknown transformations.
       assert.equal((await ui.demote("carrier-normalize", "1", "r", "")).code, "authority_missing");
-      assert.equal((await ui.promote("no-such", "1", "gesture-5")).code, "evidence_invalid");
+      assert.equal((await ui.promote("no-such", "1", "gesture-5")).code, "transformation_unknown");
     } finally {
       h.cleanup();
     }
@@ -378,6 +391,61 @@ describe("evidence flows from real admissions — and only for registered transf
       assert.ok(solo.ok, "the admission stands although evidence recording failed");
     } finally {
       h.cleanup();
+    }
+  });
+});
+
+describe("review-of-#357 fixes, pinned", () => {
+  test("the honesty containments: uncovered verifier, out-of-footprint class, and unit-mismatched revert each record NOTHING, silently", async () => {
+    const h = await admissionHarness();
+    const errors = [];
+    const origError = console.error;
+    console.error = (...args) => void errors.push(args.map(String).join(" "));
+    try {
+      // Subject claims the registered transformation but never carried its verifier.
+      const p1 = await h.produce("Notes/nc.md", "o\n", "n\n", REGISTERED, { preds: [{ id: "content-diff", version: "1" }] });
+      assert.ok((await h.admission.admitWithGesture(p1.id, "g-1")).ok);
+      // Subject's class is outside the declared footprint.
+      const p2 = await h.produce("Notes/oc.md", "o\n", "n\n", REGISTERED, { classes: ["content"] });
+      assert.ok((await h.admission.admitWithGesture(p2.id, "g-2")).ok);
+      assert.equal(h.recorded.length, 0, "admitted-but-not-the-tuple's-shape is evidence for nothing");
+      assert.deepEqual(errors.filter((e) => e.includes("promotion evidence")), [], "each skip is clean, not a swallowed crash");
+    } finally {
+      console.error = origError;
+      h.cleanup();
+    }
+  });
+
+  test("a COHORT-unit tuple's drill is not satisfied by an item revert — the missing drill stays named", async () => {
+    // A registry whose transformation declares recovery per cohort, same everything else.
+    const h = await admissionHarness();
+    try {
+      h.registry.register(transformation({ version: "2", recovery: { unit: "cohort" } }));
+      const p = await h.produce("Notes/cu.md", "o\n", "n\n", { id: "carrier-normalize", version: "2" });
+      assert.ok((await h.admission.revertToBase(p.id, "g-1")).ok);
+      assert.equal(h.recorded.length, 0, "an item revert does not exercise 'recovery per cohort'");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  test("promote AND demote each require a named principal; the fold skips a half-shaped promoted line", async () => {
+    const store = createPromotionStore(memoryIo());
+    for (const [kind, ref] of [["individual-admit", "a"], ["cohort-admit", "b"], ["revert", "c"]]) {
+      await store.recordEvidence(TUPLE, { kind, ref }, T0);
+    }
+    await assert.rejects(() => store.promote(TUPLE, "g-1", "  ", T0), (e) => e.code === "authority_missing");
+    await store.promote(TUPLE, "g-1", "nelson", T0);
+    await assert.rejects(() => store.demote(TUPLE, "g-2", "", "r", T0), (e) => e.code === "authority_missing");
+    const fold = foldPromotionEvents([JSON.stringify({ kind: "promoted", tuple: TUPLE })]);
+    assert.equal(promotionVerdictOf(fold.get(tupleKeyOf(TUPLE))).state, "unpromoted", "a promoted line with no clock and no principal folds to nothing");
+  });
+
+  test("separator characters are unregistrable — tuple identities cannot collide by data", () => {
+    const reg = createTransformationRegistry(predicates());
+    for (const bad of ["a,b", "a@b", "a|b", "a b"]) {
+      assert.throws(() => reg.register(transformation({ id: bad })), (e) => e.code === "shape_invalid", `id '${bad}' must refuse`);
+      assert.throws(() => reg.register(transformation({ version: bad })), (e) => e.code === "shape_invalid", `version '${bad}' must refuse`);
     }
   });
 });

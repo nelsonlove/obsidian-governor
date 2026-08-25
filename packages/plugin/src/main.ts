@@ -673,7 +673,11 @@ export default class VaultMcpPlugin extends Plugin {
     // because it was previously allowlisted). Evidence accrues in
     // `governance/promotion-evidence.jsonl`; the pane's promote/demote
     // gestures decide on top of it.
-    const transformationRegistry = createTransformationRegistry(createDefaultPredicateRegistry());
+    // ONE predicate registry, shared by admission verification and the
+    // transformation registry — "the declared verifier is registered" and
+    // "admission can run it" stay one fact by construction.
+    const predicateRegistry = createDefaultPredicateRegistry();
+    const transformationRegistry = createTransformationRegistry(predicateRegistry);
     const promotionFile = `${pluginDir}/governance/promotion-evidence.jsonl`;
     let promotionIoChain: Promise<unknown> = Promise.resolve();
     const promotionStore = createPromotionStore({
@@ -705,6 +709,7 @@ export default class VaultMcpPlugin extends Plugin {
     admissionFactories.set(this, () =>
       buildAdmission({
         repo: lazyHistoryRepo,
+        predicates: predicateRegistry,
         promotion: {
           transformationOf: (id, version) => transformationRegistry.get(id, version),
           recordEvidence: (tuple, evidence, at) => promotionStore.recordEvidence(tuple, evidence, at),

@@ -127,6 +127,16 @@ export interface BuildAdmissionDeps {
   bindingGate: () => Promise<{ ok: true } | { ok: false; code: string; detail: string }>;
   refreshProjections?: () => Promise<void>;
   /**
+   * The predicate registry admission verifies against. OPTIONAL with the
+   * default registry as fallback — but production (main.ts) passes the ONE
+   * shared instance the transformation registry also validates against, so
+   * "a transformation's declared verifier is registered" and "admission can
+   * run that verifier" are the same fact by construction (WP10a): a subject
+   * naming a predicate this registry lacks refuses at admission, which is
+   * exactly what makes recorded evidence honest about what ran.
+   */
+  predicates?: import("../kernel/governance/verification/registry.js").PredicateRegistry;
+  /**
    * WP10a: the promotion-evidence recorder. OPTIONAL and a FACT-RECORDER,
    * not a gate (the refreshProjections class, not the bindingGate class):
    * absence records nothing, and a recording failure never fails the
@@ -151,7 +161,7 @@ const STANDING_MESSAGE = /^admission ([0-9a-f-]+)\n/;
 export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
   const now = deps.now ?? (() => Date.now());
   const claims = createClaimStore(deps.claimIo);
-  const registry = createDefaultPredicateRegistry();
+  const registry = deps.predicates ?? createDefaultPredicateRegistry();
 
   // Promotion evidence (WP10a): one recording site per admission/revert
   // outcome, keyed on the REGISTERED transformation (tupleOf builds the
@@ -162,15 +172,36 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
   // under-counting is the safe direction for a promotion gate, and the
   // degraded branch is a crash-recovery path, not a place to grow evidence.
   const recordPromotionEvidence = (
-    transformation: { id: string; version: string } | null | undefined,
+    subject: {
+      transformation: { id: string; version: string };
+      predicates: Array<{ id: string; version: string }>;
+      changeClasses: readonly string[];
+    } | null | undefined,
     kind: "individual-admit" | "cohort-admit" | "revert",
     ref: string,
     memberCount?: number
   ): void => {
     try {
-      if (!deps.promotion || !transformation) return;
-      const t = deps.promotion.transformationOf(transformation.id, transformation.version);
+      if (!deps.promotion || !subject) return;
+      const t = deps.promotion.transformationOf(subject.transformation.id, subject.transformation.version);
       if (t === null) return;
+      // THE HONESTY CONTAINMENTS (review of #357, rule 1: claim vs evidence).
+      // Evidence for tuple X must describe work that actually WAS X's shape:
+      //   * the subject's predicate list must cover the declared verifier set
+      //     — otherwise "admitted under X's verifier" was never checked;
+      //   * the subject's classes must fit the declared footprint — an
+      //     out-of-footprint admission is evidence for a different animal;
+      //   * a revert drills the declared recovery path only when the UNIT
+      //     matches — an item revert does not exercise "recovery per cohort"
+      //     (cohort-unit tuples wait for the cohort-scale revert verb; their
+      //     missing drill stays NAMED in the pane, which is the honest state).
+      // Each miss is a CLEAN skip (pinned silent), not a crash.
+      const declared = new Map(t.verifier.predicates.map((p) => [p.id, p.version]));
+      for (const [id, version] of declared) {
+        if (!subject.predicates.some((p) => p.id === id && p.version === version)) return;
+      }
+      if (!subject.changeClasses.every((c) => (t.appliesTo as readonly string[]).includes(c))) return;
+      if (kind === "revert" && t.recovery.unit !== "item") return;
       void deps.promotion
         .recordEvidence(tupleOf(t), { kind, ref, ...(memberCount !== undefined ? { memberCount } : {}) }, now())
         .catch((e) => console.error("[governor] promotion evidence record failed (facts only; the decision stands)", e));
@@ -454,7 +485,7 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
 
         // One cohort, one transformation (groupIneligibilityOf refuses mixed),
         // so the first member speaks for the manifest.
-        recordPromotionEvidence(fresh[0]?.subject.transformation, "cohort-admit", frozen.digest.value, fresh.length);
+        recordPromotionEvidence(fresh[0]?.subject, "cohort-admit", frozen.digest.value, fresh.length);
         return {
           ok: true,
           claimId: claim.id,
@@ -559,7 +590,7 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
           console.error("[governor] proposal projection update after admission failed (rebuildable)", e);
         }
 
-        recordPromotionEvidence(proposal.subject.transformation, "individual-admit", claim.id);
+        recordPromotionEvidence(proposal.subject, "individual-admit", claim.id);
         return {
           ok: true,
           claimId: claim.id,
@@ -646,7 +677,7 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
           // mutation that happened.
           return { ok: false, code: "revert_partial", detail: `the base bytes were written back, but the proposal could not be superseded (${e instanceof Error ? e.message : String(e)}); a later Admit will refuse with subject_drift` };
         }
-        recordPromotionEvidence(proposal.subject.transformation, "revert", proposalId);
+        recordPromotionEvidence(proposal.subject, "revert", proposalId);
         return { ok: true, supersededProposalId: proposalId };
       } catch (e) {
         return { ok: false, code: "revert_error", detail: e instanceof Error ? e.message : String(e) };
