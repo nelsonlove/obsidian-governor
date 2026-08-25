@@ -19,12 +19,29 @@ import { mintId } from "../contracts/ids.js";
 import type { Sha256Digest } from "../contracts/digest.js";
 import type { VerificationRecord } from "../verification/predicate.js";
 
+/**
+ * How a claim was authorized — a WIDENED DISCRIMINATED UNION (WP10b,
+ * governor-lead's condition 6), never an optional field: adding the mandate
+ * variant as a second arm makes tsc enumerate every reader, where an
+ * optional gestureRef would let the promoted case silently inherit the
+ * human case's handling. Both arms carry their evidence REQUIRED:
+ *   * human-gesture — the one-shot ref the gesture gate minted;
+ *   * mandate — the mandate that authorized it, the SERVICE-minted use ref
+ *     (callers cannot supply one), and the exact promoted tuple key the
+ *     admission ran under, so "what let this happen automatically" is
+ *     answerable from the claim alone (condition 10: an automatic admission
+ *     is distinguishable after the fact, in the chain itself).
+ */
+export type ClaimAuthority =
+  | { kind: "human-gesture"; gestureRef: string }
+  | { kind: "mandate"; mandateId: string; useRef: string; promotedTuple: string };
+
 export interface AdmissionClaimV1 {
   schema: "governor.admission-claim/v1";
   id: string;
   subjectDigest: Sha256Digest;
   proposalId: string;
-  authority: { kind: "human-gesture"; gestureRef: string };
+  authority: ClaimAuthority;
   verification: Array<{ predicate: { id: string; version: string }; passed: true }>;
   admittedAt: number;
   /** The standing ref value this admission expected to succeed (null = first admission). */
@@ -72,7 +89,8 @@ export interface ClaimStore {
 export function buildAdmissionClaim(args: {
   subjectDigest: Sha256Digest;
   proposalId: string;
-  gestureRef: string;
+  /** The full discriminated authority — the caller STATES which arm; there is no default. */
+  authority: ClaimAuthority;
   verification: VerificationRecord[];
   expectedStanding: string | null;
   /** The note identities the subject covers — the SERVICE derives these from the subject itself. */
@@ -88,7 +106,10 @@ export function buildAdmissionClaim(args: {
     id: mintId("proposal", args.now, args.rand),
     subjectDigest: args.subjectDigest,
     proposalId: args.proposalId,
-    authority: { kind: "human-gesture", gestureRef: args.gestureRef },
+    authority:
+      args.authority.kind === "human-gesture"
+        ? { kind: "human-gesture", gestureRef: args.authority.gestureRef }
+        : { kind: "mandate", mandateId: args.authority.mandateId, useRef: args.authority.useRef, promotedTuple: args.authority.promotedTuple },
     verification: args.verification.filter((r) => r.passed).map((r) => ({ predicate: r.predicate, passed: true as const })),
     admittedAt: args.now,
     expectedStanding: args.expectedStanding,

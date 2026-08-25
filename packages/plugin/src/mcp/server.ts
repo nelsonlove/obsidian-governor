@@ -49,6 +49,7 @@ import { openSession, isLive, livenessOf, type SessionV1 } from "../kernel/gover
 import { deriveClasses, requireClassesCovered, authorityKeysDiffer, frontmatterUid } from "../kernel/governance/proposals/class-firewall.js";
 import { buildProposalSubjectFromOperation } from "../kernel/governance/proposals/proposal-builder.js";
 import { openProposal } from "../kernel/governance/proposals/proposal.js";
+import { productionStampOf } from "../kernel/governance/mandates/policy.js";
 import { NOTE_WRITE_V1 } from "../kernel/operations/actions/note-write.js";
 import { digestBytes } from "../kernel/governance/contracts/digest.js";
 import { canonicalize } from "../kernel/governance/contracts/canonical-json.js";
@@ -319,6 +320,50 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
       const uid = frontmatterUid(proposedText) ?? ctx.proposals.uidOf(facts.path);
       const proposalSession = operation.sessionId ?? "no-session";
       const now = Date.now();
+
+      // WP10b: the producer's mandate stamp. If this connection's session
+      // runs under a mandate and the write FITS it (productionStampOf — the
+      // pure decision, exhaustively pinned in its own suite), the subject
+      // carries the mandate id and the budgets are charged. An unfit write
+      // proposes UNSTAMPED — a mandate grants, it never blocks production —
+      // and any resolution failure degrades to unstamped with a console
+      // error, because a proposal is safe and losing one to mandate plumbing
+      // would not be.
+      let stampedMandateId: string | null = null;
+      let stampCharge: { mandateId: string; delta: { items: number; proposals: number; bytes: number } } | null = null;
+      try {
+        if (operation.sessionId && ctx.sessions && ctx.mandates) {
+          const sess = await ctx.sessions.get(operation.sessionId);
+          const governing = sess?.mandateId ?? null;
+          if (governing !== null) {
+            const mandate = await ctx.mandates.getMandate(governing);
+            const usage = await ctx.mandates.usageOf(governing);
+            const decision = productionStampOf(
+              mandate,
+              usage,
+              {
+                delegate: { sessionId: operation.sessionId, connection: connectionId, role: null },
+                notePath: facts.path,
+                changeClasses: derived,
+                transformation: { id: NOTE_WRITE_V1.id, version: String(NOTE_WRITE_V1.version) },
+                predicates: [{ id: "content-diff", version: "1" }],
+                action: { id: NOTE_WRITE_V1.id, version: String(NOTE_WRITE_V1.version) },
+                durability: "replayable",
+              },
+              facts.proposedBytes.byteLength,
+              now
+            );
+            stampedMandateId = decision.mandateId;
+            if (decision.mandateId !== null && decision.charge !== null) {
+              stampCharge = { mandateId: decision.mandateId, delta: decision.charge };
+            }
+          }
+        }
+      } catch (e) {
+        console.error("[governor] mandate stamp resolution failed; proposing unstamped", e);
+        stampedMandateId = null;
+        stampCharge = null;
+      }
       const proposal = openProposal({ subject: buildProposalSubjectFromOperation({
         vaultId: ctx.proposals.vaultId,
         noteId: uid ?? `path:${facts.path}`,
@@ -332,7 +377,7 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
         producingOperation: { id: operation.id, action: operation.action.id, actionVersion: operation.action.version },
         observations: [], // a write's subject needs no read observation; capture is uncoupled (D16)
         sessionId: proposalSession,
-        mandateId: null,
+        mandateId: stampedMandateId,
       }), sessionId: proposalSession }, now);
 
       // Snapshots FIRST, proposal second — a proposal without its recording is
@@ -342,6 +387,16 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
       const recordingRef = await ctx.proposals.record(proposal.id, facts.path, facts.baseBytes, facts.proposedBytes);
       if (recordingRef === null) return;
       await ctx.proposals.open({ ...proposal, recordingRef }, now);
+      // The charge lands only after the stamped proposal durably opened —
+      // counted work is work that exists. A failed charge under-counts, which
+      // is LOUD here and healed by the door's own budget check (the belt).
+      if (stampCharge !== null && ctx.mandates) {
+        try {
+          await ctx.mandates.chargeAndObserve(stampCharge.mandateId, stampCharge.delta);
+        } catch (e) {
+          console.error("[governor] mandate budget charge after stamped proposal FAILED — usage is under-counted", e);
+        }
+      }
     },
     // The slot is cleared on EVERY close, completed or not — a write whose
     // operation was later judged failed (or a timeout's late settlement) must

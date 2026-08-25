@@ -107,6 +107,10 @@ export interface ServerCtx {
     allDrafts(): Promise<import("../kernel/governance/mandates/draft.js").MandateDraftV1[]>;
     allMandates(): Promise<import("../kernel/governance/mandates/mandate.js").MandateV1[]>;
     usageOf(id: string): Promise<import("../kernel/governance/mandates/budgets.js").MandateUsage>;
+    /** WP10b producer stamping: the session's governing mandate, resolved for the fit check. */
+    getMandate(id: string): Promise<import("../kernel/governance/mandates/mandate.js").MandateV1 | null>;
+    /** Charge production usage and observe a budget breach into the durable `exhausted` transition. Implemented in main.ts. */
+    chargeAndObserve(id: string, delta: { items: number; proposals: number; bytes: number }): Promise<void>;
   };
   /**
    * Proposal production (WP6b-1): the durable store plus the vault identity
