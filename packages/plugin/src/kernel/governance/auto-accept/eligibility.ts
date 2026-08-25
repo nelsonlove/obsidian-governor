@@ -9,13 +9,10 @@
 //       each covered by an ENABLED allowlisted detector, with NO residual. A write
 //       that mixes a mechanical stamp with ANY other content edit is NOT eligible;
 //       the whole write stays pending. A mechanical class can never smuggle content
-//       past review. ONE additional partition EXISTS only under an honored per-note
-//       `auto-accept: appends` policy (#261): an appended body TAIL — bytes strictly
-//       extending the (identical or healed-only) existing body — counts as covered,
-//       by the policy rather than a class. The conjunctive rule itself is unchanged:
-//       every non-tail difference must still be class-attributed, an edit inside
-//       existing content is still residual, and no policy-less write gets the tail
-//       partition.
+//       past review. (The per-note policy partitions — `all`, and #261's appended
+//       tail under `appends` — were DELETED in WP10c per guide §654: `all` outright,
+//       `appends` migrated to content proposals. No frontmatter value widens
+//       eligibility; an appended tail is residual like any other content.)
 //   (B) RAIL-CLEAN — the change introduces no new conformance finding. The four
 //       authorized classes are rail-neutral BY CONSTRUCTION (see classes.ts); a
 //       future non-neutral class MUST supply a real railCheck result via the seam
@@ -29,6 +26,13 @@
 //  FAIL-SAFE: any exception, any doubt, a missing rename index, an unrecognized
 //  change → NOT eligible → the change stays pending. Auto-accept only ever REDUCES
 //  the human's queue for provably-mechanical changes; it never risks content.
+//
+//  WP10c REASSESSMENT (guide §654, 2026-08-25): this engine survives ONLY for
+//  the pre-cutover / post-rollback legacy era — post-cutover its writer refuses
+//  and the poll no longer runs the sweep. None of its classes carries automatic
+//  authority into the admission era; a class that deserves a future automatic
+//  life returns as a REGISTERED TRANSFORMATION (transformations/) through its
+//  own review, with promotion evidence from zero.
 //
 //  Ported verbatim from obsidian-stewardship/src/auto-accept/eligibility.ts (#83, cycle 1).
 //  This is the eligibility ENGINE — a pure predicate over bytes. It advances no baseline
@@ -45,12 +49,9 @@ import {
 } from "./classes.js";
 import {
   evaluateFrontmatter,
-  evaluateBodyWithAppend,
   evaluateLinkHeal,
   type RenameIndex,
 } from "./detectors.js";
-import { isAppendOnly } from "./append-only.js";
-import type { AutoAcceptPolicy } from "../protected-policy.js";
 
 export type { RenameIndex } from "./detectors.js";
 
@@ -81,20 +82,6 @@ export interface EvalContext {
   // cleared here (a clean:true result) or it stays ineligible — the engine refuses to accept a
   // matched class that is neither rail-neutral nor rail-cleared.
   railCheck?: (cls: ClassId, base: string, cur: string) => RailResult;
-  /**
-   * The per-note auto-accept policy (#135/#224) — the HUMAN's delegation for
-   * THIS note. MUST be the HONORED value (the caller derives it from the
-   * blessed BASELINE frontmatter via `autoAcceptPolicyOf`, never from the raw
-   * current note — honor-only-if-blessed): `appends` accepts a change iff the
-   * baseline is a byte-prefix of the current content (the #226 detector, same
-   * conservative discipline), or — since #261 — iff the diff COMPOSES as
-   * allowlisted mechanical classes plus an appended body tail (see the header:
-   * the tail is one extra partition, nothing else is loosened — a write that
-   * appends AND modifies anything non-mechanical still stays pending); `all`
-   * accepts any pending agent-attributed change. Absent/null ⇒ class-allowlist
-   * evaluation only, byte-identical to the pre-#135 behavior.
-   */
-  policy?: AutoAcceptPolicy | null;
 }
 
 export interface EvalResult {
@@ -102,8 +89,6 @@ export interface EvalResult {
   classes: ClassId[];      // matched classes for this write (sorted, canonical order)
   reason: string;          // machine-ish reason (for logs / debugging)
   rail: RailSummary | null;
-  /** The per-note policy that drove an eligible result, when one did (absent for class-driven accepts). */
-  policy?: AutoAcceptPolicy;
 }
 
 function toSet(e: ReadonlyArray<ClassId> | ReadonlySet<ClassId>): Set<ClassId> {
@@ -174,26 +159,14 @@ export function evaluate(base: string, cur: string, ctx: EvalContext): EvalResul
     if (typeof base !== "string" || typeof cur !== "string") return notEligible("bad-input");
     if (base === cur) return notEligible("no-change");
 
-    // Per-note policy branch (#135) — BEFORE the class allowlist, and
-    // independent of it (a human's per-note delegation does not require any
-    // mechanical class to be enabled). `ctx.policy` is the HONORED (blessed)
-    // policy only; see EvalContext. `appends` that does not pass the byte-prefix
-    // detector falls THROUGH to class evaluation — a pure uid-stamp on a
-    // policy-carrying note still auto-accepts by class, and (#261) the class
-    // evaluation below COMPOSES with the policy: a change that is allowlisted
-    // mechanical classes PLUS an appended body tail is eligible, where either
-    // half alone already would be. (The live #261 wedge: a `modified:` stamp +
-    // rename-driven link rewrites landed between the blessing and the appends,
-    // so byte-prefix failed AND the class path refused the appended tail —
-    // each half provably fine, the combination stuck pending forever.)
-    if (ctx.policy === "all") {
-      return { eligible: true, classes: [], reason: "policy-all", rail: null, policy: "all" };
-    }
-    const appendsPolicy = ctx.policy === "appends";
-    if (appendsPolicy && isAppendOnly(base, cur)) {
-      return { eligible: true, classes: [], reason: "policy-appends", rail: null, policy: "appends" };
-    }
-
+    // The per-note policy branches are DELETED (WP10c, guide §654): `all`
+    // was a whole-note blank check and is gone outright; `appends` migrated
+    // to content proposals — an appended tail is residual here, exactly like
+    // any other content, and lands as an ordinary proposal for the human's
+    // decision. Eligibility is the reviewed mechanical classes ALONE; no
+    // frontmatter value widens it. (#261's composition machinery went with
+    // the policy — its wedge cannot recur, because nothing waits on a
+    // policy-accept anymore.)
     const enabled = toSet(ctx.enabled);
     if (enabled.size === 0) return notEligible("allowlist-empty");
 
@@ -216,15 +189,11 @@ export function evaluate(base: string, cur: string, ctx: EvalContext): EvalResul
       }
     }
 
-    // BODY: byte-identical, or ONLY confirmed link-heals (if enabled + index present) — and,
-    // under an honored `appends` policy (#261), optionally PLUS an appended tail after the
-    // (identical or healed-only) existing content. The strict evaluator stays in force for
-    // class-only notes: an appended tail is residual there.
+    // BODY: byte-identical, or ONLY confirmed link-heals (if enabled + index
+    // present). An appended tail is residual — content proposes (WP10c).
     const bodyEnabled = new Set<ClassId>(enabled);
     const bodyIndex = bodyEnabled.has("link-heal") ? ctx.renameIndex : null;
-    const body = appendsPolicy
-      ? evaluateBodyWithAppend(bp.body, cp.body, bodyIndex)
-      : { ...evaluateLinkHeal(bp.body, cp.body, bodyIndex), appended: false };
+    const body = evaluateLinkHeal(bp.body, cp.body, bodyIndex);
     if (!body.ok) return notEligible(`body:${body.reason}`);
 
     // FRONTMATTER: every FM difference attributed to an enabled class, no residual.
@@ -234,14 +203,11 @@ export function evaluate(base: string, cur: string, ctx: EvalContext): EvalResul
     // Combine matched classes.
     const matched = new Set<ClassId>(fm.classes);
     if (body.healed) matched.add("link-heal");
-    const appended = body.appended === true;
 
-    // No matched class but bytes differ → an unexplained residual we could not attribute —
-    // UNLESS the whole difference is an appended body tail under the appends policy (only
-    // reachable when frontmatter changed in a way classes explain as "nothing", i.e. it is
-    // identical; the pure whole-note byte-append normally exits via the fast path above).
+    // No matched class but bytes differ → an unexplained residual we could
+    // not attribute. Stays PENDING; a human (or the admission era's proposal
+    // path) decides.
     if (matched.size === 0) {
-      if (appended) return { eligible: true, classes: [], reason: "policy-appends", rail: null, policy: "appends" };
       return notEligible("no-class-matched-residual");
     }
 
@@ -255,11 +221,7 @@ export function evaluate(base: string, cur: string, ctx: EvalContext): EvalResul
     const rail = evaluateRail(classes, base, cur, ctx);
     if (!rail.clean) return notEligible("rail-not-clean", rail);
 
-    // The policy is recorded on the result iff it did real work (covered the appended tail);
-    // a pure class-accept on a policy-carrying note stays a class accept, as before.
-    return appended
-      ? { eligible: true, classes, reason: "policy-appends+classes", rail, policy: "appends" }
-      : { eligible: true, classes, reason: "ok", rail };
+    return { eligible: true, classes, reason: "ok", rail };
   } catch (e) {
     // Any thrown error → fail safe.
     return notEligible(`exception:${e instanceof Error ? e.message : String(e)}`);
@@ -279,8 +241,8 @@ export interface AutoAcceptRecord {
   toHash: string;
   classes: ClassId[];
   railResult: RailSummary | null;
-  /** The per-note policy that drove this accept (#135), when one did. Absent on class-driven accepts. */
-  policy?: AutoAcceptPolicy;
+  /** HISTORICAL only: the policy that drove a pre-WP10c policy-accept. Never produced anymore; kept so old log records still parse and render. */
+  policy?: "appends" | "all";
 }
 
 export function autoAcceptRecord(args: {
@@ -290,7 +252,6 @@ export function autoAcceptRecord(args: {
   toHash: string;
   classes: ClassId[];
   railResult: RailSummary | null;
-  policy?: AutoAcceptPolicy;
 }): AutoAcceptRecord {
   return {
     event: "auto-accept",
@@ -301,6 +262,5 @@ export function autoAcceptRecord(args: {
     toHash: args.toHash,
     classes: args.classes,
     railResult: args.railResult,
-    ...(args.policy ? { policy: args.policy } : {}),
   };
 }

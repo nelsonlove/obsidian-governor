@@ -692,8 +692,9 @@ export class VaultMcpSettingTab extends PluginSettingTab {
           "additionally, the value only takes effect once the write that set it is human-attributed or accepted " +
           "in review. The accepted family (accepted / accepted-by / accepted-on / acceptance-status: accepted) " +
           "is a hardcoded floor underneath — it is always enforced and cannot be declared, removed, or downgraded " +
-          `here. Default: ${formatProtectedPropertyLines(DEFAULT_PROTECTED_PROPERTIES)} (the per-note auto-accept ` +
-          "policy — a human writes auto-accept: appends|all in a note's own frontmatter to delegate)."
+          `here. Default: ${formatProtectedPropertyLines(DEFAULT_PROTECTED_PROPERTIES)} (the RETIRED per-note ` +
+          "auto-accept policy — it confers nothing since WP10c (appends propose for review like all content), " +
+          "but the key stays protected: historical notes carry it, and agents must not toggle it)."
       )
       .addTextArea((ta) => {
         ta.setValue(formatProtectedPropertyLines(this.plugin.settings.protectedProperties));

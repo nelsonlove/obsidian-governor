@@ -303,34 +303,11 @@ perimeter — never shrink, downgrade, or restate the floor. `acceptance-status`
 non-accepted values stay deliberately agent-writable workflow state (`proposed`,
 `revising`), exactly as before.
 
-**The first consumer — the per-note auto-accept policy (#135).** `auto-accept` ships in the
-default declared list as authority-conferring. A human delegates by writing
-`auto-accept: appends` (auto-accept append-only changes — the baseline must be a byte-prefix
-of the current content; a write that appends *and* edits stays pending, with the ONE #261
-carve-out below: edits that are themselves allowlisted mechanical classes compose with the
-appended tail) or
-`auto-accept: all` in a note's own frontmatter — their editor write is human-attributed and
-therefore honored; no pane toggle exists. The eligibility engine consults the **honored**
-policy (from the blessed baseline) before the class allowlist, and every policy-driven
-auto-accept logs `policy: appends|all` in the acceptance log beside the class-driven
-records. The review pane badges the honored policy read-only.
+**The first consumer — the per-note auto-accept policy (#135) — RETIRED (WP10c, 2026-08-25).** `auto-accept` remains in the default declared list as authority-conferring, but the policy's operational half is deleted per the development guide's order: `auto-accept: all` no longer parses at all (a whole-note blank check never belonged in frontmatter — it reads as no policy under every authority era, including after a cutover rollback), and `auto-accept: appends` is migrated to content proposals — an appended tail is residual content like any other edit, and lands as an ordinary proposal for the human's decision. The key stays protected (historical notes carry it; agents must not toggle it), and the review pane badges a note's legacy `appends` declaration read-only, with the retirement stated. The #261 composition machinery (mechanical classes plus an appended tail) was deleted with the policy; its wedge cannot recur, because nothing waits on a policy-accept anymore. Rename captures still persist (`governance/rename-records.json`, TTL 30 days, capped) for the link-heal oracle.
 
-**The `appends` policy composes with the mechanical classes (#261).** A pending diff that is
-allowlisted mechanical classes **plus** an appended body tail is eligible where each half
-alone already would be: frontmatter differences must still be fully class-attributed
-(`modified:` stamp → timestamp, …), body changes before the tail must still be
-confirmed-rename link-heals only, and the tail must strictly extend the existing (or
-healed) body. Nothing is loosened — an edit inside existing content, an unconfirmed link
-rewrite, or a non-mechanical frontmatter change still wedges the whole write pending. This
-closes the live #261 failure: a host-side `modified:` stamp plus Obsidian's rename-driven
-wikilink rewrites landed between the blessing and the agent appends, byte-prefix failed,
-and the class path called the appended tail residual — every part individually blessed,
-the combination stuck pending forever (and silently; refusals on policy-carrying notes now
-log to the console, once per content-state). Supporting it, **rename captures persist**
-(`governance/rename-records.json`, TTL 30 days, capped) so the link-heal oracle still
-confirms a rename after a plugin reload.
+**The sweep is event-driven, not timer-only (#261) — and era-scoped (WP10c).** Post-cutover the legacy auto-accept sweep never runs (its writer refuses; running it was pure work and noise); the poll's automated arm is the **mandated-admission sweep** instead, which puts mandate-stamped proposal cohorts through the full admission refusal table — promotion evidence, scope, classes, verifier coverage, budgets — or leaves them for the human. The auto-accept classes were reassessed individually per the guide: none carries automatic authority into the admission era; a class that deserves a future automatic life returns as a registered transformation through its own review, with promotion evidence from zero.
 
-**The sweep is event-driven, not timer-only (#261).** Live diagnosis showed Chromium
+**The legacy sweep's event-driven design (#261), retained for the pre-cutover/rollback era.** Live diagnosis showed Chromium
 suspends renderer timers while the Obsidian window is occluded — the 2.5s journal poll
 simply never ticked during unattended sessions, which is exactly when agents write (the
 observed "zero auto-accept records ever"). The kernel now nudges the governance poll after

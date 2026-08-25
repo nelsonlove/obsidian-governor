@@ -136,7 +136,7 @@ export interface ReviewController {
   // context-aware surfacing (proposed ⇒ "will stamp", else ⇒ "baseline only").
   acceptanceStatus(path: string): string | null;
   // ── protected properties (#135/#224) — READ-ONLY display data ──────────────
-  // The HONORED per-note auto-accept policy ("appends" | "all" | null), derived from the
+  // The HONORED per-note auto-accept policy ("appends" | null — "all" no longer parses, WP10c), derived from the
   // blessed BASELINE frontmatter (honor-only-if-blessed) — never the raw current note. The
   // pane only BADGES it; the human sets it by editing the note's frontmatter (their editor
   // write is human-attributed and therefore honored). No toggle here, deliberately.
@@ -1434,7 +1434,10 @@ export class GovernanceReviewView extends ItemView {
     // #135 read-only policy badge: the HONORED per-note auto-accept policy, if any.
     const honoredPolicy = deps.honoredAutoAccept(item.path);
     if (honoredPolicy) {
-      title.createDiv({ cls: "governance-detail-sub", text: `auto-accept policy (honored): ${honoredPolicy}` });
+      // WP10c: the policy is retired — the badge says what the note once
+      // delegated and what happens NOW, so the human is never surprised that
+      // an appends note's appends sit in the queue.
+      title.createDiv({ cls: "governance-detail-sub", text: `legacy auto-accept policy: ${honoredPolicy} (retired — appends now propose for review)` });
     }
     // UNTRUSTED agent-authored text — see kernel/governance/intent-view.ts for the text-node-only
     // render path and its behavioral escaping test.
