@@ -761,7 +761,11 @@ export class GovernanceReviewView extends ItemView {
       main.createDiv({ cls: "governance-row-title", text: item.subject.path ?? item.subject.noteId });
       main.createDiv({
         cls: "governance-row-path",
-        text: `${item.subjectDigest.value.slice(0, 12)}… · ${item.subject.changeClasses.join("+")} · ${new Date(item.createdAt).toLocaleString()}`,
+        // Condition 10 at the proposal surface: mandate-produced work says so
+        // before any decision — provenance the human sees, never a gate.
+        text:
+          `${item.subjectDigest.value.slice(0, 12)}… · ${item.subject.changeClasses.join("+")} · ${new Date(item.createdAt).toLocaleString()}` +
+          (item.subject.mandateId ? ` · under mandate ${item.subject.mandateId.slice(0, 8)}…` : ""),
       });
       const controls = row.createDiv({ cls: "governance-proposed-controls" });
 

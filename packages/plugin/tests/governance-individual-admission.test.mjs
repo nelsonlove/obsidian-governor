@@ -244,13 +244,13 @@ describe("admission policy — every §9 refusal, by code", () => {
     );
   });
 
-  test("a mandate authority refuses OUTRIGHT: Gate 1 has no automatic admission", async () => {
+  test("a mandate authority on the INDIVIDUAL path refuses: automatic admission decides cohorts only (WP10b)", async () => {
     const h = harness();
     const subj = subject();
     const proposal = withVerification(openProposal({ subject: subj, sessionId: "s" }, T0, RAND(1)), "passed");
     await assert.rejects(
       () => h.service.admit({ proposal, subject: subj, authority: { kind: "mandate", mandateId: "m-1" } }),
-      (e) => e.code === "mandate_not_supported"
+      (e) => e.code === "mandate_requires_cohort"
     );
   });
 
@@ -352,7 +352,7 @@ describe("standing resolver — the chain walk (#334)", () => {
       const claim = buildAdmissionClaim({
         subjectDigest: digest,
         proposalId: `p-${seed}`,
-        gestureRef: "g",
+        authority: { kind: "human-gesture", gestureRef: "g" },
         verification: [],
         expectedStanding: chain[0] ?? null,
         coveredNotes: [{ vaultId: "v", noteId, subjectDigest: digest.value }],
@@ -398,7 +398,7 @@ describe("standing resolver — the chain walk (#334)", () => {
     const cohortClaim = buildAdmissionClaim({
       subjectDigest: d("the-cohort"),
       proposalId: "p-cohort",
-      gestureRef: "g",
+      authority: { kind: "human-gesture", gestureRef: "g" },
       verification: [],
       expectedStanding: null,
       coveredNotes: members,
@@ -408,7 +408,7 @@ describe("standing resolver — the chain walk (#334)", () => {
     const single = buildAdmissionClaim({
       subjectDigest: d("unrelated"),
       proposalId: "p-single",
-      gestureRef: "g",
+      authority: { kind: "human-gesture", gestureRef: "g" },
       verification: [],
       expectedStanding: cohortClaim.id,
       coveredNotes: [{ vaultId: "v", noteId: "someone-else", subjectDigest: d("unrelated").value }],
@@ -426,7 +426,7 @@ describe("standing resolver — the chain walk (#334)", () => {
     const reAdmit = buildAdmissionClaim({
       subjectDigest: d("m-25-v2"),
       proposalId: "p-re",
-      gestureRef: "g",
+      authority: { kind: "human-gesture", gestureRef: "g" },
       verification: [],
       expectedStanding: single.id,
       coveredNotes: [{ vaultId: "v", noteId: "member-25", subjectDigest: d("m-25-v2").value }],
@@ -444,7 +444,7 @@ describe("standing resolver — the chain walk (#334)", () => {
   test("unattached claims answer ungoverned; a chained-but-unreadable claim answers unresolvable", async () => {
     const { buildAdmissionClaim, createClaimStore } = await import("../src/kernel/governance/admission/settlement.ts");
     const claims = createClaimStore(memoryIo());
-    const orphan = buildAdmissionClaim({ subjectDigest: d("orphan"), proposalId: "p", gestureRef: "g", verification: [], expectedStanding: null, coveredNotes: [{ vaultId: "v", noteId: "n", subjectDigest: d("orphan").value }], now: T0, rand: RAND(6) });
+    const orphan = buildAdmissionClaim({ subjectDigest: d("orphan"), proposalId: "p", authority: { kind: "human-gesture", gestureRef: "g" }, verification: [], expectedStanding: null, coveredNotes: [{ vaultId: "v", noteId: "n", subjectDigest: d("orphan").value }], now: T0, rand: RAND(6) });
     await claims.append(orphan);
     const resolver = createStandingResolver({ claims, standingChain: async () => [] });
     const answer = await resolver.forSubject(d("orphan").value);

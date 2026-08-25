@@ -23,7 +23,8 @@
 // in any window leaves a ref pointing at evidence that does not exist,
 // because the claim lands BEFORE the ref moves.
 
-import { AdmissionRefusedError, requireAdmissible, requireCohortAdmissible, type AdmissionRequest, type CohortAdmissionRequest } from "./policy.js";
+import { AdmissionRefusedError, requireAdmissible, requireCohortAdmissible, type AdmissionRequest, type CohortAdmissionRequest, type MandateAdmissionContext } from "./policy.js";
+import { mintId } from "../contracts/ids.js";
 import { buildAdmissionClaim, type AdmissionClaimV1, type ClaimStore } from "./settlement.js";
 import { RefCasError } from "../history-store/types.js";
 import { subjectDigest, type CohortSubjectV1, type ProposalItemSubjectV1 } from "../contracts/subject-v1.js";
@@ -63,7 +64,25 @@ export interface AdmissionDeps {
   /** Current standing claim id, read fresh — the CAS expectation. */
   currentStanding: () => Promise<string | null>;
   /** Step 4: append the settlement record. Failures here are retried by recovery, not silently dropped. */
-  recordSettlement: (record: { claimId: string; subjectDigest: string; at: number }) => Promise<void>;
+  recordSettlement: (record: { claimId: string; subjectDigest: string; at: number; authority: string }) => Promise<void>;
+  /**
+   * Resolve the mandate refusal table's facts (WP10b) — mandate record,
+   * folded usage, registered transformation, promotion verdict. A capability
+   * like `verify`: the REQUEST has no field a caller-built context could
+   * arrive through, and the wiring answers from the durable stores. A THROW
+   * here refuses the admission as mandate_unavailable — fail closed, its own
+   * code, never a silent fall-through to "unpromoted". Optional: a wiring
+   * that admits only by gesture never provides it, and a mandate authority
+   * then refuses rather than guessing.
+   */
+  mandateContext?: (mandateId: string, transformation: { id: string; version: string }) => Promise<MandateAdmissionContext>;
+  /**
+   * Charge a mandate's budgets after a mandate-authorized admission stands
+   * (usage is a fact about the act). Failures degrade LOUDLY to console —
+   * an uncharged budget under-counts, which over-permits later admissions;
+   * the belt is that scope/classes/tuple/expiry still bind every one.
+   */
+  chargeMandate?: (mandateId: string, delta: { items?: number; proposals?: number; bytes?: number }, now: number) => Promise<void>;
   /** Step 5: rebuildable projections. A throw degrades observability only. */
   refreshProjections?: () => Promise<void>;
   now: () => number;
@@ -114,7 +133,7 @@ export function createAdmissionService(deps: AdmissionDeps): AdmissionService {
   // (authority_missing refuses them first).
   async function requireGestureUnused(gestureRef: string): Promise<void> {
     if (!gestureRef) return;
-    const prior = (await deps.claims.all()).find((c) => c.authority.gestureRef === gestureRef);
+    const prior = (await deps.claims.all()).find((c) => c.authority.kind === "human-gesture" && c.authority.gestureRef === gestureRef);
     if (prior) {
       throw new AdmissionRefusedError(
         "gesture_replayed",
@@ -144,7 +163,21 @@ export function createAdmissionService(deps: AdmissionDeps): AdmissionService {
         // admissions (review finding: caller A's cleanup emptied it before
         // caller B's coverage ran, refusing healthy members).
         const coverage = await deps.verifyCohort(request.frozenSubject, cohortDigest.value, request.memberProposals);
-        requireCohortAdmissible(request, coverage, now);
+        let mandateCtx: MandateAdmissionContext | undefined;
+        if (request.authority.kind === "mandate") {
+          if (!deps.mandateContext) {
+            throw new AdmissionRefusedError("mandate_unavailable", "no mandate context capability is wired; a mandate that cannot be validated authorizes nothing");
+          }
+          // Resolution failures refuse with their own code (condition 7's
+          // sibling): "the stores could not answer" is not "the answer was no
+          // evidence", and neither is ever "safe".
+          try {
+            mandateCtx = await deps.mandateContext(request.authority.mandateId, request.frozenSubject.items[0]?.transformation ?? { id: "", version: "" });
+          } catch (e) {
+            throw new AdmissionRefusedError("mandate_unavailable", `the mandate context could not be resolved: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        }
+        requireCohortAdmissible(request, coverage, now, mandateCtx);
         if (request.authority.kind === "human-gesture") await requireGestureUnused(request.authority.gestureRef);
 
         // Duplicate check inside the serialized chain, cohort-shaped: if what
@@ -160,7 +193,24 @@ export function createAdmissionService(deps: AdmissionDeps): AdmissionService {
         const claim = buildAdmissionClaim({
           subjectDigest: cohortDigest,
           proposalId: request.memberProposals.map((p) => p.id).join(","),
-          gestureRef: request.authority.kind === "human-gesture" ? request.authority.gestureRef : "",
+          // The discriminated authority (condition 6). The mandate arm's
+          // useRef is minted HERE, by the service, inside the serialized
+          // chain — no caller can supply one, the exact discipline the
+          // gesture gate applies to gestureRef. promotedTuple records the
+          // exact tuple key the verdict covered (condition 10: the claim
+          // alone answers "what allowed this automatically").
+          authority:
+            request.authority.kind === "human-gesture"
+              ? { kind: "human-gesture", gestureRef: request.authority.gestureRef }
+              : {
+                  kind: "mandate",
+                  mandateId: request.authority.mandateId,
+                  useRef: `mandate-use-${mintId("proposal", now, deps.rand?.())}`,
+                  promotedTuple:
+                    mandateCtx?.promotion.state === "promoted" && mandateCtx.transformation
+                      ? `${mandateCtx.transformation.id}@${mandateCtx.transformation.version}`
+                      : "",
+                },
           verification: coverage.items.flatMap((i) => i.records),
           expectedStanding: expected,
           coveredNotes: deriveCohortCoveredNotes(request.frozenSubject),
@@ -169,7 +219,19 @@ export function createAdmissionService(deps: AdmissionDeps): AdmissionService {
         });
         await deps.claims.append(claim);
         await deps.standingAdvance(expected, claim.id);
-        await deps.recordSettlement({ claimId: claim.id, subjectDigest: claim.subjectDigest.value, at: now });
+        await deps.recordSettlement({
+          claimId: claim.id,
+          subjectDigest: claim.subjectDigest.value,
+          at: now,
+          authority: claim.authority.kind === "human-gesture" ? "human-gesture" : `mandate:${claim.authority.mandateId}`,
+        });
+        if (request.authority.kind === "mandate" && deps.chargeMandate) {
+          try {
+            await deps.chargeMandate(request.authority.mandateId, { items: request.frozenSubject.items.length, proposals: 0 }, now);
+          } catch (e) {
+            console.error("[governor] mandate budget charge after automatic admission FAILED — usage is under-counted until recovery", e);
+          }
+        }
         try {
           await deps.refreshProjections?.();
         } catch (e) {
@@ -217,7 +279,9 @@ export function createAdmissionService(deps: AdmissionDeps): AdmissionService {
         const claim = buildAdmissionClaim({
           subjectDigest: request.proposal.subjectDigest,
           proposalId: request.proposal.id,
-          gestureRef: request.authority.kind === "human-gesture" ? request.authority.gestureRef : "",
+          // The individual path is gesture-only (policy refuses the mandate
+          // arm with mandate_requires_cohort before this line can run).
+          authority: { kind: "human-gesture", gestureRef: request.authority.kind === "human-gesture" ? request.authority.gestureRef : "" },
           verification: outcome.records,
           expectedStanding: expected,
           // DERIVED from the subject, in the same breath as the digest — no
@@ -236,7 +300,7 @@ export function createAdmissionService(deps: AdmissionDeps): AdmissionService {
 
         // 4. Settlement record. A failure here is NOT unwound (the admission
         //    HAS happened); recovery completes the record from the claim.
-        await deps.recordSettlement({ claimId: claim.id, subjectDigest: claim.subjectDigest.value, at: now });
+        await deps.recordSettlement({ claimId: claim.id, subjectDigest: claim.subjectDigest.value, at: now, authority: "human-gesture" });
 
         // 5. Projections: best-effort, rebuildable by definition — D05's own
         //    words: "Mutable indexes are rebuildable projections, never

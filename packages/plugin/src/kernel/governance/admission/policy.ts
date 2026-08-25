@@ -12,8 +12,14 @@ import { subjectDigest, type CohortSubjectV1, type ProposalItemSubjectV1 } from 
 import type { ProposalV1 } from "../proposals/proposal.js";
 import type { VerificationRecord } from "../verification/predicate.js";
 import type { CohortCoverageOutcome } from "../cohorts/coverage.js";
+import type { MandateV1 } from "../mandates/mandate.js";
+import type { MandateUsage } from "../mandates/budgets.js";
+import { budgetBreach } from "../mandates/budgets.js";
+import { pathWithin } from "../mandates/policy.js";
+import { AUTOMATABLE_CLASSES, type TransformationV1 } from "../transformations/transformation.js";
+import type { PromotionVerdict } from "../transformations/promotion.js";
 
-/** How this admission is authorized. WP6 knows gestures; mandates are WP9. */
+/** How this admission is authorized. The mandate arm is real as of WP10b — validated by the mandate table below, never waved through. */
 export type AdmissionAuthority =
   | {
       kind: "human-gesture";
@@ -24,6 +30,28 @@ export type AdmissionAuthority =
       kind: "mandate";
       mandateId: string;
     };
+
+/**
+ * The facts the mandate refusal table decides over — RESOLVED BY THE
+ * SERVICE'S capability (the verification pattern: the request has no field a
+ * caller-built context could ride in on). Every "could not resolve" state is
+ * explicit and refuses; nothing here defaults to permissive.
+ */
+export interface MandateAdmissionContext {
+  /** The mandate the authority names, from the durable store. null = the store answered "no such mandate". */
+  mandate: MandateV1 | null;
+  usage: MandateUsage;
+  /** The REGISTERED transformation matching the cohort's stamp, or null when the registry does not hold it. */
+  transformation: TransformationV1 | null;
+  /**
+   * The promotion verdict for the transformation's exact tuple — or
+   * `unavailable` when the evidence store could not be read (condition 7: a
+   * broken evidence lookup must read as BROKEN, its own refusal, never as
+   * "no recorded failures, therefore safe" and never silently as
+   * unpromoted — a wrong-shaped answer here is a blanket auto-admit).
+   */
+  promotion: PromotionVerdict | { state: "unavailable"; detail: string };
+}
 
 export class AdmissionRefusedError extends Error {
   constructor(
@@ -130,24 +158,29 @@ export function requireAdmissible(request: AdmissionRequest, verification: Verif
     throw new AdmissionRefusedError("verification_incomplete", `required verification missing: ${missing.join(", ")} — coverage is exact and total, never sampled`);
   }
 
-  // Authority. WP6 admits only through the human gesture; a mandate-kind
-  // authority refuses OUTRIGHT until WP9 builds real mandate validation —
-  // "no automatic mandated admission" is a Gate 1 condition (D14), so the
-  // refusal is the implementation, not a stub of one.
+  // Authority. The INDIVIDUAL path admits only through the human gesture —
+  // deliberately, and not as a leftover: mandated admission is a COHORT act
+  // by doctrine (D02 / sessions-mandates-and-cohorts.md mode 3 — "Governor
+  // verifies every item and admits exact cohorts"; the pilot and every
+  // exception are individual precisely BECAUSE a human decides them). An
+  // automatic single-item door would be a second, smaller entrance with the
+  // same authority and half the manifest discipline.
   if (authority.kind === "mandate") {
-    throw new AdmissionRefusedError("mandate_not_supported", "mandated admission does not exist until WP9; Gate 1 admits only through the human gesture");
+    throw new AdmissionRefusedError(
+      "mandate_requires_cohort",
+      "mandated admission decides frozen cohorts only; a single result is either part of a cohort or a human's individual decision"
+    );
   }
   if (!authority.gestureRef) {
     throw new AdmissionRefusedError("authority_missing", "admission requires the gesture reference minted by the accept surface");
   }
 
-  // A subject claiming to have run under a mandate cannot be admitted before
-  // mandates exist — the claim would be unverifiable.
-  if (subject.mandateId !== null) {
-    throw new AdmissionRefusedError("mandate_not_supported", `the subject claims mandate ${subject.mandateId}, which cannot be validated before WP9`);
-  }
+  // A mandate-PRODUCED subject under a HUMAN gesture is the cohort-decision
+  // happy path (D02: even eligible mandates run in cohort-decision mode) —
+  // the mandateId is provenance the human sees, never a gate on their
+  // decision. WP6's refusal here is retired by WP10b, on purpose.
 
-  void now; // expiry checks arrive with mandates; the parameter is the seam
+  void now; // the clock stays a parameter: the cohort table's mandate arm consumes it, and the two tables must age together
 }
 
 export interface CohortAdmissionRequest {
@@ -168,7 +201,7 @@ export interface CohortAdmissionRequest {
  * one failed item fails the gesture whole, with the items named —
  * review-and-safety's abort rule at cohort scale.
  */
-export function requireCohortAdmissible(request: CohortAdmissionRequest, coverage: CohortCoverageOutcome, now: number): void {
+export function requireCohortAdmissible(request: CohortAdmissionRequest, coverage: CohortCoverageOutcome, now: number, mandateCtx?: MandateAdmissionContext): void {
   const { frozenSubject, memberProposals, authority } = request;
 
   // The RECOMPUTED digest must be what the gesture covered. A tampered
@@ -206,9 +239,9 @@ export function requireCohortAdmissible(request: CohortAdmissionRequest, coverag
     if (proposal.producedOutcome !== "completed") {
       throw new AdmissionRefusedError("result_not_settled", `member ${item.noteId}'s producing operation was '${proposal.producedOutcome}'`);
     }
-    if (item.mandateId !== null) {
-      throw new AdmissionRefusedError("mandate_not_supported", `member ${item.noteId} claims a mandate, which cannot be validated before WP9`);
-    }
+    // A mandate-produced member under a HUMAN gesture is the cohort-decision
+    // happy path — provenance, not a gate (WP10b retires WP6's refusal). The
+    // mandate-AUTHORITY table below is where member mandate ids bind.
   }
   // The item table's rule at cohort scale: an open human objection blocks the
   // member, and one blocked member blocks the decision (whole-abort). A
@@ -236,9 +269,8 @@ export function requireCohortAdmissible(request: CohortAdmissionRequest, coverag
   }
 
   if (authority.kind === "mandate") {
-    throw new AdmissionRefusedError("mandate_not_supported", "mandated admission does not exist until WP9");
-  }
-  if (!authority.gestureRef) {
+    requireMandateCohortAdmissible(request, mandateCtx, now);
+  } else if (!authority.gestureRef) {
     throw new AdmissionRefusedError("authority_missing", "cohort admission requires the gesture reference minted by the accept surface");
   }
 
@@ -247,5 +279,125 @@ export function requireCohortAdmissible(request: CohortAdmissionRequest, coverag
   // world-state — is session-base territory (D01) and lands with the
   // session-base predicate, not here: per-item base agreement is what
   // coverage just proved. Named so the omission reads as a decision.
-  void now;
+}
+
+/**
+ * THE MANDATE REFUSAL TABLE — what an admission with no human click requires
+ * (WP10b; D02, D14; governor-lead's conditions 1, 5, 7, 9). Runs AFTER the
+ * shared rows above, so drift, settlement, revision, and coverage are
+ * already proven for the exact digest; this table decides only whether the
+ * MANDATE may stand in for the gesture. Every uncertainty refuses with its
+ * own code — and the two absence shapes are DISTINCT on purpose: a store
+ * that answered "nothing" (promotion_missing, with the gap named) and a
+ * store that could not answer (promotion_unavailable) are different bugs,
+ * and only one of them looks like one.
+ */
+function requireMandateCohortAdmissible(request: CohortAdmissionRequest, ctx: MandateAdmissionContext | undefined, now: number): void {
+  const { frozenSubject, authority } = request;
+  if (authority.kind !== "mandate") throw new AdmissionRefusedError("authority_missing", "not a mandate authority");
+  if (ctx === undefined) {
+    throw new AdmissionRefusedError("mandate_unavailable", "no mandate context capability is wired; a mandate that cannot be validated authorizes nothing");
+  }
+
+  // 1. The mandate itself: known, active, unexpired (the WP6 `void now` seam, consumed at last).
+  const m = ctx.mandate;
+  if (m === null) throw new AdmissionRefusedError("mandate_unknown", `no mandate ${authority.mandateId} in the durable record`);
+  if (m.id !== authority.mandateId) {
+    throw new AdmissionRefusedError("mandate_unknown", "the resolved mandate does not match the authority's id — the context is answering a different question");
+  }
+  if (m.status !== "active") {
+    throw new AdmissionRefusedError(`mandate_${m.status}`, `mandate ${m.id} is ${m.status}; nothing further runs under it`);
+  }
+  if (now >= m.expiresAt) {
+    throw new AdmissionRefusedError("mandate_expired", `mandate ${m.id} expired at ${m.expiresAt} (now ${now})`);
+  }
+  if (!m.terms.admission.mayAdmit) {
+    throw new AdmissionRefusedError("admission_not_authorized", `mandate ${m.id} authorizes production only (mayProduce without mayAdmit); its results return for the human cohort decision`);
+  }
+
+  // 2. Every member was produced under THIS mandate — named misses, whole-abort.
+  const foreign = frozenSubject.items.filter((i) => i.mandateId !== m.id).map((i) => i.noteId);
+  if (foreign.length > 0) {
+    throw new AdmissionRefusedError(
+      "mandate_subject_mismatch",
+      `${foreign.length} member(s) were not produced under mandate ${m.id}: ${foreign.join(", ")} — a mandate admits only its own work`,
+      foreign
+    );
+  }
+
+  // 3. Classes: automatable AND inside the mandate's grant. The registry
+  // already cannot hold content/authority (WP10a's structural line) — this
+  // is the door's own check, because doors do not trust hallways, and a
+  // mandate may legally allow producing content that must NEVER auto-admit.
+  for (const item of frozenSubject.items) {
+    const notAutomatable = item.changeClasses.find((c) => !AUTOMATABLE_CLASSES.includes(c));
+    if (notAutomatable !== undefined) {
+      throw new AdmissionRefusedError("class_not_automatable", `member ${item.noteId} carries class '${notAutomatable}' — content and authority work never auto-admits (D02)`);
+    }
+    const escalated = item.changeClasses.find((c) => !m.terms.allowedClasses.includes(c));
+    if (escalated !== undefined) {
+      throw new AdmissionRefusedError("class_escalation", `member ${item.noteId} carries class '${escalated}', outside mandate ${m.id}'s grant (${m.terms.allowedClasses.join(", ")})`);
+    }
+    // 4. Scope, per member, named.
+    if (item.path === null || !m.terms.scope.include.some((p) => pathWithin(item.path!, p)) || m.terms.scope.exclude.some((p) => pathWithin(item.path!, p))) {
+      throw new AdmissionRefusedError("scope_escape", `member ${item.noteId} (${item.path ?? "no path"}) is outside mandate ${m.id}'s scope`);
+    }
+    // 5. Transformation: the mandate's exact named transformation, per member.
+    if (item.transformation.id !== m.terms.transformation.id || item.transformation.version !== m.terms.transformation.version) {
+      throw new AdmissionRefusedError(
+        "transformation_mismatch",
+        `member ${item.noteId} carries ${item.transformation.id}@${item.transformation.version}; mandate ${m.id} authorizes ${m.terms.transformation.id}@${m.terms.transformation.version}`
+      );
+    }
+  }
+
+  // 6. The transformation must be REGISTERED — promotion is defined only
+  // over the registry, and an unregistered name has no tuple to have
+  // evidenced.
+  const t = ctx.transformation;
+  if (t === null) {
+    throw new AdmissionRefusedError("transformation_unregistered", `${m.terms.transformation.id}@${m.terms.transformation.version} is not a registered transformation; nothing unregistered auto-admits`);
+  }
+  if (t.id !== m.terms.transformation.id || t.version !== m.terms.transformation.version) {
+    throw new AdmissionRefusedError("transformation_unregistered", "the resolved transformation does not match the mandate's — the context is answering a different question");
+  }
+  // 6b. The declared verifier must be covered by every member's predicate
+  // list — the tuple's promise holds only if ITS verifier runs at this
+  // admission (the coverage rows above prove the listed predicates ran;
+  // this proves the list contains the right ones).
+  for (const item of frozenSubject.items) {
+    for (const p of t.verifier.predicates) {
+      if (!item.predicates.some((sp) => sp.id === p.id && sp.version === p.version)) {
+        throw new AdmissionRefusedError(
+          "verifier_not_covered",
+          `member ${item.noteId} does not carry the tuple's declared verifier ${p.id}@${p.version}; what was verified is not what was promoted`
+        );
+      }
+    }
+  }
+  // 6c. Recovery: the frozen decision's unit must be the tuple's declared unit.
+  if (frozenSubject.recoveryUnit !== t.recovery.unit) {
+    throw new AdmissionRefusedError(
+      "recovery_mismatch",
+      `the cohort froze with recovery per ${frozenSubject.recoveryUnit}; the promoted tuple declares recovery per ${t.recovery.unit}`
+    );
+  }
+
+  // 7. Promotion — the live-evidence gate's verdict, three-state and loud.
+  const promo = ctx.promotion;
+  if (promo.state === "unavailable") {
+    throw new AdmissionRefusedError("promotion_unavailable", `the promotion evidence could not be read (${promo.detail}); a broken evidence store authorizes nothing`);
+  }
+  if (promo.state !== "promoted") {
+    throw new AdmissionRefusedError(
+      "promotion_missing",
+      `${t.id}@${t.version} is not promoted for automatic admission — ${promo.missing.length > 0 ? `missing live evidence: ${promo.missing.join("; ")}` : "the evidence gate is met but no human has promoted it"}`
+    );
+  }
+
+  // 8. Budgets — the admission spends items; a reached budget is a normal stop.
+  const breach = budgetBreach(m.terms.budgets, ctx.usage, m.activatedAt, now);
+  if (breach !== null) {
+    throw new AdmissionRefusedError("budget_exhausted", `mandate ${m.id}: ${breach.detail}`);
+  }
 }

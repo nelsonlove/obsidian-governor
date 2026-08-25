@@ -39,6 +39,9 @@ import { RefCasError, type ObjectId } from "../kernel/governance/history-store/t
 import type { HistoryRepository } from "../kernel/governance/history-store/repository.js";
 import { createDefaultPredicateRegistry } from "../kernel/governance/verification/predicates.js";
 import { tupleOf } from "../kernel/governance/transformations/transformation.js";
+import { budgetBreach, type MandateUsage } from "../kernel/governance/mandates/budgets.js";
+import type { MandateV1 } from "../kernel/governance/mandates/mandate.js";
+import type { MandateAdmissionContext } from "../kernel/governance/admission/policy.js";
 import { verifySubject } from "../kernel/governance/verification/verify.js";
 import type { ProposalStore } from "../kernel/governance/proposals/proposal-store.js";
 import type { ProposalV1 } from "../kernel/governance/proposals/proposal.js";
@@ -74,6 +77,16 @@ export interface AdmissionUiDeps {
    * the written-back bytes surface through the ordinary review machinery.
    */
   revertToBase(proposalId: string, gestureRef: string): Promise<RevertOutcome>;
+  /**
+   * WP10b: admit a frozen cohort under a MANDATE — no gesture, the whole
+   * refusal table instead (active mayAdmit mandate, every member its work,
+   * automatable in-grant classes, in-scope, the exact registered
+   * transformation with its declared verifier covered, the PROMOTED tuple,
+   * budget remaining). Absent mandate machinery ⇒ refuses. NO production
+   * caller in WP10b — the sweep that invokes it is WP10c's package; until
+   * then this is the door, shipped closed and fully gated, the WP6 shape.
+   */
+  admitCohortUnderMandate(frozen: FrozenCohort, members: ProposalV1[], mandateId: string): Promise<CohortAdmitOutcome>;
 }
 
 export type CohortAdmitOutcome =
@@ -81,6 +94,8 @@ export type CohortAdmitOutcome =
       ok: true;
       claimId: string;
       degraded: boolean;
+      /** Condition 10: "human-gesture" or "mandate:<id>" — the receipt says which door opened. */
+      authority: string;
       receipt: { subjectDigest: string; memberCount: number; predicates: string[]; verifier: string; coverage: "exact-and-total" };
     }
   | { ok: false; code: string; detail: string; failedNoteIds?: string[] };
@@ -107,7 +122,7 @@ export interface BuildAdmissionDeps {
   /** Write note bytes through the plugin's ordinary write machinery (revert). */
   writeNoteBytes(path: string, bytes: Uint8Array): Promise<void>;
   /** Append one settlement line to the acceptance log. */
-  appendSettlement(record: { event: "admission-settlement"; claimId: string; subjectDigest: string; ts: string }): Promise<void>;
+  appendSettlement(record: { event: "admission-settlement"; claimId: string; subjectDigest: string; ts: string; authority: string }): Promise<void>;
   /** Rebuildable projections refresh (the pane nudge). Optional. */
   /**
    * The cutover marker↔store binding gate (store-binding.ts). When present
@@ -151,6 +166,19 @@ export interface BuildAdmissionDeps {
       evidence: { kind: "individual-admit" | "cohort-admit" | "revert"; ref: string; memberCount?: number },
       now: number
     ): Promise<void>;
+    /** WP10b: the promotion verdict the mandate door consumes. A THROW here refuses the admission (promotion_unavailable via the context resolver) — never a silent unpromoted. */
+    verdictOf(tuple: import("../kernel/governance/transformations/promotion.js").PromotionTuple): Promise<import("../kernel/governance/transformations/promotion.js").PromotionVerdict>;
+  };
+  /**
+   * WP10b: the mandate store's admission-facing verbs. Optional — absent
+   * (tests, bare embeds, gesture-only wirings) means every mandate-authority
+   * admission refuses mandate_unavailable, which is the fail-closed shape.
+   */
+  mandates?: {
+    get(mandateId: string): Promise<MandateV1 | null>;
+    usageOf(mandateId: string): Promise<MandateUsage>;
+    charge(mandateId: string, delta: Partial<MandateUsage>, now: number): Promise<void>;
+    markExhausted(mandateId: string, breach: string, now: number): Promise<void>;
   };
   now?: () => number;
 }
@@ -307,9 +335,46 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
         claimId: r.claimId,
         subjectDigest: r.subjectDigest,
         ts: new Date(r.at).toISOString(),
+        // Condition 10: an automatic admission is distinguishable in what a
+        // human reads afterward — the settlement line names its authority.
+        authority: r.authority,
       });
     },
     refreshProjections: deps.refreshProjections,
+    // WP10b: the mandate refusal table's fact resolver. Distinctions kept
+    // loud: a store that THROWS surfaces as promotion "unavailable" (its own
+    // refusal), never as unpromoted; an unregistered transformation resolves
+    // to null and the policy names it transformation_unregistered.
+    mandateContext:
+      deps.mandates &&
+      (async (mandateId, transformation) => {
+        const mandate = await deps.mandates!.get(mandateId);
+        const usage = await deps.mandates!.usageOf(mandateId);
+        const t = deps.promotion?.transformationOf(transformation.id, transformation.version) ?? null;
+        let promotion: MandateAdmissionContext["promotion"];
+        if (t === null || !deps.promotion) {
+          promotion = { state: "unavailable", detail: "no registered transformation/promotion machinery to consult" };
+        } else {
+          try {
+            promotion = await deps.promotion.verdictOf(tupleOf(t));
+          } catch (e) {
+            promotion = { state: "unavailable", detail: e instanceof Error ? e.message : String(e) };
+          }
+        }
+        return { mandate, usage, transformation: t, promotion };
+      }),
+    // Budget charge after a mandate admission stands; an observed breach is
+    // recorded as the normal stop (exhausted), durably.
+    chargeMandate:
+      deps.mandates &&
+      (async (mandateId, delta, at) => {
+        await deps.mandates!.charge(mandateId, delta, at);
+        const m = await deps.mandates!.get(mandateId);
+        if (m && m.status === "active") {
+          const breach = budgetBreach(m.terms.budgets, await deps.mandates!.usageOf(mandateId), m.activatedAt, at);
+          if (breach !== null) await deps.mandates!.markExhausted(mandateId, breach.detail, at);
+        }
+      }),
     now,
   });
 
@@ -329,64 +394,19 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
     };
   }
 
-  return {
-    async pending() {
-      return deps.proposals.pending();
-    },
-
-    async freezeSelection(selector, recoveryUnit) {
-      try {
-        const pending = await deps.proposals.pending();
-        const selected = selectProposals(pending, selector);
-        if (selected.length === 0) return { ok: false, reason: "the selection matches no pending proposals" };
-        const frozen = freezeCohort({ items: selected, resolvedScope: { include: [], exclude: [] }, recoveryUnit });
-        // Members are returned in the SUBJECT's canonical item order (the
-        // freeze sorts items by noteId; selection order is arbitrary), so
-        // members[i] corresponds to frozen.subject.items[i] for every caller.
-        const byId = new Map<string, ProposalV1>(selected.map((m) => [m.id, m]));
-        return { ok: true, frozen, members: frozen.memberProposalIds.map((id) => byId.get(id)!) };
-      } catch (e) {
-        return { ok: false, reason: e instanceof Error ? e.message : String(e) };
-      }
-    },
-
-    async refreezeWithout(frozen, members, excludeProposalIds, recoveryUnit) {
-      try {
-        const input: FreezeInput = {
-          items: members,
-          resolvedScope: frozen.subject.resolvedScope,
-          recoveryUnit,
-          excludedProposalIds: [...frozen.subject.excludedProposalIds],
-        };
-        const successor = excludeAndRefreeze(input, frozen, excludeProposalIds);
-        const byId = new Map<string, ProposalV1>(members.map((m) => [m.id, m]));
-        return { ok: true, frozen: successor, members: successor.memberProposalIds.map((id) => byId.get(id)!) };
-      } catch (e) {
-        return { ok: false, reason: e instanceof Error ? e.message : String(e) };
-      }
-    },
-
-    async standingHealth(): Promise<StandingHealthReport> {
-      // #337 option 4: the chain-absent direction surfaced as CRITICAL. The
-      // chain reader reuses claimIdOf — one canonical parse of the standing
-      // commit message, never a second regex.
-      return standingHealth({
-        claims,
-        standingChain: async () => {
-          const repo = await deps.repo();
-          const head = await repo.resolveRef(standingRef());
-          if (head === null) return [];
-          const ids: string[] = [];
-          for (const entry of await repo.log(standingRef(), 100000)) {
-            const id = await claimIdOf(repo, entry.oid);
-            if (id !== null) ids.push(id);
-          }
-          return ids;
-        },
-      });
-    },
-
-    async admitCohortWithGesture(frozen, members, gestureRef) {
+  // The shared cohort-decision core (WP10b): one body, two doors. The
+  // gesture door passes the human's ref; the mandate door passes the mandate
+  // authority and the service resolves + judges the full refusal table.
+  // Everything else — binding gate, click/decision-time member re-fetch,
+  // already-standing self-heal, per-member re-observation, degraded-window
+  // discrimination — is IDENTICAL on purpose: the automatic path gets no
+  // smaller entrance (governor-lead's condition on second doors).
+  async function decideCohortAdmission(
+    frozen: FrozenCohort,
+    members: ProposalV1[],
+    authority: import("../kernel/governance/admission/policy.js").AdmissionAuthority
+  ): Promise<CohortAdmitOutcome> {
+    const authorityLabel = authority.kind === "human-gesture" ? "human-gesture" : `mandate:${authority.mandateId}`;
       // The degraded discriminator is standing MOVEMENT during this call —
       // the item path's rule, applied at cohort scale. A failed pre-read is
       // "unknown", which suppresses the degraded-success branch entirely.
@@ -470,7 +490,7 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
           frozenSubject: frozen.subject,
           gestureCoveredDigest: frozen.digest.value,
           memberProposals: fresh,
-          authority: { kind: "human-gesture", gestureRef },
+          authority,
         });
 
         // Projections: every member catches up; failures degrade (D05).
@@ -485,11 +505,12 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
 
         // One cohort, one transformation (groupIneligibilityOf refuses mixed),
         // so the first member speaks for the manifest.
-        recordPromotionEvidence(fresh[0]?.subject, "cohort-admit", frozen.digest.value, fresh.length);
+        if (authority.kind === "human-gesture") recordPromotionEvidence(fresh[0]?.subject, "cohort-admit", frozen.digest.value, fresh.length);
         return {
           ok: true,
           claimId: claim.id,
           degraded: false,
+          authority: authorityLabel,
           receipt: cohortReceipt(claim.subjectDigest.value, frozen),
         };
       } catch (e) {
@@ -516,7 +537,7 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
                   /* rebuildable */
                 }
               }
-              return { ok: true, claimId: head, degraded: true, receipt: cohortReceipt(claim.subjectDigest.value, frozen) };
+              return { ok: true, claimId: head, degraded: true, authority: authorityLabel, receipt: cohortReceipt(claim.subjectDigest.value, frozen) };
             }
           }
         } catch {
@@ -524,6 +545,73 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
         }
         return { ok: false, code: "admission_error", detail: e instanceof Error ? e.message : String(e) };
       }
+    }
+
+  return {
+    async pending() {
+      return deps.proposals.pending();
+    },
+
+    async freezeSelection(selector, recoveryUnit) {
+      try {
+        const pending = await deps.proposals.pending();
+        const selected = selectProposals(pending, selector);
+        if (selected.length === 0) return { ok: false, reason: "the selection matches no pending proposals" };
+        const frozen = freezeCohort({ items: selected, resolvedScope: { include: [], exclude: [] }, recoveryUnit });
+        // Members are returned in the SUBJECT's canonical item order (the
+        // freeze sorts items by noteId; selection order is arbitrary), so
+        // members[i] corresponds to frozen.subject.items[i] for every caller.
+        const byId = new Map<string, ProposalV1>(selected.map((m) => [m.id, m]));
+        return { ok: true, frozen, members: frozen.memberProposalIds.map((id) => byId.get(id)!) };
+      } catch (e) {
+        return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+      }
+    },
+
+    async refreezeWithout(frozen, members, excludeProposalIds, recoveryUnit) {
+      try {
+        const input: FreezeInput = {
+          items: members,
+          resolvedScope: frozen.subject.resolvedScope,
+          recoveryUnit,
+          excludedProposalIds: [...frozen.subject.excludedProposalIds],
+        };
+        const successor = excludeAndRefreeze(input, frozen, excludeProposalIds);
+        const byId = new Map<string, ProposalV1>(members.map((m) => [m.id, m]));
+        return { ok: true, frozen: successor, members: successor.memberProposalIds.map((id) => byId.get(id)!) };
+      } catch (e) {
+        return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+      }
+    },
+
+    async standingHealth(): Promise<StandingHealthReport> {
+      // #337 option 4: the chain-absent direction surfaced as CRITICAL. The
+      // chain reader reuses claimIdOf — one canonical parse of the standing
+      // commit message, never a second regex.
+      return standingHealth({
+        claims,
+        standingChain: async () => {
+          const repo = await deps.repo();
+          const head = await repo.resolveRef(standingRef());
+          if (head === null) return [];
+          const ids: string[] = [];
+          for (const entry of await repo.log(standingRef(), 100000)) {
+            const id = await claimIdOf(repo, entry.oid);
+            if (id !== null) ids.push(id);
+          }
+          return ids;
+        },
+      });
+    },
+
+    async admitCohortWithGesture(frozen, members, gestureRef) {
+      return decideCohortAdmission(frozen, members, { kind: "human-gesture", gestureRef });
+    },
+
+    // WP10b: the mandate door. Same core, no gesture — the refusal table is
+    // the gate. NO production caller until WP10c's sweep.
+    async admitCohortUnderMandate(frozen, members, mandateId) {
+      return decideCohortAdmission(frozen, members, { kind: "mandate", mandateId });
     },
 
     async admitWithGesture(proposalId, gestureRef) {
