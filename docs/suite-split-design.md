@@ -1,7 +1,7 @@
 # The suite split — core host, governance provider, satellite modules
 
-> [!note] ADOPTED by Nelson 2026-08-25 ("looks good", after reading in full) — governor-lead's perimeter review still gates S2/S3
-> §10's decisions: (1) repo name `obsidian-mcp-suite` — decided; (2) adoption — given; (3) satellite release posture — per recommendation (private-tier satellites unreleased until independently needed) absent a contrary ruling. The register updates in §8 are Nelson's rulings, recorded by this adoption. The S1 package may begin; S2/S3 (the seam and the split) additionally require governor-lead's review of §3/§5. [Status and compatibility](status-and-compatibility.md#current-release-state) remains the single owner of shipped truth throughout the split.
+> [!note] ADOPTED by Nelson 2026-08-25 ("looks good", after reading in full) — S2/S3 gated on an independent fresh-context perimeter review (lane consolidated 2026-08-25; governor-lead retired)
+> §10's decisions: (1) repo name `obsidian-mcp-suite` — decided; (2) adoption — given; (3) satellite release posture — per recommendation (private-tier satellites unreleased until independently needed) absent a contrary ruling. The register updates in §8 are Nelson's rulings, recorded by this adoption. The S1 package may begin; S2/S3 (the seam and the split) additionally require an independent fresh-context perimeter review of §3/§5 (the reviewer-separation discipline survives the lane consolidation of 2026-08-25, under which governor-lead retired and the release + perimeter-review lanes consolidated onto the sole remaining agent). [Status and compatibility](status-and-compatibility.md#current-release-state) remains the single owner of shipped truth throughout the split.
 
 ## 1. Why
 
@@ -106,7 +106,7 @@ What the governance provider registers through it: the accept-forbidden transiti
 | Conformance | public optional | **satellite** | read-only |
 | Bases | public optional | **satellite** | read-only |
 | Fileclass CLI proxy | public optional | **satellite** | already doubly-gated |
-| Provenance (inspect + slot audit) | optional / private regen | **satellite** | governor-lead's #257 lane — extraction only with their sign-off |
+| Provenance (inspect + slot audit) | optional / private regen | **satellite** | formerly governor-lead's #257 lane; lane consolidated 2026-08-25 |
 | Skills compiler | private operator | **satellite** | the biggest single extraction; least entangled |
 | Cross-session | private operator | **satellite** | |
 | Triage | private operator | **satellite** | |
@@ -121,8 +121,8 @@ Each package: one PR, tests move with their code, the full suite green at every 
 
 - **S1 — rename and restructure, zero behavior change.** Repo rename; `packages/plugin` → `packages/host` + `packages/governor` as *directories* while still building ONE plugin artifact (imports moved, boundaries made visible, no runtime change). The point: make every later diff small and reviewable.
 - **S2 — the seam, consumed in-tree.** Build the hook API in the host layer; the governance layer registers its vetoes/observers through it *while still compiled into one plugin*. Proves the seam's sufficiency with zero distribution risk. The seam's five rules get their pins here.
-- **S3 — the actual split.** Two plugin artifacts; id migrations (`governor` → `vault-mcp` for the host; the provider takes `governor`); the governance-state migration map executes; the runbook gains the two-plugin install/upgrade story. This is the package with live-vault stakes — it lands with a rollback path and governor-lead's release-lane sign-off.
-- **S4…Sn — satellites, private tier first** (skills, cross-session, triage, QuickAdd — the biggest "arcane" contributors, least entangled), then the optional tier (bases, vocab, conformance, scheme, fileclass, provenance — the last only with governor-lead). Each satellite dogfoods `vault-mcp-api` and shrinks the host.
+- **S3 — the actual split.** Two plugin artifacts; id migrations (`governor` → `vault-mcp` for the host; the provider takes `governor`); the governance-state migration map executes; the runbook gains the two-plugin install/upgrade story. This is the package with live-vault stakes — it lands with a rollback path and an independent release-readiness review.
+- **S4…Sn — satellites, private tier first** (skills, cross-session, triage, QuickAdd — the biggest "arcane" contributors, least entangled), then the optional tier (bases, vocab, conformance, scheme, fileclass, provenance). Each satellite dogfoods `vault-mcp-api` and shrinks the host.
 - **Then: the Gate 2 evidence checkpoint** (§657–664), run on the split build — the architecture we intend to keep, per Nelson's sequencing ruling.
 
 ## 8. What does not change
@@ -134,7 +134,7 @@ The admission perimeter's internals and doctrine. The standing chain's format an
 
 ## 9. Risks and costs, named
 
-- **The seam is new perimeter surface.** It is refuse-or-observe only, but it is the one place a design error could leak capability — hence S2's in-tree proving step and governor-lead's review before S3.
+- **The seam is new perimeter surface.** It is refuse-or-observe only, but it is the one place a design error could leak capability — hence S2's in-tree proving step and the independent perimeter review before S3.
 - **Release multiplication.** One release lane becomes several manifests. The lockfile-regen gap already flagged in the release pipeline gets worse before it gets better; the S3 package must include per-plugin release tooling, not inherit the gap.
 - **Id migration on the live vault** (§4). Shipped machinery, real click.
 - **Test-suite split.** 4,000+ tests partition along package lines; the cross-package integration tests (seam round-trips, publish round-trips) are NEW tests S2/S3 must add, not inherited coverage.
