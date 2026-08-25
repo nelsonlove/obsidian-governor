@@ -45,7 +45,7 @@ The seam itself is app-walkable (it must be — registration happens through the
 
 ## 4. Names and identities
 
-- **The monorepo** renames away from `obsidian-governor` — "governor" now means the governance provider, not the whole. Recommendation: **`obsidian-vault-mcp`** (the suite's historical identity; the npm SDK is already `vault-mcp-api`). Nelson's call.
+- **The monorepo** renames away from `obsidian-governor` — "governor" now means the governance provider, not the whole. **Chosen: `obsidian-mcp-suite`** (Nelson, 2026-08-25). Verified clean at choosing time: no GitHub repo of that name anywhere, npm free, no community-registry collision — and `-suite` is an established plugin-family naming pattern there. (`obsidian-vault-mcp` was considered and rejected: three same-name neighbors including a community-directory plugin repo, plus an existing "Vault MCP" org brand in the exact niche.)
 - **The host plugin id** returns to **`vault-mcp`**. The 0.12.0 id-migration machinery (`id-migration.ts`, `migrateLegacyModuleIds`) exists and runs the reverse direction with the same care: folder migration, settings adoption, discovery grace period, bridge dual-id lookup (the SDK already resolves both ids).
 - **The governance provider plugin id** is **`governor`** — the name finally names the thing.
 - **npm names do not change** (`vault-mcp-api`, `@vault-mcp/core`): published contracts keep their identities, per the standing naming rulings.
@@ -142,6 +142,6 @@ The admission perimeter's internals and doctrine. The standing chain's format an
 
 ## 10. Open decisions (Nelson)
 
-1. **The repo name.** Recommendation: `obsidian-vault-mcp`.
+1. **The repo name.** DECIDED: `obsidian-mcp-suite` (see §4).
 2. **Adopt this document** — which records the two register entries in §8 and green-lights S1.
 3. **Satellite release posture:** released/versioned per satellite from day one, or private-tier satellites stay unreleased (installed from the monorepo build) until someone needs them independently? Recommendation: the latter — release ceremony only where there is an audience.
