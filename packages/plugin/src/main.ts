@@ -16,6 +16,10 @@ import { buildAdmission, type AdmissionUiDeps } from "./governance/admission-wir
 import { buildMandateUi, type MandateUiDeps } from "./governance/mandate-wiring.js";
 import { createMandateStore } from "./kernel/governance/mandates/lifecycle.js";
 import { governanceAcceptanceSettings } from "./kernel/governance/settings.js";
+import { buildPromotionUi, type PromotionUiDeps } from "./governance/promotion-wiring.js";
+import { createTransformationRegistry } from "./kernel/governance/transformations/transformation.js";
+import { createPromotionStore } from "./kernel/governance/transformations/promotion.js";
+import { createDefaultPredicateRegistry } from "./kernel/governance/verification/predicates.js";
 import { openGitRepository } from "./governance/history-store/git-repository.js";
 import { historyDir } from "./governance/history-store/local-data-root.js";
 import { uuidv7 } from "./kernel/uuidv7.js";
@@ -156,6 +160,8 @@ interface VaultMcpSettings {
 const admissionFactories = new WeakMap<Plugin, () => AdmissionUiDeps>();
 // WP9: the mandate surface factory — same shape and reasoning as admission's.
 const mandateUiFactories = new WeakMap<Plugin, () => MandateUiDeps>();
+// WP10a: the promotion surface factory.
+const promotionUiFactories = new WeakMap<Plugin, () => PromotionUiDeps>();
 // WP8: per-plugin migration surface (import / cutover / rollback), built in onload.
 const migrations = new WeakMap<Plugin, Migration>();
 
@@ -661,9 +667,48 @@ export default class VaultMcpPlugin extends Plugin {
     await migration.loadState();
     setLegacyWriteGuard(this, () => !migration.isCutOver());
 
+    // ── the transformation registry + promotion evidence store (WP10a) ──────
+    // The registry ships EMPTY: real transformations arrive by their own
+    // reviewed registrations (no legacy entry receives authority merely
+    // because it was previously allowlisted). Evidence accrues in
+    // `governance/promotion-evidence.jsonl`; the pane's promote/demote
+    // gestures decide on top of it.
+    const transformationRegistry = createTransformationRegistry(createDefaultPredicateRegistry());
+    const promotionFile = `${pluginDir}/governance/promotion-evidence.jsonl`;
+    let promotionIoChain: Promise<unknown> = Promise.resolve();
+    const promotionStore = createPromotionStore({
+      appendLine: (line) => {
+        const task = async () => {
+          const dir = `${pluginDir}/governance`;
+          if (!(await sessionAdapter.exists(dir))) await sessionAdapter.mkdir(dir);
+          if (await sessionAdapter.exists(promotionFile)) await sessionAdapter.append(promotionFile, line + "\n");
+          else await sessionAdapter.write(promotionFile, line + "\n");
+        };
+        const next = promotionIoChain.then(task, task);
+        promotionIoChain = next.catch(() => undefined);
+        return next;
+      },
+      readLines: async () => {
+        if (!(await sessionAdapter.exists(promotionFile))) return [];
+        const raw = await sessionAdapter.read(promotionFile);
+        return raw.split("\n").filter(Boolean);
+      },
+    });
+    promotionUiFactories.set(this, () =>
+      buildPromotionUi({
+        registry: transformationRegistry,
+        store: promotionStore,
+        principal: () => governanceAcceptanceSettings((this.settings.modules?.acceptance?.config ?? {}) as Record<string, unknown>).acceptedBy,
+      })
+    );
+
     admissionFactories.set(this, () =>
       buildAdmission({
         repo: lazyHistoryRepo,
+        promotion: {
+          transformationOf: (id, version) => transformationRegistry.get(id, version),
+          recordEvidence: (tuple, evidence, at) => promotionStore.recordEvidence(tuple, evidence, at),
+        },
         claimIo,
         proposals: proposalStore,
         readNoteBytes: async (path) => {
@@ -1049,6 +1094,7 @@ export default class VaultMcpPlugin extends Plugin {
           // Built fresh per mount, handed as an argument (§9: never a property).
           admission: admissionFactories.get(this)?.(),
           mandates: mandateUiFactories.get(this)?.(),
+          promotion: promotionUiFactories.get(this)?.(),
           migration: migrations.get(this),
         });
       } catch (e) {

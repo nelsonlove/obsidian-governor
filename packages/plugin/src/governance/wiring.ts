@@ -146,6 +146,8 @@ export interface GovernanceWireDeps {
   admission?: import("./admission-wiring.js").AdmissionUiDeps;
   /** WP9: the mandate surface (drafts + gesture-gated activate/decline/revoke), built in main.ts. Absent ⇒ no Mandates section. */
   mandates?: import("./mandate-wiring.js").MandateUiDeps;
+  /** WP10a: the promotion surface (tuple evidence + gesture-gated promote/demote), built in main.ts. Absent ⇒ no section. */
+  promotion?: import("./promotion-wiring.js").PromotionUiDeps;
   /** WP8: the migration surface (import / cutover / rollback), built in main.ts. Absent ⇒ no migration section and legacy controls stay live. */
   migration?: import("./migration-wiring.js").Migration;
 }
@@ -681,7 +683,8 @@ function acceptanceStatusFor(plugin: Plugin, path: string): string | null {
 function buildController(
   plugin: Plugin,
   admission?: import("./admission-wiring.js").AdmissionUiDeps,
-  mandates?: import("./mandate-wiring.js").MandateUiDeps
+  mandates?: import("./mandate-wiring.js").MandateUiDeps,
+  promotion?: import("./promotion-wiring.js").PromotionUiDeps
 ): ReviewController {
   return {
     legacyRetired: () => legacyRetired(plugin),
@@ -692,6 +695,9 @@ function buildController(
     // WP9: the mandate surface — same reachability class; the grant verb is
     // reachable only through the pane's gesture-gated Activate control.
     mandates,
+    // WP10a: the promotion surface — same reachability class again; promote
+    // arms automatic admission and exists only behind the pane's gesture.
+    promotion,
     getPending: () => getCachedPending(plugin),
     getBaselineContent: (path) => getStore(plugin).get(path)?.content ?? null,
     readCurrent: (path) => readNote(plugin, path),
@@ -1263,7 +1269,7 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
   // not unregister (an Obsidian build without viewRegistry.unregisterView) we REUSE the existing
   // registration — its factory reads live WeakMap state, so the pane still works.
   try {
-    plugin.registerView(VIEW_TYPE_GOVERNANCE, (leaf) => new GovernanceReviewView(leaf, buildController(plugin, deps.admission, deps.mandates)));
+    plugin.registerView(VIEW_TYPE_GOVERNANCE, (leaf) => new GovernanceReviewView(leaf, buildController(plugin, deps.admission, deps.mandates, deps.promotion)));
   } catch (e) {
     console.warn("governor acceptance: review view type already registered — reusing it", e);
   }

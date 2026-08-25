@@ -38,6 +38,7 @@ import { standingRef } from "../kernel/governance/history-store/refs.js";
 import { RefCasError, type ObjectId } from "../kernel/governance/history-store/types.js";
 import type { HistoryRepository } from "../kernel/governance/history-store/repository.js";
 import { createDefaultPredicateRegistry } from "../kernel/governance/verification/predicates.js";
+import { tupleOf } from "../kernel/governance/transformations/transformation.js";
 import { verifySubject } from "../kernel/governance/verification/verify.js";
 import type { ProposalStore } from "../kernel/governance/proposals/proposal-store.js";
 import type { ProposalV1 } from "../kernel/governance/proposals/proposal.js";
@@ -125,6 +126,22 @@ export interface BuildAdmissionDeps {
    */
   bindingGate: () => Promise<{ ok: true } | { ok: false; code: string; detail: string }>;
   refreshProjections?: () => Promise<void>;
+  /**
+   * WP10a: the promotion-evidence recorder. OPTIONAL and a FACT-RECORDER,
+   * not a gate (the refreshProjections class, not the bindingGate class):
+   * absence records nothing, and a recording failure never fails the
+   * admission it describes. Evidence accrues ONLY to transformations the
+   * registry actually holds — an unregistered transformation's admissions
+   * are ordinary human decisions, evidence for nothing automatic.
+   */
+  promotion?: {
+    transformationOf(id: string, version: string): import("../kernel/governance/transformations/transformation.js").TransformationV1 | null;
+    recordEvidence(
+      tuple: import("../kernel/governance/transformations/promotion.js").PromotionTuple,
+      evidence: { kind: "individual-admit" | "cohort-admit" | "revert"; ref: string; memberCount?: number },
+      now: number
+    ): Promise<void>;
+  };
   now?: () => number;
 }
 
@@ -135,6 +152,32 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
   const now = deps.now ?? (() => Date.now());
   const claims = createClaimStore(deps.claimIo);
   const registry = createDefaultPredicateRegistry();
+
+  // Promotion evidence (WP10a): one recording site per admission/revert
+  // outcome, keyed on the REGISTERED transformation (tupleOf builds the
+  // tuple from the registered declaration, never from the subject's own
+  // predicate list). Total: any throw lands in console.error and the
+  // admission's own result is untouched — a fact-recorder must never cost
+  // the act it describes. Degraded successes deliberately do NOT record:
+  // under-counting is the safe direction for a promotion gate, and the
+  // degraded branch is a crash-recovery path, not a place to grow evidence.
+  const recordPromotionEvidence = (
+    transformation: { id: string; version: string } | null | undefined,
+    kind: "individual-admit" | "cohort-admit" | "revert",
+    ref: string,
+    memberCount?: number
+  ): void => {
+    try {
+      if (!deps.promotion || !transformation) return;
+      const t = deps.promotion.transformationOf(transformation.id, transformation.version);
+      if (t === null) return;
+      void deps.promotion
+        .recordEvidence(tupleOf(t), { kind, ref, ...(memberCount !== undefined ? { memberCount } : {}) }, now())
+        .catch((e) => console.error("[governor] promotion evidence record failed (facts only; the decision stands)", e));
+    } catch (e) {
+      console.error("[governor] promotion evidence record failed (facts only; the decision stands)", e);
+    }
+  };
 
   /** The claim id the standing ref currently names, or null. */
   async function currentStanding(): Promise<string | null> {
@@ -409,6 +452,9 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
           }
         }
 
+        // One cohort, one transformation (groupIneligibilityOf refuses mixed),
+        // so the first member speaks for the manifest.
+        recordPromotionEvidence(fresh[0]?.subject.transformation, "cohort-admit", frozen.digest.value, fresh.length);
         return {
           ok: true,
           claimId: claim.id,
@@ -513,6 +559,7 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
           console.error("[governor] proposal projection update after admission failed (rebuildable)", e);
         }
 
+        recordPromotionEvidence(proposal.subject.transformation, "individual-admit", claim.id);
         return {
           ok: true,
           claimId: claim.id,
@@ -599,6 +646,7 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
           // mutation that happened.
           return { ok: false, code: "revert_partial", detail: `the base bytes were written back, but the proposal could not be superseded (${e instanceof Error ? e.message : String(e)}); a later Admit will refuse with subject_drift` };
         }
+        recordPromotionEvidence(proposal.subject.transformation, "revert", proposalId);
         return { ok: true, supersededProposalId: proposalId };
       } catch (e) {
         return { ok: false, code: "revert_error", detail: e instanceof Error ? e.message : String(e) };
