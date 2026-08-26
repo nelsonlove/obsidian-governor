@@ -1,0 +1,21 @@
+{
+  "name": "@vault-mcp/quickadd-choices",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node esbuild.config.mjs production",
+    "dev": "node esbuild.config.mjs",
+    "test": "tsc --noEmit && node --import tsx --test 'tests/*.test.mjs'"
+  },
+  "dependencies": {
+    "vault-mcp-api": "*",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "esbuild": "^0.21.0",
+    "obsidian": "latest",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  }
+}

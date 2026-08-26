@@ -1,10 +1,16 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { fakeServer } from "./fake-server.mjs";
-import { installObsidianStub } from "./obsidian-stub.mjs";
 
-installObsidianStub();
-const { registerQuickAddTools } = await import("../src/mcp/tools-quickadd.ts");
+// The satellite's kernel/glue are obsidian-free at the type level for tests:
+// tool.ts imports only TYPES from obsidian and the SDK, so no stub or fake
+// server is needed — the SdkToolSpec's handler is called directly, and a
+// SHIM below re-creates the old envelope shape ({ isError, structuredContent,
+// content }) so the assertion bodies below survive the SDK migration
+// unchanged: a THROWN refusal renders as the host's error envelope would,
+// and a returned result is ok-shaped with `partial` mirrored into isError
+// (the apiVersion-1 gap: the real envelope cannot carry it — the shim keeps
+// asserting the SIGNAL, which now lives in the data).
+const { buildCompileTool } = await import("../src/tool.ts");
 
 // A minimal fake note: frontmatter + a resolvable-or-not set of wikilinks.
 // `extension` mirrors Obsidian's TFile — derived from the path, so a link
@@ -15,7 +21,6 @@ function fakeFile(path) {
 }
 
 function build({ notes = [], links = {}, existingChoices = [], settings = {}, commandApi = true, commands = {} } = {}) {
-  const server = fakeServer();
   const files = notes.map((n) => fakeFile(n.path));
   const saveSettingsCalls = [];
   const addedCommands = [];
@@ -61,9 +66,27 @@ function build({ notes = [], links = {}, existingChoices = [], settings = {}, co
     enabledPlugins: () => [],
     getSettings: () => ({ readOnly: false, allowlist: [], ...settings }),
   };
-  registerQuickAddTools(server, app, ctx);
+  const spec = buildCompileTool(app);
+  const handler = async (args) => {
+    try {
+      const data = await spec.handler(args ?? {});
+      return {
+        isError: data.partial === true,
+        structuredContent: data,
+        content: [{ type: "text", text: JSON.stringify(data) }],
+      };
+    } catch (e) {
+      return {
+        isError: true,
+        structuredContent: undefined,
+        // Old-envelope text shape: "[code] detail" → "Error [code]: detail".
+        content: [{ type: "text", text: `Error ${String(e instanceof Error ? e.message : e).replace(/^\[([a-z_]+)\] /, "[$1]: ")}` }],
+      };
+    }
+  };
   return {
-    handler: server.tools.get("obsidian_quickadd_compile").handler,
+    handler,
+    spec,
     quickadd,
     saveSettingsCalls,
     addedCommands,
@@ -711,82 +734,56 @@ describe("obsidian_quickadd_compile: name fallback", () => {
   });
 });
 
-describe("obsidian_quickadd_compile: QuickAdd unavailable", () => {
-  test("a typed refusal when QuickAdd isn't installed/enabled", async () => {
-    const server = fakeServer();
+describe("quickadd_choices_compile: QuickAdd unavailable", () => {
+  async function callWith(quickaddValue) {
+    const { buildCompileTool } = await import("../src/tool.ts");
     const app = {
       vault: { getMarkdownFiles: () => [] },
       metadataCache: { getFileCache: () => null, getFirstLinkpathDest: () => null },
-      plugins: { plugins: {} },
+      plugins: { plugins: quickaddValue === undefined ? {} : { quickadd: quickaddValue } },
     };
-    const ctx = {
-      pluginVersion: "0.0.0-test", socketPath: "/tmp/x.sock", vaultName: "test",
-      enabledPlugins: () => [], getSettings: () => ({ readOnly: false, allowlist: [] }),
-    };
-    registerQuickAddTools(server, app, ctx);
-    const res = await server.tools.get("obsidian_quickadd_compile").handler({ dry_run: true });
-    assert.equal(res.isError, true);
-    assert.match(res.content[0].text, /^Error \[quickadd_unavailable\]/);
+    const spec = buildCompileTool(app);
+    try {
+      await spec.handler({ dry_run: true });
+      return null;
+    } catch (e) {
+      return String(e.message);
+    }
+  }
+
+  test("a typed refusal when QuickAdd isn't installed/enabled", async () => {
+    assert.match(await callWith(undefined), /^\[quickadd_unavailable\]/);
   });
 
   test("a typed refusal when quickadd.settings.choices is missing entirely", async () => {
-    const server = fakeServer();
-    const quickadd = { settings: {}, saveSettings: async () => {} };
-    const app = {
-      vault: { getMarkdownFiles: () => [] },
-      metadataCache: { getFileCache: () => null, getFirstLinkpathDest: () => null },
-      plugins: { plugins: { quickadd } },
-    };
-    const ctx = {
-      pluginVersion: "0.0.0-test", socketPath: "/tmp/x.sock", vaultName: "test",
-      enabledPlugins: () => [], getSettings: () => ({ readOnly: false, allowlist: [] }),
-    };
-    registerQuickAddTools(server, app, ctx);
-    const res = await server.tools.get("obsidian_quickadd_compile").handler({ dry_run: false });
-    assert.equal(res.isError, true);
-    assert.match(res.content[0].text, /^Error \[quickadd_unavailable\]/);
+    assert.match(await callWith({ settings: {}, saveSettings: async () => {} }), /^\[quickadd_unavailable\]/);
   });
 
   test("a typed refusal when quickadd.settings.choices is not an array", async () => {
-    const server = fakeServer();
-    const quickadd = { settings: { choices: "not an array" }, saveSettings: async () => {} };
-    const app = {
-      vault: { getMarkdownFiles: () => [] },
-      metadataCache: { getFileCache: () => null, getFirstLinkpathDest: () => null },
-      plugins: { plugins: { quickadd } },
-    };
-    const ctx = {
-      pluginVersion: "0.0.0-test", socketPath: "/tmp/x.sock", vaultName: "test",
-      enabledPlugins: () => [], getSettings: () => ({ readOnly: false, allowlist: [] }),
-    };
-    registerQuickAddTools(server, app, ctx);
-    const res = await server.tools.get("obsidian_quickadd_compile").handler({ dry_run: false });
-    assert.equal(res.isError, true);
-    assert.match(res.content[0].text, /^Error \[quickadd_unavailable\]/);
+    assert.match(await callWith({ settings: { choices: "not an array" }, saveSettings: async () => {} }), /^\[quickadd_unavailable\]/);
   });
 });
 
-describe("obsidian_quickadd_compile: path allowlist", () => {
-  test("refuses outright while a path allowlist is active, before enumerating anything", async () => {
-    const { handler, getMarkdownFilesCalls, saveSettingsCalls } = build({
-      notes: [macroNote("Choices/Stamp title.md", "Stamp title", "stamp-title")],
-      links: { "stamp-title": "Scripts/stamp-title.md" },
-      settings: { allowlist: ["Some/Path"] },
-    });
-    const res = await handler({ dry_run: true });
-    assert.equal(res.isError, true);
-    assert.match(res.content[0].text, /^Error \[out_of_allowlist\]/);
-    // Nothing ran: not even the vault enumeration the refusal exists to prevent.
-    assert.deepEqual(getMarkdownFilesCalls, []);
-    assert.deepEqual(saveSettingsCalls, []);
-  });
-
-  test("the refusal also applies to dry_run: false", async () => {
-    const { handler, getMarkdownFilesCalls } = build({ settings: { allowlist: ["Some/Path"] } });
-    const res = await handler({ dry_run: false });
-    assert.equal(res.isError, true);
-    assert.match(res.content[0].text, /^Error \[out_of_allowlist\]/);
-    assert.deepEqual(getMarkdownFilesCalls, []);
+describe("path allowlist — HOST-owned since the satellite extraction", () => {
+  // The old in-tool refusal moved to the host: a mutating external tool whose
+  // args carry no recognized path field is blocked outright while an
+  // allowlist is active (external-tools.ts), which is this tool exactly. The
+  // satellite must carry NO allowlist logic of its own — one owner, no
+  // second, subtly-different refusal. Pinned as a source property.
+  test("the satellite has zero allowlist logic; its args carry no path key (so the host's block applies)", async () => {
+    const fs = await import("node:fs");
+    const src = fs.readFileSync(new URL("../src/tool.ts", import.meta.url), "utf8");
+    // Code-level: no allowlist machinery — no refusal helper, no settings
+    // read. (Comments and the tool DESCRIPTION may — should — explain the
+    // host's ownership, so plain-word scanning would be wrong here.)
+    assert.ok(!/allowlistRefusal|settings\.allowlist|getSettings|GuardSettings/.test(src), "no allowlist code in the satellite — the host owns the refusal");
+    const { buildCompileTool } = await import("../src/tool.ts");
+    const spec = buildCompileTool({});
+    const props = Object.keys(spec.inputSchema ?? {});
+    for (const p of props) {
+      assert.ok(!["path", "from", "to", "paths", "file", "files", "folder", "folder_path"].includes(p), `input '${p}' must not be a recognized path key — the host's pathless-mutating-tool block is the allowlist story`);
+    }
+    assert.notEqual(spec.readOnly, true, "the tool must register as MUTATING or the host's block (and queue/journal) would not apply");
   });
 });
 
