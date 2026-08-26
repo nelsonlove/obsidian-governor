@@ -204,7 +204,6 @@ const INTEGRATIONS: McpSurfaceRow[] = [
   // A Templater template is code; its output cannot be inspected before it runs.
   { tool: "obsidian_create_note_from_template", readOnly: false, module: "core", distribution: "private", paths: ["template_path", "target_path"], postcondition: "Create a note by executing a Templater template.", gate: "app.plugins.plugins['templater-obsidian'] loaded" },
   { tool: "obsidian_import_apple_notes", readOnly: false, module: "core", distribution: "private", paths: ["output_folder"], postcondition: "Drive the Importer plugin's Apple Notes import headlessly into a folder.", gate: "app.plugins.plugins['obsidian-importer'] loaded + version in KNOWN_GOOD_IMPORTER_VERSIONS" },
-  { tool: "obsidian_quickadd_compile", readOnly: false, module: "core", distribution: "private", refusesUnderScope: true, postcondition: "Compile QuickAdd choice notes into QuickAdd's live configuration.", gate: "runtime: QuickAdd plugin present" },
 ];
 
 // ── the official Obsidian CLI proxy ──────────────────────────────────────────

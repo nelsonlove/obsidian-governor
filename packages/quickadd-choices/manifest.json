@@ -1,0 +1,9 @@
+{
+  "id": "quickadd-choices",
+  "name": "QuickAdd Choices",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "QuickAdd choices as markdown notes: compiles Macro/Template/Capture/Multi choice notes into QuickAdd's live config, published as an MCP tool through the vault-mcp host.",
+  "author": "Nelson Love",
+  "isDesktopOnly": true
+}
