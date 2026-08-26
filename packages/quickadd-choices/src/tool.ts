@@ -731,6 +731,13 @@ export function buildCompileTool(app: App): SdkToolSpec {
       dry_run: z.boolean().describe("If true, report the would-be diff and errors without writing anything."),
     },
     handler: async (args: Record<string, unknown>) => {
+      // Schema validation enforces a boolean dry_run at the host — this is
+      // the belt (review of #363): if validation is ever bypassed, a missing
+      // or non-boolean dry_run REFUSES rather than silently taking the
+      // mutating path. The dangerous direction is opt-in only.
+      if (typeof args.dry_run !== "boolean") {
+        refuse("invalid_arguments", "dry_run is required and must be a boolean — pass dry_run: true first to inspect the would-be diff.");
+      }
       const dry_run = args.dry_run === true;
       // app.plugins is not in the public obsidian types — cast required.
       const quickadd = (app as any).plugins?.plugins?.quickadd;

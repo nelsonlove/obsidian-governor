@@ -234,13 +234,20 @@ test("F7: destructiveHint:true overrides RW base and is reflected in registered 
 
 // ── F3: allowlist bypass prevention ──────────────────────────────────────────
 
-test("F3: mutating tool with unrecognized args blocked when allowlist is active", async () => {
-  const entries = [{ ownerId: "p", toolName: "p_tool", spec: spec("tool") }];
+test("F3: mutating tool with unrecognized args blocked when allowlist is active — and the publisher's handler NEVER RUNS", async () => {
+  // The refuses-before-anything property the quickadd-choices satellite (and
+  // every pathless mutating publisher) relies on: the block precedes the
+  // handler call, so nothing the publisher would have done — vault
+  // enumeration, config writes — has happened when the refusal returns
+  // (review of #363: the old in-tool tests pinned this; the host now owns it).
+  let handlerRan = 0;
+  const entries = [{ ownerId: "p", toolName: "p_tool", spec: { ...spec("tool"), handler: () => { handlerRan++; return { ok: 1 }; } } }];
   const server = fakeServer();
   registerExternalTools(server, fakeApp(["p"]), fakeCtx({ readOnly: false, allowlist: ["ok"] }, entries));
   const res = await server.calls[0].handler({ note: "x" }); // "note" is not a recognized path key
   assert.equal(res.isError, true);
   assert.match(res.content[0].text, /blocked/);
+  assert.equal(handlerRan, 0, "the block precedes the publisher's handler — refused means nothing ran");
 });
 
 test("F3: mutating tool passes when allowlist is empty (no restriction)", async () => {

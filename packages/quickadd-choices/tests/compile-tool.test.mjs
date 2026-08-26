@@ -780,8 +780,13 @@ describe("path allowlist — HOST-owned since the satellite extraction", () => {
     const { buildCompileTool } = await import("../src/tool.ts");
     const spec = buildCompileTool({});
     const props = Object.keys(spec.inputSchema ?? {});
+    // The EXACT lists from the host's guard.ts (PATH_KEYS + ARRAY_PATH_KEYS,
+    // guard.ts:10-12) — keep in sync BY HAND when the guard's lists change; a
+    // made-up list here gave false comfort (review of #363: four entries the
+    // guard never recognized, six recognized keys that would have slipped).
+    const GUARD_PATH_KEYS = ["path", "from", "to", "target_path", "template_path", "subdir", "file_path", "output_folder", "paths", "refs"];
     for (const p of props) {
-      assert.ok(!["path", "from", "to", "paths", "file", "files", "folder", "folder_path"].includes(p), `input '${p}' must not be a recognized path key — the host's pathless-mutating-tool block is the allowlist story`);
+      assert.ok(!GUARD_PATH_KEYS.includes(p), `input '${p}' is a guard-recognized path key — it would flip the host from block-outright to scope-by-path and break the whole-surface-refuses story`);
     }
     assert.notEqual(spec.readOnly, true, "the tool must register as MUTATING or the host's block (and queue/journal) would not apply");
   });
