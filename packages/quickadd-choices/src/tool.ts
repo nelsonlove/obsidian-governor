@@ -1,20 +1,35 @@
-// packages/plugin/src/mcp/tools-quickadd.ts
+// packages/quickadd-choices/src/tool.ts
 //
-// obsidian_quickadd_compile — "QuickAdd macros as notes"
-// (docs/superpowers/specs/2026-08-18-quickadd-macros-as-notes-design.md).
-// Discovers Macro/UserScript, Template and Capture choice notes by
-// frontmatter, resolves their wikilinks, feeds the pure transform
-// (kernel/quickadd/transform.ts), and
-// applies the result via QuickAdd's own saveSettings() — vault-mcp is a
-// full Obsidian plugin, so no raw data.json parsing is needed.
+// `compile` (published by the host as `quickadd_choices_compile`) —
+// "QuickAdd choices as notes". Discovers Macro/UserScript, Template,
+// Capture and Multi choice notes by frontmatter, resolves their wikilinks,
+// feeds the pure transform (./transform.ts), and applies the result via
+// QuickAdd's own saveSettings() — this satellite is a full Obsidian plugin,
+// so no raw data.json parsing is needed.
+//
+// FIRST SATELLITE OF THE SUITE (suite-split design §6): this plugin
+// publishes its one tool to the vault-mcp host through vault-mcp-api, and
+// exists partly to prove that path. Consequences of the publishing contract,
+// each deliberate:
+//   * The ALLOWLIST refusal moved to the HOST: a mutating external tool
+//     whose arguments carry no recognized path field is blocked outright
+//     while a path allowlist is active — which is this tool exactly, so the
+//     old in-tool refusal is redundant and was dropped. Same net behavior,
+//     one owner.
+//   * Refusals THROW (`[code] detail` messages) — the host renders a thrown
+//     error as its error envelope. Partial compiles cannot set the envelope's
+//     isError bit through apiVersion 1 (the first real API gap this
+//     extraction surfaced — filed for apiVersion 2); the response data
+//     carries `partial: true` beside `errors` instead, and callers must
+//     check it.
+//   * The queue, journal, and kernel args still apply — external mutating
+//     tools ride the host's guarded registration like every built-in.
 //
 // The write is a SCOPED MERGE, never a full overwrite: only choices whose
 // id carries the qan: compiler-owned prefix (see transform.ts) are
 // replaced/added/removed. Every other choice in QuickAdd's live config —
-// hand-authored, or managed by another mechanism entirely (e.g. the vault's
-// own sync-quickadd-choices.js during the migration window) — passes
-// through completely untouched. This is what lets Stage A ship before
-// every choice in the vault is migrated to a note.
+// hand-authored, or managed by another mechanism entirely — passes through
+// completely untouched.
 //
 // saveSettings() alone writes data.json but does NOT make a choice runnable:
 // QuickAdd registers each command-bearing choice as an Obsidian command
@@ -23,14 +38,10 @@
 // over the compiler-owned set — see applyCommands below.
 
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { App } from "obsidian";
-import { ok, okError, codedError } from "./helpers.js";
-import type { ServerCtx } from "./tools-core.js";
-import { RW } from "./tools-vault-write.js";
-import type { GuardSettings } from "../guard.js";
-import { transformChoices, isCompilerOwnedId, deriveChoiceId } from "../kernel/quickadd/transform.js";
-import { EDITOR_COMMAND_TYPES } from "../kernel/quickadd/types.js";
+import type { SdkToolSpec } from "vault-mcp-api";
+import { transformChoices, isCompilerOwnedId, deriveChoiceId } from "./transform.js";
+import { EDITOR_COMMAND_TYPES } from "./types.js";
 import type {
   ChoiceNoteInput,
   MacroStepResolved,
@@ -45,7 +56,12 @@ import type {
   TemplateFieldFailed,
   CaptureTargetOk,
   CaptureTargetFailed,
-} from "../kernel/quickadd/types.js";
+} from "./types.js";
+
+/** A refusal the host renders as its error envelope: thrown, `[code] detail`. */
+function refuse(code: string, detail: string): never {
+  throw new Error(`[${code}] ${detail}`);
+}
 
 /** A compiler-owned CONTAINER coming back EMPTY while it previously held this
  *  many choices reads as a cold metadata cache, not a real change — see the
@@ -54,26 +70,6 @@ import type {
  *  it is compared against is the NESTED-AWARE total (`countAll`), not the
  *  number of top-level entries. */
 const MASS_REMOVAL_THRESHOLD = 3;
-
-/** obsidian_quickadd_compile is disabled while a path allowlist is active: it
- *  enumerates EVERY markdown file in the vault to find choice notes, and the
- *  config it writes can install a UserScript from anywhere in the vault. It
- *  takes no path argument, so the guard can never scope it, and there is no
- *  honest partial answer — like the fileclass module and the Dataview query
- *  tools, the whole surface refuses rather than silently under- or
- *  over-reaching. */
-function allowlistRefusal(settings: GuardSettings | null | undefined): { code: string; message: string } | null {
-  if (settings?.allowlist && settings.allowlist.length > 0) {
-    return {
-      code: "out_of_allowlist",
-      message:
-        "obsidian_quickadd_compile is disabled while a path allowlist is active: compiling enumerates every " +
-        "markdown file in the vault to discover choice notes, and it writes QuickAdd config that can install " +
-        "UserScripts from anywhere in the vault — neither half can be scoped to an allowlist.",
-    };
-  }
-  return null;
-}
 
 /** Extract the link target from a raw `[[target]]` or `[[target|alias]]`
  *  string. Returns null if the string isn't wikilink-shaped at all — a
@@ -682,12 +678,10 @@ function emptiedContainers(
   return emptied;
 }
 
-export function registerQuickAddTools(server: McpServer, app: App, ctx: ServerCtx): void {
-  server.registerTool(
-    "obsidian_quickadd_compile",
-    {
-      title: "Compile QuickAdd choice notes",
-      description:
+export function buildCompileTool(app: App): SdkToolSpec {
+  return {
+    name: "compile",
+    description:
         "Compiles every Macro/UserScript, Template, Capture, and Multi choice note (frontmatter quickadd-type: " +
         "macro, template, capture, or multi) into QuickAdd's live config. `dry_run: true` reports the would-be diff " +
         "(`added`/`changed`/`removed` compiler-owned choices) and any per-note errors without touching anything; " +
@@ -730,18 +724,21 @@ export function registerQuickAddTools(server: McpServer, app: App, ctx: ServerCt
         "claims EVERY other root-level choice note as a member — the largest blast radius any single note's " +
         "placement has in this compiler, and worth checking before putting one there. " +
         "A note with an unrecognized quickadd-type is simply out of scope here — " +
-        "silently skipped. Refuses outright while a path allowlist is active.",
-      inputSchema: {
-        dry_run: z.boolean().describe("If true, report the would-be diff and errors without writing anything."),
-      },
-      annotations: RW,
+        "silently skipped. Under an active path allowlist the HOST blocks this tool (it has no path argument " +
+        "to scope). A partial compile is flagged in the DATA — `partial: true` beside `errors` — check it; the " +
+        "response envelope alone does not distinguish partial from clean.",
+    inputSchema: {
+      dry_run: z.boolean().describe("If true, report the would-be diff and errors without writing anything."),
     },
-    async ({ dry_run }) => {
-      // FIRST, before anything else runs or is even enumerated: this tool
-      // cannot be honestly scoped to a subset of the vault.
-      const refusal = allowlistRefusal(ctx.getSettings());
-      if (refusal) return codedError(refusal.code, refusal.message);
-
+    handler: async (args: Record<string, unknown>) => {
+      // Schema validation enforces a boolean dry_run at the host — this is
+      // the belt (review of #363): if validation is ever bypassed, a missing
+      // or non-boolean dry_run REFUSES rather than silently taking the
+      // mutating path. The dangerous direction is opt-in only.
+      if (typeof args.dry_run !== "boolean") {
+        refuse("invalid_arguments", "dry_run is required and must be a boolean — pass dry_run: true first to inspect the would-be diff.");
+      }
+      const dry_run = args.dry_run === true;
       // app.plugins is not in the public obsidian types — cast required.
       const quickadd = (app as any).plugins?.plugins?.quickadd;
       if (
@@ -749,7 +746,7 @@ export function registerQuickAddTools(server: McpServer, app: App, ctx: ServerCt
         typeof quickadd.saveSettings !== "function" ||
         !Array.isArray(quickadd.settings.choices)
       ) {
-        return codedError("quickadd_unavailable", "QuickAdd is not installed, not enabled, or its API is unavailable.");
+        refuse("quickadd_unavailable", "QuickAdd is not installed, not enabled, or its API is unavailable.");
       }
 
       const inputs = collectChoiceNotes(app);
@@ -787,8 +784,9 @@ export function registerQuickAddTools(server: McpServer, app: App, ctx: ServerCt
       // guard weighs. `removed.length` is only the top-level entry count.
       const removedTotal = countAll(removedEntries.map((p) => p.choice));
 
-      const respond = (data: Record<string, unknown>) =>
-        result.errors.length > 0 ? okError(data) : ok(data);
+      // apiVersion 1 cannot set the envelope's isError bit on a returned
+      // result, so the partial-compile signal lives in the DATA (see header).
+      const respond = (data: Record<string, unknown>) => ({ ...data, partial: result.errors.length > 0 });
 
       if (dry_run) {
         return respond({
@@ -838,14 +836,14 @@ export function registerQuickAddTools(server: McpServer, app: App, ctx: ServerCt
             removedTotal > removed.length
               ? `, ${removedTotal} choices in total once everything nested inside them is counted`
               : "";
-          return codedError(
+          refuse(
             "suspicious_mass_removal",
             `Refusing to apply: this compile found 0 choice notes while ${removed.length} top-level compiler-owned ` +
               `choices (${removed.map((r) => r.name ?? r.id).join(", ")}) would be removed${nested}.` + tail,
           );
         }
         const which = emptied.map((e) => `"${e.name ?? e.id}" (${e.lost})`).join(", ");
-        return codedError(
+        refuse(
           "suspicious_mass_removal",
           `Refusing to apply: this compile kept ${emptied.length} compiler-owned Multi ` +
             `${emptied.length === 1 ? "choice" : "choices"} but discovered no members for ` +
@@ -882,8 +880,8 @@ export function registerQuickAddTools(server: McpServer, app: App, ctx: ServerCt
         removed,
         errors: result.errors,
       });
-    }
-  );
+    },
+  };
 }
 
 /** Deregister then re-register the compiler-owned Obsidian commands. Returns
@@ -914,7 +912,7 @@ function applyCommands(
     for (const choice of fresh) quickadd.addCommandForChoice(choice);
     return true;
   } catch (e) {
-    console.error("governor: QuickAdd command (de)registration failed after a compile", e);
+    console.error("quickadd-choices: QuickAdd command (de)registration failed after a compile", e);
     return false;
   }
 }

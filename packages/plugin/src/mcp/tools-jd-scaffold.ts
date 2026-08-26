@@ -9,7 +9,7 @@
 //
 // Registered as a proper `mutating: true` capability module through
 // modules-mount.ts (see builtinModules), NOT hand-registered in server.ts —
-// unlike tools-scheme-write.ts/tools-survey.ts/tools-quickadd.ts, these three
+// unlike tools-scheme-write.ts/tools-survey.ts, these three
 // tools mutate real vault NOTES, not another plugin's config, so nothing
 // blocks them from going the module-host route and picking up its free
 // settings-tab enable/disable toggle. That route means this file takes an
