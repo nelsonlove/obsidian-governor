@@ -10,14 +10,14 @@ The FULL set is locked by `tests/tool-inventory.test.mjs`: the names documented
 here must equal the names registered in source, both directions, or the suite
 fails (the fs-expressible and scheme sub-locks from #25/task-6 still apply).
 
-**Count summary:** 17 fs-expressible + 44 always-live + 10 module-mounted
-(default enabled, settings-toggleable) = **71 base** tools, plus up to
+**Count summary:** 17 fs-expressible + 43 always-live + 10 module-mounted
+(default enabled, settings-toggleable) = **70 base** tools, plus up to
 6 conditional integration tools, 1 Importer-plugin-conditional import tool
 (`obsidian_import_apple_notes`), 5 CLI-binary-conditional dedicated tools
 (`obsidian_note_history`, `obsidian_note_diff`, `obsidian_base_create`,
 `obsidian_plugin_install`, `obsidian_plugin_uninstall`), and 1 settings-gated
 CLI-conditional tool (`obsidian_cli`, default OFF)
-= **up to 84 total**.  The 3 Code Mode meta-tools are an alternative
+= **up to 83 total**.  The 3 Code Mode meta-tools are an alternative
 per-connection surface and are not counted (a session sees one surface or the
 other, never both).  Not counted here (outside the locked `obsidian_*` family):
 the always-on `governance_submit_revision` + `governance_revisions` (2 tools, see their section below),
@@ -127,16 +127,14 @@ Claude Code round trip).
 | `obsidian_survey_status` | Report whether a note's `## Contents (Filesystem)` section is stale relative to its mirror directory. Read-only |
 | `obsidian_survey_slot` | Regenerate the section (bare skeleton, or pass `snapshot_body` for pre-written prose) and stamp `survey:` frontmatter. `dry_run: true` (mandatory, no default) reports the plan only |
 
-### `tools-quickadd.ts` — `registerQuickAddTools` (1 tool, "QuickAdd macros as notes")
+### QuickAdd choices — EXTRACTED to the `quickadd-choices` satellite plugin
 
-Registered directly in `server.ts`, alongside `registerSchemeWriteTools` — same
-reason: this tool mutates another plugin's config (QuickAdd's own `data.json`,
-applied via QuickAdd's own `saveSettings()`), not a vault note, so it cannot go
-through the module host (`modules-mount.ts`'s `registerAll` gate refuses any
-tool whose `readOnlyHint !== true`).
-
-| Tool name | Description |
-|---|---|
+The former obsidian-quickadd-compile tool (one tool) moved to
+`packages/quickadd-choices` in the suite split's first satellite extraction:
+it now publishes as `quickadd_choices_compile` through `vault-mcp-api`, like
+any third-party plugin, and is therefore no longer part of this inventory —
+external tools are inventoried as a mechanism (see `external-tools.ts`),
+never as per-tool rows here.
 
 ### `tools-write-notes.ts` — `registerWriteNotesTool` (1 tool, kernel B1)
 
@@ -609,7 +607,6 @@ this historical snapshot.
 | `packages/plugin/src/mcp/tools-core.ts` | `registerCoreTools` | 2 always-live |
 | `packages/plugin/src/mcp/tools-vault-write.ts` | `registerVaultWriteTools` | 2 always-live |
 | `packages/plugin/src/mcp/tools-scheme-write.ts` | `registerSchemeWriteTools` | 3 always-live |
-| `packages/plugin/src/mcp/tools-quickadd.ts` | `registerQuickAddTools` | 1 always-live |
 | `packages/plugin/src/mcp/tools-complementary.ts` | `registerComplementaryTools` | 9 always-live |
 | `packages/plugin/src/mcp/tools-nav.ts` | `registerNavTools` | 11 always-live |
 | `packages/plugin/src/mcp/tools-locks.ts` | `registerLockTools` | 4 always-live |
