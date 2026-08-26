@@ -5,7 +5,6 @@ import { registerCoreTools, type ServerCtx } from "./tools-core.js";
 import { registerVaultWriteTools } from "./tools-vault-write.js";
 import { registerSchemeWriteTools } from "./tools-scheme-write.js";
 import { registerSurveyTools } from "./tools-survey.js";
-import { registerQuickAddTools } from "./tools-quickadd.js";
 import { registerComplementaryTools } from "./tools-complementary.js";
 import { registerNavTools } from "./tools-nav.js";
 import { registerIntegrationTools } from "./tools-integrations.js";
@@ -500,12 +499,11 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   registerSurveyTools(server, app, {
     getSettings: () => ctx.getSettings(),
   });
-  // ── QuickAdd macros as notes, Stage A (#quickadd-macros-as-notes) ──────────
-  // Compiles Macro/UserScript choice notes into QuickAdd's own config via
-  // saveSettings() — mutates another plugin's config, not a vault note, so
-  // same as registerSchemeWriteTools above: cannot go through modules-mount.ts
-  // (readOnlyHint !== true is refused there), registers directly here instead.
-  registerQuickAddTools(server, app, ctx);
+  // "QuickAdd choices as notes" EXTRACTED (suite-split, first satellite):
+  // it now lives in packages/quickadd-choices, publishing
+  // `quickadd_choices_compile` through vault-mcp-api like any third-party
+  // plugin. The execution seam (quickadd-choice.ts, running a choice) stays
+  // here — it serves obsidian_run_command and triage, not authoring.
   registerComplementaryTools(server, app, ctx);
   // ctx: obsidian_list_bookmarks enumerates paths the human bookmarked, which
   // is another argument-less read of vault structure.

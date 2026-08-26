@@ -7,7 +7,7 @@ import {
   deriveMacroId,
   deriveStepId,
   isCompilerOwnedId,
-} from "../src/kernel/quickadd/transform.ts";
+} from "../src/transform.ts";
 
 function userscriptStep(overrides = {}) {
   return { kind: "userscript", ok: true, scriptPath: "Scripts/stamp-title.md", settings: {}, ...overrides };
