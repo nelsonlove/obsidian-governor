@@ -12,8 +12,32 @@
 // revoked session is evidence about the past, and a new session is cheap.
 // Expiry is decided AT USE (dequeue, admission) against a caller-supplied
 // clock — no timers, nothing here reads the wall clock.
+//
+// HOST-SIDE since the suite split's S2 (condition 7, ruled 2026-08-27: "the
+// HOST keeps minting"). A session is TRANSPORT state — the host is the only
+// thing that knows a connection began, it computes the connection's scope
+// digest, and it closes the session when the socket drops. So the record, its
+// lifecycle transitions and its clock-expiry floor live here in the host's
+// kernel, and `SessionV1` is a published contract the governance provider
+// CONSUMES rather than owns. That is what lets `ServerCtx` name zero provider
+// types. (S3 promotes this module physically into `@vault-mcp/core`, where
+// two plugin artifacts can both import it.)
+//
+// What the PROVIDER owns is REFUSAL: revocation state, answered through the
+// seam's refusal-shaped session hook (`registerSessionRefusal`, mcp/seam.ts).
+// The host never asks a provider for permission — only whether it wants to
+// refuse — and an absent provider constrains nothing.
 
-import { mintId, type SessionId } from "../contracts/ids.js";
+import { uuidv7 } from "../uuidv7.js";
+
+// The branded session identifier. Declared HERE rather than imported from the
+// provider's `contracts/ids.ts`: `SessionId` was used in that module and in
+// this one only, so moving the session contract host-side moved its brand with
+// it rather than leaving the host reaching into provider internals for a type.
+// The RUNTIME form is unchanged — `mintId("session", …)` was `uuidv7(ms, rand)`
+// with a type assertion, and so is this.
+declare const brand: unique symbol;
+export type SessionId = string & { readonly [brand]: "session" };
 
 /**
  * How long a session lives without explicit closure. Generous on purpose: the
@@ -97,7 +121,7 @@ export function openSession(input: OpenSessionInput, now: number, rand?: Uint8Ar
   if (!(ttl > 0)) throw new Error(`session ttl must be positive, got ${ttl}`);
   return {
     schema: "governor.session/v1",
-    id: mintId("session", now, rand),
+    id: uuidv7(now, rand) as SessionId,
     vaultId: input.vaultId,
     replicaId: input.replicaId,
     actor: { connection: input.actor.connection, clientClaim: input.actor.clientClaim },
@@ -125,6 +149,36 @@ export function isLive(session: SessionV1, now: number): boolean {
 export function livenessOf(session: SessionV1, now: number): SessionStatus {
   if (session.status !== "open") return session.status;
   return now < session.expiresAt ? "open" : "expired";
+}
+
+/**
+ * THE HOST'S OWN FLOOR at dequeue: a typed refusal when this connection's
+ * session has run out, or `null` when it has not.
+ *
+ * Refusal-shaped rather than boolean for the same reason the seam's session
+ * hook is (condition 2): every answer on this path is either a refusal or
+ * silence, and a type that can also say YES is a type someone can eventually
+ * talk into saying yes. `null` here means "the host has nothing to add", which
+ * is exactly what it means coming back from the seam — so server.ts composes
+ * the two by taking the first refusal, and neither can un-refuse the other.
+ *
+ * Pure: `now` is supplied, no store is read, and no session at all is not an
+ * error. Expiry needs no writer and no durable record to have HAPPENED, which
+ * is what lets a host with no governance provider installed still stop
+ * honouring a session that ran out while its connection stayed open.
+ */
+export function expiryRefusal(
+  session: SessionV1 | null,
+  now: number
+): { code: string; detail: string; status: SessionStatus } | null {
+  if (!session) return null;
+  if (isLive(session, now)) return null;
+  const status = livenessOf(session, now);
+  return {
+    code: "session_not_live",
+    detail: `this connection's session (${session.id}) is ${status}; reconnect to open a new session`,
+    status,
+  };
 }
 
 /**

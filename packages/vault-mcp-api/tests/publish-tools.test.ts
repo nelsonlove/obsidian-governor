@@ -28,7 +28,6 @@ function fakeApi(apiVersion = 1) {
     calls, unregisteredCount: () => unregistered,
     apiVersion,
     registerTools: (owner: string, tools: Array<Record<string, unknown>>) => { calls.push({ owner, tools }); return () => { unregistered += 1; }; },
-    unregisterTools: () => {},
   };
 }
 

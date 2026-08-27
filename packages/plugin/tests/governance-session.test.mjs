@@ -20,7 +20,7 @@ import {
   expireSession,
   SessionNotLiveError,
   SESSION_TTL_MS,
-} from "../src/governor/kernel/sessions/session.ts";
+} from "../src/kernel/sessions/session.ts";
 import { createSessionStore, foldSessionEvents } from "../src/governor/kernel/sessions/session-store.ts";
 import { isUuidV7 } from "../src/governor/kernel/contracts/ids.ts";
 
@@ -222,10 +222,10 @@ describe("session liveness at dequeue — behavioral, not just a source pin", as
   const RW_DEF = { title: "w", description: "", annotations: { readOnlyHint: false } };
   const ACTOR = { transport: "mcp", connection: "c-1" };
 
-  function fixture(liveness) {
+  function fixture(sessionRefusal) {
     const kernel = new Kernel(new WriteQueue(1000), new WriteJournal(fakeAdapter(), "dir/journal"), null, new IdempotencyStore(), new LockStore());
     const seen = [];
-    const guarded = makeGuarded({ getSettings: () => ({ readOnly: false, allowlist: [] }), kernel, actor: () => ACTOR, sessionLive: liveness });
+    const guarded = makeGuarded({ getSettings: () => ({ readOnly: false, allowlist: [] }), kernel, actor: () => ACTOR, sessionRefusal });
     const wrapped = guarded(withKernelArgs({ ...RW_DEF, inputSchema: { path: z.string() } }), async (args) => {
       seen.push(args);
       return { content: [{ type: "text", text: "ok" }] };
@@ -234,9 +234,12 @@ describe("session liveness at dequeue — behavioral, not just a source pin", as
   }
 
   test("a mutation whose session died refuses at dequeue with session_not_live — the handler never runs", async () => {
-    // Async liveness, as the production path is: the check consults the
-    // durable store, where a human's revocation lands.
-    const { seen, call } = fixture(async () => ({ live: false, status: "revoked", sessionId: "s-1" }));
+    // Async, as the production path is: server.ts composes the host's own
+    // expiry floor with whatever the governance provider says through the seam.
+    const { seen, call } = fixture(async () => ({
+      code: "session_not_live",
+      detail: "this connection's session (s-1) is revoked; reconnect to open a new session",
+    }));
     const res = await call({ path: "A.md" });
     assert.ok(res.isError, "refused");
     assert.match(res.content[0].text, /session_not_live/);
@@ -244,11 +247,24 @@ describe("session liveness at dequeue — behavioral, not just a source pin", as
     assert.equal(seen.length, 0, "the handler never executed");
   });
 
-  test("a live session's mutation proceeds untouched", async () => {
-    const { seen, call } = fixture(async () => ({ live: true, status: "open", sessionId: "s-1" }));
+  test("a live session's mutation proceeds untouched — null is silence, and silence lets it through", async () => {
+    const { seen, call } = fixture(async () => null);
     const res = await call({ path: "A.md" });
     assert.ok(!res.isError);
     assert.equal(seen.length, 1);
+  });
+
+  test("the refusal is REFUSAL-SHAPED — the guard renders whatever code and detail it is handed", async () => {
+    // Condition 2's shape, behaviourally: the check cannot express an allow, so
+    // whatever it returns is a refusal and the guard's only job is to render
+    // it. A provider refusing for a reason the host never heard of still stops
+    // the write, and the agent still gets a coded error it can act on.
+    const { seen, call } = fixture(() => ({ code: "mandate_exhausted", detail: "budget spent; ask for a new mandate" }));
+    const res = await call({ path: "A.md" });
+    assert.ok(res.isError);
+    assert.match(res.content[0].text, /Error \[mandate_exhausted\]/);
+    assert.match(res.content[0].text, /budget spent/);
+    assert.equal(seen.length, 0);
   });
 
   test("no session machinery at all means no check — tests and embeds keep working", async () => {
@@ -269,7 +285,7 @@ describe("session wiring — pinned, because unwired machinery is the known fail
     assert.match(server, /openSession\(/, "the connection opens a session");
     assert.match(server, /sessionId: \(\) => session\?\.id \?\? null/, "the executor learns the session id");
     assert.match(server, /session: session\.id/, "the journal actor carries it");
-    assert.match(server, /sessionLive,/, "the dequeue liveness check is wired into guardedOpts");
+    assert.match(server, /sessionRefusal,/, "the dequeue session refusal is wired into guardedOpts");
     assert.match(server, /onclose/, "the transport close ends the session");
   });
 
@@ -280,11 +296,22 @@ describe("session wiring — pinned, because unwired machinery is the known fail
     assert.match(main, /journalHead: \(\) => journalHeadMarker\(\)/, "the base-state head marker is real, not a null stub");
   });
 
-  test("the dequeue liveness check consults the STORE — revocation must reach a live connection", () => {
+  test("the dequeue check still reaches the STORE — through the seam, because revocation must reach a live connection", () => {
     // The first draft checked only the closure-captured session object, whose
     // status nothing ever mutates — a store-level revoke would never have
-    // reached it, and only wall-clock expiry could refuse.
+    // reached it, and only wall-clock expiry could refuse. S2 kept that
+    // property while moving the store read to its owner: the HOST keeps the
+    // expiry floor over its own record (it minted it, and expiry needs no
+    // store), and the PROVIDER answers revocation from the store through the
+    // seam's refusal hook. Both halves are pinned, because either one alone
+    // would silently lose a refusal the other used to make.
     const server = fs.readFileSync(new URL("../src/mcp/server.ts", import.meta.url), "utf8");
-    assert.match(server, /await ctx\.sessions\.get\(session\.id\)/, "sessionLive re-reads the folded store state");
+    assert.match(server, /expiryRefusal\(session, now\)/, "the host keeps its own expiry floor");
+    assert.match(server, /ctx\.seam\?\.refuseSession\(/, "and asks the seam for anything else");
+    assert.ok(!server.includes("ctx.sessions.get("), "the host no longer reads the store to ask permission");
+
+    const main = fs.readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");
+    assert.match(main, /registerSessionRefusal\(/, "the provider registers the refusal");
+    assert.match(main, /sessionStore\.get\(sessionId\)/, "and answers it from the folded store state, where a revoke lands");
   });
 });

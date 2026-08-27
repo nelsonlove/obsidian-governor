@@ -17,7 +17,6 @@ import { registerLockTools } from "./tools-locks.js";
 import { registerUidTools } from "./tools-uid.js";
 import { registerPendingReviewTools, obsidianPendingReviewSource } from "./tools-pending-review.js";
 import { registerGovernanceRevisionTool, registerGovernanceRevisionsListTool } from "./tools-governance-revision.js";
-import { registerMandateTools } from "./tools-governance-mandate.js";
 import { registerLinkTools, obsidianLinkSource } from "./tools-links.js";
 import { registerConformanceDebtTools, registerConformanceDebtRenderTool } from "./tools-conformance-debt.js";
 import { obsidianDebtRenderSource } from "./obsidian-debt-source.js";
@@ -33,6 +32,7 @@ import { obsidianBasesSource } from "./obsidian-bases-source.js";
 import { obsidianJdScaffoldSource } from "./obsidian-jd-scaffold-source.js";
 import { registerCodeModeTools, makeCaptureRegister, type CapturedRegistry } from "./tools-code-mode.js";
 import { makeGuarded, resolveGuardedPath, withKernelArgs } from "./guarded.js";
+import { reportCompletedWrite } from "./seam.js";
 import { sealUnguardedRegistration } from "./seal-registration.js";
 import { visiblePaths } from "../guard.js";
 import type { JournalActor } from "../kernel/index.js";
@@ -44,13 +44,11 @@ import { makeRegistry, DEFAULT_SCHEMES } from "../kernel/scheme/registry.js";
 import { buildMcpActionRegistry } from "../kernel/operations/mcp-registry.js";
 import { createOperationExecutor } from "../kernel/operations/executor.js";
 import { createCapture } from "../kernel/observations/capture.js";
-import { openSession, isLive, livenessOf, type SessionV1 } from "../governor/kernel/sessions/session.js";
-import { deriveClasses, requireClassesCovered, authorityKeysDiffer, frontmatterUid } from "../governor/kernel/proposals/class-firewall.js";
-import { buildProposalSubjectFromOperation } from "../governor/kernel/proposals/proposal-builder.js";
-import { openProposal } from "../governor/kernel/proposals/proposal.js";
-import { productionStampOf } from "../governor/kernel/mandates/policy.js";
-import { NOTE_WRITE_V1 } from "../kernel/operations/actions/note-write.js";
-import { digestBytes } from "../governor/kernel/contracts/digest.js";
+import { openSession, expiryRefusal, type SessionV1 } from "../kernel/sessions/session.js";
+// The session scope digest is the HOST's own assertion about a connection
+// (condition 7: the host mints), so these two contracts are consulted here.
+// They still live in the provider subtree — the SEAM does not need them, and
+// promoting them into `@vault-mcp/core` is S3's contract-publishing package.
 import { canonicalize } from "../governor/kernel/contracts/canonical-json.js";
 import { digestUtf8 } from "../governor/kernel/contracts/digest.js";
 import { isExcludedTerritory } from "../governor/wiring/territories.js";
@@ -78,7 +76,34 @@ export interface BuildOpts {
    * never be mislabeled.
    */
   clientLabel?: string;
+  /**
+   * Tool registrars supplied by the governance PROVIDER, from the composition
+   * root (main.ts). They arrive as closures over the provider's own stores, so
+   * `ServerCtx` carries no provider port and names no provider type — which is
+   * S2's exit criterion, and the shape S3 replaces with the provider publishing
+   * those tools itself through `vault-mcp-api`.
+   *
+   * This is NOT a seam hook class (see mcp/seam.ts): contributing a tool is the
+   * apiVersion-1 `registerTools` capability, which confers nothing — every
+   * registration here still lands at the guard/queue/journal interception point
+   * above, exactly like a host registration.
+   */
+  providerTools?: ProviderToolRegistrar[];
 }
+
+/**
+ * The per-CONNECTION facts a provider-supplied registrar cannot know from the
+ * composition root, because they only exist once a connection does. Everything
+ * else a provider tool needs (its stores, the settings) it closes over itself.
+ */
+export interface ProviderToolContext {
+  /** This connection's session id, or null when no session machinery is wired. */
+  sessionId(): string | null;
+  /** The journal actor's client label, when the build supplied one. */
+  clientLabel(): string | null;
+}
+
+export type ProviderToolRegistrar = (server: McpServer, ctx: ProviderToolContext) => void;
 
 // Per-connection id for the journal's actor block. Monotonic within a plugin
 // load; the load-time epoch keeps ids from colliding across plugin reloads.
@@ -157,30 +182,38 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   }
 
   /**
-   * Liveness for the dequeue check. The STORE is consulted, not only the
-   * closure-captured session object — revocation lands in the store (a human
-   * act against the durable record), and a check that never re-read it would
-   * let a revoked session's queued mutations keep executing, with only
-   * wall-clock expiry ever able to refuse. Store errors degrade to the
-   * in-memory view rather than blocking the queue.
+   * The dequeue refusal for this connection's session — consulted inside the
+   * kernel's queued closure, so `WRITE_TIMEOUT_MS` bounds it (condition 5).
+   *
+   * TWO refusers, and the split is the ruling (condition 7 — the host mints):
+   *
+   *   • The HOST's own floor: the session record it minted carries an expiry,
+   *     and expiry needs no writer and no store to have happened. A host with
+   *     no governance provider installed still stops acting under a session
+   *     that has run out — the TTL is transport hygiene, not governance.
+   *   • The PROVIDER's refusal, through the seam. Revocation is a human act
+   *     against the durable record, and the record's revocation state belongs
+   *     to whoever owns the review pane the human revoked in. So the host does
+   *     not re-read the store to ask permission; it asks the seam whether
+   *     anyone wants to refuse, and a `null` from an absent provider is not an
+   *     allow — it is silence, which the host's own floor has already spoken
+   *     for.
+   *
+   * The union of the two is exactly what the single store-reading check did
+   * before: expired ⇒ refused, revoked/closed ⇒ refused, otherwise proceed.
    */
-  const sessionLive = async () => {
-    if (!session) return { live: true, status: "open", sessionId: null };
+  const sessionRefusal = async (): Promise<{ code: string; detail: string } | null> => {
     const now = Date.now();
-    let current = session;
-    if (ctx.sessions) {
-      try {
-        current = (await ctx.sessions.get(session.id)) ?? session;
-      } catch {
-        /* degrade to the in-memory view */
+    const expired = expiryRefusal(session, now);
+    if (expired) {
+      // The expiry transition is recorded, not merely observed — the durable
+      // record should not say "open" about a session nothing will honour.
+      if (expired.status === "expired" && session && ctx.sessions) {
+        ctx.sessions.markExpired(session.id, now).catch(() => undefined);
       }
+      return { code: expired.code, detail: expired.detail };
     }
-    const live = isLive(current, now);
-    const status = livenessOf(current, now);
-    if (!live && status === "expired" && ctx.sessions) {
-      ctx.sessions.markExpired(session.id, now).catch(() => undefined);
-    }
-    return { live, status, sessionId: session.id };
+    return (await ctx.seam?.refuseSession(session?.id ?? null)) ?? null;
   };
 
   const actor = (): JournalActor => {
@@ -270,132 +303,26 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
       return { binding: `${a.connection}`, clientClaim: a.client ?? null };
     },
     sessionId: () => session?.id ?? null,
-    // Proposal production (WP6b-1). The executor decides WHEN (a completed
-    // operation); this decides WHETHER: the surface's action is the native
-    // write, the human turned history on, the store is wired, and the backend
-    // reported the write's exact bytes. Failures degrade — the write stands.
+    // Proposal production, now BEHIND THE SEAM (S2). The executor still
+    // decides WHEN — a completed operation — and the host still decides that
+    // the facts describe THIS operation. Everything after that is the
+    // governance provider's, running as a registered write observer
+    // (governor/wiring/write-observer.ts) that the host neither awaits nor
+    // reads a return value from.
+    //
+    // The write-facts slot and its attribution guard stay HERE because they
+    // protect the HOST's bookkeeping: the slot is a single-item mailbox filled
+    // by the backend and taken exactly once, and a mismatch means the facts
+    // belong to some other write. Handing mis-attributed bytes across the seam
+    // would manufacture a proposal about a write that did not happen, so the
+    // safe direction is to report NOTHING.
     propose: async (operation, _result, sources) => {
       const facts = writeFacts;
       writeFacts = null; // taken exactly once, for exactly this operation
-      if (!facts) return;
-      if (operation.action.id !== NOTE_WRITE_V1.id) return;
-      // Attribution guard: the facts must describe THE path this operation
-      // resolved. The slot's timing safety is a scheduling property (nothing
-      // awaits between the backend's report and this take today) — this check
-      // is the guarantee that outlives refactors: a mismatch means the facts
-      // belong to some other write, and the safe direction is to propose
-      // NOTHING rather than a record with the wrong operation id on it.
-      if (!sources.includes(facts.path)) {
-        console.warn(`[governor] write facts for '${facts.path}' do not match operation ${operation.id}'s sources; proposal skipped`);
-        return;
-      }
-      const st = ctx.getSettings();
-      if (st.historyEnabled !== true || !ctx.proposals) return;
-
-      // Class firewall (classification rule 5): classes DERIVED from the
-      // diff, declaration must cover them. pathChanged is false because this
-      // surface writes at a fixed path (a move is a different action);
-      // authority-key changes ARE derivable here — the accept guard refuses
-      // introducing/changing accepted keys, but REMOVING them or downgrading
-      // acceptance-status passes it and changes standing (review finding), so
-      // the diff is inspected rather than assumed clean. An authority-shaped
-      // diff fails coverage below and the proposal is skipped — the write
-      // stands; the legacy queue still governs it.
-      const dec = new TextDecoder();
-      const baseText = facts.baseBytes === null ? null : dec.decode(facts.baseBytes);
-      const proposedText = dec.decode(facts.proposedBytes);
-      const derived = deriveClasses({
-        baseBytes: facts.baseBytes,
-        proposedBytes: facts.proposedBytes,
-        pathChanged: false,
-        touchesAuthorityKeys: authorityKeysDiffer(baseText, proposedText),
-      });
-      requireClassesCovered(NOTE_WRITE_V1.changeClasses, derived);
-      if (derived.length === 0) return; // a byte-identical rewrite proposes nothing
-
-      // Identity: the uid from the EXACT written bytes first (the metadata
-      // cache lags a create), the cache for pre-existing uids, the honest
-      // path fallback last — never invented.
-      const uid = frontmatterUid(proposedText) ?? ctx.proposals.uidOf(facts.path);
-      const proposalSession = operation.sessionId ?? "no-session";
-      const now = Date.now();
-
-      // WP10b: the producer's mandate stamp. If this connection's session
-      // runs under a mandate and the write FITS it (productionStampOf — the
-      // pure decision, exhaustively pinned in its own suite), the subject
-      // carries the mandate id and the budgets are charged. An unfit write
-      // proposes UNSTAMPED — a mandate grants, it never blocks production —
-      // and any resolution failure degrades to unstamped with a console
-      // error, because a proposal is safe and losing one to mandate plumbing
-      // would not be.
-      let stampedMandateId: string | null = null;
-      let stampCharge: { mandateId: string; delta: { items: number; proposals: number; bytes: number } } | null = null;
-      try {
-        if (operation.sessionId && ctx.sessions && ctx.mandates) {
-          const sess = await ctx.sessions.get(operation.sessionId);
-          const governing = sess?.mandateId ?? null;
-          if (governing !== null) {
-            const mandate = await ctx.mandates.getMandate(governing);
-            const usage = await ctx.mandates.usageOf(governing);
-            const decision = productionStampOf(
-              mandate,
-              usage,
-              {
-                delegate: { sessionId: operation.sessionId, connection: connectionId, role: null },
-                notePath: facts.path,
-                changeClasses: derived,
-                transformation: { id: NOTE_WRITE_V1.id, version: String(NOTE_WRITE_V1.version) },
-                predicates: [{ id: "content-diff", version: "1" }],
-                action: { id: NOTE_WRITE_V1.id, version: String(NOTE_WRITE_V1.version) },
-                durability: "replayable",
-              },
-              facts.proposedBytes.byteLength,
-              now
-            );
-            stampedMandateId = decision.mandateId;
-            if (decision.mandateId !== null && decision.charge !== null) {
-              stampCharge = { mandateId: decision.mandateId, delta: decision.charge };
-            }
-          }
-        }
-      } catch (e) {
-        console.error("[governor] mandate stamp resolution failed; proposing unstamped", e);
-        stampedMandateId = null;
-        stampCharge = null;
-      }
-      const proposal = openProposal({ subject: buildProposalSubjectFromOperation({
-        vaultId: ctx.proposals.vaultId,
-        noteId: uid ?? `path:${facts.path}`,
-        path: facts.path,
-        pathSemanticallyRelevant: false,
-        base: facts.baseBytes === null ? null : digestBytes(facts.baseBytes),
-        proposed: digestBytes(facts.proposedBytes),
-        changeClasses: derived,
-        transformation: { id: NOTE_WRITE_V1.id, version: String(NOTE_WRITE_V1.version) },
-        predicates: [{ id: "content-diff", version: "1" }],
-        producingOperation: { id: operation.id, action: operation.action.id, actionVersion: operation.action.version },
-        observations: [], // a write's subject needs no read observation; capture is uncoupled (D16)
-        sessionId: proposalSession,
-        mandateId: stampedMandateId,
-      }), sessionId: proposalSession }, now);
-
-      // Snapshots FIRST, proposal second — a proposal without its recording is
-      // permanently unverifiable (base bytes die with the write; the review's
-      // HIGH finding), so a failed or out-of-scope recording skips the
-      // proposal rather than opening a dead one.
-      const recordingRef = await ctx.proposals.record(proposal.id, facts.path, facts.baseBytes, facts.proposedBytes);
-      if (recordingRef === null) return;
-      await ctx.proposals.open({ ...proposal, recordingRef }, now);
-      // The charge lands only after the stamped proposal durably opened —
-      // counted work is work that exists. A failed charge under-counts, which
-      // is LOUD here and healed by the door's own budget check (the belt).
-      if (stampCharge !== null && ctx.mandates) {
-        try {
-          await ctx.mandates.chargeAndObserve(stampCharge.mandateId, stampCharge.delta);
-        } catch (e) {
-          console.error("[governor] mandate budget charge after stamped proposal FAILED — usage is under-counted", e);
-        }
-      }
+      // Returns immediately: observers are dispatched off this path, so a
+      // provider that hangs or throws cannot cost the caller a write that has
+      // already landed (condition 5).
+      reportCompletedWrite(ctx.seam, facts, operation, sources, actor());
     },
     // The slot is cleared on EVERY close, completed or not — a write whose
     // operation was later judged failed (or a timeout's late settlement) must
@@ -418,7 +345,7 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
     kernel: ctx.kernel,
     actor,
     executor,
-    sessionLive,
+    sessionRefusal,
     // `jd:<address>` addressing at the interception point: same per-call
     // freshness as registerSchemeTools's own registry() below (a scheme
     // config edit lands live), and the same notes() source it uses.
@@ -586,24 +513,31 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
     },
     getSettings: () => ctx.getSettings(),
   });
-  // ── mandate negotiation (WP9): the agent's draft + list verbs ──────────────
-  // Draft is a MUTATING registration (read-only mode blocks negotiating
-  // authority; the queue and journal record the request); the listing is
-  // read-only. Both are candidates-only: activation has NO tool — it is the
-  // pane's gesture-gated control. Registered only when main.ts wired the
-  // mandate store; tests and bare embeds simply have no mandate surface.
-  if (ctx.mandates) {
-    const mandatesPort = ctx.mandates;
-    registerMandateTools(server, {
-      draft: (d, now) => mandatesPort.draft(d, now),
-      allDrafts: () => mandatesPort.allDrafts(),
-      allMandates: () => mandatesPort.allMandates(),
-      usageOf: (id) => mandatesPort.usageOf(id),
-      sessionId: () => session?.id ?? null,
-      client: () => opts.clientLabel ?? null,
-      now: () => Date.now(),
-      getSettings: () => ctx.getSettings(),
-    });
+  // ── the governance provider's own tools ────────────────────────────────────
+  // Mandate negotiation (WP9) is the standing example: draft is MUTATING
+  // (read-only mode blocks negotiating authority; the queue and journal record
+  // the request) and the listing is read-only, and both are candidates-only —
+  // activation has NO tool, it is the pane's gesture-gated control.
+  //
+  // They register through registrars the COMPOSITION ROOT supplies, not through
+  // a port on `ServerCtx`. That is S2's exit criterion made structural: the
+  // host's per-connection context named five provider types purely to carry the
+  // mandate store's verbs across, and a context that names provider types
+  // cannot be a host contract at S3. The registrars run through the patched
+  // `server.registerTool` above like everything else, so the guard, the queue,
+  // the journal and the kernel arguments bind unchanged.
+  const providerToolCtx: ProviderToolContext = {
+    sessionId: () => session?.id ?? null,
+    clientLabel: () => opts.clientLabel ?? null,
+  };
+  for (const contribute of opts.providerTools ?? []) {
+    try {
+      contribute(server, providerToolCtx);
+    } catch (e) {
+      // A degraded provider surface must not cost the connection — the module
+      // host's own convention, and the journal's.
+      console.error("[governor] provider tool registrar failed", e);
+    }
   }
   // ── capability modules: scope-provider + vocab + skills ────────────────────
   // Ruled decision #2 realized: the two capability modules register THROUGH

@@ -461,7 +461,9 @@ export function registerNavTools(server: McpServer, app: App, ctx: ServerCtx) {
     "obsidian_plugin_toggle",
     {
       title: "Enable or disable a community plugin",
-      description: "Enable or disable a community plugin by its ID. Returns {plugin_id, enabled}.",
+      description:
+        "Enable or disable a community plugin by its ID. Returns {plugin_id, enabled}. " +
+        "Refuses to disable this host plugin or a registered governance provider — do that from Obsidian settings.",
       inputSchema: {
         plugin_id: z.string().min(1).describe("Community plugin ID, e.g. 'dataview'."),
         enabled:   z.boolean().describe("true to enable, false to disable."),
@@ -476,6 +478,27 @@ export function registerNavTools(server: McpServer, app: App, ctx: ServerCtx) {
         // kind of rename a hardcoded "vault-mcp" here silently survives.)
         if (!enabled && plugin_id === PLUGIN_ID) {
           return fail(new Error(`refusing to disable ${PLUGIN_ID} via MCP (it hosts this connection); use Obsidian settings`));
+        }
+        // The SAME rule, extended to a registered governance provider (suite
+        // split, S2, condition 6 — the condition that most earns its keep under
+        // the §0 threat model). Post-split `governor` is just another plugin id,
+        // so `obsidian_plugin_toggle('governor', false)` becomes a one-call way
+        // for AN AGENT DOING CLEANUP to switch off the thing that reviews it —
+        // not by malice, but because a disabled-looking plugin looks like tidy
+        // work. A provider that currently holds a seam registration is by
+        // definition in service, so an agent may not switch it off; a human can,
+        // in Obsidian's own settings, which is where that decision belongs.
+        //
+        // Deliberately NOT the persisted latch (first-registration state kept
+        // across reloads, mutating tools refusing while a latched provider is
+        // absent): that defends against DELIBERATE removal by an adversary who
+        // can also just call `app.plugins.disablePlugin`, and it lives on
+        // `reference/hostile-threat-model`.
+        if (!enabled && (ctx.seam?.providerIds() ?? []).includes(plugin_id)) {
+          return fail(new Error(
+            `refusing to disable '${plugin_id}' via MCP: it is a registered governance provider for ${PLUGIN_ID}, ` +
+              `so disabling it would remove the review perimeter this session writes under. Use Obsidian settings.`
+          ));
         }
         // app.plugins.enablePlugin / disablePlugin are internal — not in public obsidian types.
         const plugins = (app as any).plugins;

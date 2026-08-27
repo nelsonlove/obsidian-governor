@@ -27,6 +27,8 @@ import { digestBytes } from "../src/governor/kernel/contracts/digest.ts";
 import { createActionRegistry } from "../src/kernel/operations/registry.ts";
 import { createOperationExecutor } from "../src/kernel/operations/executor.ts";
 import { buildMcpActionRegistry } from "../src/kernel/operations/mcp-registry.ts";
+import { createGovernanceSeam, reportCompletedWrite } from "../src/mcp/seam.ts";
+import { createProposalObserver } from "../src/governor/wiring/write-observer.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const enc = (s) => new TextEncoder().encode(s);
@@ -189,9 +191,22 @@ describe("content-diff@1 — the subject describes the actual bytes", () => {
   });
 });
 
-// ── the propose hook, through the real executor ──────────────────────────────
+// ── the seam round trip, through the real executor and the real observer ─────
+//
+// S2 turned this path into two halves that meet at the seam, so the test drives
+// BOTH real halves rather than a mirror of either: server.ts's host-side slot
+// take + attribution guard + `notifyWrite`, and the provider's real
+// `createProposalObserver`. A mirror of the producer here is exactly how a
+// producer and its test drift apart while both stay green.
+//
+// One consequence is visible in every test below: observers are dispatched OFF
+// the caller's result path (condition 5), so the write returns BEFORE the
+// proposal exists and each test settles the microtask queue before asserting.
+// That ordering is the property, not an inconvenience.
 
 describe("proposal production — a completed write becomes a durable proposal", () => {
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+
   function harness({ enabled = true, untracked = false, recordFails = false } = {}) {
     const r = createActionRegistry();
     r.register(NOTE_WRITE_V1);
@@ -199,17 +214,32 @@ describe("proposal production — a completed write becomes a durable proposal",
     r.validate();
 
     const store = createProposalStore(memoryIo());
-    // The server wiring's shape, minus Obsidian: slot set by the "backend",
-    // taken exactly once by propose (with the attribution guard), snapshots
-    // recorded before the proposal opens, slot cleared on every close.
-    let writeFacts = null;
     const recordings = [];
-    const record = async (proposalId, path, baseBytes, proposedBytes) => {
-      if (recordFails) throw new Error("gitdir on fire");
-      if (untracked) return null;
-      recordings.push({ proposalId, path, baseBytes, proposedBytes });
-      return `refs/governor/proposals/${proposalId}`;
-    };
+    const { seam, consult } = createGovernanceSeam();
+
+    // THE PROVIDER's half: the real producer, registered through the real seam.
+    seam.registerWriteObserver(
+      "governor",
+      createProposalObserver({
+        historyEnabled: () => enabled,
+        proposals: {
+          open: (proposal, now) => store.open(proposal, now),
+          uidOf: () => null,
+          vaultId: "vault-1",
+          record: async (proposalId, path, baseBytes, proposedBytes) => {
+            if (recordFails) throw new Error("gitdir on fire");
+            if (untracked) return null;
+            recordings.push({ proposalId, path, baseBytes, proposedBytes });
+            return `refs/governor/proposals/${proposalId}`;
+          },
+        },
+        now: () => T0,
+      })
+    );
+
+    // THE HOST's half, mirroring mcp/server.ts exactly: the slot the backend
+    // fills, taken exactly once, guarded by attribution, and reported across.
+    let writeFacts = null;
     const executor = createOperationExecutor({
       registry: r,
       actor: () => ({ binding: "c", clientClaim: null }),
@@ -218,45 +248,17 @@ describe("proposal production — a completed write becomes a durable proposal",
       propose: async (operation, _result, sources) => {
         const facts = writeFacts;
         writeFacts = null;
-        if (!facts) return;
-        if (operation.action.id !== NOTE_WRITE_V1.id) return;
-        if (!sources.includes(facts.path)) return;
-        if (!enabled) return;
-        const dec2 = new TextDecoder();
-        const derived = deriveClasses({
-          baseBytes: facts.baseBytes,
-          proposedBytes: facts.proposedBytes,
-          pathChanged: false,
-          touchesAuthorityKeys: authorityKeysDiffer(facts.baseBytes === null ? null : dec2.decode(facts.baseBytes), dec2.decode(facts.proposedBytes)),
-        });
-        requireClassesCovered(NOTE_WRITE_V1.changeClasses, derived);
-        if (derived.length === 0) return;
-        const subject = buildProposalSubjectFromOperation({
-          vaultId: "vault-1",
-          noteId: frontmatterUid(dec2.decode(facts.proposedBytes)) ?? `path:${facts.path}`,
-          path: facts.path,
-          pathSemanticallyRelevant: false,
-          base: facts.baseBytes === null ? null : digestBytes(facts.baseBytes),
-          proposed: digestBytes(facts.proposedBytes),
-          changeClasses: derived,
-          transformation: { id: NOTE_WRITE_V1.id, version: "1" },
-          predicates: [{ id: "content-diff", version: "1" }],
-          producingOperation: { id: operation.id, action: operation.action.id, actionVersion: operation.action.version },
-          observations: [],
-          sessionId: operation.sessionId ?? "no-session",
-          mandateId: null,
-        });
-        const proposal = openProposal({ subject, sessionId: operation.sessionId ?? "no-session" }, T0);
-        const ref = await record(proposal.id, facts.path, facts.baseBytes, facts.proposedBytes);
-        if (ref === null) return;
-        await store.open({ ...proposal, recordingRef: ref }, T0);
+        // The REAL host-side reporter, not a copy of it — the take-once slot is
+        // the only part server.ts keeps to itself, because it is a closure
+        // variable rather than a decision.
+        reportCompletedWrite(consult, facts, operation, sources, { transport: "mcp", connection: "c" });
       },
       onClose: () => {
         writeFacts = null;
       },
     });
     const setFacts = (f) => (writeFacts = f);
-    return { executor, store, setFacts, recordings };
+    return { executor, store, setFacts, recordings, settle };
   }
 
   const WRITE = { surface: { id: "obsidian_write_note" }, inputs: { path: "A.md", content: "new" } };
@@ -268,6 +270,7 @@ describe("proposal production — a completed write becomes a durable proposal",
       setFacts({ path: "A.md", baseBytes: enc("old"), proposedBytes: enc("new"), created: false });
       return { path: "A.md", created: false };
     });
+    await settle();
     const pending = await store.pending();
     assert.equal(pending.length, 1);
     const p = pending[0];
@@ -286,6 +289,7 @@ describe("proposal production — a completed write becomes a durable proposal",
       setFacts({ path: "A.md", baseBytes: enc("old"), proposedBytes: enc("new"), created: false });
       return "ok";
     });
+    await settle();
     assert.equal((await store.all()).length, 0);
   });
 
@@ -296,6 +300,7 @@ describe("proposal production — a completed write becomes a durable proposal",
       setFacts({ path: "A.md", baseBytes: enc("old"), proposedBytes: enc("new"), created: false });
       return "written";
     });
+    await settle();
     assert.equal(result, "written");
     assert.equal((await store.all()).length, 0);
   });
@@ -307,6 +312,7 @@ describe("proposal production — a completed write becomes a durable proposal",
       setFacts({ path: "SOMEWHERE-ELSE.md", baseBytes: enc("a"), proposedBytes: enc("b"), created: false });
       return "ok";
     });
+    await settle();
     assert.equal((await store.all()).length, 0, "a mis-attributed proposal is worse than none");
   });
 
@@ -324,6 +330,7 @@ describe("proposal production — a completed write becomes a durable proposal",
       });
       return "ok";
     });
+    await settle();
     assert.equal(result, "ok");
     assert.equal((await store.all()).length, 0, "an authority-class diff cannot ride a content declaration");
   });
@@ -335,6 +342,7 @@ describe("proposal production — a completed write becomes a durable proposal",
       setFacts({ path: "New.md", baseBytes: null, proposedBytes: enc("---\nuid: 0190-fresh\n---\nbody"), created: true });
       return "ok";
     });
+    await settle();
     const all = await store.all();
     assert.equal(all[0].subject.noteId, "0190-fresh", "a freshly-stamped uid is the identity from the first proposal");
   });
@@ -346,6 +354,7 @@ describe("proposal production — a completed write becomes a durable proposal",
       setFacts({ path: "A.md", baseBytes: null, proposedBytes: enc("x"), created: true });
       return "ok";
     });
+    await settle();
     assert.equal(result, "ok");
     assert.equal((await store.pending()).length, 0);
   });
@@ -357,6 +366,7 @@ describe("proposal production — a completed write becomes a durable proposal",
       setFacts({ path: "A.md", baseBytes: enc("same"), proposedBytes: enc("same"), created: false });
       return "ok";
     });
+    await settle();
     assert.equal((await store.pending()).length, 0);
   });
 
@@ -378,10 +388,11 @@ describe("proposal production — a completed write becomes a durable proposal",
   });
 
   test("the slot is taken exactly once — a following read cannot inherit a write's facts", async () => {
-    const { executor, store, setFacts } = harness();
+    const { executor, store, setFacts, settle } = harness();
     setFacts({ path: "A.md", baseBytes: enc("a"), proposedBytes: enc("b"), created: false });
     await executor.run(WRITE, async () => "one");
     await executor.run(WRITE, async () => "two"); // no new facts set
+    await settle();
     assert.equal((await store.all()).length, 1, "the second operation produced nothing from stale facts");
   });
 });
@@ -391,25 +402,47 @@ describe("proposal production — a completed write becomes a durable proposal",
 describe("wiring pins — the mechanism-exists-but-unwired lesson, again", () => {
   const read = (rel) => fs.readFileSync(path.join(HERE, "..", "src", rel), "utf8");
 
-  test("server.ts wires the slot, the gate, the firewall, and the store", () => {
+  test("server.ts reports write facts across the seam — and produces nothing itself", () => {
+    // S2 split this pin in two. The HOST keeps the slot and its attribution
+    // guard, because they protect the host's own bookkeeping; everything that
+    // decides what a write MEANS moved behind the seam.
     const server = read("mcp/server.ts");
     assert.match(server, /new ObsidianBackend\(app, visible, \(facts\) => \{/, "the backend reports write facts");
     assert.match(server, /writeFacts = null; \/\/ taken exactly once/, "the slot is take-once");
-    assert.match(server, /historyEnabled !== true \|\| !ctx\.proposals/, "production is gated on the human's setting");
-    assert.match(server, /requireClassesCovered\(NOTE_WRITE_V1\.changeClasses, derived\)/, "the firewall runs in production");
-    assert.match(server, /ctx\.proposals\.open\(/, "the proposal reaches the durable store");
-    assert.match(server, /touchesAuthorityKeys: authorityKeysDiffer\(/, "authority classification is derived from the bytes, never hardcoded");
-    assert.match(server, /sources\.includes\(facts\.path\)/, "the attribution guard binds facts to the operation's resolved path");
-    assert.match(server, /frontmatterUid\(proposedText\)/, "identity comes from the written bytes before the lagging cache");
     assert.match(server, /onClose: \(\) => \{\s*writeFacts = null;/, "the slot clears on EVERY close, not only completed ones");
+    // The attribution guard and the report itself are `reportCompletedWrite`
+    // (mcp/seam.ts), driven directly by this file's harness above and by
+    // tests/seam.test.mjs — so what is pinned here is only that server.ts calls
+    // it, which is the one line a source scan is the right instrument for.
+    assert.match(server, /reportCompletedWrite\(ctx\.seam, facts, operation, sources, actor\(\)\)/, "the facts cross the seam rather than becoming a proposal here");
+    // The negative half, which is the actual S2 claim: the transport no longer
+    // knows what a proposal is.
+    for (const gone of ["openProposal", "requireClassesCovered", "buildProposalSubjectFromOperation", "productionStampOf", "ctx.proposals"]) {
+      assert.ok(!server.includes(gone), `mcp/server.ts still names '${gone}' — proposal production moved behind the seam`);
+    }
   });
 
-  test("server.ts records snapshots BEFORE opening the proposal — no dead proposals", () => {
-    const server = read("mcp/server.ts");
-    const recordAt = server.indexOf("ctx.proposals.record(");
-    const openAt = server.indexOf("ctx.proposals.open(");
+  test("the observer holds the gate, the firewall, and the store", () => {
+    const obs = read("governor/wiring/write-observer.ts");
+    assert.match(obs, /deps\.historyEnabled\(\) !== true/, "production is gated on the human's setting");
+    assert.match(obs, /requireClassesCovered\(NOTE_WRITE_V1\.changeClasses, derived\)/, "the firewall runs in production");
+    assert.match(obs, /deps\.proposals\.open\(/, "the proposal reaches the durable store");
+    assert.match(obs, /touchesAuthorityKeys: authorityKeysDiffer\(/, "authority classification is derived from the bytes, never hardcoded");
+    assert.match(obs, /frontmatterUid\(proposedText\)/, "identity comes from the written bytes before the lagging cache");
+  });
+
+  test("the observer records snapshots BEFORE opening the proposal — no dead proposals", () => {
+    const obs = read("governor/wiring/write-observer.ts");
+    const recordAt = obs.indexOf("deps.proposals.record(");
+    const openAt = obs.indexOf("deps.proposals.open(");
     assert.ok(recordAt > 0 && openAt > 0 && recordAt < openAt, "record precedes open in the producer");
-    assert.match(server, /if \(recordingRef === null\) return;/, "an out-of-scope or failed recording skips the proposal");
+    assert.match(obs, /if \(recordingRef === null\) return;/, "an out-of-scope or failed recording skips the proposal");
+  });
+
+  test("main.ts registers the producer as a seam write observer", () => {
+    const main = read("main.ts");
+    assert.match(main, /registerWriteObserver\(/, "the producer arrives through the seam, not through ServerCtx");
+    assert.match(main, /createProposalObserver\(\{/, "and it is the real producer, not a stub");
   });
 
   test("main.ts wires the history repository behind the effective scope", () => {

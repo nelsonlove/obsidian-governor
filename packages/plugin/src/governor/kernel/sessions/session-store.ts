@@ -15,7 +15,11 @@
 // carries identifiers and digests, never note bodies, so the
 // outlives-its-source argument does not apply and auditability wins.
 
-import { SessionNotLiveError, attachMandate, closeSession, expireSession, revokeSession, type SessionV1 } from "./session.js";
+// The session CONTRACT is host-owned since S2 (condition 7 — the host mints;
+// see src/kernel/sessions/session.ts). The STORE — the durable event log, and
+// the revocation state a human's Revoke gesture writes — stays with the
+// provider, and is what the seam's session-refusal hook consults.
+import { SessionNotLiveError, attachMandate, closeSession, expireSession, revokeSession, type SessionV1 } from "../../../kernel/sessions/session.js";
 
 export type SessionEvent =
   | { kind: "opened"; at: number; session: SessionV1 }
