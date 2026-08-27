@@ -13,7 +13,7 @@
 // or fails loudly because the evidence is gone.
 
 import type { ProposalItemSubjectV1 } from "../contracts/subject-v1.js";
-import type { Sha256Digest } from "../contracts/digest.js";
+import type { Sha256Digest } from "@vault-mcp/core";
 import type { ChangeClass } from "../contracts/change-class.js";
 
 /** What a predicate may consult, beyond the subject itself. */

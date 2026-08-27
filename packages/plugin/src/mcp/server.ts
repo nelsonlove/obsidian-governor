@@ -47,10 +47,10 @@ import { createCapture } from "../kernel/observations/capture.js";
 import { openSession, expiryRefusal, type SessionV1 } from "../kernel/sessions/session.js";
 // The session scope digest is the HOST's own assertion about a connection
 // (condition 7: the host mints), so these two contracts are consulted here.
-// They still live in the provider subtree — the SEAM does not need them, and
-// promoting them into `@vault-mcp/core` is S3's contract-publishing package.
-import { canonicalize } from "../governor/kernel/contracts/canonical-json.js";
-import { digestUtf8 } from "../governor/kernel/contracts/digest.js";
+// S3, condition 9: promoted into `@vault-mcp/core` — the seam never needed
+// them, and now both the host and the governance provider depend on the
+// published contract rather than the host reaching into the provider subtree.
+import { canonicalize, digestUtf8 } from "@vault-mcp/core";
 import { isExcludedTerritory } from "../governor/wiring/territories.js";
 import { createObservationStore } from "../kernel/observations/store.js";
 import { createLocalBlobStore } from "../governor/wiring/observations/local-store.js";

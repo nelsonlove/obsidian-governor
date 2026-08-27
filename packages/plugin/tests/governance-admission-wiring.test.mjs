@@ -22,7 +22,7 @@ import { proposalRef, standingRef } from "../src/governor/kernel/history-store/r
 import { createProposalStore } from "../src/governor/kernel/proposals/proposal-store.ts";
 import { openProposal } from "../src/governor/kernel/proposals/proposal.ts";
 import { buildProposalSubjectFromOperation } from "../src/governor/kernel/proposals/proposal-builder.ts";
-import { digestBytes } from "../src/governor/kernel/contracts/digest.ts";
+import { digestBytes } from "@vault-mcp/core";
 import { runGuardedDisposition } from "../src/governor/kernel/gesture.ts";
 
 const enc = (s) => new TextEncoder().encode(s);

@@ -13,7 +13,7 @@
 // machinery) and are NOT minted here. Identity is never derived from path or
 // Git author.
 
-import { uuidv7 } from "../../../kernel/uuidv7.js";
+import { uuidv7 } from "@vault-mcp/core";
 
 declare const brand: unique symbol;
 type Branded<B extends string> = string & { readonly [brand]: B };
@@ -43,7 +43,7 @@ interface MintableMap {
  * Mint a new id of the given kind. `ms` is the mint time and `rand` is
  * injectable so tests are deterministic — the same injection contract the
  * vault's note-uid mint already uses (they share one UUIDv7 implementation,
- * kernel/uuidv7.ts, precisely so the two can never drift apart in format).
+ * @vault-mcp/core's uuidv7.ts, precisely so the two can never drift apart in format).
  */
 export function mintId<K extends MintableKind>(kind: K, ms: number, rand?: Uint8Array): MintableMap[K] {
   void kind; // the kind exists to bind the return TYPE; all kinds share the UUIDv7 format

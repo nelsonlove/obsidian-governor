@@ -13,7 +13,7 @@
 
 import { mintId, type ProposalId } from "../contracts/ids.js";
 import { subjectDigest, type ProposalItemSubjectV1 } from "../contracts/subject-v1.js";
-import type { Sha256Digest } from "../contracts/digest.js";
+import type { Sha256Digest } from "@vault-mcp/core";
 import type { AuthorityState, DevelopmentState, VerificationState } from "../contracts/states.js";
 
 export interface ProposalV1 {

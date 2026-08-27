@@ -23,7 +23,7 @@ import { buildProposalSubjectFromOperation } from "../src/governor/kernel/propos
 import { openProposal } from "../src/governor/kernel/proposals/proposal.ts";
 import { createProposalStore } from "../src/governor/kernel/proposals/proposal-store.ts";
 import { verifySubject } from "../src/governor/kernel/verification/verify.ts";
-import { digestBytes } from "../src/governor/kernel/contracts/digest.ts";
+import { digestBytes } from "@vault-mcp/core";
 import { createActionRegistry } from "../src/kernel/operations/registry.ts";
 import { createOperationExecutor } from "../src/kernel/operations/executor.ts";
 import { buildMcpActionRegistry } from "../src/kernel/operations/mcp-registry.ts";

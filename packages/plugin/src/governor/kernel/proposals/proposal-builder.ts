@@ -14,7 +14,7 @@
 
 import { SubjectInvalidError, buildProposalItemSubject, type ProposalItemInput, type ProposalItemSubjectV1 } from "../contracts/subject-v1.js";
 import type { ChangeClass } from "../contracts/change-class.js";
-import type { Sha256Digest } from "../contracts/digest.js";
+import type { Sha256Digest } from "@vault-mcp/core";
 
 /** The slice of an observation record the builder validates against. */
 export interface SupportingObservation {

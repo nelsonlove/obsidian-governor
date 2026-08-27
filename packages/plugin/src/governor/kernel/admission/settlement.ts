@@ -16,7 +16,7 @@
 // without evidence, and nothing self-heals THAT — it surfaces.
 
 import { mintId } from "../contracts/ids.js";
-import type { Sha256Digest } from "../contracts/digest.js";
+import type { Sha256Digest } from "@vault-mcp/core";
 import type { VerificationRecord } from "../verification/predicate.js";
 
 /**
