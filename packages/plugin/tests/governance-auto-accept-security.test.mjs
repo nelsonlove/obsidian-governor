@@ -1,5 +1,5 @@
 // AUTO-ACCEPT SECURITY INVARIANTS (static scans) — the subset that binds the PURE modules
-// folded in cycle 1 (src/kernel/governance/auto-accept/*.ts). Ported from
+// folded in cycle 1 (src/governor/kernel/auto-accept/*.ts). Ported from
 // obsidian-stewardship/tests/auto-accept-security.test.mjs (#83, cycle 1).
 //
 // Auto-accept is the ONE automated baseline advance — a violation here is a critical defect.
@@ -18,7 +18,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const aaDir = path.join(here, "..", "src", "kernel", "governance", "auto-accept");
+const aaDir = path.join(here, "..", "src", "governor", "kernel", "auto-accept");
 const readRaw = (p) => fs.readFileSync(p, "utf8");
 const aaFiles = () => fs.readdirSync(aaDir).filter((f) => f.endsWith(".ts")).map((f) => path.join(aaDir, f));
 

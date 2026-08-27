@@ -1,8 +1,8 @@
 // A READ-ONLY view of the governance module's human-review queue (slice B3b; repointed #261).
 //
-// The governance module (src/governance/wiring.ts) publishes a read-only index at
+// The governance module (src/governor/wiring/wiring.ts) publishes a read-only index at
 // `<plugin dir>/governance/pending-index.json` — beside the acceptance log — on every
-// review-queue refresh (kernel/governance/pending-index.ts is the serializer). This tool
+// review-queue refresh (governor/kernel/pending-index.ts is the serializer). This tool
 // exposes a READ of that index to agents, so an agent can see which notes are pending human
 // review and avoid stepping on one. It is the same data the review pane shows — nothing here
 // is a new source of truth, and NOTHING here changes review state.
@@ -54,7 +54,7 @@ const RO = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, o
  * PLUGIN dir (`<config dir>/plugins/governor` unless Obsidian reports otherwise) — built
  * from `app.vault.configDir` (not a hardwired `.obsidian`), so a vault with a renamed config
  * dir still resolves, matching how the journal and install-id build their own plugin-dir
- * paths. Must agree with `pendingIndexPath` in src/governance/wiring.ts.
+ * paths. Must agree with `pendingIndexPath` in src/governor/wiring/wiring.ts.
  */
 export const PENDING_INDEX_REL = "governance/pending-index.json";
 

@@ -1,7 +1,7 @@
 /**
  * governance-revision.test.mjs — the revision round-trip's pure content
  * machinery (#101): callout insert/remove + the submit-revision transform
- * (kernel/governance/revision.ts).
+ * (governor/kernel/revision.ts).
  *
  * Pinned properties:
  *   • insertion lands DIRECTLY BELOW the note's H1; a note with no H1 gets the
@@ -31,7 +31,7 @@ import {
   insertRevisionRequest,
   withdrawRevisionRequests,
   planSubmitRevision,
-} from "../src/kernel/governance/revision.ts";
+} from "../src/governor/kernel/revision.ts";
 
 const BOM = String.fromCharCode(0xfeff);
 const FM = "---\nacceptance-status: revising\nuid: abc\n---\n";

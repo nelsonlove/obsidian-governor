@@ -12,7 +12,7 @@
 //  THE AUTHORITY AXIS (#221): a disposition that confers standing — that decides
 //  what enters or leaves the accepted knowledge base — is `authority: "human"`
 //  and exists ONLY as a gesture-gated pane control (addEventListener +
-//  isRealGesture; see gesture.ts and governance/pane.ts). A mechanical,
+//  isRealGesture; see gesture.ts and governor/wiring/pane.ts). A mechanical,
 //  reversible write that merely SUPPLIES a candidate is `authority: "agent"`
 //  and exists ONLY as an ordinary guarded MCP tool. Nothing here changes the
 //  gating: descriptors are DATA. Deliberately:
@@ -20,7 +20,7 @@
 //    - NO callable rides a descriptor. `effect` is a documentation string, not
 //      a function — an accept-capable callable on module-exported data would be
 //      exactly the app-walkable accept gadget the reachability invariant
-//      (governance/wiring.ts header) forbids.
+//      (governor/wiring/wiring.ts header) forbids.
 //    - NO registry / plugin API for third-party dispositions. The set below is
 //      frozen; extending it is a reviewed code change, same as
 //      AUTHORIZED_CLASSES (auto-accept/classes.ts).
@@ -53,7 +53,7 @@ export type DispositionId =
 
 /** Re-exported from the substrate (type-position reference only — see the
  * header comment for why this file carries no import statement). */
-export type DispositionAuthority = import("../triage/dispositions.js").DispositionAuthority;
+export type DispositionAuthority = import("../../kernel/triage/dispositions.js").DispositionAuthority;
 
 /** Where a disposition surfaces. */
 export type DispositionSurface =
@@ -71,7 +71,7 @@ export type DispositionSurface =
 /** The acceptance instance's descriptor: the substrate shape closed over this
  * instance's own id/surface unions (adopt is the one `confirm` verb,
  * request-changes the one `input` verb, skip the one `stateless` verb). */
-export type DispositionDescriptor = import("../triage/dispositions.js").DispositionDescriptorShape<
+export type DispositionDescriptor = import("../../kernel/triage/dispositions.js").DispositionDescriptorShape<
   DispositionId,
   DispositionSurface
 >;

@@ -1,8 +1,8 @@
 // The soft conformance gate (#230 gate + Nelson's 2026-08-19 soft/hard/off ruling).
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { acceptNote, AcceptGateError } from "../src/kernel/governance/accept.ts";
-import { governanceAcceptanceSettings } from "../src/kernel/governance/settings.ts";
+import { acceptNote, AcceptGateError } from "../src/governor/kernel/accept.ts";
+import { governanceAcceptanceSettings } from "../src/governor/kernel/settings.ts";
 
 const NOTE = "---\nacceptance-status: proposed\ntitle: T\n---\n\n# T\nbody\n";
 

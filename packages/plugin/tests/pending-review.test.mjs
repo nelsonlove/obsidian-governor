@@ -27,7 +27,7 @@ import {
   obsidianPendingReviewSource,
   PENDING_INDEX_REL,
 } from "../src/mcp/tools-pending-review.ts";
-import { serializePendingIndex } from "../src/kernel/governance/pending-index.ts";
+import { serializePendingIndex } from "../src/governor/kernel/pending-index.ts";
 
 // A well-formed index: the shape the governance module publishes.
 const INDEX = {

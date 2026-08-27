@@ -28,7 +28,7 @@ import { createObservationStore } from "../src/kernel/observations/store.ts";
 import { createCapture } from "../src/kernel/observations/capture.ts";
 import { NOTE_READ_V1 } from "../src/kernel/operations/actions/note-read.ts";
 import { compatibilityAction } from "../src/kernel/operations/compatibility.ts";
-import { isExcludedTerritory } from "../src/governance/territories.ts";
+import { isExcludedTerritory } from "../src/governor/wiring/territories.ts";
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
@@ -360,12 +360,12 @@ describe("capture — a guarded territory is never retained outside itself", () 
     // the mechanism existed, tests exercised it against fixtures, and the one
     // line connecting it to production was missing. So the wiring is pinned at
     // the source: buildMcpServer must hand createCapture the shared territory
-    // predicate, and the predicate must come from governance/territories.
+    // predicate, and the predicate must come from governor/wiring/territories.
     const fs = await import("node:fs");
     const server = fs.readFileSync(new URL("../src/mcp/server.ts", import.meta.url), "utf8");
     assert.match(server, /excludedSource:\s*isExcludedTerritory/, "createCapture must receive the territory predicate");
-    assert.match(server, /from "\.\.\/governance\/territories\.js"/, "and it must be the SHARED list, not a local copy");
-    const territories = fs.readFileSync(new URL("../src/governance/territories.ts", import.meta.url), "utf8");
+    assert.match(server, /from "\.\.\/governor\/wiring\/territories\.js"/, "and it must be the SHARED list, not a local copy");
+    const territories = fs.readFileSync(new URL("../src/governor/wiring/territories.ts", import.meta.url), "utf8");
     assert.match(territories, /"80-89"/, "the guarded legal/PII area is on the shared list");
   });
 });

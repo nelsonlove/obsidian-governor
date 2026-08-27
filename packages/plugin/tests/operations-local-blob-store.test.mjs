@@ -15,7 +15,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import * as path from "node:path";
 
-import { createLocalBlobStore, observationDir } from "../src/governance/observations/local-store.ts";
+import { createLocalBlobStore, observationDir } from "../src/governor/wiring/observations/local-store.ts";
 
 const A = `sha256:${"a".repeat(64)}`;
 const B = `sha256:${"b".repeat(64)}`;

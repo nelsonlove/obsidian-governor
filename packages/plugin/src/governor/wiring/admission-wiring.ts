@@ -25,26 +25,26 @@
 // built here translate. CAS runs over commit oids, so the git-level
 // exactly-one-winner property carries the claim-level one.
 
-import { createAdmissionService, type AdmissionService } from "../kernel/governance/admission/service.js";
-import { standingHealth, type StandingHealthReport } from "../kernel/governance/admission/standing-health.js";
-import { freezeCohort, excludeAndRefreeze, type FrozenCohort, type FreezeInput } from "../kernel/governance/cohorts/freeze.js";
-import { verifyCohortCoverage } from "../kernel/governance/cohorts/coverage.js";
-import { selectProposals, type CohortSelector } from "../kernel/governance/cohorts/cohort.js";
-import { createClaimStore, type ClaimIo } from "../kernel/governance/admission/settlement.js";
-import { AdmissionRefusedError } from "../kernel/governance/admission/policy.js";
-import { buildProposalItemSubject, subjectDigest } from "../kernel/governance/contracts/subject-v1.js";
-import { digestBytes } from "../kernel/governance/contracts/digest.js";
-import { standingRef } from "../kernel/governance/history-store/refs.js";
-import { RefCasError, type ObjectId } from "../kernel/governance/history-store/types.js";
-import type { HistoryRepository } from "../kernel/governance/history-store/repository.js";
-import { createDefaultPredicateRegistry } from "../kernel/governance/verification/predicates.js";
-import { tupleOf } from "../kernel/governance/transformations/transformation.js";
-import { budgetBreach, type MandateUsage } from "../kernel/governance/mandates/budgets.js";
-import type { MandateV1 } from "../kernel/governance/mandates/mandate.js";
-import type { MandateAdmissionContext } from "../kernel/governance/admission/policy.js";
-import { verifySubject } from "../kernel/governance/verification/verify.js";
-import type { ProposalStore } from "../kernel/governance/proposals/proposal-store.js";
-import type { ProposalV1 } from "../kernel/governance/proposals/proposal.js";
+import { createAdmissionService, type AdmissionService } from "../kernel/admission/service.js";
+import { standingHealth, type StandingHealthReport } from "../kernel/admission/standing-health.js";
+import { freezeCohort, excludeAndRefreeze, type FrozenCohort, type FreezeInput } from "../kernel/cohorts/freeze.js";
+import { verifyCohortCoverage } from "../kernel/cohorts/coverage.js";
+import { selectProposals, type CohortSelector } from "../kernel/cohorts/cohort.js";
+import { createClaimStore, type ClaimIo } from "../kernel/admission/settlement.js";
+import { AdmissionRefusedError } from "../kernel/admission/policy.js";
+import { buildProposalItemSubject, subjectDigest } from "../kernel/contracts/subject-v1.js";
+import { digestBytes } from "../kernel/contracts/digest.js";
+import { standingRef } from "../kernel/history-store/refs.js";
+import { RefCasError, type ObjectId } from "../kernel/history-store/types.js";
+import type { HistoryRepository } from "../kernel/history-store/repository.js";
+import { createDefaultPredicateRegistry } from "../kernel/verification/predicates.js";
+import { tupleOf } from "../kernel/transformations/transformation.js";
+import { budgetBreach, type MandateUsage } from "../kernel/mandates/budgets.js";
+import type { MandateV1 } from "../kernel/mandates/mandate.js";
+import type { MandateAdmissionContext } from "../kernel/admission/policy.js";
+import { verifySubject } from "../kernel/verification/verify.js";
+import type { ProposalStore } from "../kernel/proposals/proposal-store.js";
+import type { ProposalV1 } from "../kernel/proposals/proposal.js";
 
 export interface AdmissionUiDeps {
   /** Pending new-style proposals, for the pane's list. */
@@ -161,7 +161,7 @@ export interface BuildAdmissionDeps {
    * naming a predicate this registry lacks refuses at admission, which is
    * exactly what makes recorded evidence honest about what ran.
    */
-  predicates?: import("../kernel/governance/verification/registry.js").PredicateRegistry;
+  predicates?: import("../kernel/verification/registry.js").PredicateRegistry;
   /**
    * WP10a: the promotion-evidence recorder. OPTIONAL and a FACT-RECORDER,
    * not a gate (the refreshProjections class, not the bindingGate class):
@@ -171,14 +171,14 @@ export interface BuildAdmissionDeps {
    * are ordinary human decisions, evidence for nothing automatic.
    */
   promotion?: {
-    transformationOf(id: string, version: string): import("../kernel/governance/transformations/transformation.js").TransformationV1 | null;
+    transformationOf(id: string, version: string): import("../kernel/transformations/transformation.js").TransformationV1 | null;
     recordEvidence(
-      tuple: import("../kernel/governance/transformations/promotion.js").PromotionTuple,
+      tuple: import("../kernel/transformations/promotion.js").PromotionTuple,
       evidence: { kind: "individual-admit" | "cohort-admit" | "revert"; ref: string; memberCount?: number },
       now: number
     ): Promise<void>;
     /** WP10b: the promotion verdict the mandate door consumes. A THROW here refuses the admission (promotion_unavailable via the context resolver) — never a silent unpromoted. */
-    verdictOf(tuple: import("../kernel/governance/transformations/promotion.js").PromotionTuple): Promise<import("../kernel/governance/transformations/promotion.js").PromotionVerdict>;
+    verdictOf(tuple: import("../kernel/transformations/promotion.js").PromotionTuple): Promise<import("../kernel/transformations/promotion.js").PromotionVerdict>;
   };
   /**
    * WP10b: the mandate store's admission-facing verbs. Optional — absent
@@ -326,7 +326,7 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
       };
       return verifyCohortCoverage(
         registry,
-        shaped as import("../kernel/governance/cohorts/freeze.js").FrozenCohort,
+        shaped as import("../kernel/cohorts/freeze.js").FrozenCohort,
         async (item) => {
           const proposedBytes = item.path === null ? null : await deps.readNoteBytes(item.path);
           const proposal = byIdentity.get(`${item.vaultId}\u0000${item.noteId}`) ?? null;
@@ -420,7 +420,7 @@ export function buildAdmission(deps: BuildAdmissionDeps): AdmissionUiDeps {
   async function decideCohortAdmission(
     frozen: FrozenCohort,
     members: ProposalV1[],
-    authority: import("../kernel/governance/admission/policy.js").AdmissionAuthority
+    authority: import("../kernel/admission/policy.js").AdmissionAuthority
   ): Promise<CohortAdmitOutcome> {
     const authorityLabel = authority.kind === "human-gesture" ? "human-gesture" : `mandate:${authority.mandateId}`;
       // The degraded discriminator is standing MOVEMENT during this call —

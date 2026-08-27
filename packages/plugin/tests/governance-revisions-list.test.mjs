@@ -1,7 +1,7 @@
 // governance_revisions — the read-side discovery listing (parser + tool).
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { parseRevisionRequestCallouts } from "../src/kernel/governance/revision.ts";
+import { parseRevisionRequestCallouts } from "../src/governor/kernel/revision.ts";
 import { registerGovernanceRevisionsListTool } from "../src/mcp/tools-governance-revision.ts";
 
 describe("parseRevisionRequestCallouts", () => {

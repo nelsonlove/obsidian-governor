@@ -55,7 +55,7 @@ reviewer can send a change back for another pass:
   shared accept-forbidden guard re-checks its write. `revising` and `proposed` are
   agent-legal status transitions; the accepted-family stays forbidden exactly as above.
 
-The full verb set is declared as **data** (`kernel/governance/dispositions.ts`): each
+The full verb set is declared as **data** (`governor/kernel/dispositions.ts`): each
 disposition carries `{id, authority, surface, label, effect}`, and the pane renders its
 controls from that table. The authority axis (#221) is what sorts them — a verb that confers
 standing is a human gesture; a mechanical, reversible write is agent-expressible. Accept
@@ -76,7 +76,7 @@ They are now converged: the pane's gesture-gated **Accept is context-aware** and
 | `revising` | Never stamped (baseline advance only) — a revising note goes through withdraw / `governance_submit_revision` back to `proposed` first |
 
 **Ordering is the load-bearing part**: the stamp itself changes the note, so `acceptNote`
-(kernel/governance/accept.ts) stamps FIRST, re-reads, **verifies the fold** — status now
+(governor/kernel/accept.ts) stamps FIRST, re-reads, **verifies the fold** — status now
 `accepted`, body byte-identical to pre-stamp, and the non-stamp frontmatter **key set**
 unchanged; a foreign write racing into the accept window that changes the body or adds or
 removes a frontmatter key aborts the accept with no baseline advance — and only then
@@ -101,7 +101,7 @@ fail-safe ambiguous classification instead.
 
 **This does not touch the agent-side guarantee.** The stamp is an in-app,
 human-gesture-gated `processFrontMatter` call (`stampAcceptedFrontmatter`, module-scope and
-unexported in `governance/wiring.ts`, reachable only through the gesture-gated accept
+unexported in `governor/wiring/wiring.ts`, reachable only through the gesture-gated accept
 handler) — it **bypasses MCP entirely** and is exactly the human path the accept-forbidden
 guard reserves. Every agent transport still refuses the accepted family; `@vault-mcp/core`
 is unchanged.

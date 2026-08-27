@@ -87,9 +87,9 @@ export interface ServerCtx {
    * shaped degrades to "no session", never to a crash.
    */
   sessions?: {
-    open(session: import("../kernel/governance/sessions/session.js").SessionV1, now: number): Promise<void>;
+    open(session: import("../governor/kernel/sessions/session.js").SessionV1, now: number): Promise<void>;
     /** Folded current state, so liveness checks see store-level revocation. */
-    get(sessionId: string): Promise<import("../kernel/governance/sessions/session.js").SessionV1 | null>;
+    get(sessionId: string): Promise<import("../governor/kernel/sessions/session.js").SessionV1 | null>;
     close(sessionId: string, now: number): Promise<void>;
     markExpired(sessionId: string, now: number): Promise<void>;
     replicaId: string;
@@ -103,12 +103,12 @@ export interface ServerCtx {
    * review pane (mandate-wiring.ts), and no ServerCtx port reaches them.
    */
   mandates?: {
-    draft(d: import("../kernel/governance/mandates/draft.js").MandateDraftV1, now: number): Promise<void>;
-    allDrafts(): Promise<import("../kernel/governance/mandates/draft.js").MandateDraftV1[]>;
-    allMandates(): Promise<import("../kernel/governance/mandates/mandate.js").MandateV1[]>;
-    usageOf(id: string): Promise<import("../kernel/governance/mandates/budgets.js").MandateUsage>;
+    draft(d: import("../governor/kernel/mandates/draft.js").MandateDraftV1, now: number): Promise<void>;
+    allDrafts(): Promise<import("../governor/kernel/mandates/draft.js").MandateDraftV1[]>;
+    allMandates(): Promise<import("../governor/kernel/mandates/mandate.js").MandateV1[]>;
+    usageOf(id: string): Promise<import("../governor/kernel/mandates/budgets.js").MandateUsage>;
     /** WP10b producer stamping: the session's governing mandate, resolved for the fit check. */
-    getMandate(id: string): Promise<import("../kernel/governance/mandates/mandate.js").MandateV1 | null>;
+    getMandate(id: string): Promise<import("../governor/kernel/mandates/mandate.js").MandateV1 | null>;
     /** Charge production usage and observe a budget breach into the durable `exhausted` transition. Implemented in main.ts. */
     chargeAndObserve(id: string, delta: { items: number; proposals: number; bytes: number }): Promise<void>;
   };
@@ -118,7 +118,7 @@ export interface ServerCtx {
    * bare embeds, and any build until main.ts wires it).
    */
   proposals?: {
-    open(proposal: import("../kernel/governance/proposals/proposal.js").ProposalV1, now: number): Promise<void>;
+    open(proposal: import("../governor/kernel/proposals/proposal.js").ProposalV1, now: number): Promise<void>;
     /** The note's stable uid from frontmatter, when the cache has one. */
     uidOf(path: string): string | null;
     vaultId: string;

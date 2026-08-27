@@ -16,7 +16,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isRealGesture, runGuardedAdopt } from "../src/kernel/governance/gesture.ts";
+import { isRealGesture, runGuardedAdopt } from "../src/governor/kernel/gesture.ts";
 
 // A test-only stand-in for a genuine user gesture: a real Event whose isTrusted reads true.
 class RealGestureEvent extends Event {
@@ -102,7 +102,7 @@ test("adopt proceeds ONLY on a real gesture AND human confirm", async () => {
 // rejected for adopt are rejected here, before any confirm/action runs.
 
 test("runGuardedDisposition (no confirm) is INERT on a forged plain object", async () => {
-  const { runGuardedDisposition } = await import("../src/kernel/governance/gesture.ts");
+  const { runGuardedDisposition } = await import("../src/governor/kernel/gesture.ts");
   let acted = 0;
   const outcome = await runGuardedDisposition({ isTrusted: true }, null, async () => { acted++; });
   assert.equal(outcome, "blocked-untrusted");
@@ -110,7 +110,7 @@ test("runGuardedDisposition (no confirm) is INERT on a forged plain object", asy
 });
 
 test("runGuardedDisposition (no confirm) is INERT on a synthesized (untrusted) Event", async () => {
-  const { runGuardedDisposition } = await import("../src/kernel/governance/gesture.ts");
+  const { runGuardedDisposition } = await import("../src/governor/kernel/gesture.ts");
   let acted = 0;
   const outcome = await runGuardedDisposition(new Event("click"), null, async () => { acted++; });
   assert.equal(outcome, "blocked-untrusted");
@@ -118,7 +118,7 @@ test("runGuardedDisposition (no confirm) is INERT on a synthesized (untrusted) E
 });
 
 test("runGuardedDisposition (no confirm) runs exactly once on a real gesture", async () => {
-  const { runGuardedDisposition } = await import("../src/kernel/governance/gesture.ts");
+  const { runGuardedDisposition } = await import("../src/governor/kernel/gesture.ts");
   let acted = 0;
   const outcome = await runGuardedDisposition(new RealGestureEvent("click"), null, async () => { acted++; });
   assert.equal(outcome, "done");
@@ -126,7 +126,7 @@ test("runGuardedDisposition (no confirm) runs exactly once on a real gesture", a
 });
 
 test("runGuardedDisposition with a confirm gate: forged arg never even opens the confirm", async () => {
-  const { runGuardedDisposition } = await import("../src/kernel/governance/gesture.ts");
+  const { runGuardedDisposition } = await import("../src/governor/kernel/gesture.ts");
   let confirmed = 0;
   let acted = 0;
   const outcome = await runGuardedDisposition(
@@ -178,12 +178,12 @@ test("converged accept: a genuine gesture runs the stamp+advance action exactly 
 // confirm-less runGuardedDisposition shape. Kept as a shim so these tests exercise the SAME
 // shared gate mechanism the descriptor set names.
 async function runGuardedDispositionShim(evt, action) {
-  const { runGuardedDisposition } = await import("../src/kernel/governance/gesture.ts");
+  const { runGuardedDisposition } = await import("../src/governor/kernel/gesture.ts");
   return runGuardedDisposition(evt, null, action);
 }
 
 test("runGuardedAdopt IS the confirm-gated instantiation of the shared gate (one mechanism)", async () => {
-  const { runGuardedAdopt: adopt, runGuardedDisposition } = await import("../src/kernel/governance/gesture.ts");
+  const { runGuardedAdopt: adopt, runGuardedDisposition } = await import("../src/governor/kernel/gesture.ts");
   // Behavioral identity on all three outcomes.
   for (const [evt, confirm, expected] of [
     [{ isTrusted: true }, async () => true, "blocked-untrusted"],

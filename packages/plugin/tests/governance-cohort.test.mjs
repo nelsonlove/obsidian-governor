@@ -13,14 +13,14 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 
-import { selectProposals, groupIneligibilityOf } from "../src/kernel/governance/cohorts/cohort.ts";
-import { freezeCohort, excludeAndRefreeze } from "../src/kernel/governance/cohorts/freeze.ts";
-import { verifyCohortCoverage } from "../src/kernel/governance/cohorts/coverage.ts";
-import { buildProposalSubjectFromOperation } from "../src/kernel/governance/proposals/proposal-builder.ts";
-import { openProposal } from "../src/kernel/governance/proposals/proposal.ts";
-import { digestUtf8, digestBytes } from "../src/kernel/governance/contracts/digest.ts";
-import { createDefaultPredicateRegistry } from "../src/kernel/governance/verification/predicates.ts";
-import { SubjectInvalidError } from "../src/kernel/governance/contracts/subject-v1.ts";
+import { selectProposals, groupIneligibilityOf } from "../src/governor/kernel/cohorts/cohort.ts";
+import { freezeCohort, excludeAndRefreeze } from "../src/governor/kernel/cohorts/freeze.ts";
+import { verifyCohortCoverage } from "../src/governor/kernel/cohorts/coverage.ts";
+import { buildProposalSubjectFromOperation } from "../src/governor/kernel/proposals/proposal-builder.ts";
+import { openProposal } from "../src/governor/kernel/proposals/proposal.ts";
+import { digestUtf8, digestBytes } from "../src/governor/kernel/contracts/digest.ts";
+import { createDefaultPredicateRegistry } from "../src/governor/kernel/verification/predicates.ts";
+import { SubjectInvalidError } from "../src/governor/kernel/contracts/subject-v1.ts";
 
 const enc = (s) => new TextEncoder().encode(s);
 const T0 = 1_700_000_000_000;

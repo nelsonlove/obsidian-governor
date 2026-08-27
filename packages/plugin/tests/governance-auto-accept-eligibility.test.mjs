@@ -1,12 +1,12 @@
 // Ported from obsidian-stewardship/tests/auto-accept-eligibility.test.mjs (#83, cycle 1) —
-// the eligibility predicate, now at src/kernel/governance/auto-accept/eligibility.ts. The
+// the eligibility predicate, now at src/governor/kernel/auto-accept/eligibility.ts. The
 // conjunctive-per-write composition, the allowlist gate, the rail-clean gate + pluggable seam,
 // and the audit record. The predicate reads ONLY the objective bytes (+ rename index): no
 // agent-supplied field can influence it.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { evaluate, evaluateRail, autoAcceptRecord } from "../src/kernel/governance/auto-accept/eligibility.ts";
-import { AUTHORIZED_CLASSES, DEFAULT_ALLOWLIST } from "../src/kernel/governance/auto-accept/classes.ts";
+import { evaluate, evaluateRail, autoAcceptRecord } from "../src/governor/kernel/auto-accept/eligibility.ts";
+import { AUTHORIZED_CLASSES, DEFAULT_ALLOWLIST } from "../src/governor/kernel/auto-accept/classes.ts";
 
 const UID = "019fea8c-2093-758a-8da2-e8dbcddda6b4";
 const ALL = [...DEFAULT_ALLOWLIST];

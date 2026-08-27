@@ -25,11 +25,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { planLegacyImport, createLegacyEvidenceStore } from "../src/kernel/governance/migration/legacy-import.ts";
-import { performCutover, rollbackCutover, CutoverRefusedError, LegacyWriterDisabledError, CUTOVER_DEFAULT } from "../src/kernel/governance/migration/cutover.ts";
-import { BaselineStore } from "../src/kernel/governance/baseline-store.ts";
-import { buildMigration } from "../src/governance/migration-wiring.ts";
-import { standingHealth } from "../src/kernel/governance/admission/standing-health.ts";
+import { planLegacyImport, createLegacyEvidenceStore } from "../src/governor/kernel/migration/legacy-import.ts";
+import { performCutover, rollbackCutover, CutoverRefusedError, LegacyWriterDisabledError, CUTOVER_DEFAULT } from "../src/governor/kernel/migration/cutover.ts";
+import { BaselineStore } from "../src/governor/kernel/baseline-store.ts";
+import { buildMigration } from "../src/governor/wiring/migration-wiring.ts";
+import { standingHealth } from "../src/governor/kernel/admission/standing-health.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const T0 = 1_800_000_000_000;
@@ -244,10 +244,10 @@ describe("single standing writer — the disabled writer REFUSES", () => {
     // proves: (a) both writers exist where claimed, (b) no setBaseline/rekey
     // implementation exists OUTSIDE the guarded store.
     const src = (rel) => fs.readFileSync(path.join(HERE, "..", "src", rel), "utf8");
-    const baselineStore = src("kernel/governance/baseline-store.ts");
+    const baselineStore = src("governor/kernel/baseline-store.ts");
     assert.match(baselineStore, /requireWritable\("setBaseline/, "the legacy advance primitive is guarded");
     assert.match(baselineStore, /requireWritable\("rekey/, "the re-addressing sibling is guarded");
-    const service = src("kernel/governance/admission/service.ts");
+    const service = src("governor/kernel/admission/service.ts");
     assert.match(service, /standingAdvance\(expected, claim\.id\)/, "the new writer exists where claimed");
 
     // No second implementation: across src/**, `async setBaseline(` and
@@ -265,7 +265,7 @@ describe("single standing writer — the disabled writer REFUSES", () => {
     // while the pattern checks a spelling is the family's purest shape —
     // governor-lead's planted `advanceBaselineBlob` passed the name scan
     // while producing byte-identical blobs).
-    const isStore = (f) => f.endsWith(path.join("kernel", "governance", "baseline-store.ts"));
+    const isStore = (f) => f.endsWith(path.join("governor", "kernel", "baseline-store.ts"));
     const nameOffenders = files.filter((f) => !isStore(f) && /async setBaseline\(|async rekey\(/.test(fs.readFileSync(f, "utf8")));
     assert.deepEqual(nameOffenders, [], "no implementation NAMED setBaseline/rekey exists outside the store (name spellings only — the shape scan below covers renamed writers)");
 
@@ -304,7 +304,7 @@ describe("single standing writer — the disabled writer REFUSES", () => {
     assert.ok(/async setBaseline\(|async rekey\(/.test(planted), "the pattern the scan uses does flag the planted writer");
     // And the guarded-store pattern would NOT be satisfied by a store whose
     // gates were deleted.
-    const gutted = fs.readFileSync(path.join(HERE, "..", "src", "kernel", "governance", "baseline-store.ts"), "utf8").replace(/requireWritable\("setBaseline[^\n]*\n/, "");
+    const gutted = fs.readFileSync(path.join(HERE, "..", "src", "governor", "kernel", "baseline-store.ts"), "utf8").replace(/requireWritable\("setBaseline[^\n]*\n/, "");
     assert.ok(!/requireWritable\("setBaseline/.test(gutted), "removing the gate is visible to the scan");
   });
 });
@@ -420,7 +420,7 @@ describe("selective re-acceptance only — the migration cannot mint standing", 
     // migration module that could construct claims or advance standing.
     // Pinned structurally: neither migration module imports from admission/,
     // the history store, or the claim builder.
-    for (const rel of ["kernel/governance/migration/legacy-import.ts", "kernel/governance/migration/cutover.ts", "governance/migration-wiring.ts"]) {
+    for (const rel of ["governor/kernel/migration/legacy-import.ts", "governor/kernel/migration/cutover.ts", "governor/wiring/migration-wiring.ts"]) {
       const text = fs.readFileSync(path.join(HERE, "..", "src", rel), "utf8");
       for (const forbidden of ["admission/", "settlement", "buildAdmissionClaim", "standingAdvance", "history-store"]) {
         assert.ok(!text.includes(forbidden), `${rel} must not reach ${forbidden}`);
@@ -515,7 +515,7 @@ describe("review regressions — duplicate lines, concurrency, fail-open, half-w
     // and no admission. The refusal must precede the acceptNote/revertNote
     // call. Declared for what it is: a source-order pin (the wiring imports
     // `obsidian`, so the behavior is not headless-runnable here).
-    const raw = fs.readFileSync(path.join(HERE, "..", "src", "governance", "wiring.ts"), "utf8");
+    const raw = fs.readFileSync(path.join(HERE, "..", "src", "governor", "wiring", "wiring.ts"), "utf8");
     for (const [fn, delegate] of [["performAccept", "acceptNote("], ["performRevert", "revertNote("]]) {
       const at = raw.indexOf(`async function ${fn}(`);
       assert.notEqual(at, -1, `${fn} exists`);
@@ -570,7 +570,7 @@ describe("the migration section's own fixes are pinned — eleventh-instance clo
     // stayed green — the section needs Obsidian's DOM, so like main.ts it
     // gets the source-read idiom: the branch, the early return, and the
     // confirm-phase try are pinned as source facts with mutants for each.
-    const raw = fs.readFileSync(path.join(HERE, "..", "src", "governance", "wiring.ts"), "utf8");
+    const raw = fs.readFileSync(path.join(HERE, "..", "src", "governor", "wiring", "wiring.ts"), "utf8");
     const at = raw.indexOf("function renderMigrationSection(");
     assert.notEqual(at, -1);
     const body = raw.slice(at, raw.indexOf("\nfunction ", at + 10) === -1 ? raw.length : raw.indexOf("\nfunction ", at + 10));

@@ -11,7 +11,7 @@ import {
   frontmatterKeys,
   acceptanceStatusOf,
   missingRequiredKeys,
-} from "../src/kernel/governance/frontmatter.ts";
+} from "../src/governor/kernel/frontmatter.ts";
 
 test("parseNote splits frontmatter and body", () => {
   const n = parseNote("---\ntitle: A\ntags: [x]\n---\nbody line 1\nbody line 2");

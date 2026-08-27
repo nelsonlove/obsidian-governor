@@ -30,9 +30,9 @@ import {
   type SnapshotFile,
   type TreeDiffEntry,
   type TreeEntry,
-} from "../../kernel/governance/history-store/types.js";
-import type { HistoryRepository } from "../../kernel/governance/history-store/repository.js";
-import { normalizeVaultPath } from "../../kernel/governance/history-store/history-scope.js";
+} from "../../kernel/history-store/types.js";
+import type { HistoryRepository } from "../../kernel/history-store/repository.js";
+import { normalizeVaultPath } from "../../kernel/history-store/history-scope.js";
 
 /** The fixed machine identity. Not an authority claim — see the header. */
 const COMMITTER = { name: "governor", email: "governor@local" };

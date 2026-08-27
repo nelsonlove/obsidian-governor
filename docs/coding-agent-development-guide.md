@@ -64,7 +64,7 @@ Snapshot observed on 2026-08-20:
 - the primary checkout had a user-owned `README.md` modification and an untracked `.claude/` directory;
 - the plugin package contained 143 test files;
 - current acceptance used per-path baseline blobs, an acceptance JSONL log, a pending queue derived from the write journal, gesture-gated human acceptance, and class/per-note auto-accept; and
-- `governance/wiring.ts` and `governance/pane.ts` were large integration surfaces carrying load-bearing reachability controls.
+- `governor/wiring/wiring.ts` and `governor/wiring/pane.ts` were large integration surfaces carrying load-bearing reachability controls.
 
 Never use that dirty primary checkout for implementation. Every coding task begins in a fresh worktree from the current reviewed upstream branch. Preserve the user's working tree exactly.
 
@@ -115,18 +115,18 @@ Scale and consequence are separate fields. One content word may be more conseque
 | `packages/plugin/src/mcp/guarded.ts` and other surface registration | Action registry plus surface bindings | Inventory both directions, bind every surface to a versioned action, and make raw handler reachability a build failure |
 | Current read handlers | Observation contracts and store | Apply scope/redaction before capture; do not claim replayability until the native action and payload tests exist |
 | Current mutation handlers | Effect contracts | Preserve existing guard/queue behavior through the adapter; add intended, attempted, and observed effects incrementally |
-| `kernel/governance/baseline-store.ts` | Git history plus standing resolver | Retain as a read-only legacy-import adapter during cutover; stop direct baseline advancement after cutover |
-| `kernel/governance/hash.ts` FNV hash | Canonical SHA-256 subject digests | FNV may remain only as a non-authoritative cache/diff optimization |
-| `kernel/governance/accept.ts` | Human gesture plus admission service | Preserve closure-only reachability; replace direct `setBaseline` with an exact admission request |
-| `kernel/governance/queue.ts` | Proposal/review projection | Project from proposal, standing, origin, and journal state rather than journal-plus-path baseline alone |
-| `kernel/governance/classify.ts` | Origin classifier | Keep positive trusted-human-input evidence; emit an origin classification rather than silently deciding authority inside the classifier |
-| `kernel/governance/auto-accept/*` | Transformation registry, verifiers, and mandate policy | Reassess every class; no legacy entry receives automatic authority merely because it was previously allowlisted |
+| `governor/kernel/baseline-store.ts` | Git history plus standing resolver | Retain as a read-only legacy-import adapter during cutover; stop direct baseline advancement after cutover |
+| `governor/kernel/hash.ts` FNV hash | Canonical SHA-256 subject digests | FNV may remain only as a non-authoritative cache/diff optimization |
+| `governor/kernel/accept.ts` | Human gesture plus admission service | Preserve closure-only reachability; replace direct `setBaseline` with an exact admission request |
+| `governor/kernel/queue.ts` | Proposal/review projection | Project from proposal, standing, origin, and journal state rather than journal-plus-path baseline alone |
+| `governor/kernel/classify.ts` | Origin classifier | Keep positive trusted-human-input evidence; emit an origin classification rather than silently deciding authority inside the classifier |
+| `governor/kernel/auto-accept/*` | Transformation registry, verifiers, and mandate policy | Reassess every class; no legacy entry receives automatic authority merely because it was previously allowlisted |
 | `auto-accept: all` | No target equivalent | Disable and migrate; it is incompatible with bounded class-based admission |
 | `auto-accept: appends` | Content proposal policy | Appended prose is content and returns for human decision |
 | `governance/acceptance-log.jsonl` | Historical import plus structured claims | Preserve as evidence; new proposal/verification/admission/revocation/effect claims use versioned records |
 | `governance/pending-index.json` | Rebuildable review projection | Never authority; absence remains unavailable rather than empty |
-| `governance/wiring.ts` | Live event adapters and controller composition | Split only along work being changed; preserve module-scope accept reachability |
-| `governance/pane.ts` | Review-center views | Add individual/cohort/mandate projections behind a narrow controller; no accept callable on reachable instances |
+| `governor/wiring/wiring.ts` | Live event adapters and controller composition | Split only along work being changed; preserve module-scope accept reachability |
+| `governor/wiring/pane.ts` | Review-center views | Add individual/cohort/mandate projections behind a narrow controller; no accept callable on reachable instances |
 | `main.ts` static imports | Distribution composition root | Public build imports only public/core and approved optional modules; private code is absent from the bundle |
 | `kernel/modules/manifest.ts` | Module packaging plus generated capability projection | Reference registered actions; do not make module presence equivalent to public eligibility or action semantics |
 
@@ -159,7 +159,7 @@ packages/plugin/src/kernel/effects/
   effect.ts             intended, attempted, and observed effect contracts
   settlement.ts         late, partial, uncertain, and correction semantics
 
-packages/plugin/src/governance/observations/
+packages/plugin/src/governor/wiring/observations/
   local-store.ts        protected replica-local replay payload adapter
   retention.ts          audited expiry, export, dependency check, and deletion
 ```
@@ -171,7 +171,7 @@ The executor is not a second mutation kernel. It becomes the seam around the exi
 Create:
 
 ```text
-packages/plugin/src/kernel/governance/contracts/
+packages/plugin/src/governor/kernel/contracts/
   change-class.ts       six-class registry and escalation rules
   ids.ts                branded ids for vault, replica, session, mandate, proposal, cohort, key, predicate
   origin.ts             four origin classes and confidence
@@ -188,14 +188,14 @@ Keep exact note-content digests byte-preserving. Do not normalize the note befor
 Create:
 
 ```text
-packages/plugin/src/kernel/governance/history-store/
+packages/plugin/src/governor/kernel/history-store/
   types.ts              repository-neutral object/ref contracts
   history-scope.ts      stable human-chosen include/exclude policy
   refs.ts               internal ref names behind one service
   repository.ts         interface used by proposal and admission services
   recovery.ts           settlement inspection and repair plans
 
-packages/plugin/src/governance/history-store/
+packages/plugin/src/governor/wiring/history-store/
   git-repository.ts     live standard-Git implementation
   local-data-root.ts    platform-appropriate outside-vault storage
 ```
@@ -207,32 +207,32 @@ The Community adapter must not require the user to install Git or expose a gener
 Create:
 
 ```text
-packages/plugin/src/kernel/governance/sessions/
+packages/plugin/src/governor/kernel/sessions/
   session.ts
   session-store.ts
 
-packages/plugin/src/kernel/governance/proposals/
+packages/plugin/src/governor/kernel/proposals/
   proposal.ts
   proposal-store.ts
   proposal-builder.ts
 
-packages/plugin/src/kernel/governance/verification/
+packages/plugin/src/governor/kernel/verification/
   predicate.ts
   registry.ts
   verify.ts
 
-packages/plugin/src/kernel/governance/cohorts/
+packages/plugin/src/governor/kernel/cohorts/
   cohort.ts
   freeze.ts
   coverage.ts
 
-packages/plugin/src/kernel/governance/admission/
+packages/plugin/src/governor/kernel/admission/
   policy.ts
   service.ts
   settlement.ts
   standing-resolver.ts
 
-packages/plugin/src/kernel/governance/origins/
+packages/plugin/src/governor/kernel/origins/
   classifier.ts
   reconcile.ts
 ```
@@ -242,7 +242,7 @@ packages/plugin/src/kernel/governance/origins/
 Create only after Gate 1 is complete:
 
 ```text
-packages/plugin/src/kernel/governance/mandates/
+packages/plugin/src/governor/kernel/mandates/
   mandate.ts
   draft.ts
   policy.ts
@@ -255,18 +255,18 @@ packages/plugin/src/kernel/governance/mandates/
 Create only after the local authority path is proven:
 
 ```text
-packages/plugin/src/kernel/governance/attestations/
+packages/plugin/src/governor/kernel/attestations/
   statement.ts
   dsse.ts
   trust.ts
   ledger.ts
 
-packages/plugin/src/governance/attestations/
+packages/plugin/src/governor/wiring/attestations/
   signer.ts
   secret-store.ts
   portable-ledger-adapter.ts
 
-packages/plugin/src/kernel/governance/replicas/
+packages/plugin/src/governor/kernel/replicas/
   reconciler.ts
   completeness.ts
   conflicts.ts
@@ -535,7 +535,7 @@ The dependency spike is part of this PR's design evidence. The final PR includes
 
 **Decision coverage:** D01, D12  
 **Create:** sessions/origins files and `governance-session.test.mjs`, `governance-origin.test.mjs`  
-**Modify:** `kernel/governance/classify.ts`, journal actor schema, connection context, `governance/wiring.ts`
+**Modify:** `governor/kernel/classify.ts`, journal actor schema, connection context, `governor/wiring/wiring.ts`
 
 Deliver:
 
@@ -552,7 +552,7 @@ Deliver:
 
 **Decision coverage:** D03, D06, D11, D13, D14 Gate 1  
 **Create:** proposals, verification, and admission files plus `governance-individual-admission.test.mjs` and `governance-settlement.test.mjs`  
-**Modify:** `kernel/governance/accept.ts`, `governance/wiring.ts`, current pending/history projections
+**Modify:** `governor/kernel/accept.ts`, `governor/wiring/wiring.ts`, current pending/history projections
 
 Deliver one end-to-end path:
 
@@ -588,7 +588,7 @@ The test must prove that later work cannot enter a frozen cohort and that one fa
 ### WP8 — Legacy evidence import and authority cutover
 
 **Decision coverage:** D04, D06, D14 Gate 1  
-**Create:** `kernel/governance/migration/legacy-import.ts`, cutover state, tests, and migration report  
+**Create:** `governor/kernel/migration/legacy-import.ts`, cutover state, tests, and migration report  
 **Modify:** `baseline-store.ts`, acceptance log readers, settings migration, status and troubleshooting
 
 Deliver:
@@ -732,20 +732,20 @@ Parallelize only packages whose inputs have merged and whose write sets do not o
 | Action registry and inventory | `kernel/operations/action.ts`, `registry.ts`, `surface-binding.ts`, capability projections, inventory tests | Immediately; integration owner controls current registration files |
 | Operation executor/compatibility | remaining `kernel/operations/`, executor tests | Action registry contract merged |
 | Observations/effects | `kernel/observations/`, `kernel/effects/`, live observation store | Executor interfaces merged |
-| Subject contracts | `kernel/governance/contracts/`, subject fixtures | Operation and observation identity contracts merged |
-| History service | `kernel/governance/history-store/`, live history adapter | Subject contracts |
-| Sessions/origins | `kernel/governance/sessions/`, `origins/`; classifier integration | Subject contracts |
+| Subject contracts | `governor/kernel/contracts/`, subject fixtures | Operation and observation identity contracts merged |
+| History service | `governor/kernel/history-store/`, live history adapter | Subject contracts |
+| Sessions/origins | `governor/kernel/sessions/`, `origins/`; classifier integration | Subject contracts |
 | Proposal/verification | `proposals/`, `verification/` | Subjects and history interfaces |
 | Admission | `admission/` and admission tests | Subjects, history, verification |
 | Cohorts | `cohorts/` and cohort tests | Proposal and verification contracts |
-| UI integration | assigned slices of `governance/pane.ts` and `wiring.ts` | Corresponding kernel service merged |
+| UI integration | assigned slices of `governor/wiring/pane.ts` and `wiring.ts` | Corresponding kernel service merged |
 | Migration | `migration/`, legacy adapters | Gate 1 path stable |
 | Mandates | `mandates/` | Gate 1 checkpoint |
 | Signing | `attestations/` | Local admission stable |
 | Replicas | `replicas/`, portable adapter | Signing and live Sync spike |
 | Distribution/release | `distribution/`, build graph, release tests | Module profile implemented |
 
-`main.ts`, `governance/wiring.ts`, `governance/pane.ts`, package manifests, lock file, and build configuration are integration-owner files. Do not assign them to multiple agents concurrently. Kernel agents expose narrow interfaces; the integration owner connects them in dependency order.
+`main.ts`, `governor/wiring/wiring.ts`, `governor/wiring/pane.ts`, package manifests, lock file, and build configuration are integration-owner files. Do not assign them to multiple agents concurrently. Kernel agents expose narrow interfaces; the integration owner connects them in dependency order.
 
 ## 14. Test-first workflow for every work package
 

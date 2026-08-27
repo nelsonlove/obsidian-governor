@@ -44,18 +44,18 @@ import { makeRegistry, DEFAULT_SCHEMES } from "../kernel/scheme/registry.js";
 import { buildMcpActionRegistry } from "../kernel/operations/mcp-registry.js";
 import { createOperationExecutor } from "../kernel/operations/executor.js";
 import { createCapture } from "../kernel/observations/capture.js";
-import { openSession, isLive, livenessOf, type SessionV1 } from "../kernel/governance/sessions/session.js";
-import { deriveClasses, requireClassesCovered, authorityKeysDiffer, frontmatterUid } from "../kernel/governance/proposals/class-firewall.js";
-import { buildProposalSubjectFromOperation } from "../kernel/governance/proposals/proposal-builder.js";
-import { openProposal } from "../kernel/governance/proposals/proposal.js";
-import { productionStampOf } from "../kernel/governance/mandates/policy.js";
+import { openSession, isLive, livenessOf, type SessionV1 } from "../governor/kernel/sessions/session.js";
+import { deriveClasses, requireClassesCovered, authorityKeysDiffer, frontmatterUid } from "../governor/kernel/proposals/class-firewall.js";
+import { buildProposalSubjectFromOperation } from "../governor/kernel/proposals/proposal-builder.js";
+import { openProposal } from "../governor/kernel/proposals/proposal.js";
+import { productionStampOf } from "../governor/kernel/mandates/policy.js";
 import { NOTE_WRITE_V1 } from "../kernel/operations/actions/note-write.js";
-import { digestBytes } from "../kernel/governance/contracts/digest.js";
-import { canonicalize } from "../kernel/governance/contracts/canonical-json.js";
-import { digestUtf8 } from "../kernel/governance/contracts/digest.js";
-import { isExcludedTerritory } from "../governance/territories.js";
+import { digestBytes } from "../governor/kernel/contracts/digest.js";
+import { canonicalize } from "../governor/kernel/contracts/canonical-json.js";
+import { digestUtf8 } from "../governor/kernel/contracts/digest.js";
+import { isExcludedTerritory } from "../governor/wiring/territories.js";
 import { createObservationStore } from "../kernel/observations/store.js";
-import { createLocalBlobStore } from "../governance/observations/local-store.js";
+import { createLocalBlobStore } from "../governor/wiring/observations/local-store.js";
 import { vaultSlug } from "../paths.js";
 import { collectPaths } from "../guard.js";
 
@@ -257,7 +257,7 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
     enabled: () => ctx.getSettings().captureObservations === true,
     maxBytes: ctx.getSettings().captureMaxBytes ?? 50 * 1024 * 1024,
     // The same territory list the governance pane enumerates by — one list,
-    // one meaning (governance/territories.ts). Reads in a guarded territory
+    // one meaning (governor/wiring/territories.ts). Reads in a guarded territory
     // stay legal; RETAINING copies of them outside the territory is what this
     // forbids (issue #322).
     excludedSource: isExcludedTerritory,

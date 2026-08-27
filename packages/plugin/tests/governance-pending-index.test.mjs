@@ -1,11 +1,11 @@
 // Ported from obsidian-stewardship/tests/pending-index.test.mjs (#83, cycle 1) —
 // pendingIndex/serializePendingIndex, the pure read-only pending-index serializer,
-// now at src/kernel/governance/pending-index.ts. Derived entirely from PendingItem[];
+// now at src/governor/kernel/pending-index.ts. Derived entirely from PendingItem[];
 // no I/O, no obsidian runtime. The bytes it emits are what obsidian_pending_review parses.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pendingIndex, serializePendingIndex } from "../src/kernel/governance/pending-index.ts";
+import { pendingIndex, serializePendingIndex } from "../src/governor/kernel/pending-index.ts";
 
 const item = (overrides = {}) => ({
   path: "Notes/A.md",

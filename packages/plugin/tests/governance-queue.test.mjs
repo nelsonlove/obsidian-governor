@@ -3,9 +3,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { computeQueue, groupByAgent } from "../src/kernel/governance/queue.ts";
-import { contentHash } from "../src/kernel/governance/hash.ts";
-import { parseJournal } from "../src/kernel/governance/journal-reader.ts";
+import { computeQueue, groupByAgent } from "../src/governor/kernel/queue.ts";
+import { contentHash } from "../src/governor/kernel/hash.ts";
+import { parseJournal } from "../src/governor/kernel/journal-reader.ts";
 
 const baseline = (path, content, at) => ({ path, content, hash: contentHash(content), acceptedAt: at, acceptedBy: "seed" });
 const jrec = (o) => JSON.stringify(o);

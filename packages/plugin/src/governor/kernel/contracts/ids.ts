@@ -13,7 +13,7 @@
 // machinery) and are NOT minted here. Identity is never derived from path or
 // Git author.
 
-import { uuidv7 } from "../../uuidv7.js";
+import { uuidv7 } from "../../../kernel/uuidv7.js";
 
 declare const brand: unique symbol;
 type Branded<B extends string> = string & { readonly [brand]: B };

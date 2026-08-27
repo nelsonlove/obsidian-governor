@@ -62,7 +62,7 @@ import { DEFAULT_PROVENANCE_CONFIG, validateProvenanceConfig, DEFAULT_NOTES_DIR,
 import { registerHealthTools, type HealthToolsCtx } from "./tools-health.js";
 import { DEFAULT_HEALTH_CONFIG, validateHealthConfig, DEFAULT_EMPTY_CHARS, type HealthSource } from "../kernel/health/index.js";
 import { registerFileclassTools, type FileclassToolsCtx } from "./tools-fileclass.js";
-import { DEFAULT_GOVERNANCE_SETTINGS, DEFAULT_ACCEPTANCE_SETTINGS } from "../kernel/governance/settings.js";
+import { DEFAULT_GOVERNANCE_SETTINGS, DEFAULT_ACCEPTANCE_SETTINGS } from "../governor/kernel/settings.js";
 import {
   registerCrosssessionTools,
   emptyCrosssessionSource,
@@ -771,11 +771,11 @@ const FILECLASS_MANIFEST: ModuleManifest = {
 // ── acceptance module manifest (#83, cycle 2: the accept gesture + pane) ─────────────
 //
 // Module id `acceptance` since 0.12.0 (historically `governance` — the source dirs
-// src/governance/ + src/kernel/governance/ and the shipped governance_* tool names keep
+// src/governor/wiring/ + src/governor/kernel/ and the shipped governance_* tool names keep
 // the old word; the settings key migrated via migrateLegacyModuleIds).
 //
 // The acceptance module's enabled-flag gates the Obsidian REVIEW PANE — the human-only
-// Accept / Revert / Adopt / auto-accept-allowlist surface (src/governance/{pane,wiring}.ts,
+// Accept / Revert / Adopt / auto-accept-allowlist surface (src/governor/wiring/{pane,wiring}.ts,
 // wired in main.ts, NOT here). It contributes ZERO tools to the MCP transport: the accept
 // gesture never touches the bridge. The one MCP read surface — obsidian_pending_review — is
 // registered ALWAYS-ON and read-only in server.ts, DECOUPLED from this toggle (cycle 2 fixed
@@ -797,7 +797,7 @@ const FILECLASS_MANIFEST: ModuleManifest = {
 // The config fields below are the accept pane's ONLY MCP-side knobs — display prefs and
 // acceptance-convergence parameters, not accept capabilities. They live at
 // `modules.acceptance.config.*`, the exact keys the pane wiring reads through
-// `governanceDisplaySettings` / `governanceAcceptanceSettings` (kernel/governance/settings.ts):
+// `governanceDisplaySettings` / `governanceAcceptanceSettings` (governor/kernel/settings.ts):
 // the two pending-count badges (default ON), the `acceptedBy` identity the human's own Accept
 // gesture stamps into a `proposed` note (#221/#164 convergence — settings are human-only by
 // construction, so the identity is human-set), and the OPTIONAL `requiredFrontmatterKeys`
@@ -1667,7 +1667,7 @@ export function builtinModules(deps: MountDeps): VaultModule[] {
     // `governance`): the accept pane's toggle. It
     // contributes ZERO MCP tools — its registrar is a NO-OP on the transport. Its
     // enabled-flag is read by main.ts (NOT here) to decide whether to wire the Obsidian
-    // review pane (src/governance/wiring.ts). Deliberately NOT `mutating`: it registers no
+    // review pane (src/governor/wiring/wiring.ts). Deliberately NOT `mutating`: it registers no
     // tool at all, so the mount's read-only-only registrar gate is satisfied vacuously and
     // the accept/baseline-name tripwire has nothing to catch (the accept path lives entirely
     // behind gesture-gated pane buttons, never on the MCP surface). Default DISABLED: the

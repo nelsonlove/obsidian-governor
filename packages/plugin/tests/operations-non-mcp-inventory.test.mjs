@@ -91,7 +91,7 @@ describe("non-MCP inventory — Obsidian commands", () => {
 // ── the property the acceptance model rests on ───────────────────────────────
 
 describe("non-MCP inventory — governance contributes no command", () => {
-  test("src/governance registers zero Obsidian commands", async () => {
+  test("src/governor/wiring registers zero Obsidian commands", async () => {
     const found = await scanGovernanceCommands();
     assert.deepEqual(
       found,
@@ -112,7 +112,7 @@ describe("non-MCP inventory — governance contributes no command", () => {
 
 describe("non-MCP inventory — the accept perimeter stays module-scope", () => {
   test("every authority function named in the perimeter is present in wiring.ts", async () => {
-    const { present } = await scanModuleScopeOnly("governance/wiring.ts", ACCEPT_PERIMETER_FUNCTIONS);
+    const { present } = await scanModuleScopeOnly("governor/wiring/wiring.ts", ACCEPT_PERIMETER_FUNCTIONS);
     assert.deepEqual(
       [...present].sort(),
       [...ACCEPT_PERIMETER_FUNCTIONS].sort(),
@@ -121,7 +121,7 @@ describe("non-MCP inventory — the accept perimeter stays module-scope", () => 
   });
 
   test("none of them is exported", async () => {
-    const { exported } = await scanModuleScopeOnly("governance/wiring.ts", ACCEPT_PERIMETER_FUNCTIONS);
+    const { exported } = await scanModuleScopeOnly("governor/wiring/wiring.ts", ACCEPT_PERIMETER_FUNCTIONS);
     assert.deepEqual(
       [...exported],
       [],
@@ -134,11 +134,11 @@ describe("non-MCP inventory — the accept perimeter stays module-scope", () => 
     // export set closes the CLASS: a new export — including one that captures
     // an accept-capable closure without being named after it — becomes a
     // visible decision rather than something a reviewer must happen to notice.
-    const actual = await scanExports("governance/wiring.ts");
+    const actual = await scanExports("governor/wiring/wiring.ts");
     assert.deepEqual(
       [...actual].sort(),
       [...WIRING_EXPORTS].sort(),
-      "governance/wiring.ts's exports changed; confirm the new one carries no accept-capable closure, then update WIRING_EXPORTS"
+      "governor/wiring/wiring.ts's exports changed; confirm the new one carries no accept-capable closure, then update WIRING_EXPORTS"
     );
   });
 
@@ -152,7 +152,7 @@ describe("non-MCP inventory — the accept perimeter stays module-scope", () => 
     // those two names count as reaching the log. Each delegate is listed
     // explicitly rather than followed automatically.
     const reaches = await scanFunctionReaches(
-      "governance/wiring.ts",
+      "governor/wiring/wiring.ts",
       ACCEPT_PERIMETER_FUNCTIONS,
       ["appendLog", "acceptNote", "revertNote"]
     );
@@ -349,6 +349,25 @@ describe("non-MCP inventory — bridge, settings and internal surfaces", () => {
     }
   });
 
+  // The same check for the OTHER two places the inventory records a source path. PLAIN_SURFACES
+  // had it; AUTOMATION_SURFACES and the bindings' `source` did not, so a rename could leave
+  // either naming a file that no longer exists and nothing would say so — an inventory that
+  // points at a dead path describes a codebase nobody has.
+  test("every automation surface and every non-MCP binding names a file that exists", async () => {
+    const rows = [
+      ...AUTOMATION_SURFACES.map((r) => ({ id: r.id, file: r.file })),
+      // Command bindings carry no `source` (their file is COMMAND_SURFACES' own scan); the
+      // automation and authority bindings do, and those are the ones that name a path.
+      ...nonMcpBindings().filter((b) => b.source).map((b) => ({ id: b.id, file: b.source })),
+    ];
+    assert.ok(rows.length > 0, "nothing scanned — the inventory is empty or the shape changed");
+    for (const row of rows) {
+      const abs = resolvePath(PLUGIN_SRC, row.file.replace(/^src\//, ""));
+      const text = await readFile(abs, "utf8").catch(() => null);
+      assert.ok(text !== null, `surface '${row.id}' names ${row.file}, which does not exist`);
+    }
+  });
+
   test("no duplicate surface ids across the whole non-MCP inventory", () => {
     const ids = [
       ...COMMAND_SURFACES.map((r) => `command:${r.id}`),
@@ -421,7 +440,7 @@ describe("non-MCP inventory — bridge, settings and internal surfaces", () => {
     // and must name a declared action as its owner.
     const declaredActions = new Set(AUTHORITY_SURFACES.map((r) => r.action));
     const { present } = await scanModuleScopeOnly(
-      "governance/wiring.ts",
+      "governor/wiring/wiring.ts",
       NOT_SURFACES.map((n) => n.name)
     );
     for (const n of NOT_SURFACES) {

@@ -11,7 +11,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { contentHash } from "../src/kernel/governance/hash.ts";
+import { contentHash } from "../src/governor/kernel/hash.ts";
 
 export async function makeTmpFs() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "vault-mcp-governance-test-"));

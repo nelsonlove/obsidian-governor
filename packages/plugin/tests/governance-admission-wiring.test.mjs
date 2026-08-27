@@ -16,14 +16,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { buildAdmission, readFileFromTree } from "../src/governance/admission-wiring.ts";
-import { openGitRepository } from "../src/governance/history-store/git-repository.ts";
-import { proposalRef, standingRef } from "../src/kernel/governance/history-store/refs.ts";
-import { createProposalStore } from "../src/kernel/governance/proposals/proposal-store.ts";
-import { openProposal } from "../src/kernel/governance/proposals/proposal.ts";
-import { buildProposalSubjectFromOperation } from "../src/kernel/governance/proposals/proposal-builder.ts";
-import { digestBytes } from "../src/kernel/governance/contracts/digest.ts";
-import { runGuardedDisposition } from "../src/kernel/governance/gesture.ts";
+import { buildAdmission, readFileFromTree } from "../src/governor/wiring/admission-wiring.ts";
+import { openGitRepository } from "../src/governor/wiring/history-store/git-repository.ts";
+import { proposalRef, standingRef } from "../src/governor/kernel/history-store/refs.ts";
+import { createProposalStore } from "../src/governor/kernel/proposals/proposal-store.ts";
+import { openProposal } from "../src/governor/kernel/proposals/proposal.ts";
+import { buildProposalSubjectFromOperation } from "../src/governor/kernel/proposals/proposal-builder.ts";
+import { digestBytes } from "../src/governor/kernel/contracts/digest.ts";
+import { runGuardedDisposition } from "../src/governor/kernel/gesture.ts";
 
 const enc = (s) => new TextEncoder().encode(s);
 const dec = (b) => new TextDecoder().decode(b);
@@ -407,7 +407,7 @@ describe("§15 — synthetic clicks and captured callbacks remain unable to admi
 
   test("the pane wires Admit through the shared gate — pinned at the source", async () => {
     const fsm = await import("node:fs");
-    const raw = fsm.readFileSync(new URL("../src/governance/pane.ts", import.meta.url), "utf8");
+    const raw = fsm.readFileSync(new URL("../src/governor/wiring/pane.ts", import.meta.url), "utf8");
     const lines = raw.split("\n");
     let found = false;
     for (let i = 0; i < lines.length; i++) {
@@ -425,9 +425,9 @@ describe("§15 — synthetic clicks and captured callbacks remain unable to admi
     // the gate mints AFTER its checks and hands the ref to the action; the
     // pane has no mint to misplace.
     const fsm = await import("node:fs");
-    const pane = fsm.readFileSync(new URL("../src/governance/pane.ts", import.meta.url), "utf8");
+    const pane = fsm.readFileSync(new URL("../src/governor/wiring/pane.ts", import.meta.url), "utf8");
     assert.ok(!/mintGestureRef|uuidv7|gesture-\$\{/.test(pane), "no mint machinery is reachable from the pane");
-    const gesture = fsm.readFileSync(new URL("../src/kernel/governance/gesture.ts", import.meta.url), "utf8");
+    const gesture = fsm.readFileSync(new URL("../src/governor/kernel/gesture.ts", import.meta.url), "utf8");
     const gateAt = gesture.indexOf("isRealGesture(evt)");
     const mintAt = gesture.indexOf("mintGestureRefInternal(Date.now())");
     assert.ok(gateAt > 0 && mintAt > gateAt, "the mint sits downstream of the trust check, in the gate's own body");
@@ -449,7 +449,7 @@ describe("§15 — synthetic clicks and captured callbacks remain unable to admi
 
   test("this scan can find something — the vacuity self-check", async () => {
     const fsm = await import("node:fs");
-    const raw = fsm.readFileSync(new URL("../src/governance/pane.ts", import.meta.url), "utf8");
+    const raw = fsm.readFileSync(new URL("../src/governor/wiring/pane.ts", import.meta.url), "utf8");
     assert.ok(/admitBtn\.addEventListener\(/.test(raw), "the pattern matches the real wiring site");
   });
 });
@@ -459,7 +459,7 @@ describe("§15 — synthetic clicks and captured callbacks remain unable to admi
 describe("the declared fail direction", () => {
   test("admission-wiring.ts declares its threat-model row at the top of the file", async () => {
     const fsm = await import("node:fs");
-    const raw = fsm.readFileSync(new URL("../src/governance/admission-wiring.ts", import.meta.url), "utf8");
+    const raw = fsm.readFileSync(new URL("../src/governor/wiring/admission-wiring.ts", import.meta.url), "utf8");
     assert.match(raw, /FAIL CLOSED/, "the row is declared");
     assert.match(raw, /REMAINS PROPOSED/, "with the outcome named");
     assert.match(raw, /degraded/i, "and the one deliberate exception documented");

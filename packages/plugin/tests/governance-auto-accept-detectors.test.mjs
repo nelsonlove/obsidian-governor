@@ -1,5 +1,5 @@
 // Ported from obsidian-stewardship/tests/auto-accept-detectors.test.mjs (#83, cycle 1) —
-// per-class CONSERVATIVE detectors, now at src/kernel/governance/auto-accept/detectors.ts.
+// per-class CONSERVATIVE detectors, now at src/governor/kernel/auto-accept/detectors.ts.
 // For EACH class: a genuine positive AND a battery of "almost-mechanical-but-not" cases that
 // MUST return false (→ the change stays PENDING). A detector that ever returns true for a case
 // with ANY residual content change is a critical defect.
@@ -13,7 +13,7 @@ import {
   evaluateLinkHeal,
   isValidUuidV7,
   isValidTimestamp,
-} from "../src/kernel/governance/auto-accept/detectors.ts";
+} from "../src/governor/kernel/auto-accept/detectors.ts";
 
 const UID = "019fea8c-2093-758a-8da2-e8dbcddda6b4"; // valid UUIDv7 (version nibble 7, variant 8)
 

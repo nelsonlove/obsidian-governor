@@ -10,8 +10,8 @@
 // Reads are honest about absence: a transformation with no evidence shows
 // the named missing classes, never an empty row.
 
-import { tupleOf, type TransformationRegistry, type TransformationV1 } from "../kernel/governance/transformations/transformation.js";
-import { PromotionRefusedError, type PromotionStore, type PromotionVerdict } from "../kernel/governance/transformations/promotion.js";
+import { tupleOf, type TransformationRegistry, type TransformationV1 } from "../kernel/transformations/transformation.js";
+import { PromotionRefusedError, type PromotionStore, type PromotionVerdict } from "../kernel/transformations/promotion.js";
 
 export type PromotionActOutcome = { ok: true } | { ok: false; code: string; detail: string };
 

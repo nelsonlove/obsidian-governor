@@ -225,7 +225,7 @@ export async function scanMcpSurfaces() {
   const tools = new Map();
   const unresolved = [];
   /** String consts are resolved across the whole tree: `SUBMIT_REVISION_TOOL`
-   * is declared in kernel/governance/dispositions.ts and used in mcp/. */
+   * is declared in governor/kernel/dispositions.ts and used in mcp/. */
   const globalConsts = new Map();
   const parsed = [];
 
@@ -407,7 +407,7 @@ export async function scanCommands() {
 }
 
 /**
- * Commands registered from anywhere under `src/governance/`.
+ * Commands registered from anywhere under `src/governor/wiring/`.
  *
  * Expected to be EMPTY, permanently. This is the inverse of an inventory: the
  * assertion is that a whole class of surface does not exist, because
@@ -415,7 +415,7 @@ export async function scanCommands() {
  */
 export async function scanGovernanceCommands() {
   const commands = await scanCommands();
-  return [...commands.values()].filter((c) => c.file.startsWith("src/governance/"));
+  return [...commands.values()].filter((c) => c.file.startsWith("src/governor/wiring/"));
 }
 
 /**
@@ -473,7 +473,7 @@ export async function scanAutomationSites() {
  *
  * Bodies are delimited by this file's own style — a module-scope
  * `function name(` through the next `}` at column 0 — which holds throughout
- * `governance/wiring.ts`. A function whose body cannot be delimited is
+ * `governor/wiring/wiring.ts`. A function whose body cannot be delimited is
  * reported as `null` rather than silently treated as not calling anything.
  *
  * `delegates` names indirect routes: `performAccept` does not call `appendLog`
