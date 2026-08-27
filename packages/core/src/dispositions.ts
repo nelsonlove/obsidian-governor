@@ -21,8 +21,14 @@
 //      governance PROVIDER) — the review pane's seven verbs, mixed
 //      human/agent authority;
 //    - the INBOX-TRIAGE instance (kernel/triage/descriptors.ts, HOST — a
-//      future satellite plugin) — ten verbs, ALL agent authority (none
-//      confers standing), no pane surface at all.
+//      future satellite plugin) — THREE mechanical primitives (trash / move /
+//      stamp), ALL agent authority (none confers standing), no pane surface at
+//      all. Anything richer is a human-declared config row, not a built-in.
+//      (This said "ten verbs" until S3a. That was the pre-#241 table; Nelson's
+//      2026-08-19 ruling replaced it with the three primitives — see
+//      docs/triage.md. The stale count rode along on the move into this
+//      package, where a wrong number would have shipped as documentation of a
+//      published contract.)
 //
 //  PUBLISHED HERE (@vault-mcp/core) rather than living in either subtree: the
 //  provider's dispositions module type-imported this shape from the host's
@@ -60,7 +66,7 @@ export type DispositionAuthority = "human" | "agent";
 /**
  * The generic descriptor every instance's dispositions declare. `Id` and
  * `Surface` are the instance's own closed unions (e.g. the acceptance
- * instance's seven ids over five surfaces; the triage instance's ten ids over
+ * instance's seven ids over five surfaces; the triage instance's three ids over
  * the one "mcp-tool" surface). Instances may EXTEND this shape with their own
  * data fields (the triage table adds effect-mapping metadata) — extensions
  * must stay plain data, per the substrate rules above.

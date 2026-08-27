@@ -6,7 +6,8 @@
   "scripts": {
     "build": "node esbuild.config.mjs production",
     "dev": "node esbuild.config.mjs",
-    "test": "tsc --noEmit && node --import tsx --test 'tests/*.test.mjs'"
+    "test": "tsc --noEmit && node --import tsx --test 'tests/*.test.mjs'",
+    "pretest": "npm --prefix ../core run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",

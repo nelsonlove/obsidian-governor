@@ -43,25 +43,39 @@
  *     builder, mandate stamping, history recording — is now `governor/wiring/write-observer.ts`
  *     behind the seam, and the session liveness consultation is the seam's refusal hook.
  *
- * What S2 did NOT do, so the remaining numbers are not mistaken for drift:
+ * ── WHAT S3a DID (the contract-publishing package) ──────────────────────────────────────────
  *
- *   • `server.ts` still imports `canonical-json` and `digest`, for the SESSION SCOPE DIGEST —
- *     a host assertion about a connection. The seam itself does not need them; promoting them
- *     into `@vault-mcp/core` is S3's contract-publishing package.
- *   • `server.ts` still imports `territories` and the observation blob store: §5 left the
- *     observations ruling (host-side capture with territories as host config, or a capture
- *     hook) open, and it is S3's call.
- *   • `tools-governance-revision.ts` still crosses twice, one of which is the triage-dispositions
- *     inversion condition 9 names — also deferred to S3.
+ * S2 left four items here as "not done, deferred to S3". S3a discharged three of them by
+ * PUBLISHING what the crossing reached for into `@vault-mcp/core`, which is the sanctioned way
+ * an entry leaves these tables — the scan matches relative specifiers only, so a dependency on
+ * a published contract is by construction not a boundary crossing:
+ *
+ *   • `server.ts`'s `canonical-json` + `digest` — DONE. They serve the SESSION SCOPE DIGEST, a
+ *     host assertion about a connection, so a host depending on a provider for them was always
+ *     backwards. `server.ts` went from FOUR crossings to TWO.
+ *   • The triage-dispositions inversion (condition 9) — DONE. The generic descriptor substrate
+ *     is in `@vault-mcp/core`; triage's own descriptors stayed host-side, because triage becomes
+ *     a SATELLITE and a provider must not depend on one. Note this retired the GOVERNOR→HOST
+ *     edge (`governor/kernel/dispositions.ts`). `src/mcp/tools-governance-revision.ts` still
+ *     crosses twice in the other direction — that is the file's own placement, not the
+ *     inversion, and it retires when the file moves with the provider's tools.
+ *   • `SessionV1` (condition 7) — DONE, published rather than borrowed.
+ *
+ * What is still open, so the remaining numbers are not mistaken for drift:
+ *
+ *   • `server.ts` still imports `territories` and the observation blob store. The observations
+ *     question §5 left open is now RULED (see condition 9's ruling in the design doc: host-side
+ *     capture, territories published as a contract, no capture hook) — but RULED is not MOVED.
+ *     The code move is the next package, and this table describes today.
  *   • `tools-governance-mandate.ts` still physically sits in `src/mcp/`. Its registration no
  *     longer runs through `ServerCtx`, which is what mattered; the file itself moves with the
- *     rest of the provider's tools at S3.
+ *     rest of the provider's tools.
  *
- * The other direction GREW, from 7 to 10, and that is the intended shape rather than a
- * regression: every new entry is the provider depending on something the HOST is ruled to own —
- * the session contract (condition 7), the native write action, and the seam's own types. This
- * list is the "publish as a contract or copy it" work item for S3, so entries arriving here
- * from the other table is the split proceeding, not decaying.
+ * The other direction went 7 → 10 at S2 → 6 at S3a. The S2 growth was intended (the provider
+ * depending on things the host is RULED to own); S3a shrank it by publishing four of those as
+ * contracts instead. This list is the "publish as a contract or copy it" work item, so entries
+ * arriving here from the other table is the split proceeding, and entries leaving via
+ * `@vault-mcp/core` is that work item being discharged.
  *
  * Instrument discipline: the scan is a pure function over a { path -> source } map, and it is
  * exercised against a synthetic tree with a planted violation BEFORE it is trusted against the
@@ -368,9 +382,15 @@ describe("THE BOUNDARY — one governance subtree, an enumerated seam", () => {
     // Two bounds, because the two directions are meant to move differently.
     //
     // host→governor must approach ZERO: every one of these is the host reaching into provider
-    // internals, and at S3 there is no such reach to make. S1 enumerated 45; S2 left 32.
+    // internals, and at S3 there is no such reach to make. S1 enumerated 45; S2 left 32; S3a
+    // leaves 30.
+    //
+    // The bound is set to the CURRENT number, not a round number above it. A ratchet with slack
+    // is a ratchet that lets the next few regressions through silently, which is the opposite of
+    // what it is for — it sat at 35 against an actual 32 through all of S2 and would not have
+    // caught three new crossings. Tighten it in the same commit that lowers the count.
     assert.ok(
-      host <= 35,
+      host <= 30,
       `${host} host→governor imports — this direction only shrinks; route it through the seam`
     );
     // The total is the coarse ratchet. It rises slightly slower than host→governor falls,
@@ -378,7 +398,7 @@ describe("THE BOUNDARY — one governance subtree, an enumerated seam", () => {
     // governor→host ones — the provider depending on published host contracts is the TARGET
     // state for that list, so the total is a guard against sprawl, not a target in itself.
     assert.ok(
-      crossings <= 50,
+      crossings <= 36,
       `${crossings} boundary crossings — the split is meant to shrink this, not grow it`
     );
   });
