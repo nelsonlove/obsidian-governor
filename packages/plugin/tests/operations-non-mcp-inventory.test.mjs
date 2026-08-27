@@ -349,6 +349,25 @@ describe("non-MCP inventory — bridge, settings and internal surfaces", () => {
     }
   });
 
+  // The same check for the OTHER two places the inventory records a source path. PLAIN_SURFACES
+  // had it; AUTOMATION_SURFACES and the bindings' `source` did not, so a rename could leave
+  // either naming a file that no longer exists and nothing would say so — an inventory that
+  // points at a dead path describes a codebase nobody has.
+  test("every automation surface and every non-MCP binding names a file that exists", async () => {
+    const rows = [
+      ...AUTOMATION_SURFACES.map((r) => ({ id: r.id, file: r.file })),
+      // Command bindings carry no `source` (their file is COMMAND_SURFACES' own scan); the
+      // automation and authority bindings do, and those are the ones that name a path.
+      ...nonMcpBindings().filter((b) => b.source).map((b) => ({ id: b.id, file: b.source })),
+    ];
+    assert.ok(rows.length > 0, "nothing scanned — the inventory is empty or the shape changed");
+    for (const row of rows) {
+      const abs = resolvePath(PLUGIN_SRC, row.file.replace(/^src\//, ""));
+      const text = await readFile(abs, "utf8").catch(() => null);
+      assert.ok(text !== null, `surface '${row.id}' names ${row.file}, which does not exist`);
+    }
+  });
+
   test("no duplicate surface ids across the whole non-MCP inventory", () => {
     const ids = [
       ...COMMAND_SURFACES.map((r) => `command:${r.id}`),

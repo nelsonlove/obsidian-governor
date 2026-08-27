@@ -536,7 +536,16 @@ describe("history browser (#135): a READ-ONLY surface that confers nothing", () 
       );
       assert.ok(!/\breadAcceptanceLog\b/.test(code(rel)), `${rel} must not reference readAcceptanceLog`);
     }
-    assert.match(readRaw("governor/wiring/pane.ts"), /governor\/kernel\/history/, "the pane renders the history");
+    // The positive leg — without it the loop above would pass in a world where NOBODY imports
+    // the reader. Asserted on the pane's actual import SPECIFIER, not on the segment
+    // `governor/kernel/history`: inside src/governor/ the pane's import is relative
+    // (`../kernel/history.js`), so that segment survives only in prose, and a comment pinning
+    // itself is not a pin.
+    assert.match(
+      readRaw("governor/wiring/pane.ts"),
+      /from ["']\.\.\/kernel\/history\.js["']/,
+      "the pane renders the history",
+    );
   });
 
   test("history adds no command and no forbidden-named tool (the module still contributes ZERO tools)", () => {
