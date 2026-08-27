@@ -131,6 +131,14 @@ Known-overstated section instead — see its header for the format.
   package. The gap is declared in the sentence's own home; when S2 lands, this entry gains
   its test citation or the suite catches the lie.
 
+## docs/suite-split-design.md (threat-model retriage)
+
+- **Condition 4's per-hook byte copies.** The cheap half survives (deep-freeze `operation` and `actor`, which also catches a BUGGY hook mutating shared state); copying every write's bytes per hook is a per-write cost paid against an actor §0 excludes.
+  approved 2026-08-27: a DEFERRAL record, not a safety claim — it states what the build will
+  NOT do and why, against the threat model §0 records as Nelson's ruling. The strong form is
+  preserved verbatim on the branch reference/hostile-threat-model (921f72e), which is the
+  evidence: reversing the decision is a read, not a re-derivation.
+
 ## docs/suite-split-design.md (perimeter-review amendments)
 
 - Rule 6 (§5) generalizes it: the seam accepts registrations that can only ADD A REFUSAL, never a predicate the host consults for permission.
