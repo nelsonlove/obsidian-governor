@@ -897,7 +897,12 @@ describe("the era swap, pinned at the source (wiring.ts is plugin-bound; the sca
   });
 
   test("reconcile's silent advance is gated: post-cutover a human edit no-ops quietly instead of throwing per edit", () => {
-    assert.match(wiringSrc, /if \(shouldAdvanceBaselineSilently\(cls\)\) \{[\s\S]{0,700}?if \(legacyRetired\(plugin\)\) \{ await refresh\(plugin\); return; \}/, "the guard sits inside the silent-advance branch, before setBaseline");
+    // The refresh here became COALESCED (the rename-storm fix): a per-file
+    // handler must never await the whole-vault pass. What this pin cares about
+    // is unchanged — the retirement guard sits inside the silent-advance
+    // branch, before setBaseline — so it matches the guard, not the refresh
+    // call's shape.
+    assert.match(wiringSrc, /if \(shouldAdvanceBaselineSilently\(cls\)\) \{[\s\S]{0,700}?if \(legacyRetired\(plugin\)\) \{ requestRefresh\(plugin\); return; \}/, "the guard sits inside the silent-advance branch, before setBaseline");
   });
 
   test("maybeAutoAccept consults NO per-note policy anymore — the read is gone from the wiring", () => {

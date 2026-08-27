@@ -64,6 +64,7 @@
 import type { AcceptOpts } from "../kernel/accept.js";
 import { Component, TFile, TFolder, MarkdownView, Notice, type WorkspaceLeaf, type Plugin, type DataAdapter } from "obsidian";
 import { BaselineStore, type BlobFs } from "../kernel/baseline-store.js";
+import { createCoalescer, type Coalescer } from "../kernel/coalesce.js";
 import { planBaselineReconcile, summarizePlan } from "../kernel/baseline-reconcile.js";
 import { parseJournal, recentAgentWrite, agentWritesSince, type JournalRecord } from "../kernel/journal-reader.js";
 import { computeQueue, type PendingItem, type NoteSnapshot } from "../kernel/queue.js";
@@ -124,6 +125,10 @@ import { isExcludedTerritory } from "./territories.js";
 const LOCAL_USER = "local-human";
 const RECENT_WRITE_WINDOW_MS = 15_000;
 const SILENT_ADVANCE_DEBOUNCE_MS = 1200;
+/** How long after the LAST refresh request the one whole-vault pass runs. Short
+ *  enough to feel immediate, long enough to swallow a rename's backlink storm
+ *  (Obsidian rewrites the linkers over a few hundred ms). */
+const REFRESH_COALESCE_MS = 400;
 const HUMAN_INPUT_WINDOW_MS = 5_000;
 const JOURNAL_POLL_MS = 2500;
 /** Coalesce a burst of deletes (a folder of pending notes) into ONE queue recompute. Short enough
@@ -751,7 +756,7 @@ async function reconcile(plugin: Plugin, file: TFile): Promise<void> {
   try { current = await plugin.app.vault.read(file); } catch { return; }
 
   // Our own accept/revert writes land the note exactly on its (new) baseline — skip them.
-  if (baseline && contentHash(current) === baseline.hash) { await refresh(plugin); return; }
+  if (baseline && contentHash(current) === baseline.hash) { requestRefresh(plugin); return; }
 
   const journal = await readJournal(plugin);
   const nowIso = new Date().toISOString();
@@ -776,7 +781,7 @@ async function reconcile(plugin: Plugin, file: TFile): Promise<void> {
     // human edit, forever. A human edit after the cutover is governed by
     // admission like everything else; skipping here is the quiet, honest
     // no-op — nothing is lost, because nothing could have been written.
-    if (legacyRetired(plugin)) { await refresh(plugin); return; }
+    if (legacyRetired(plugin)) { requestRefresh(plugin); return; }
     // Human-attributed change → advance the baseline silently (it must never queue). Log it (D2 —
     // audit completeness). NOT app-reachable: invoked only by the debounced vault "modify" event.
     const toHash = contentHash(current);
@@ -794,7 +799,7 @@ async function reconcile(plugin: Plugin, file: TFile): Promise<void> {
     // mechanical, allowlisted, rail-neutral class. Conservative + fail-safe.
     await maybeAutoAccept(plugin, path);
   }
-  await refresh(plugin);
+  requestRefresh(plugin);
 }
 
 // ── AUTO-ACCEPT: the eligibility+advance step (module-scope; event-driven, never a method) ──
@@ -952,6 +957,27 @@ async function reconcileBaselines(plugin: Plugin): Promise<void> {
 }
 
 // ── queue / badge refresh (read-only: recomputes the queue; advances no baseline) ──
+// ── the coalesced refresh (the rename-storm fix) ─────────────────────────────
+// refresh() reads EVERY governed note. Anything driven by a per-file event must
+// therefore ask through here, never await refresh() directly: a rename fires one
+// modify event per backlinking note, and one whole-vault pass per event is the
+// 120 × 3,581 blowup that made the vault crawl. Human-gesture paths (Accept,
+// Revert, Adopt, the pane's Refresh button) still await refresh() directly —
+// they are one-at-a-time and they want the fresh result in hand.
+const refreshCoalescers = new WeakMap<Plugin, Coalescer>();
+function requestRefresh(plugin: Plugin): void {
+  let c = refreshCoalescers.get(plugin);
+  if (!c) {
+    c = createCoalescer(
+      () => refresh(plugin),
+      REFRESH_COALESCE_MS,
+      (e) => console.error("governor acceptance: coalesced refresh failed", e),
+    );
+    refreshCoalescers.set(plugin, c);
+  }
+  c.request();
+}
+
 async function refresh(plugin: Plugin): Promise<void> {
   // Generation guard. refresh() has several concurrent drivers (the journal poll, the pane's
   // Refresh button, reconcile, and now vault deletes), and it AWAITS a cachedRead per governed
