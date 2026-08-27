@@ -95,7 +95,7 @@ export interface ServerCtx {
    * The host keeps only its own expiry floor, which needs no store at all.
    */
   sessions?: {
-    open(session: import("../kernel/sessions/session.js").SessionV1, now: number): Promise<void>;
+    open(session: import("@vault-mcp/core").SessionV1, now: number): Promise<void>;
     close(sessionId: string, now: number): Promise<void>;
     markExpired(sessionId: string, now: number): Promise<void>;
     replicaId: string;

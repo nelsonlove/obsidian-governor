@@ -29,17 +29,19 @@
 //  dispositions.test.mjs pins completeness + authority classes).
 //
 //  The GENERIC descriptor shape was extracted to the disposition substrate
-//  (kernel/triage/dispositions.ts — #221 phase 2) once the shape had survived
-//  contact here; this file keeps the ACCEPTANCE-SPECIFIC halves — the closed
-//  id/surface unions, the frozen seven-verb table, and the accept-effect
-//  display text — and its exports are unchanged (same names, same shapes,
-//  same behavior). The substrate types are referenced through inline
-//  `import(…)` TYPE positions only, deliberately: this file stays a
-//  pure-data LEAF with no import statement and no runtime module edge (the
-//  governance tripwire pins that), so the shared shape binds at compile time
-//  while reachability is exactly what it was. The substrate's generic
-//  helpers are equivalent to the one-line filters below (the triage instance
-//  uses the shared ones; the equivalence is pinned by test).
+//  (#221 phase 2) and, at the suite split's S3 (condition 9), published to
+//  `@vault-mcp/core` — the provider must not depend on `kernel/triage/`,
+//  which is destined to become its own satellite plugin. This file keeps the
+//  ACCEPTANCE-SPECIFIC halves — the closed id/surface unions, the frozen
+//  seven-verb table, and the accept-effect display text — and its exports
+//  are unchanged (same names, same shapes, same behavior). The substrate
+//  types are referenced through inline `import(…)` TYPE positions only,
+//  deliberately: this file stays a pure-data LEAF with no import statement
+//  and no runtime module edge (the governance tripwire pins that), so the
+//  shared shape binds at compile time while reachability is exactly what it
+//  was. The substrate's generic helpers are equivalent to the one-line
+//  filters below (the triage instance uses the shared ones; the equivalence
+//  is pinned by test).
 // ============================================================================
 
 export type DispositionId =
@@ -53,7 +55,7 @@ export type DispositionId =
 
 /** Re-exported from the substrate (type-position reference only — see the
  * header comment for why this file carries no import statement). */
-export type DispositionAuthority = import("../../kernel/triage/dispositions.js").DispositionAuthority;
+export type DispositionAuthority = import("@vault-mcp/core").DispositionAuthority;
 
 /** Where a disposition surfaces. */
 export type DispositionSurface =
@@ -71,7 +73,7 @@ export type DispositionSurface =
 /** The acceptance instance's descriptor: the substrate shape closed over this
  * instance's own id/surface unions (adopt is the one `confirm` verb,
  * request-changes the one `input` verb, skip the one `stateless` verb). */
-export type DispositionDescriptor = import("../../kernel/triage/dispositions.js").DispositionDescriptorShape<
+export type DispositionDescriptor = import("@vault-mcp/core").DispositionDescriptorShape<
   DispositionId,
   DispositionSurface
 >;
