@@ -131,6 +131,21 @@ Known-overstated section instead — see its header for the format.
   package. The gap is declared in the sentence's own home; when S2 lands, this entry gains
   its test citation or the suite catches the lie.
 
+## docs/suite-split-design.md (perimeter-review amendments)
+
+- Rule 6 (§5) generalizes it: the seam accepts registrations that can only ADD A REFUSAL, never a predicate the host consults for permission.
+  approved 2026-08-27 AS A DESIGN RULE OF AN UNBUILT SEAM: no seam code exists; §5's own
+  condition 2 requires this pinned as a source scan over the seam's declared return types when
+  S2 lands, and the doc says so. The rule's evidence today is the review's finding 2 (the
+  boolean sessionGate could express an ALLOW) and the in-tree precedent it cites
+  (setLegacyWriteGuard is permission-shaped and safe only because it is unreachable from app —
+  inventory-non-mcp.ts:103 says so itself).
+- Ship `registerWriteVeto` only with a real registrant and a round-trip test — §5/§6's two named registrants were both wrong on the code (the fuller transition guard is `acceptTransitionReason`, host-side in `@vault-mcp/core`; the legacy-writer guard is a provider-internal `BaselineStore` predicate that never touches the seam).
+  approved 2026-08-27: a factual correction verified by the reviewer against the current tree
+  (packages/core/src/accept-guard.ts's acceptTransitionReason; governor/wiring/wiring.ts's
+  setLegacyWriteGuard consumed by the provider's own BaselineStore). It states what does NOT
+  cross the seam, which is a claim about code that exists.
+
 ## docs/acceptance-model.md (WP10c retirement)
 
 - **The first consumer — the per-note auto-accept policy (#135) — RETIRED (WP10c, 2026-08-25).** `auto-accept` remains in the default declared list as authority-conferring, but the policy's operational half is deleted per the development guide's order: `auto-accept: all` no longer parses at all (a whole-note blank check never belonged in frontmatter — it reads as no policy under every authority era, including after a cutover rollback), and `auto-accept: appends` is migrated to content proposals — an appended tail is residual content like any other edit, and lands as an ordinary proposal for the human's decision.
