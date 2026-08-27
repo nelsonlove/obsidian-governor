@@ -413,7 +413,7 @@ describe("the mandate store — append-only events, one fold", () => {
 
 const { buildMandateUi } = await import("../src/governor/wiring/mandate-wiring.ts");
 const { createSessionStore } = await import("../src/governor/kernel/sessions/session-store.ts");
-const { openSession } = await import("../src/governor/kernel/sessions/session.ts");
+const { openSession } = await import("../src/kernel/sessions/session.ts");
 
 function wiredWorld() {
   const mandateIo = memoryIo();

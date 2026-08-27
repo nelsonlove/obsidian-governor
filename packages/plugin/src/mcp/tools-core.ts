@@ -12,6 +12,7 @@ import type { Kernel, ModuleSettings, ServerIdentity, VocabInstanceSettings } fr
 import { findObsidianBinary } from "./tools-cli.js";
 import type { SchemeInstanceConfig } from "../kernel/scheme/registry.js";
 import type { CliCommandPolicy } from "./cli-policy.js";
+import type { SeamConsult } from "./seam.js";
 
 export interface ServerCtx {
   pluginVersion: string;
@@ -85,11 +86,16 @@ export interface ServerCtx {
    * Session machinery (WP5): the durable store plus the facts needed to open
    * one per connection. Absent in tests/bare embeds — everything session-
    * shaped degrades to "no session", never to a crash.
+   *
+   * LIFECYCLE ONLY, since S2 (condition 7 — the host mints). The port records
+   * what the host does to a session it owns: opened, closed, expired. There is
+   * no `get`, deliberately: reading the durable record to decide whether a
+   * queued mutation may proceed is asking PERMISSION, and permission is the
+   * governance provider's question, answered through the seam's refusal hook.
+   * The host keeps only its own expiry floor, which needs no store at all.
    */
   sessions?: {
-    open(session: import("../governor/kernel/sessions/session.js").SessionV1, now: number): Promise<void>;
-    /** Folded current state, so liveness checks see store-level revocation. */
-    get(sessionId: string): Promise<import("../governor/kernel/sessions/session.js").SessionV1 | null>;
+    open(session: import("../kernel/sessions/session.js").SessionV1, now: number): Promise<void>;
     close(sessionId: string, now: number): Promise<void>;
     markExpired(sessionId: string, now: number): Promise<void>;
     replicaId: string;
@@ -98,33 +104,34 @@ export interface ServerCtx {
     journalHead(): string | null;
   };
   /**
-   * Mandate negotiation (WP9): drafting and listing ONLY. Grant, decline,
-   * and revoke are deliberately absent — they are human gestures in the
-   * review pane (mandate-wiring.ts), and no ServerCtx port reaches them.
+   * THE GOVERNANCE SEAM's consultation half (S2, docs/suite-split-design.md
+   * §5). Absent ⇒ no provider is installed and nothing is consulted: every
+   * consultation iterates a possibly-empty hook list, so the standalone host is
+   * the vacuous case rather than a special one (rule 4).
+   *
+   * This carries no provider type and no provider capability — `mcp/seam.ts` is
+   * host-owned, and what crosses it is bytes, identifiers and refusals.
    */
-  mandates?: {
-    draft(d: import("../governor/kernel/mandates/draft.js").MandateDraftV1, now: number): Promise<void>;
-    allDrafts(): Promise<import("../governor/kernel/mandates/draft.js").MandateDraftV1[]>;
-    allMandates(): Promise<import("../governor/kernel/mandates/mandate.js").MandateV1[]>;
-    usageOf(id: string): Promise<import("../governor/kernel/mandates/budgets.js").MandateUsage>;
-    /** WP10b producer stamping: the session's governing mandate, resolved for the fit check. */
-    getMandate(id: string): Promise<import("../governor/kernel/mandates/mandate.js").MandateV1 | null>;
-    /** Charge production usage and observe a budget breach into the durable `exhausted` transition. Implemented in main.ts. */
-    chargeAndObserve(id: string, delta: { items: number; proposals: number; bytes: number }): Promise<void>;
-  };
+  seam?: SeamConsult;
   /**
-   * Proposal production (WP6b-1): the durable store plus the vault identity
-   * facts the producer needs. Absent ⇒ no proposals are produced (tests,
-   * bare embeds, and any build until main.ts wires it).
+   * NOTE what is deliberately ABSENT here, and where it went (suite split, S2):
+   *
+   *   `mandates`  — the WP9 draft/list port. It exists so the mandate TOOLS can
+   *                 reach the provider's store, and it named three provider
+   *                 types to do it. Those tools now register through
+   *                 `BuildOpts.providerTools`, as registrars the composition
+   *                 root closes over its own stores — so the host's context no
+   *                 longer describes the provider's data model.
+   *   `proposals` — the WP6b-1 production port. Proposal production moved
+   *                 behind the seam entirely (`registerWriteObserver`), so the
+   *                 host reports write facts and knows nothing about what is
+   *                 made of them.
+   *
+   * Between them plus the session contract moving host-side, `ServerCtx` names
+   * ZERO governance-provider types, which is S2's exit criterion. The remaining
+   * host→governor imports are concentrated in `main.ts` (the composition root
+   * S3 replaces with two plugin manifests) and a short list in `server.ts`.
    */
-  proposals?: {
-    open(proposal: import("../governor/kernel/proposals/proposal.js").ProposalV1, now: number): Promise<void>;
-    /** The note's stable uid from frontmatter, when the cache has one. */
-    uidOf(path: string): string | null;
-    vaultId: string;
-    /** Record base+proposed snapshots; the recording ref, or null when the path is outside the history scope. */
-    record(proposalId: string, path: string, baseBytes: Uint8Array | null, proposedBytes: Uint8Array): Promise<string | null>;
-  };
 }
 
 const RO = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };

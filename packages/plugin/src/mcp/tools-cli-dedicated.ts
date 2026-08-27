@@ -288,7 +288,8 @@ export function registerCliDedicatedTools(
         "Uninstall a community plugin by id (pinned CLI `plugin:uninstall` subcommand; the vault is pinned). " +
         "DANGEROUS and destructive: removes the plugin's code and settings from the vault — the human-only \"Allow " +
         "dangerous CLI commands\" setting must be on, exactly as for the raw proxy's plugin:uninstall. Refuses to " +
-        "uninstall the governor plugin itself (that would sever every connected session). Refuses while a path allowlist is " +
+        "uninstall the governor plugin itself, or a registered governance provider (that would sever every connected " +
+        "session, or remove the review perimeter). Refuses while a path allowlist is " +
         "active (a plugin uninstall cannot be path-scoped).",
       inputSchema: {
         plugin_id: z.string().min(1).describe("Community plugin id, e.g. 'dataview'."),
@@ -319,6 +320,17 @@ export function registerCliDedicatedTools(
           return fail(
             `refusing to uninstall '${args.plugin_id}' — that is this plugin (or its pre-0.12.0 id, whose folder ` +
               `may still hold un-migrated data); it would sever every connected session. Do it from Obsidian.`,
+          );
+        }
+        // And the same rule for a registered governance provider (suite split,
+        // S2, condition 6). Uninstall needs no `enabled` branch the way
+        // obsidian_plugin_toggle does: removing a plugin is disabling it and
+        // deleting it, so a provider currently holding a seam registration is
+        // refused outright. See tools-nav.ts's toggle for the reasoning.
+        if ((ctx.seam?.providerIds() ?? []).includes(args.plugin_id)) {
+          return fail(
+            `refusing to uninstall '${args.plugin_id}': it is a registered governance provider for ${PLUGIN_ID}, so ` +
+              `removing it would remove the review perimeter this session writes under. Do it from Obsidian.`,
           );
         }
         return await runPinned(

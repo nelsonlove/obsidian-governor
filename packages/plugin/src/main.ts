@@ -9,9 +9,14 @@ import { writeDiscovery, removeDiscovery, writeBridge, type Discovery } from "./
 import { ConnectionSetupModal, VaultMcpSettingTab } from "./connection-ui.js";
 import { findClaudeBinary, claudeIsRegistered, claudeRegister, claudeRemove, claudeEnsureConnectPlugin } from "./claude-cli.js";
 import { ExternalToolRegistry, type VaultMcpApi } from "./mcp/external-tools.js";
+import { createGovernanceSeam, type GovernanceSeam } from "./mcp/seam.js";
+import type { ProviderToolRegistrar } from "./mcp/server.js";
+import { registerMandateTools } from "./mcp/tools-governance-mandate.js";
+import { isLive, livenessOf } from "./kernel/sessions/session.js";
 import { Kernel, WriteQueue, WriteJournal, IdempotencyStore, LockStore, UidIndex, loadInstallId, migrateLegacyModuleIds, DEFAULT_VOCABULARIES, type VocabInstanceSettings, type ModuleSettings } from "./kernel/index.js";
 import { createSessionStore } from "./governor/kernel/sessions/session-store.js";
 import { createProposalStore } from "./governor/kernel/proposals/proposal-store.js";
+import { createProposalObserver } from "./governor/wiring/write-observer.js";
 import { buildAdmission, type AdmissionUiDeps } from "./governor/wiring/admission-wiring.js";
 import { buildMandateUi, type MandateUiDeps } from "./governor/wiring/mandate-wiring.js";
 import { createMandateStore } from "./governor/kernel/mandates/lifecycle.js";
@@ -33,7 +38,10 @@ import { DEFAULT_SCHEMES, type SchemeInstanceConfig } from "./kernel/scheme/regi
 import { DEFAULT_PROTECTED_PROPERTIES, setDeclaredProtectedProperties } from "@vault-mcp/core";
 import { wireGovernance, nudgeGovernanceQueue, setLegacyWriteGuard, baselinesOf } from "./governor/wiring/wiring.js";
 import { buildMigration, type Migration } from "./governor/wiring/migration-wiring.js";
-import { mountAction } from "./governor/wiring/mount-state.js";
+// Host-side since S2 (condition 9): the mount decision is generic, and the
+// HOST already uses it for the scheme panes below — a shared helper living in
+// the provider's subtree would have been one more thing S3 has to untangle.
+import { mountAction } from "./mount-state.js";
 import { wireSkills } from "./skills/wiring.js";
 import { wireSchemePanes, registerSchemeCommands } from "./scheme/wiring.js";
 import { runFolderMigration, LEGACY_PLUGIN_ID } from "./id-migration.js";
@@ -165,6 +173,33 @@ const mandateUiFactories = new WeakMap<Plugin, () => MandateUiDeps>();
 const promotionUiFactories = new WeakMap<Plugin, () => PromotionUiDeps>();
 // WP8: per-plugin migration surface (import / cutover / rollback), built in onload.
 const migrations = new WeakMap<Plugin, Migration>();
+// The externally-published tool registry and the governance seam, both held in
+// module-private WeakMaps for the same reason the factories above are (§9,
+// suite-split condition 1): a `private` class field is compile-time privacy
+// only, so `app.plugins.plugins.governor.externalRegistry` handed renderer JS
+// every third-party handler — and would have handed it every REGISTERED HOOK
+// once the seam existed. A reachable write observer is a proposal factory
+// callable with forged facts, which is strictly more than the `app.vault`
+// equivalence covers: writing bytes through `app.vault` produces a loud queue
+// entry, while a forged proposal is quiet by design.
+//
+// Registration stays reachable (through `api` below) and that is harmless —
+// registering grants the registrant nothing. What must not be reachable is the
+// LIST of what everyone else registered.
+const externalRegistries = new WeakMap<Plugin, ExternalToolRegistry>();
+const governanceSeams = new WeakMap<Plugin, ReturnType<typeof createGovernanceSeam>>();
+
+function externalRegistryOf(plugin: Plugin): ExternalToolRegistry {
+  let registry = externalRegistries.get(plugin);
+  if (!registry) externalRegistries.set(plugin, (registry = new ExternalToolRegistry()));
+  return registry;
+}
+
+function seamOf(plugin: Plugin): ReturnType<typeof createGovernanceSeam> {
+  let seam = governanceSeams.get(plugin);
+  if (!seam) governanceSeams.set(plugin, (seam = createGovernanceSeam()));
+  return seam;
+}
 
 const DEFAULT_SETTINGS: VaultMcpSettings = {
   setupAcknowledged: false,
@@ -205,7 +240,6 @@ export default class VaultMcpPlugin extends Plugin {
   private listener: UnixSocketListener | null = null;
   private slug = "";
   declare settings: VaultMcpSettings;
-  private externalRegistry = new ExternalToolRegistry();
   // The governance review pane's live-mount handle: the child Component wireGovernance registers
   // its view/ribbon/events/interval on, or null when the pane is unmounted. Non-null ⇔ mounted, so
   // it doubles as the idempotency state. `governanceReconcile` serializes mount/unmount so a rapid
@@ -221,10 +255,19 @@ export default class VaultMcpPlugin extends Plugin {
   // property rides the plugin instance, so it moved with the 0.12.0 id
   // migration automatically; the old 'vault-mcp' lookup finds nothing once
   // the old plugin entry is removed — SDK consumers need a dual-id read).
-  api: VaultMcpApi = {
+  //
+  // apiVersion stays 1 while the object GAINS the governance seam: the seam's
+  // methods are additive, so every published `vault-mcp-api` build (which
+  // refuses to register against an unexpected apiVersion) keeps working. What
+  // the object LOST is `unregisterTools(ownerPluginId)` — an id-addressed
+  // revocation anyone holding this object could aim at anyone else's tools; the
+  // disposer `registerTools` returns is now the only way to revoke, and it can
+  // only revoke what its holder registered.
+  api: VaultMcpApi & GovernanceSeam = {
     apiVersion: 1,
-    registerTools: (owner, tools) => this.externalRegistry.registerTools(owner, tools),
-    unregisterTools: (owner) => this.externalRegistry.unregisterTools(owner),
+    registerTools: (owner, tools) => externalRegistryOf(this).registerTools(owner, tools),
+    registerWriteObserver: (id, observe) => seamOf(this).seam.registerWriteObserver(id, observe),
+    registerSessionRefusal: (id, refuse) => seamOf(this).seam.registerSessionRefusal(id, refuse),
   };
 
   async loadSettings() {
@@ -840,79 +883,160 @@ export default class VaultMcpPlugin extends Plugin {
       }),
       serverIdentity,
       sessions: {
-        open: (session: import("./governor/kernel/sessions/session.js").SessionV1, now: number) => sessionStore.open(session, now),
-        get: (sessionId: string) => sessionStore.get(sessionId),
+        // LIFECYCLE ONLY (condition 7 — the host mints). `get` is deliberately
+        // absent: reading the durable record to decide whether a queued
+        // mutation may proceed is asking PERMISSION, and that question now
+        // goes to the seam's session-refusal hook, which the provider answers
+        // from this same store (see the registration below).
+        open: (session: import("./kernel/sessions/session.js").SessionV1, now: number) => sessionStore.open(session, now),
         close: (sessionId: string, now: number) => sessionStore.close(sessionId, now),
         markExpired: (sessionId: string, now: number) => sessionStore.markExpired(sessionId, now),
         replicaId: install,
         vaultId: vaultName,
         journalHead: () => journalHeadMarker(),
       },
-      // WP9: the mandate negotiation port — drafting and listing only. The
-      // store's grant/decline/revoke verbs are NOT exposed here: they belong
-      // to the pane's gesture-gated surface (mandate-wiring.ts).
-      mandates: {
-        draft: (d: import("./governor/kernel/mandates/draft.js").MandateDraftV1, now: number) => mandateStore.draft(d, now),
-        allDrafts: () => mandateStore.allDrafts(),
-        allMandates: () => mandateStore.allMandates(),
-        usageOf: (id: string) => mandateStore.usageOf(id),
-        getMandate: (id: string) => mandateStore.getMandate(id),
-        // WP10b producer charge: usage recorded, then the breach observed
-        // into the durable `exhausted` transition — a spent budget STOPS
-        // (normal stop), it never silently keeps counting.
-        chargeAndObserve: async (id: string, delta: { items: number; proposals: number; bytes: number }) => {
-          const at = Date.now();
-          await mandateStore.charge(id, delta, at);
-          const m = await mandateStore.getMandate(id);
-          if (m && m.status === "active") {
-            const breach = budgetBreach(m.terms.budgets, await mandateStore.usageOf(id), m.activatedAt, at);
-            if (breach !== null) await mandateStore.markExhausted(id, breach.detail, at);
-          }
-        },
-      },
-      proposals: {
-        open: (proposal: import("./governor/kernel/proposals/proposal.js").ProposalV1, now: number) => proposalStore.open(proposal, now),
-        uidOf: (path: string) => {
-          const uid = (this.app.metadataCache.getCache(path)?.frontmatter as Record<string, unknown> | undefined)?.uid;
-          return typeof uid === "string" && uid.length > 0 ? uid : null;
-        },
-        vaultId: vaultName,
-        // Record the proposal's base and proposed snapshots in the history
-        // store (WP4 consumed at last), returning the recording ref — the
-        // evidence admission-time verification replays base bytes from,
-        // because the write itself destroys them (the review's HIGH finding:
-        // without this, every overwrite proposal was permanently
-        // unverifiable). Null when the path is outside the effective history
-        // scope: an untracked path is ungoverned by the new system, and the
-        // producer skips the proposal rather than opening a dead one.
-        record: async (proposalId: string, path: string, baseBytes: Uint8Array | null, proposedBytes: Uint8Array) => {
-          const scope = effectiveScope(this.settings.historyScope, EXCLUDED_PREFIXES);
-          if (!isTracked(scope, path)) return null;
-          const repo = await lazyHistoryRepo();
-          const ref = proposalRef(proposalId);
-          // Base first (recorded-missing for a creation), proposed chained on
-          // it — the ref chain IS the diff, and stock git can read both.
-          const base = await repo.recordSnapshot({
-            ref,
-            files: [{ path, bytes: baseBytes }],
-            message: `base for proposal ${proposalId}`,
-            timestamp: Math.floor(Date.now() / 1000),
-            expectedRef: null,
-          });
-          await repo.recordSnapshot({
-            ref,
-            files: [{ path, bytes: proposedBytes }],
-            message: `proposed for proposal ${proposalId}`,
-            timestamp: Math.floor(Date.now() / 1000),
-            expectedRef: base.oid,
-          });
-          return ref;
-        },
-      },
-      getExternalTools: () => this.externalRegistry.entries(),
+      // The consultation half of the governance seam. The REGISTRATION half
+      // rides `this.api`; this side is closure-held and reaches no further than
+      // the per-connection servers built below.
+      seam: seamOf(this).consult,
+      getExternalTools: () => externalRegistryOf(this).entries(),
       getVocabularies: () => this.settings.vocabularies,
       kernel,
     };
+
+    // ── the governance provider registers on the seam (suite split, S2) ──────
+    //
+    // In-tree the provider is compiled into this same artifact, so these two
+    // registrations look like ordinary wiring. That is exactly the point of S2:
+    // everything the host used to do FOR the provider now happens THROUGH the
+    // seam, in one artifact and at zero distribution risk, so S3 can move the
+    // provider into its own plugin by changing who calls these two lines and
+    // nothing else. Both disposers are handed to `this.register`, so a plugin
+    // unload revokes the hooks — a stale observer holding a dead provider's
+    // stores is worse than no observer.
+    const seam = seamOf(this).seam;
+
+    // WHAT CROSSES OUTWARD: the exact bytes of a completed write. The producer
+    // behind this hook is the WP6b-1 proposal machinery, verbatim, moved out of
+    // mcp/server.ts — see governor/wiring/write-observer.ts.
+    this.register(
+      seam.registerWriteObserver(
+        this.manifest.id,
+        createProposalObserver({
+          historyEnabled: () => this.settings.historyEnabled === true,
+          proposals: {
+            open: (proposal, now) => proposalStore.open(proposal, now),
+            uidOf: (path: string) => {
+              const uid = (this.app.metadataCache.getCache(path)?.frontmatter as Record<string, unknown> | undefined)?.uid;
+              return typeof uid === "string" && uid.length > 0 ? uid : null;
+            },
+            vaultId: vaultName,
+            // Record the proposal's base and proposed snapshots in the history
+            // store (WP4 consumed at last), returning the recording ref — the
+            // evidence admission-time verification replays base bytes from,
+            // because the write itself destroys them. Null when the path is
+            // outside the effective history scope: an untracked path is
+            // ungoverned by the new system, and the producer skips the proposal
+            // rather than opening a dead one.
+            record: async (proposalId: string, path: string, baseBytes: Uint8Array | null, proposedBytes: Uint8Array) => {
+              const scope = effectiveScope(this.settings.historyScope, EXCLUDED_PREFIXES);
+              if (!isTracked(scope, path)) return null;
+              const repo = await lazyHistoryRepo();
+              const ref = proposalRef(proposalId);
+              // Base first (recorded-missing for a creation), proposed chained
+              // on it — the ref chain IS the diff, and stock git can read both.
+              const base = await repo.recordSnapshot({
+                ref,
+                files: [{ path, bytes: baseBytes }],
+                message: `base for proposal ${proposalId}`,
+                timestamp: Math.floor(Date.now() / 1000),
+                expectedRef: null,
+              });
+              await repo.recordSnapshot({
+                ref,
+                files: [{ path, bytes: proposedBytes }],
+                message: `proposed for proposal ${proposalId}`,
+                timestamp: Math.floor(Date.now() / 1000),
+                expectedRef: base.oid,
+              });
+              return ref;
+            },
+          },
+          sessions: { get: (id: string) => sessionStore.get(id) },
+          mandates: {
+            getMandate: (id: string) => mandateStore.getMandate(id),
+            usageOf: (id: string) => mandateStore.usageOf(id),
+            // WP10b producer charge: usage recorded, then the breach observed
+            // into the durable `exhausted` transition — a spent budget STOPS
+            // (normal stop), it never silently keeps counting.
+            chargeAndObserve: async (id: string, delta: { items: number; proposals: number; bytes: number }) => {
+              const at = Date.now();
+              await mandateStore.charge(id, delta, at);
+              const m = await mandateStore.getMandate(id);
+              if (m && m.status === "active") {
+                const breach = budgetBreach(m.terms.budgets, await mandateStore.usageOf(id), m.activatedAt, at);
+                if (breach !== null) await mandateStore.markExhausted(id, breach.detail, at);
+              }
+            },
+          },
+        })
+      )
+    );
+
+    // WHAT CROSSES INWARD: a refusal, and only a refusal. Revocation is a human
+    // act in the review pane, landing in the provider's own session store — so
+    // the provider is what notices it, and the host learns only "refused, and
+    // here is the coded reason". The host's own TTL floor (mcp/server.ts) runs
+    // regardless, so a host with no provider still stops honouring an expired
+    // session.
+    //
+    // The catch is the PROVIDER's choice, not the seam's default: an
+    // unhandled throw from a refusal hook is treated as a refusal (fail
+    // closed), which is right for a hook that means to guard something. Here a
+    // store read that fails is the pre-S2 behaviour — degrade to the host's own
+    // expiry view rather than wedge every write in the vault behind a
+    // corrupted `sessions.jsonl`. Missing a revocation on a transient read
+    // error is what this code did before; refusing every write is not.
+    this.register(
+      seam.registerSessionRefusal(this.manifest.id, async (sessionId) => {
+        if (!sessionId) return null;
+        let record;
+        try {
+          record = await sessionStore.get(sessionId);
+        } catch (e) {
+          console.error("[governor] session store read failed; falling back to the host's expiry floor", e);
+          return null;
+        }
+        if (!record) return null; // a session the store never saw refuses nothing
+        const at = Date.now();
+        if (isLive(record, at)) return null;
+        return {
+          code: "session_not_live",
+          detail: `this connection's session (${sessionId}) is ${livenessOf(record, at)}; reconnect to open a new session`,
+        };
+      })
+    );
+
+    // ── the governance provider's TOOL contributions (suite split, S2) ───────
+    //
+    // Mandate negotiation is provider surface that happens to be an MCP tool.
+    // It arrives as a registrar closed over the provider's own store, rather
+    // than as a port on `ServerCtx`, so the host's per-connection context names
+    // no provider type. At S3 this array is what the provider publishes for
+    // itself through `vault-mcp-api`.
+    const providerTools: ProviderToolRegistrar[] = [
+      (server, connection) =>
+        registerMandateTools(server, {
+          draft: (d, now) => mandateStore.draft(d, now),
+          allDrafts: () => mandateStore.allDrafts(),
+          allMandates: () => mandateStore.allMandates(),
+          usageOf: (id) => mandateStore.usageOf(id),
+          sessionId: () => connection.sessionId(),
+          client: () => connection.clientLabel(),
+          now: () => Date.now(),
+          getSettings: () => ctx.getSettings(),
+        }),
+    ];
 
     // The uid index is kept fresh only while something can actually read it:
     // a live socket, or the dev tool-runner (which resolves uid: addressing
@@ -925,7 +1049,7 @@ export default class VaultMcpPlugin extends Plugin {
       // One MCP server per connection → concurrent Claude Code sessions and
       // background agents share the plugin without evicting each other.
       this.listener = new UnixSocketListener(sock, (transport, connOpts) => {
-        const server = buildMcpServer(this.app, ctx, { codeMode: connOpts.codeMode });
+        const server = buildMcpServer(this.app, ctx, { codeMode: connOpts.codeMode, providerTools });
         server.connect(transport).catch((e) => console.error("[governor] connect failed", e));
       });
       await this.listener.listen();
@@ -1046,6 +1170,7 @@ export default class VaultMcpPlugin extends Plugin {
               codeMode: true,
               clientLabel: "tool-runner",
               onRegistry: (r) => (registry = r),
+              providerTools,
             });
             return registry;
           });

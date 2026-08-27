@@ -236,13 +236,22 @@ export interface GuardedOpts {
    */
   schemes?: () => SchemeRegistry | null;
   /**
-   * Session liveness, consulted AT DEQUEUE (WP5). A mutation that waited in
+   * The session refusal, consulted AT DEQUEUE (WP5). A mutation that waited in
    * the queue past its session's expiry — or whose session was revoked while
    * it waited — refuses instead of executing under an authority context that
-   * no longer exists. Absent ⇒ no session machinery (tests, bare embeds);
-   * the check is skipped, exactly like the kernel itself.
+   * no longer exists. Absent ⇒ no session machinery (tests, bare embeds); the
+   * check is skipped, exactly like the kernel itself.
+   *
+   * REFUSAL-SHAPED, not boolean (suite split, S2, condition 2). It returns
+   * `{code, detail}` or `null`, and `null` means "nothing to say" rather than
+   * "allowed": the previous `{live: boolean}` shape could express an ALLOW, and
+   * once the governance provider answers this question across a plugin
+   * boundary, an allow is a permission a registrant could assert. A type that
+   * cannot say yes cannot be talked into saying yes. server.ts composes the
+   * host's own expiry floor with the seam's provider refusals behind this one
+   * function; the guard only renders whatever refusal comes back.
    */
-  sessionLive?: () => Promise<{ live: boolean; status: string; sessionId: string | null }> | { live: boolean; status: string; sessionId: string | null };
+  sessionRefusal?: () => Promise<{ code: string; detail: string } | null> | { code: string; detail: string } | null;
   /**
    * The shared operation executor (WP1). Every guarded call runs inside one
    * operation, so action identity, actor binding and phase history are the
@@ -552,13 +561,8 @@ async function runGuarded(opts: GuardedOpts, def: any, handler: any, name: strin
         // mutation can wait in the queue across its session's expiry or
         // revocation, and executing it then would act under an authority
         // context that no longer exists (WP5).
-        const live = await opts.sessionLive?.();
-        if (live && !live.live) {
-          return codedError(
-            "session_not_live",
-            `this connection's session${live.sessionId ? ` (${live.sessionId})` : ""} is ${live.status}; reconnect to open a new session`
-          );
-        }
+        const refusal = await opts.sessionRefusal?.();
+        if (refusal) return codedError(refusal.code, refusal.detail);
         mark("attempted");
         return handler(toolArgs, extra);
       }

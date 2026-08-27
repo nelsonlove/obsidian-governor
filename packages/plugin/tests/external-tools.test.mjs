@@ -50,12 +50,48 @@ test("disposer removes exactly what it registered; idempotent; spares replacemen
   assert.deepEqual(reg.entries().map((e) => e.toolName), ["p_t"]);
 });
 
-test("unregisterTools drops all of an owner's tools by raw id", () => {
+// ── condition 3: the disposer is the ONLY revocation path ────────────────────
+//
+// `unregisterTools(ownerPluginId)` used to sit beside the disposer and was
+// addressed by OWNER ID, so any caller holding the api object could revoke any
+// publisher's tools — a cleanup script naming the wrong id silently unhooked
+// somebody else's whole surface, indistinguishable afterwards from a publisher
+// that never registered. These two tests pin the fix from both sides: the
+// forgeable entry point is gone, and a disposer cannot be aimed at a stranger.
+
+test("there is NO id-addressed revocation — the forgeable entry point is gone", () => {
   const reg = new ExternalToolRegistry();
   reg.registerTools("jd-survey", [spec("a"), spec("b")]);
-  reg.registerTools("other", [spec("c")]);
-  reg.unregisterTools("jd-survey");
-  assert.deepEqual(reg.entries().map((e) => e.toolName), ["other_c"]);
+  assert.equal(typeof reg.unregisterTools, "undefined", "an id-addressed revoke is forgeable by definition");
+  // And nothing else on the object takes an owner id and removes entries: the
+  // only exposed verbs are register (which returns the disposer) and read.
+  const verbs = new Set([
+    ...Object.getOwnPropertyNames(Object.getPrototypeOf(reg)),
+    ...Object.getOwnPropertyNames(reg),
+  ].filter((k) => k !== "constructor" && typeof reg[k] === "function"));
+  assert.deepEqual([...verbs].sort(), ["entries", "registerTools"]);
+});
+
+test("a caller holding the api object cannot revoke a registration it did not make", () => {
+  const reg = new ExternalToolRegistry();
+  // Two publishers. `quickadd` holds its own disposer; `intruder` holds only
+  // what the api object gives everyone — a register function.
+  const quickaddDispose = reg.registerTools("quickadd", [spec("a"), spec("b")]);
+  const intruderDispose = reg.registerTools("intruder", [spec("c")]);
+  // Everything the intruder can do with its own disposer touches only its own
+  // entries, whatever id it names or re-names.
+  intruderDispose();
+  assert.deepEqual(reg.entries().map((e) => e.toolName).sort(), ["quickadd_a", "quickadd_b"]);
+  // Registering under an id that publishes to SOMEONE ELSE'S tool names does
+  // not revoke theirs either — the cross-owner clobber guard refuses it
+  // outright (F4, pinned below), so "register over it, then dispose" is not a
+  // laundering route to the same effect. ("QuickAdd" sanitizes to the same
+  // `quickadd_` namespace while being a different raw owner id, which is
+  // exactly the case F4 exists for.)
+  assert.throws(() => reg.registerTools("QuickAdd", [spec("a")]), TypeError);
+  assert.deepEqual(reg.entries().map((e) => e.toolName).sort(), ["quickadd_a", "quickadd_b"]);
+  quickaddDispose();
+  assert.deepEqual(reg.entries(), []);
 });
 
 test("registration is atomic: a mid-array validation failure registers nothing", () => {
