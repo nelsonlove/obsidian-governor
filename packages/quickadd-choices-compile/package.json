@@ -1,5 +1,5 @@
 {
-  "name": "@vault-mcp/quickadd-choices",
+  "name": "@vault-mcp/quickadd-choices-compile",
   "version": "0.1.0",
   "private": true,
   "type": "module",
