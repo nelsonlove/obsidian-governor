@@ -44,7 +44,8 @@ import { makeRegistry, DEFAULT_SCHEMES } from "../kernel/scheme/registry.js";
 import { buildMcpActionRegistry } from "../kernel/operations/mcp-registry.js";
 import { createOperationExecutor } from "../kernel/operations/executor.js";
 import { createCapture } from "../kernel/observations/capture.js";
-import { openSession, expiryRefusal, type SessionV1 } from "../kernel/sessions/session.js";
+import { openSession } from "../kernel/sessions/session.js";
+import { expiryRefusal, type SessionV1 } from "@vault-mcp/core";
 // The session scope digest is the HOST's own assertion about a connection
 // (condition 7: the host mints), so these two contracts are consulted here.
 // They still live in the provider subtree — the SEAM does not need them, and
