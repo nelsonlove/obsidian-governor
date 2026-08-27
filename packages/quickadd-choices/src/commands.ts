@@ -12,6 +12,16 @@
 // does not reach here. The real protection is the tool's own mass-removal
 // guard, which refuses a suspicious emptying whoever triggered it.
 //
+// WHAT "THE SAME HANDLER" DOES AND DOES NOT MEAN (review of #364): the
+// COMPILE logic is identical, but this path calls the handler DIRECTLY,
+// while an agent's call arrives wrapped by the host — read-only mode, the
+// path-allowlist refusal, the write queue, the journal, and the error
+// envelope all live in that wrapper. So under an active allowlist an agent
+// is blocked and the human at the keyboard is not. That asymmetry is the
+// intent (an allowlist scopes what AGENTS may reach, not what the person
+// running Obsidian may do), but it is an asymmetry, and it should be read
+// here rather than discovered later.
+//
 // Pure by construction: this module never imports `obsidian` and never
 // touches the DOM. It returns the TEXT a Notice should show; main.ts does
 // the showing. So the summary formatting and the refusal paths are testable
@@ -30,7 +40,11 @@ export interface CompileCommand {
 export interface CommandOutcome {
   /** Notice text — always says what happened, never just "done". */
   text: string;
-  /** True when nothing was applied because something refused or errored. */
+  /**
+   * Something went wrong — a refusal, a failure, or a PARTIAL compile (where
+   * some notes did apply). Consumed by main.ts, which also logs these to the
+   * console so a failure outlives its transient Notice.
+   */
   isError: boolean;
   /** How long the Notice should linger (ms) — longer when there is detail to read. */
   durationMs: number;
@@ -51,17 +65,37 @@ function errorTail(data: Record<string, any>): string {
   const errors = Array.isArray(data.errors) ? data.errors : [];
   if (errors.length === 0) return "";
   const first = errors[0];
-  const where = typeof first?.path === "string" ? `${first.path}: ` : "";
-  const what = typeof first?.message === "string" ? first.message : JSON.stringify(first);
+  // ChoiceError is { notePath, message } (types.ts) — reading `.path` here
+  // silently never rendered (review of #364), and the note only stayed
+  // visible because transform.ts happens to embed it in the message text.
+  const where = typeof first?.notePath === "string" ? `${first.notePath}: ` : "";
+  const raw = typeof first?.message === "string" ? first.message : JSON.stringify(first);
+  // One long message (a choice-step-target explanation runs ~600 chars) must
+  // not turn a Notice into a wall — the full text is in the tool's result.
+  const what = raw.length > 200 ? `${raw.slice(0, 197)}…` : raw;
   const more = errors.length > 1 ? ` (+${errors.length - 1} more)` : "";
   return ` — ${errors.length} note${errors.length === 1 ? "" : "s"} failed. ${where}${what}${more}`;
 }
 
 /** A thrown refusal reads `[code] detail`; show it as `code: detail`, which is what a human parses. */
-function refusalText(e: unknown): string {
-  const raw = e instanceof Error ? e.message : String(e);
+function refusalText(e: unknown): { text: string; refused: boolean } {
+  // String(e) can itself throw (a Symbol.toPrimitive that explodes), and this
+  // runs inside the catch that exists to make run() total — so it gets its
+  // own guard (review of #364: without it, run() rejected and main.ts's
+  // callback had nothing to catch it).
+  let raw: string;
+  try {
+    raw = e instanceof Error ? e.message : String(e);
+  } catch {
+    raw = "an error that could not be rendered";
+  }
   const m = /^\[([a-z_]+)\]\s*(.*)$/s.exec(raw);
-  return m ? `${m[1]}: ${m[2]}` : raw;
+  // A `[code]` shape is a REFUSAL — a policy decision, nothing written. Any
+  // other throw is a FAILURE, and may well have written something first
+  // (saveSettings rejecting after the config object was already replaced).
+  // Calling both "refused" would tell the human nothing changed when it may
+  // have (review of #364).
+  return m ? { text: `${m[1]}: ${m[2]}`, refused: true } : { text: raw, refused: false };
 }
 
 export function buildCommands(app: App): CompileCommand[] {
@@ -87,15 +121,23 @@ export function buildCommands(app: App): CompileCommand[] {
       const applied = typeof data.applied === "number" ? data.applied : 0;
       const commandsNote =
         data.commandsRegistered === false
-          ? " QuickAdd's command API was unavailable, so palette commands are stale until QuickAdd reloads."
+          ? " QuickAdd's palette commands could not be updated (its command API was unavailable or failed —" +
+            " see the console), so they are stale until QuickAdd reloads."
           : "";
       return {
-        text: `QuickAdd choices compiled: ${summary} (${applied} choice${applied === 1 ? "" : "s"} now live).${commandsNote}${tail}`,
+        text:
+          `QuickAdd choices compiled: ${summary} (${applied} compiled choice${applied === 1 ? "" : "s"}; ` +
+          `hand-authored choices are untouched).${commandsNote}${tail}`,
         isError: partial,
         durationMs: partial || commandsNote ? 12000 : 6000,
       };
     } catch (e) {
-      return { text: `QuickAdd choices — refused. ${refusalText(e)}`, isError: true, durationMs: 15000 };
+      const { text, refused } = refusalText(e);
+      return {
+        text: `QuickAdd choices — ${refused ? "refused" : "failed"}. ${text}`,
+        isError: true,
+        durationMs: 15000,
+      };
     }
   };
 
