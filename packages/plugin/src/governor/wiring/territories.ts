@@ -1,7 +1,7 @@
 // GUARDED TERRITORIES — the vault areas Governor must never review, touch, or
 // retain copies of.
 //
-// Extracted from governance/wiring.ts the day capture became the second
+// Extracted from governor/wiring/wiring.ts the day capture became the second
 // consumer. Two hand-copied lists of the same territories would drift, and a
 // drifted copy here fails PRIVATE: a prefix present in the pane's list but
 // missing from capture's means the pane politely skips a folder while capture

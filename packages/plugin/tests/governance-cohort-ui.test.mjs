@@ -18,17 +18,17 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { buildAdmission } from "../src/governance/admission-wiring.ts";
-import { openGitRepository } from "../src/governance/history-store/git-repository.ts";
-import { proposalRef, standingRef } from "../src/kernel/governance/history-store/refs.ts";
-import { createProposalStore } from "../src/kernel/governance/proposals/proposal-store.ts";
-import { openProposal } from "../src/kernel/governance/proposals/proposal.ts";
-import { buildProposalSubjectFromOperation } from "../src/kernel/governance/proposals/proposal-builder.ts";
-import { subjectDigest } from "../src/kernel/governance/contracts/subject-v1.ts";
-import { digestBytes } from "../src/kernel/governance/contracts/digest.ts";
-import { createStandingResolver } from "../src/kernel/governance/admission/standing-resolver.ts";
-import { createClaimStore } from "../src/kernel/governance/admission/settlement.ts";
-import { runGuardedDisposition } from "../src/kernel/governance/gesture.ts";
+import { buildAdmission } from "../src/governor/wiring/admission-wiring.ts";
+import { openGitRepository } from "../src/governor/wiring/history-store/git-repository.ts";
+import { proposalRef, standingRef } from "../src/governor/kernel/history-store/refs.ts";
+import { createProposalStore } from "../src/governor/kernel/proposals/proposal-store.ts";
+import { openProposal } from "../src/governor/kernel/proposals/proposal.ts";
+import { buildProposalSubjectFromOperation } from "../src/governor/kernel/proposals/proposal-builder.ts";
+import { subjectDigest } from "../src/governor/kernel/contracts/subject-v1.ts";
+import { digestBytes } from "../src/governor/kernel/contracts/digest.ts";
+import { createStandingResolver } from "../src/governor/kernel/admission/standing-resolver.ts";
+import { createClaimStore } from "../src/governor/kernel/admission/settlement.ts";
+import { runGuardedDisposition } from "../src/governor/kernel/gesture.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const enc = (s) => new TextEncoder().encode(s);
@@ -238,7 +238,7 @@ describe("§15 — the cohort gesture is gated identically", () => {
   });
 
   test("the pane wires Group & admit AND the successor through the shared gate; one gesture covers one claim — pinned", () => {
-    const raw = fs.readFileSync(path.join(HERE, "..", "src", "governance", "pane.ts"), "utf8");
+    const raw = fs.readFileSync(path.join(HERE, "..", "src", "governor", "wiring", "pane.ts"), "utf8");
     const lines = raw.split("\n");
     for (const el of ["groupBtn", "sucBtn"]) {
       let found = false;
@@ -263,7 +263,7 @@ describe("§15 — the cohort gesture is gated identically", () => {
   });
 
   test("vacuity: the one-admission-per-gate scan CATCHES the violation it exists to catch", () => {
-    const raw = fs.readFileSync(path.join(HERE, "..", "src", "governance", "pane.ts"), "utf8");
+    const raw = fs.readFileSync(path.join(HERE, "..", "src", "governor", "wiring", "pane.ts"), "utf8");
     const body = extractMethodBody(raw, "async decideCohort");
     assert.ok(scanOneAdmissionPerGate(body), "the real body passes");
     // The exact regression the review demonstrated: auto-admitting the split
@@ -291,7 +291,7 @@ describe("§15 — the cohort gesture is gated identically", () => {
   });
 
   test("vacuity: the pins match real wiring sites", () => {
-    const raw = fs.readFileSync(path.join(HERE, "..", "src", "governance", "pane.ts"), "utf8");
+    const raw = fs.readFileSync(path.join(HERE, "..", "src", "governor", "wiring", "pane.ts"), "utf8");
     assert.ok(/groupBtn\.addEventListener\(/.test(raw));
     assert.ok(/sucBtn\.addEventListener\(/.test(raw));
   });

@@ -1,6 +1,6 @@
 // Ported from obsidian-stewardship/tests/auto-accept-allowlist.test.mjs (#83, cycle 1) —
 // the frozen authorized change-class registry + UNTRUSTED-allowlist normalization, now at
-// src/kernel/governance/auto-accept/classes.ts. The default is Nelson's four; a tampered
+// src/governor/kernel/auto-accept/classes.ts. The default is Nelson's four; a tampered
 // list can at most enable/disable AMONG the four; it can NEVER introduce a new class.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -11,7 +11,7 @@ import {
   serializeAllowlist,
   deserializeAllowlist,
   isAuthorizedClass,
-} from "../src/kernel/governance/auto-accept/classes.ts";
+} from "../src/governor/kernel/auto-accept/classes.ts";
 
 test("the authorized universe is EXACTLY Nelson's four (frozen)", () => {
   assert.deepEqual(AUTHORIZED_CLASSES.map((s) => s.id), ["uid-stamp", "timestamp", "canonical-order", "link-heal"]);

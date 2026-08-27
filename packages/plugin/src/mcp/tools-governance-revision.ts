@@ -8,7 +8,7 @@
 // kernel journals it, so the governance pane surfaces the note for human review.
 //
 // AUTHORITY (the #221 axis): this verb supplies a CANDIDATE; it decides nothing. It is declared
-// as the single `authority: "agent"` descriptor in kernel/governance/dispositions.ts, and it is
+// as the single `authority: "agent"` descriptor in governor/kernel/dispositions.ts, and it is
 // an ORDINARY GUARDED MUTATING TOOL — registered through the patched registrar in server.ts
 // (`readOnlyHint: false`), so read-only mode, the path allowlist, the write queue, the write
 // journal and the kernel args (`if_rev` / `idempotency_key` / `intent`) all bind at the standard
@@ -17,7 +17,7 @@
 //
 // IT CAN NEVER WRITE ACCEPTANCE. Three independent layers make that true:
 //   1. The only status value in this module is the literal `proposed`, written by
-//      `setAcceptanceStatusProposed` (kernel/governance/revision.ts), which takes no value
+//      `setAcceptanceStatusProposed` (governor/kernel/revision.ts), which takes no value
 //      parameter — there is no argument through which an accepted-family value could arrive.
 //   2. The reviewer text/summary lands as `> `-quoted callout lines in the BODY, behind the
 //      frontmatter fence recognized by the shared core recognizer — quoted lines cannot form a
@@ -36,8 +36,8 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { acceptTransitionReason, parseGuardFrontmatter, AcceptForbiddenError } from "@vault-mcp/core";
 import { ok, codedError } from "./helpers.js";
-import { planSubmitRevision } from "../kernel/governance/revision.js";
-import { SUBMIT_REVISION_TOOL } from "../kernel/governance/dispositions.js";
+import { planSubmitRevision } from "../governor/kernel/revision.js";
+import { SUBMIT_REVISION_TOOL } from "../governor/kernel/dispositions.js";
 
 /** What the tool needs from the world — a read and a write, nothing else. */
 export interface RevisionSource {
@@ -180,7 +180,7 @@ export function registerGovernanceRevisionTool(server: McpServer, source: Revisi
 // pane's request-changes gesture wrote and callouts in agent-readable bodies.
 
 import { isVisible, type GuardSettings } from "../guard.js";
-import { parseRevisionRequestCallouts, splitNote } from "../kernel/governance/revision.js";
+import { parseRevisionRequestCallouts, splitNote } from "../governor/kernel/revision.js";
 
 const RO = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 const REVISIONS_CAP = 100;

@@ -20,10 +20,10 @@
 // isCutOver() reports true and the state surfaces `corrupt` for the status
 // surface to display.
 
-import { planLegacyImport, createLegacyEvidenceStore, type LegacyImportReport, type LegacyEvidenceStore } from "../kernel/governance/migration/legacy-import.js";
-import { performCutover, rollbackCutover, bindMarker, CutoverRefusedError, CUTOVER_DEFAULT, type CutoverStateV1, type CutoverStore } from "../kernel/governance/migration/cutover.js";
-import { bindingVerdict, mintStoreIdGestured, type BindingVerdict, type StoreIdIo } from "../kernel/governance/migration/store-binding.js";
-import type { Baseline } from "../kernel/governance/baseline-store.js";
+import { planLegacyImport, createLegacyEvidenceStore, type LegacyImportReport, type LegacyEvidenceStore } from "../kernel/migration/legacy-import.js";
+import { performCutover, rollbackCutover, bindMarker, CutoverRefusedError, CUTOVER_DEFAULT, type CutoverStateV1, type CutoverStore } from "../kernel/migration/cutover.js";
+import { bindingVerdict, mintStoreIdGestured, type BindingVerdict, type StoreIdIo } from "../kernel/migration/store-binding.js";
+import type { Baseline } from "../kernel/baseline-store.js";
 
 export interface MigrationIo {
   exists(path: string): Promise<boolean>;

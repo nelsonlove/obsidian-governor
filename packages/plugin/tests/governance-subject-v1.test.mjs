@@ -21,8 +21,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { canonicalize, NoncanonicalValueError } from "../src/kernel/governance/contracts/canonical-json.ts";
-import { digestUtf8, digestBytes, isSha256Digest } from "../src/kernel/governance/contracts/digest.ts";
+import { canonicalize, NoncanonicalValueError } from "../src/governor/kernel/contracts/canonical-json.ts";
+import { digestUtf8, digestBytes, isSha256Digest } from "../src/governor/kernel/contracts/digest.ts";
 import {
   buildProposalItemSubject,
   buildCohortSubject,
@@ -31,11 +31,11 @@ import {
   SubjectDuplicateError,
   SubjectUnsupportedVersionError,
   PROPOSAL_ITEM_SCHEMA,
-} from "../src/kernel/governance/contracts/subject-v1.ts";
-import { sortClasses, governingClass, escalate, CHANGE_CLASSES } from "../src/kernel/governance/contracts/change-class.ts";
-import { mintId, isUuidV7 } from "../src/kernel/governance/contracts/ids.ts";
-import { ORIGIN_CONFIDENCE, originRecord } from "../src/kernel/governance/contracts/origin.ts";
-import { STATE_AXES } from "../src/kernel/governance/contracts/states.ts";
+} from "../src/governor/kernel/contracts/subject-v1.ts";
+import { sortClasses, governingClass, escalate, CHANGE_CLASSES } from "../src/governor/kernel/contracts/change-class.ts";
+import { mintId, isUuidV7 } from "../src/governor/kernel/contracts/ids.ts";
+import { ORIGIN_CONFIDENCE, originRecord } from "../src/governor/kernel/contracts/origin.ts";
+import { STATE_AXES } from "../src/governor/kernel/contracts/states.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 

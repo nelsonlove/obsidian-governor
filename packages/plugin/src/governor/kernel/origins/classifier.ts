@@ -1,6 +1,6 @@
 // ORIGIN CLASSIFIER — from runtime signals to one of the four origins (WP5, D12).
 //
-// This EXTENDS the existing human-vs-agent classifier (kernel/governance/
+// This EXTENDS the existing human-vs-agent classifier (governor/kernel/
 // classify.ts) rather than replacing it. That module's behavior is adopted by
 // name in D12 — "editor-buffer change observed while the local user is
 // actively editing" is exactly its positive trusted-input signal, and its

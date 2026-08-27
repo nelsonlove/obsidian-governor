@@ -19,7 +19,7 @@
 // Event`, and a synthesized `dispatchEvent(new MouseEvent(...))` has isTrusted forced false.
 // Together only a physical human click fires accept/revert/adopt/setClassEnabled. Adopt-baseline
 // additionally opens a confirmation modal because it silences the ENTIRE queue. See
-// kernel/governance/gesture.ts and kernel/governance/accept.ts for the full invariant.
+// governor/kernel/gesture.ts and governor/kernel/accept.ts for the full invariant.
 //
 // REACHABILITY: the controller (which carries the accept/revert/adopt/setClassEnabled callables)
 // is NOT stored as an instance field — a `private readonly controller` is an enumerable own
@@ -31,11 +31,11 @@
 // closure, closed over the specific displayed row.
 
 import { ItemView, Notice, Modal, TFile, type WorkspaceLeaf, type App } from "obsidian";
-import { AcceptGateError, type AcceptOpts } from "../kernel/governance/accept.js";
-import { type PendingItem, groupByAgent } from "../kernel/governance/queue.js";
-import { diffNote, toHunks, type DiffLine, type HunkCollapsed } from "../kernel/governance/diff.js";
-import { isRealGesture, runGuardedAdopt, runGuardedDisposition } from "../kernel/governance/gesture.js";
-import type { DispositionOutcome } from "../kernel/governance/gesture.js";
+import { AcceptGateError, type AcceptOpts } from "../kernel/accept.js";
+import { type PendingItem, groupByAgent } from "../kernel/queue.js";
+import { diffNote, toHunks, type DiffLine, type HunkCollapsed } from "../kernel/diff.js";
+import { isRealGesture, runGuardedAdopt, runGuardedDisposition } from "../kernel/gesture.js";
+import type { DispositionOutcome } from "../kernel/gesture.js";
 
 // The popout incident (2026-08-23): a silently swallowed REAL click is
 // indistinguishable from the forgery case the silence was designed for — a
@@ -48,20 +48,20 @@ export function noticeGestureBlocked(outcome: DispositionOutcome): void {
   if (outcome === "blocked-untrusted") new Notice(GESTURE_BLOCKED_TEXT, 8000);
 }
 
-import { dispositionsFor, dispositionById, acceptEffectFor, type DispositionId } from "../kernel/governance/dispositions.js";
-import type { AcceptResult } from "../kernel/governance/accept.js";
-import type { ProposedItem } from "../kernel/governance/proposed.js";
-import { badgeVisible } from "../kernel/governance/badge.js";
-import { renderIntent } from "../kernel/governance/intent-view.js";
-import type { ClassId, ClassSpec } from "../kernel/governance/auto-accept/classes.js";
-import { buildHistory, renderHistoryEntries, HISTORY_DEFAULT_CAP } from "../kernel/governance/history.js";
+import { dispositionsFor, dispositionById, acceptEffectFor, type DispositionId } from "../kernel/dispositions.js";
+import type { AcceptResult } from "../kernel/accept.js";
+import type { ProposedItem } from "../kernel/proposed.js";
+import { badgeVisible } from "../kernel/badge.js";
+import { renderIntent } from "../kernel/intent-view.js";
+import type { ClassId, ClassSpec } from "../kernel/auto-accept/classes.js";
+import { buildHistory, renderHistoryEntries, HISTORY_DEFAULT_CAP } from "../kernel/history.js";
 
 /**
  * The pane's registered view type. Deliberately kept at the pre-0.12.0 string:
  * it is PERSISTED in `workspace.json`, so renaming it turns every open pane
  * into a dead leaf on upgrade — a real cost for zero user-visible benefit,
  * since the type is internal plumbing nobody reads. Historical spelling, like
- * the `governance_*` tool names and the `src/governance/` dirs; the module id
+ * the `governance_*` tool names and the `src/governor/wiring/` dirs; the module id
  * (`acceptance`), the pane title, and the ribbon label all carry the new name.
  */
 export const VIEW_TYPE_GOVERNANCE = "governance-review";
@@ -435,7 +435,7 @@ function promptRequestChanges(app: App, noteTitle: string): Promise<string | nul
 
 // ── SINGLE-SOURCED accept-class control text + wiring ─────────────────────────
 // The two accept-equivalent controls (adopt-baseline + the auto-accept allowlist) appear in TWO
-// human surfaces now — the review pane AND the settings tab (governance/wiring.ts
+// human surfaces now — the review pane AND the settings tab (governor/wiring/wiring.ts
 // renderGovernanceSettings). To keep them from drifting, both their descriptive copy and their
 // gesture-gated wiring live here as ONE implementation each; both surfaces import these.
 
@@ -733,7 +733,7 @@ export class GovernanceReviewView extends ItemView {
     } catch {
       /* the probe itself failing must not hide the proposals */
     }
-    let items: import("../kernel/governance/proposals/proposal.js").ProposalV1[] = [];
+    let items: import("../kernel/proposals/proposal.js").ProposalV1[] = [];
     try {
       items = await deps.admission.pending();
     } catch {
@@ -951,8 +951,8 @@ export class GovernanceReviewView extends ItemView {
   // someone may be working under).
   private async renderMandates(root: HTMLElement, deps: ReviewController): Promise<void> {
     if (!deps.mandates) return;
-    let drafts: import("../kernel/governance/mandates/draft.js").MandateDraftV1[] = [];
-    let mandates: Array<{ mandate: import("../kernel/governance/mandates/mandate.js").MandateV1; usage: import("../kernel/governance/mandates/budgets.js").MandateUsage }> = [];
+    let drafts: import("../kernel/mandates/draft.js").MandateDraftV1[] = [];
+    let mandates: Array<{ mandate: import("../kernel/mandates/mandate.js").MandateV1; usage: import("../kernel/mandates/budgets.js").MandateUsage }> = [];
     try {
       drafts = await deps.mandates.drafts();
       mandates = await deps.mandates.mandates();
@@ -1097,8 +1097,8 @@ export class GovernanceReviewView extends ItemView {
    * answer" shape in the authority record).
    */
   private pendingSuccessor: {
-    frozen: import("../kernel/governance/cohorts/freeze.js").FrozenCohort;
-    members: import("../kernel/governance/proposals/proposal.js").ProposalV1[];
+    frozen: import("../kernel/cohorts/freeze.js").FrozenCohort;
+    members: import("../kernel/proposals/proposal.js").ProposalV1[];
     excludedNoteIds: string[];
   } | null = null;
 
@@ -1135,8 +1135,8 @@ export class GovernanceReviewView extends ItemView {
   /** One confirm → one admit for a frozen cohort; split-by-finding on failure. */
   private async decideCohort(
     deps: ReviewController,
-    frozen: import("../kernel/governance/cohorts/freeze.js").FrozenCohort,
-    members: import("../kernel/governance/proposals/proposal.js").ProposalV1[],
+    frozen: import("../kernel/cohorts/freeze.js").FrozenCohort,
+    members: import("../kernel/proposals/proposal.js").ProposalV1[],
     gestureRef: string
   ): Promise<void> {
     const confirmed = await new Promise<boolean>((resolve) =>
@@ -1352,7 +1352,7 @@ export class GovernanceReviewView extends ItemView {
 
   // The read-only history browser: past decisions from the acceptance log, newest first, capped,
   // optionally filtered to one note. Display-only — every log-derived string lands in a text node
-  // (renderHistoryEntries, kernel/governance/history.ts), and nothing here can accept, revert, or
+  // (renderHistoryEntries, governor/kernel/history.ts), and nothing here can accept, revert, or
   // write the log.
   private async renderHistory(root: HTMLElement, deps: ReviewController): Promise<void> {
     const sub = root.createDiv({ cls: "governance-history-sub" });
@@ -1392,7 +1392,7 @@ export class GovernanceReviewView extends ItemView {
         const main = row.createDiv({ cls: "governance-row-main" });
         main.createDiv({ cls: "governance-row-title", text: item.title });
         main.createDiv({ cls: "governance-row-path", text: item.path });
-        // UNTRUSTED agent-authored text. Rendered via renderIntent() (kernel/governance/
+        // UNTRUSTED agent-authored text. Rendered via renderIntent() (governor/kernel/
         // intent-view.ts), which places it into a text node ONLY (createSpan/text) — never HTML,
         // never a markdown/wikilink/template renderer, however the agent phrased it.
         if (item.intent) {
@@ -1439,7 +1439,7 @@ export class GovernanceReviewView extends ItemView {
       // an appends note's appends sit in the queue.
       title.createDiv({ cls: "governance-detail-sub", text: `legacy auto-accept policy: ${honoredPolicy} (retired — appends now propose for review)` });
     }
-    // UNTRUSTED agent-authored text — see kernel/governance/intent-view.ts for the text-node-only
+    // UNTRUSTED agent-authored text — see governor/kernel/intent-view.ts for the text-node-only
     // render path and its behavioral escaping test.
     if (item.intent) {
       renderIntent(title, item.intent, { wrapperCls: "governance-detail-intent", full: true });
@@ -1464,7 +1464,7 @@ export class GovernanceReviewView extends ItemView {
     };
 
     // Action buttons — the ONLY accept/revert/request-changes call sites. MEMBERSHIP, ORDER and
-    // LABELS come from the declared disposition set (kernel/governance/dispositions.ts — #101,
+    // LABELS come from the declared disposition set (governor/kernel/dispositions.ts — #101,
     // phase 1 of #221): every button below is created from a `pending-item` descriptor, so the
     // pane cannot render a human disposition the table does not declare. The descriptors are
     // pure DATA — the accept-capable callables still arrive ONLY through `deps` (the

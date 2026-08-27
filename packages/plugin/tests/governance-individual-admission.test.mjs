@@ -15,17 +15,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { digestUtf8 } from "../src/kernel/governance/contracts/digest.ts";
-import { buildProposalSubjectFromOperation, ProposalDependencyError } from "../src/kernel/governance/proposals/proposal-builder.ts";
-import { openProposal, withVerification } from "../src/kernel/governance/proposals/proposal.ts";
-import { createProposalStore } from "../src/kernel/governance/proposals/proposal-store.ts";
-import { createPredicateRegistry, PredicateRegistryError } from "../src/kernel/governance/verification/registry.ts";
-import { verifySubject } from "../src/kernel/governance/verification/verify.ts";
-import { requireAdmissible, AdmissionRefusedError } from "../src/kernel/governance/admission/policy.ts";
-import { createAdmissionService } from "../src/kernel/governance/admission/service.ts";
-import { createClaimStore } from "../src/kernel/governance/admission/settlement.ts";
-import { createStandingResolver } from "../src/kernel/governance/admission/standing-resolver.ts";
-import { RefCasError } from "../src/kernel/governance/history-store/types.ts";
+import { digestUtf8 } from "../src/governor/kernel/contracts/digest.ts";
+import { buildProposalSubjectFromOperation, ProposalDependencyError } from "../src/governor/kernel/proposals/proposal-builder.ts";
+import { openProposal, withVerification } from "../src/governor/kernel/proposals/proposal.ts";
+import { createProposalStore } from "../src/governor/kernel/proposals/proposal-store.ts";
+import { createPredicateRegistry, PredicateRegistryError } from "../src/governor/kernel/verification/registry.ts";
+import { verifySubject } from "../src/governor/kernel/verification/verify.ts";
+import { requireAdmissible, AdmissionRefusedError } from "../src/governor/kernel/admission/policy.ts";
+import { createAdmissionService } from "../src/governor/kernel/admission/service.ts";
+import { createClaimStore } from "../src/governor/kernel/admission/settlement.ts";
+import { createStandingResolver } from "../src/governor/kernel/admission/standing-resolver.ts";
+import { RefCasError } from "../src/governor/kernel/history-store/types.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const d = (t) => digestUtf8(t);
@@ -331,7 +331,7 @@ describe("proposal fold — a crafted opened event cannot skip the transition fu
     // event verbatim, so a crafted line with an already-admitted proposal
     // skipped withAdmitted entirely. The fold now refuses any opened event
     // not in the mint shape.
-    const { foldProposalEvents } = await import("../src/kernel/governance/proposals/proposal-store.ts");
+    const { foldProposalEvents } = await import("../src/governor/kernel/proposals/proposal-store.ts");
     const subj = buildProposalSubjectFromOperation(subjectInput());
     const legit = openProposal({ subject: subj, sessionId: "s" }, T0, RAND(1));
     const crafted = { ...legit, authority: "admitted", verification: "unverified" };
@@ -344,7 +344,7 @@ describe("proposal fold — a crafted opened event cannot skip the transition fu
 
 describe("standing resolver — the chain walk (#334)", () => {
   async function chainFixture() {
-    const { buildAdmissionClaim, createClaimStore } = await import("../src/kernel/governance/admission/settlement.ts");
+    const { buildAdmissionClaim, createClaimStore } = await import("../src/governor/kernel/admission/settlement.ts");
     const io = memoryIo();
     const claims = createClaimStore(io);
     const chain = []; // newest first
@@ -391,7 +391,7 @@ describe("standing resolver — the chain walk (#334)", () => {
   });
 
   test("the 600-member shape: a cohort-style claim's members survive an unrelated later admission", async () => {
-    const { buildAdmissionClaim, createClaimStore } = await import("../src/kernel/governance/admission/settlement.ts");
+    const { buildAdmissionClaim, createClaimStore } = await import("../src/governor/kernel/admission/settlement.ts");
     const io = memoryIo();
     const claims = createClaimStore(io);
     const members = Array.from({ length: 50 }, (_, i) => ({ vaultId: "v", noteId: `member-${i}`, subjectDigest: d(`m-${i}`).value }));
@@ -442,7 +442,7 @@ describe("standing resolver — the chain walk (#334)", () => {
   });
 
   test("unattached claims answer ungoverned; a chained-but-unreadable claim answers unresolvable", async () => {
-    const { buildAdmissionClaim, createClaimStore } = await import("../src/kernel/governance/admission/settlement.ts");
+    const { buildAdmissionClaim, createClaimStore } = await import("../src/governor/kernel/admission/settlement.ts");
     const claims = createClaimStore(memoryIo());
     const orphan = buildAdmissionClaim({ subjectDigest: d("orphan"), proposalId: "p", authority: { kind: "human-gesture", gestureRef: "g" }, verification: [], expectedStanding: null, coveredNotes: [{ vaultId: "v", noteId: "n", subjectDigest: d("orphan").value }], now: T0, rand: RAND(6) });
     await claims.append(orphan);
@@ -468,13 +468,13 @@ describe("standing isolation — nothing outside the sanctioned modules touches 
     const srcDir = path.join(HERE, "..", "src");
     const offenders = [];
     const allowed = [
-      path.join("kernel", "governance", "history-store", "refs.ts"), // defines it
+      path.join("governor", "kernel", "history-store", "refs.ts"), // defines it
       // THE deliberate WP6b-2 addition: the one production module that builds
       // the standingAdvance capability (closure-held, handed to the
       // AdmissionService as a constructor argument). Anything else joining
       // this list is a design decision someone makes on purpose, per the
       // original comment.
-      path.join("governance", "admission-wiring.ts"),
+      path.join("governor", "wiring", "admission-wiring.ts"),
     ];
     const walk = (dir) => {
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -500,7 +500,7 @@ describe("standing isolation — nothing outside the sanctioned modules touches 
   test("the scan is not vacuous: it sees refs.ts itself", () => {
     // A scan that finds zero files INCLUDING its own allowlist would be
     // scanning the wrong thing — the exact failure the first version had.
-    const refsPath = path.join(HERE, "..", "src", "kernel", "governance", "history-store", "refs.ts");
+    const refsPath = path.join(HERE, "..", "src", "governor", "kernel", "history-store", "refs.ts");
     const text = fs.readFileSync(refsPath, "utf8");
     assert.ok(/standingRef\s*\(/.test(text) || /\$\{NAMESPACE\}\/standing/.test(text), "the pattern matches the definition site");
   });

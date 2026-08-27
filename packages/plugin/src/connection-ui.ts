@@ -7,7 +7,7 @@ import { DANGEROUS_LIST_DESC } from "./mcp/tools-cli.js";
 import { OPAQUE_ACCEPT_CLI_COMMANDS, OPAQUE_ACCEPT_COMMAND_IDS } from "./mcp/cli-policy.js";
 import { CommandSuggest } from "./command-suggest.js";
 import { builtinModules } from "./mcp/modules-mount.js";
-import { renderGovernanceSettings } from "./governance/wiring.js";
+import { renderGovernanceSettings } from "./governor/wiring/wiring.js";
 import {
   ModuleRegistry,
   collect,

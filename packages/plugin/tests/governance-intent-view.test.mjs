@@ -1,14 +1,14 @@
 // THE ONE HARD REQUIREMENT for the agent-authored `intent` field: it is UNTRUSTED, agent-authored
 // text (up to ~2000 chars) and must reach the DOM as a plain text node ONLY. Ported from
 // obsidian-stewardship/tests/intent-view.test.mjs (#83, cycle 2). This drives the actual render
-// path (kernel/governance/intent-view.ts, called by governance/pane.ts) with a fake element tree
+// path (governor/kernel/intent-view.ts, called by governor/wiring/pane.ts) with a fake element tree
 // that faithfully mirrors Obsidian's createDiv/createSpan contract (`text` sets `textContent`,
 // never `innerHTML`), so the escaping property is proven behaviorally — not just by scanning
 // source (pane.ts can't be imported headlessly: it pulls in the types-only `obsidian` runtime).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { truncateIntent, renderIntent } from "../src/kernel/governance/intent-view.ts";
+import { truncateIntent, renderIntent } from "../src/governor/kernel/intent-view.ts";
 
 // A minimal fake DOM element mirroring the two Obsidian HTMLElement helpers renderIntent uses.
 // Setting `text` on creation is the ONLY way this fake accepts content — there is no

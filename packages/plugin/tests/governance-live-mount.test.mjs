@@ -5,7 +5,7 @@
  * nothing until a plugin reload. The fix mounts/unmounts the pane live from the toggle. The
  * obsidian-coupled part (registerView / addRibbonIcon / workspace calls / Component teardown) is
  * NOT headlessly testable and is verified by build + reasoning — but the transition DECISION and
- * its idempotency guards ARE pure, and that is what `mountAction` (governance/mount-state.ts)
+ * its idempotency guards ARE pure, and that is what `mountAction` (governor/wiring/mount-state.ts)
  * captures. main.ts drives its real mount/unmount off exactly this function, so pinning it here
  * pins the live behavior's decision core:
  *   - enable while unmounted → "mount"
@@ -16,7 +16,7 @@
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { mountAction } from "../src/governance/mount-state.ts";
+import { mountAction } from "../src/governor/wiring/mount-state.ts";
 
 describe("mountAction — the live mount/unmount transition decision", () => {
   test("enable while unmounted mounts", () => {

@@ -1,5 +1,5 @@
 // governance-rename-records.test.mjs — #261: the link-heal oracle's durable half.
-// Pure (de)serialization + pruning at src/kernel/governance/rename-records.ts. The wiring
+// Pure (de)serialization + pruning at src/governor/kernel/rename-records.ts. The wiring
 // persists rename captures to governance/rename-records.json and reloads them at mount, so
 // Obsidian's rename-driven wikilink rewrites stay CONFIRMABLE across a plugin reload — the
 // in-memory-only oracle was half of the live #261 wedge (a rename's confirmation died with
@@ -13,7 +13,7 @@ import {
   deserializeRenameRecords,
   RENAME_RECORDS_CAP,
   RENAME_RECORD_TTL_MS,
-} from "../src/kernel/governance/rename-records.ts";
+} from "../src/governor/kernel/rename-records.ts";
 
 const NOW = Date.parse("2026-08-19T12:00:00Z");
 const rec = (overrides = {}) => ({

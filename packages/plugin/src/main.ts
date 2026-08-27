@@ -10,30 +10,30 @@ import { ConnectionSetupModal, VaultMcpSettingTab } from "./connection-ui.js";
 import { findClaudeBinary, claudeIsRegistered, claudeRegister, claudeRemove, claudeEnsureConnectPlugin } from "./claude-cli.js";
 import { ExternalToolRegistry, type VaultMcpApi } from "./mcp/external-tools.js";
 import { Kernel, WriteQueue, WriteJournal, IdempotencyStore, LockStore, UidIndex, loadInstallId, migrateLegacyModuleIds, DEFAULT_VOCABULARIES, type VocabInstanceSettings, type ModuleSettings } from "./kernel/index.js";
-import { createSessionStore } from "./kernel/governance/sessions/session-store.js";
-import { createProposalStore } from "./kernel/governance/proposals/proposal-store.js";
-import { buildAdmission, type AdmissionUiDeps } from "./governance/admission-wiring.js";
-import { buildMandateUi, type MandateUiDeps } from "./governance/mandate-wiring.js";
-import { createMandateStore } from "./kernel/governance/mandates/lifecycle.js";
-import { budgetBreach } from "./kernel/governance/mandates/budgets.js";
-import { governanceAcceptanceSettings } from "./kernel/governance/settings.js";
-import { buildPromotionUi, type PromotionUiDeps } from "./governance/promotion-wiring.js";
-import { createTransformationRegistry } from "./kernel/governance/transformations/transformation.js";
-import { createPromotionStore } from "./kernel/governance/transformations/promotion.js";
-import { createDefaultPredicateRegistry } from "./kernel/governance/verification/predicates.js";
-import { openGitRepository } from "./governance/history-store/git-repository.js";
-import { historyDir } from "./governance/history-store/local-data-root.js";
+import { createSessionStore } from "./governor/kernel/sessions/session-store.js";
+import { createProposalStore } from "./governor/kernel/proposals/proposal-store.js";
+import { buildAdmission, type AdmissionUiDeps } from "./governor/wiring/admission-wiring.js";
+import { buildMandateUi, type MandateUiDeps } from "./governor/wiring/mandate-wiring.js";
+import { createMandateStore } from "./governor/kernel/mandates/lifecycle.js";
+import { budgetBreach } from "./governor/kernel/mandates/budgets.js";
+import { governanceAcceptanceSettings } from "./governor/kernel/settings.js";
+import { buildPromotionUi, type PromotionUiDeps } from "./governor/wiring/promotion-wiring.js";
+import { createTransformationRegistry } from "./governor/kernel/transformations/transformation.js";
+import { createPromotionStore } from "./governor/kernel/transformations/promotion.js";
+import { createDefaultPredicateRegistry } from "./governor/kernel/verification/predicates.js";
+import { openGitRepository } from "./governor/wiring/history-store/git-repository.js";
+import { historyDir } from "./governor/wiring/history-store/local-data-root.js";
 import { uuidv7 } from "./kernel/uuidv7.js";
-import { effectiveScope, isTracked } from "./kernel/governance/history-store/history-scope.js";
-import { proposalRef } from "./kernel/governance/history-store/refs.js";
-import { EXCLUDED_PREFIXES } from "./governance/territories.js";
-import type { HistoryRepository } from "./kernel/governance/history-store/repository.js";
+import { effectiveScope, isTracked } from "./governor/kernel/history-store/history-scope.js";
+import { proposalRef } from "./governor/kernel/history-store/refs.js";
+import { EXCLUDED_PREFIXES } from "./governor/wiring/territories.js";
+import type { HistoryRepository } from "./governor/kernel/history-store/repository.js";
 import { obsidianProbe, obsidianServerIdentity, obsidianUidSource } from "./kernel/obsidian-probe.js";
 import { DEFAULT_SCHEMES, type SchemeInstanceConfig } from "./kernel/scheme/registry.js";
 import { DEFAULT_PROTECTED_PROPERTIES, setDeclaredProtectedProperties } from "@vault-mcp/core";
-import { wireGovernance, nudgeGovernanceQueue, setLegacyWriteGuard, baselinesOf } from "./governance/wiring.js";
-import { buildMigration, type Migration } from "./governance/migration-wiring.js";
-import { mountAction } from "./governance/mount-state.js";
+import { wireGovernance, nudgeGovernanceQueue, setLegacyWriteGuard, baselinesOf } from "./governor/wiring/wiring.js";
+import { buildMigration, type Migration } from "./governor/wiring/migration-wiring.js";
+import { mountAction } from "./governor/wiring/mount-state.js";
 import { wireSkills } from "./skills/wiring.js";
 import { wireSchemePanes, registerSchemeCommands } from "./scheme/wiring.js";
 import { runFolderMigration, LEGACY_PLUGIN_ID } from "./id-migration.js";
@@ -840,7 +840,7 @@ export default class VaultMcpPlugin extends Plugin {
       }),
       serverIdentity,
       sessions: {
-        open: (session: import("./kernel/governance/sessions/session.js").SessionV1, now: number) => sessionStore.open(session, now),
+        open: (session: import("./governor/kernel/sessions/session.js").SessionV1, now: number) => sessionStore.open(session, now),
         get: (sessionId: string) => sessionStore.get(sessionId),
         close: (sessionId: string, now: number) => sessionStore.close(sessionId, now),
         markExpired: (sessionId: string, now: number) => sessionStore.markExpired(sessionId, now),
@@ -852,7 +852,7 @@ export default class VaultMcpPlugin extends Plugin {
       // store's grant/decline/revoke verbs are NOT exposed here: they belong
       // to the pane's gesture-gated surface (mandate-wiring.ts).
       mandates: {
-        draft: (d: import("./kernel/governance/mandates/draft.js").MandateDraftV1, now: number) => mandateStore.draft(d, now),
+        draft: (d: import("./governor/kernel/mandates/draft.js").MandateDraftV1, now: number) => mandateStore.draft(d, now),
         allDrafts: () => mandateStore.allDrafts(),
         allMandates: () => mandateStore.allMandates(),
         usageOf: (id: string) => mandateStore.usageOf(id),
@@ -871,7 +871,7 @@ export default class VaultMcpPlugin extends Plugin {
         },
       },
       proposals: {
-        open: (proposal: import("./kernel/governance/proposals/proposal.js").ProposalV1, now: number) => proposalStore.open(proposal, now),
+        open: (proposal: import("./governor/kernel/proposals/proposal.js").ProposalV1, now: number) => proposalStore.open(proposal, now),
         uidOf: (path: string) => {
           const uid = (this.app.metadataCache.getCache(path)?.frontmatter as Record<string, unknown> | undefined)?.uid;
           return typeof uid === "string" && uid.length > 0 ? uid : null;
@@ -948,7 +948,7 @@ export default class VaultMcpPlugin extends Plugin {
     this.addSettingTab(new VaultMcpSettingTab(this.app, this));
 
     // ── acceptance review pane (#83, cycle 2; module id `acceptance` since 0.12.0,
-    // historically `governance` — the src/governance/ dirs keep the old name) ────
+    // historically `governance` — the src/governor/wiring/ dirs keep the old name) ────
     // Mounted when the acceptance module is enabled (default OFF — the module default is
     // `enabled: false`, so an absent settings row means off). This is the human-only Accept
     // surface: an Obsidian review pane whose Accept / Revert / Adopt / auto-accept-allowlist
@@ -960,7 +960,7 @@ export default class VaultMcpPlugin extends Plugin {
     // The mount FOLLOWS the toggle LIVE: flipping the acceptance-enabled toggle in the settings tab
     // mounts or unmounts the pane + gavel ribbon immediately, with NO plugin reload (see
     // `setGovernanceMounted` and connection-ui.ts's per-module enable hook). Here at onload we mount
-    // it once if it starts enabled. See src/governance/.
+    // it once if it starts enabled. See src/governor/wiring/.
     if (this.settings.modules?.acceptance?.enabled === true) {
       void this.setGovernanceMounted(true);
     }

@@ -8,7 +8,7 @@
 // (Acceptance) module fold (#83). The acceptance convergence (#221/#164) REMOVED the
 // string-rewriting `stampAcceptance` helper this file used to carry: the one production
 // writer of the accepted family is now the module-scope `stampAcceptedFrontmatter` in
-// governance/wiring.ts (Obsidian's own `app.fileManager.processFrontMatter`), reached
+// governor/wiring/wiring.ts (Obsidian's own `app.fileManager.processFrontMatter`), reached
 // exclusively through `acceptNote`'s injected `stampAccepted` dep on the gesture-gated
 // accept path. Everything left in this file is READ-ONLY over note content — it can
 // decide, but never write.

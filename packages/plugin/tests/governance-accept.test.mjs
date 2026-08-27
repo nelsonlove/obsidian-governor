@@ -22,8 +22,8 @@ import {
   formatLocalMinutes,
   AcceptGateError,
   AcceptFoldError,
-} from "../src/kernel/governance/accept.ts";
-import { computeQueue } from "../src/kernel/governance/queue.ts";
+} from "../src/governor/kernel/accept.ts";
+import { computeQueue } from "../src/governor/kernel/queue.ts";
 import { makeFakeWorld } from "./governance-helpers.mjs";
 
 const MINUTES_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;

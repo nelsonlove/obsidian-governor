@@ -108,10 +108,10 @@ A **read-only** view of the notes currently pending human review, so a well-beha
 (after `registerUidTools` in `server.ts`), not through the module host.
 
 - **It exposes data the governance module published — nothing more.** The folded governance
-  module (`src/governance/wiring.ts`) rewrites a read-only index at
+  module (`src/governor/wiring/wiring.ts`) rewrites a read-only index at
   `<plugin-dir>/governance/pending-index.json` — beside the acceptance log — on every
   review-queue refresh (`refresh()`, via the pure serializer in
-  `kernel/governance/pending-index.ts`); this tool reads it. It is the same data the review
+  `governor/kernel/pending-index.ts`); this tool reads it. It is the same data the review
   pane shows — **no new source of truth, and nothing here changes review state**.
   `readOnlyHint: true`, empty input schema, no write and no accept/baseline verb: it reports
   pending-ness; it cannot accept ("the accept verb is in no API").

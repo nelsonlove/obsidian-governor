@@ -1,6 +1,6 @@
 // ============================================================================
 //  THE DISPOSITION SUBSTRATE (#221, phase 2 — extracted from #228's
-//  kernel/governance/dispositions.ts)
+//  governor/kernel/dispositions.ts)
 // ----------------------------------------------------------------------------
 //  A triage instance = a queue predicate + a disposition set. A disposition is
 //  DECLARED as a descriptor — `{ id, authority, surface, label, effect, … }` —
@@ -16,7 +16,7 @@
 //  is `authority: "agent"` and exists ONLY as an ordinary guarded MCP tool.
 //
 //  Two instances declare against this shape today:
-//    - the ACCEPTANCE instance (kernel/governance/dispositions.ts) — the
+//    - the ACCEPTANCE instance (governor/kernel/dispositions.ts) — the
 //      review pane's seven verbs, mixed human/agent authority;
 //    - the INBOX-TRIAGE instance (kernel/triage/descriptors.ts) — ten verbs,
 //      ALL agent authority (none confers standing), no pane surface at all.

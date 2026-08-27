@@ -1,9 +1,9 @@
 // Ported from obsidian-stewardship/tests/baseline-store.test.mjs (#83, cycle 1) —
-// the per-note baseline blob store, now at src/kernel/governance/baseline-store.ts.
+// the per-note baseline blob store, now at src/governor/kernel/baseline-store.ts.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { BaselineStore } from "../src/kernel/governance/baseline-store.ts";
-import { contentHash } from "../src/kernel/governance/hash.ts";
+import { BaselineStore } from "../src/governor/kernel/baseline-store.ts";
+import { contentHash } from "../src/governor/kernel/hash.ts";
 import { makeTmpFs } from "./governance-helpers.mjs";
 
 test("baseline store round-trips through a fresh load", async () => {

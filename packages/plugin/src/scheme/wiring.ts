@@ -29,7 +29,7 @@
 // shared child `Component` (`plugin.addChild`) that `wireSchemePanes`
 // returns — a live unmount is `plugin.removeChild(it)`, which detaches any
 // open leaves, unregisters both view types, and removes both ribbon
-// elements. This mirrors `governance/wiring.ts`'s `wireGovernance` exactly
+// elements. This mirrors `governor/wiring/wiring.ts`'s `wireGovernance` exactly
 // (the fix pattern #286 pointed at, itself from #200) — a plugin-toggle
 // flip is no longer a "nothing happened until I reload" surprise, and
 // disabling the module no longer leaves a registered view type + a live
@@ -63,7 +63,7 @@ function revealFolder(app: App, path: string): void {
 /** Best-effort access to Obsidian's internal view registry — the ONE thing
  *  `plugin.registerView` only tears down at plugin unload, so a LIVE
  *  unmount must unregister the type itself (its public wrapper offers no
- *  un-register). Duplicated from governance/wiring.ts's own private helper
+ *  un-register). Duplicated from governor/wiring/wiring.ts's own private helper
  *  of the same name/shape, rather than exported and shared, matching this
  *  file's existing precedent of small per-file helpers (e.g. `vaultRoot` in
  *  mcp/obsidian-drift-source.ts / mcp/obsidian-debt-source.ts). An Obsidian

@@ -24,7 +24,7 @@
 //  the handler directly, defeating any isTrusted check that reads a caller-supplied arg.
 //  addEventListener listeners are not exposed as a reachable property, so the function cannot be
 //  grabbed; and the gate hardens to `isRealGesture` (real Event + isTrusted), which a forged
-//  plain object and a synthesized dispatchEvent both fail. See kernel/governance/gesture.ts.
+//  plain object and a synthesized dispatchEvent both fail. See governor/kernel/gesture.ts.
 //
 //  The accept-equivalent capabilities, and how each is unreachable:
 //    - performAccept   — module-scope fn; reached only via the pane Accept button clicks
@@ -61,15 +61,15 @@
 //  governance commands.
 // ============================================================================
 
-import type { AcceptOpts } from "../kernel/governance/accept.js";
+import type { AcceptOpts } from "../kernel/accept.js";
 import { Component, TFile, TFolder, MarkdownView, Notice, type WorkspaceLeaf, type Plugin, type DataAdapter } from "obsidian";
-import { BaselineStore, type BlobFs } from "../kernel/governance/baseline-store.js";
-import { planBaselineReconcile, summarizePlan } from "../kernel/governance/baseline-reconcile.js";
-import { parseJournal, recentAgentWrite, agentWritesSince, type JournalRecord } from "../kernel/governance/journal-reader.js";
-import { computeQueue, type PendingItem, type NoteSnapshot } from "../kernel/governance/queue.js";
+import { BaselineStore, type BlobFs } from "../kernel/baseline-store.js";
+import { planBaselineReconcile, summarizePlan } from "../kernel/baseline-reconcile.js";
+import { parseJournal, recentAgentWrite, agentWritesSince, type JournalRecord } from "../kernel/journal-reader.js";
+import { computeQueue, type PendingItem, type NoteSnapshot } from "../kernel/queue.js";
 import { deleteInvalidatesQueue } from "./queue-invalidation.js";
-import { shouldAdvanceBaselineSilently } from "../kernel/governance/classify.js";
-import { classifyChange } from "../kernel/governance/origins/classifier.js";
+import { shouldAdvanceBaselineSilently } from "../kernel/classify.js";
+import { classifyChange } from "../kernel/origins/classifier.js";
 import {
   acceptNote,
   revertNote,
@@ -80,12 +80,12 @@ import {
   type AcceptResult,
   type AcceptanceStampFields,
   type LogRecord,
-} from "../kernel/governance/accept.js";
-import { buildProposedList, type ProposedItem } from "../kernel/governance/proposed.js";
-import { insertRevisionRequest, withdrawRevisionRequests } from "../kernel/governance/revision.js";
-import { runGuardedDisposition } from "../kernel/governance/gesture.js";
-import { LegacyWriterDisabledError } from "../kernel/governance/migration/cutover.js";
-import { contentHash } from "../kernel/governance/hash.js";
+} from "../kernel/accept.js";
+import { buildProposedList, type ProposedItem } from "../kernel/proposed.js";
+import { insertRevisionRequest, withdrawRevisionRequests } from "../kernel/revision.js";
+import { runGuardedDisposition } from "../kernel/gesture.js";
+import { LegacyWriterDisabledError } from "../kernel/migration/cutover.js";
+import { contentHash } from "../kernel/hash.js";
 import {
   AUTHORIZED_CLASSES,
   DEFAULT_ALLOWLIST,
@@ -93,9 +93,9 @@ import {
   serializeAllowlist,
   deserializeAllowlist,
   type ClassId,
-} from "../kernel/governance/auto-accept/classes.js";
-import { evaluate, autoAcceptRecord, type AutoAcceptRecord } from "../kernel/governance/auto-accept/eligibility.js";
-import { serializePendingIndex } from "../kernel/governance/pending-index.js";
+} from "../kernel/auto-accept/classes.js";
+import { evaluate, autoAcceptRecord, type AutoAcceptRecord } from "../kernel/auto-accept/eligibility.js";
+import { serializePendingIndex } from "../kernel/pending-index.js";
 import {
   pruneRenameRecords,
   serializeRenameRecords,
@@ -103,17 +103,17 @@ import {
   RENAME_RECORDS_CAP,
   RENAME_RECORD_TTL_MS,
   type RenameRecordData,
-} from "../kernel/governance/rename-records.js";
-import { autoAcceptPolicyOf, protectedPropertyDrift } from "../kernel/governance/protected-policy.js";
-import type { RenameIndex } from "../kernel/governance/auto-accept/detectors.js";
-import { badgeVisible } from "../kernel/governance/badge.js";
-import { governanceDisplaySettings, governanceAcceptanceSettings } from "../kernel/governance/settings.js";
-import { isRealGesture } from "../kernel/governance/gesture.js";
+} from "../kernel/rename-records.js";
+import { autoAcceptPolicyOf, protectedPropertyDrift } from "../kernel/protected-policy.js";
+import type { RenameIndex } from "../kernel/auto-accept/detectors.js";
+import { badgeVisible } from "../kernel/badge.js";
+import { governanceDisplaySettings, governanceAcceptanceSettings } from "../kernel/settings.js";
+import { isRealGesture } from "../kernel/gesture.js";
 import {
   isAcceptEligible,
   selectAcceptEligible,
   type AcceptEligibilityCtx,
-} from "../kernel/governance/menu-eligibility.js";
+} from "../kernel/menu-eligibility.js";
 import { GovernanceReviewView, VIEW_TYPE_GOVERNANCE, confirmAdopt, confirmMenuAccept, renderAllowlist, wireAdoptButton, ADOPT_BASELINE_DESC, acceptThroughGate, type ReviewController, type RevisingItem, renderLegacyRetiredNotice, confirmCutover, confirmRollbackCutover, noticeGestureBlocked, confirmBindChain } from "./pane.js";
 import { isExcludedTerritory } from "./territories.js";
 
@@ -181,7 +181,7 @@ function legacyRetired(plugin: Plugin): boolean {
 }
 
 /** WP8: the loaded baseline records, for the migration wiring's import (read-only; content stays in the store). */
-export function baselinesOf(plugin: Plugin): readonly import("../kernel/governance/baseline-store.js").Baseline[] {
+export function baselinesOf(plugin: Plugin): readonly import("../kernel/baseline-store.js").Baseline[] {
   return baselineStores.get(plugin)?.all() ?? [];
 }
 
@@ -601,7 +601,7 @@ function noteFileOf(plugin: Plugin, path: string): TFile {
   return file;
 }
 // request-changes: insert the reviewer's text as a `[!revision-request]` callout directly below
-// the note's H1 (top of body when there is no H1 — kernel/governance/revision.ts, bound to the
+// the note's H1 (top of body when there is no H1 — governor/kernel/revision.ts, bound to the
 // shared core frontmatter recognizer), then set acceptance-status: revising via Obsidian's own
 // processFrontMatter. Status stays frontmatter (the Bases queue needs it); the FEEDBACK lives in
 // the note body — there is deliberately NO `requested-changes` property (2026-08-17 amendment).

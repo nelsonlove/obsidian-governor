@@ -26,7 +26,7 @@ write is agent-expressible through the guarded path.
 Phase 1 (#101/#228) proved the shape on the live acceptance instance; phase 2
 extracted the generic descriptor shape into `kernel/triage/dispositions.ts` —
 the **disposition substrate**, still shared verbatim with the acceptance
-instance (`kernel/governance/dispositions.ts`, untouched by phase 3). The
+instance (`governor/kernel/dispositions.ts`, untouched by phase 3). The
 triage instance's **frozen code-level table** is now the three built-ins
 (`kernel/triage/descriptors.ts`), all `authority: "agent"`. Declared rows are
 *not* runtime additions to that table: they are **configuration** the planner

@@ -1,4 +1,4 @@
-// Which notes get an "Accept" item on the right-click context menu (governance/wiring.ts's
+// Which notes get an "Accept" item on the right-click context menu (governor/wiring/wiring.ts's
 // file-menu/files-menu registration) — the PER-NOTE predicate behind that decision, plus the
 // multi-select filter built on it. Extracted so the rule is headless-testable independent of
 // Obsidian's Menu API, which cannot be unit-tested (see packages/plugin/CLAUDE.md's "Verifying
