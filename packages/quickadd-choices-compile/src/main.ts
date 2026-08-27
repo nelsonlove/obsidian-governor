@@ -1,7 +1,7 @@
 // QUICKADD CHOICES — the suite's first satellite plugin.
 //
 // Two jobs, one handler behind both:
-//   1. publish the `compile` tool to the vault-mcp host through
+//   1. publish the `run` tool to the vault-mcp host through
 //      vault-mcp-api, for agents (tool.ts);
 //   2. register two palette commands, for the human who just hand-edited a
 //      choice note and wants it applied without asking an agent
@@ -38,13 +38,13 @@ export default class QuickAddChoicesPlugin extends Plugin {
             .then((outcome) => {
               // isError is CONSUMED, not just computed: a Notice is
               // transient and a failure should outlive it.
-              if (outcome.isError) console.error(`[quickadd-choices] ${outcome.text}`);
+              if (outcome.isError) console.error(`[quickadd-choices-compile] ${outcome.text}`);
               new Notice(outcome.text, outcome.durationMs);
             })
             // run() is total by construction, and `new Notice` can throw if
             // the plugin was disabled mid-compile — either way an unhandled
             // rejection in a command callback is invisible to everyone.
-            .catch((e) => console.error("[quickadd-choices] compile command failed after the fact", e));
+            .catch((e) => console.error("[quickadd-choices-compile] compile command failed after the fact", e));
         },
       });
     }

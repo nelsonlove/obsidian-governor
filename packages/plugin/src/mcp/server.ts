@@ -500,8 +500,8 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
     getSettings: () => ctx.getSettings(),
   });
   // "QuickAdd choices as notes" EXTRACTED (suite-split, first satellite):
-  // it now lives in packages/quickadd-choices, publishing
-  // `quickadd_choices_compile` through vault-mcp-api like any third-party
+  // it now lives in packages/quickadd-choices-compile, publishing
+  // `quickadd_choices_compile_run` through vault-mcp-api like any third-party
   // plugin. The execution seam (quickadd-choice.ts, running a choice) stays
   // here — it serves obsidian_run_command and triage, not authoring.
   registerComplementaryTools(server, app, ctx);

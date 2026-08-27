@@ -1,6 +1,6 @@
-// packages/quickadd-choices/src/tool.ts
+// packages/quickadd-choices-compile/src/tool.ts
 //
-// `compile` (published by the host as `quickadd_choices_compile`) —
+// `run` (published by the host as `quickadd_choices_compile_run`) —
 // "QuickAdd choices as notes". Discovers Macro/UserScript, Template,
 // Capture and Multi choice notes by frontmatter, resolves their wikilinks,
 // feeds the pure transform (./transform.ts), and applies the result via
@@ -680,7 +680,7 @@ function emptiedContainers(
 
 export function buildCompileTool(app: App): SdkToolSpec {
   return {
-    name: "compile",
+    name: "run",
     description:
         "Compiles every Macro/UserScript, Template, Capture, and Multi choice note (frontmatter quickadd-type: " +
         "macro, template, capture, or multi) into QuickAdd's live config. `dry_run: true` reports the would-be diff " +
@@ -912,7 +912,7 @@ function applyCommands(
     for (const choice of fresh) quickadd.addCommandForChoice(choice);
     return true;
   } catch (e) {
-    console.error("quickadd-choices: QuickAdd command (de)registration failed after a compile", e);
+    console.error("quickadd-choices-compile: QuickAdd command (de)registration failed after a compile", e);
     return false;
   }
 }

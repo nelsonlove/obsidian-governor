@@ -127,11 +127,11 @@ Claude Code round trip).
 | `obsidian_survey_status` | Report whether a note's `## Contents (Filesystem)` section is stale relative to its mirror directory. Read-only |
 | `obsidian_survey_slot` | Regenerate the section (bare skeleton, or pass `snapshot_body` for pre-written prose) and stamp `survey:` frontmatter. `dry_run: true` (mandatory, no default) reports the plan only |
 
-### QuickAdd choices — EXTRACTED to the `quickadd-choices` satellite plugin
+### QuickAdd choices — EXTRACTED to the `quickadd-choices-compile` satellite plugin
 
 The former obsidian-quickadd-compile tool (one tool) moved to
-`packages/quickadd-choices` in the suite split's first satellite extraction:
-it now publishes as `quickadd_choices_compile` through `vault-mcp-api`, like
+`packages/quickadd-choices-compile` in the suite split's first satellite extraction:
+it now publishes as `quickadd_choices_compile_run` through `vault-mcp-api`, like
 any third-party plugin, and is therefore no longer part of this inventory —
 external tools are inventoried as a mechanism (see `external-tools.ts`),
 never as per-tool rows here.

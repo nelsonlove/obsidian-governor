@@ -734,7 +734,7 @@ describe("obsidian_quickadd_compile: name fallback", () => {
   });
 });
 
-describe("quickadd_choices_compile: QuickAdd unavailable", () => {
+describe("quickadd_choices_compile_run: QuickAdd unavailable", () => {
   async function callWith(quickaddValue) {
     const { buildCompileTool } = await import("../src/tool.ts");
     const app = {
