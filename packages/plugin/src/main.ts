@@ -28,7 +28,7 @@ import { createPromotionStore } from "./governor/kernel/transformations/promotio
 import { createDefaultPredicateRegistry } from "./governor/kernel/verification/predicates.js";
 import { openGitRepository } from "./governor/wiring/history-store/git-repository.js";
 import { historyDir } from "./governor/wiring/history-store/local-data-root.js";
-import { uuidv7 } from "./kernel/uuidv7.js";
+import { uuidv7 } from "@vault-mcp/core";
 import { effectiveScope, isTracked } from "./governor/kernel/history-store/history-scope.js";
 import { proposalRef } from "./governor/kernel/history-store/refs.js";
 import { EXCLUDED_PREFIXES } from "./governor/wiring/territories.js";

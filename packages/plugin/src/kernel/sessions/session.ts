@@ -6,11 +6,17 @@
 // therefore becomes a published contract, not provider-internal"). See
 // `packages/core/src/session.ts` for the type and its rationale.
 //
-// What STAYS here is the host's own minting logic: `openSession` needs
-// `uuidv7`, which is host-local (the kernel cannot depend on a provider, and
-// forking the mint would give the vault two id formats), so the mint itself
-// is not part of the portable contract. This module re-exports the contract
-// alongside it so existing local imports keep working unchanged.
+// What STAYS here is the host's own minting logic, `openSession`. It stays
+// because condition 7 RULED that minting is a host responsibility — a session
+// is transport state, and the host is the only thing that knows a connection
+// began. The reason is the ruling, not a dependency: `uuidv7` was promoted
+// into `@vault-mcp/core` in the same S3 step (the provider mints ids too), so
+// nothing about the import graph forces `openSession` to live here any more.
+// Do not "simplify" it into core on the strength of that — moving the mint
+// would move the responsibility, which is a ruling to revisit, not a refactor.
+//
+// This module re-exports the contract alongside it so existing local imports
+// keep working unchanged.
 //
 // HOST-SIDE since the suite split's S2 (condition 7): the host is the only
 // thing that knows a connection began, it computes the connection's scope
@@ -21,8 +27,7 @@
 // The host never asks a provider for permission — only whether it wants to
 // refuse — and an absent provider constrains nothing.
 
-import { uuidv7 } from "../uuidv7.js";
-import { SESSION_TTL_MS } from "@vault-mcp/core";
+import { SESSION_TTL_MS, uuidv7 } from "@vault-mcp/core";
 import type { SessionId, SessionV1 } from "@vault-mcp/core";
 
 export {

@@ -154,6 +154,11 @@ Known-overstated section instead — see its header for the format.
   setLegacyWriteGuard consumed by the provider's own BaselineStore). It states what does NOT
   cross the seam, which is a claim about code that exists.
 
+## docs/suite-split-design.md (S3 observations ruling)
+
+- Host-held config cannot serve a provider consumer, so the only alternative to publishing is two copies — which is precisely the failure `territories.ts`'s own header names: *"a prefix present in the pane's list but missing from capture's means the pane politely skips a folder while capture quietly writes its note bodies to disk."* On this operator's vault the guarded prefixes include `80-89` (legal/PII, standing rule that its contents do not leave it), so a drift here is a PII leak into capture blobs, not a tidiness problem.
+  tracked by: NOT a guarantee about shipped behavior — it is the RISK ARGUMENT for a design decision (publish `territories` as a contract rather than duplicate it), and it is substantiated by code that exists: `governor/wiring/territories.ts` has three importers landing on both sides of the split (`main.ts`, `mcp/server.ts`, `governor/wiring/wiring.ts`), and the quoted sentence is that module's own header comment, not a new claim. What it does NOT assert: that capture is currently leaking anything, or that publishing the module makes the territory list correct — the list is still this vault's folder names hardcoded, which issue #321 owns. Agent-classified during S3; pending the operator's review like every other span in this file.
+
 ## docs/acceptance-model.md (WP10c retirement)
 
 - **The first consumer — the per-note auto-accept policy (#135) — RETIRED (WP10c, 2026-08-25).** `auto-accept` remains in the default declared list as authority-conferring, but the policy's operational half is deleted per the development guide's order: `auto-accept: all` no longer parses at all (a whole-note blank check never belonged in frontmatter — it reads as no policy under every authority era, including after a cutover rollback), and `auto-accept: appends` is migrated to content proposals — an appended tail is residual content like any other edit, and lands as an ordinary proposal for the human's decision.

@@ -116,11 +116,16 @@ const EXPECTED_HOST_TO_GOVERNOR = {
   "src/connection-ui.ts": ["src/governor/wiring/wiring.js"],
   // The MCP transport. S2 retired FIVE of its nine crossings: the producer-stamping block
   // (class firewall, proposal builder, proposal, mandate policy) became a seam observer, and
-  // the session contract moved host-side. What is left is two contracts the host consults for
-  // its OWN session scope digest, and the two observation-capture edges §5 left for S3.
+  // the session contract moved host-side.
+  //
+  // S3 retired the two contract edges: `canonical-json` and `digest` are published in
+  // `@vault-mcp/core` now (condition 9), because the host consults them for its OWN session
+  // scope digest and a host cannot depend on a provider for an assertion about its own
+  // connection. What remains is the two observation-capture edges — RULED at S3 (see the
+  // ruling folded into condition 9): the blob store moves host-side and territories is
+  // published as a contract, which retires both. The code move is the next S3 package; until
+  // it lands these two stay listed, because this table is descriptive of today.
   "src/mcp/server.ts": [
-    "src/governor/kernel/contracts/canonical-json.js",
-    "src/governor/kernel/contracts/digest.js",
     "src/governor/wiring/observations/local-store.js",
     "src/governor/wiring/territories.js",
   ],
@@ -158,14 +163,21 @@ const SERVER_CTX = "src/mcp/tools-core.ts";
  */
 const EXPECTED_GOVERNOR_TO_HOST = {
   "src/governor/kernel/contracts/change-class.ts": ["src/kernel/operations/action.js"],
-  "src/governor/kernel/contracts/ids.ts": ["src/kernel/uuidv7.js"],
-  "src/governor/kernel/dispositions.ts": ["src/kernel/triage/dispositions.js"],
-  "src/governor/kernel/gesture.ts": ["src/kernel/uuidv7.js"],
-  // S2, condition 7: the host mints sessions, so the session CONTRACT is host-owned and the
-  // provider's store consumes it. The store — and the revocation state a human's Revoke
-  // gesture writes into it — stays with the provider, which is what answers the seam's
-  // session-refusal hook.
-  "src/governor/kernel/sessions/session-store.ts": ["src/kernel/sessions/session.js"],
+  // S3 (condition 9) retired FOUR entries from this table by publishing what they reached for
+  // into `@vault-mcp/core`, which is the "publish it or copy it" work item this list exists to
+  // make countable:
+  //
+  //   • `contracts/ids.ts` → uuidv7 and `gesture.ts` → uuidv7. The provider mints ids too, so
+  //     the mint is shared surface; forking it would give one vault two id formats. The host's
+  //     `kernel/uuidv7.ts` is GONE rather than left as a re-export — a shim that only the
+  //     composition root uses is a crossing waiting to be re-added by the next author.
+  //   • `dispositions.ts` → `kernel/triage/dispositions.js`. Only the GENERIC descriptor
+  //     substrate moved; triage's own descriptors stay host-side because triage becomes a
+  //     SATELLITE, and a provider that depends on a satellite is the layering inversion this
+  //     entry was recording.
+  //   • `sessions/session-store.ts` → `kernel/sessions/session.js`. Condition 7 ruled the host
+  //     mints, which makes `SessionV1` a published contract rather than a host internal the
+  //     provider borrows. `openSession` stays host-side ON THE RULING, not on a dependency.
   "src/governor/wiring/history-store/local-data-root.ts": ["src/paths.js"],
   "src/governor/wiring/observations/local-store.ts": [
     "src/kernel/observations/store.js",
