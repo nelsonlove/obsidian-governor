@@ -1,7 +1,7 @@
 # vault-hooks — events to actions, as notes
 
-> [!warning] PROPOSAL — not adopted, not normative
-> Drafted 2026-08-27 at Nelson's direction, after a survey of the Obsidian ecosystem found the general case unserved. Nothing here is built. Open decisions are in §11. [Status and compatibility](status-and-compatibility.md#current-release-state) remains the single owner of shipped truth.
+> [!note] DESIGN ACCEPTED 2026-08-27 (Nelson) — not yet built
+> The name is `vault-hooks`; build follows the suite split's S1–S3; the firing log's home is a setting; `enabled:` lives in the note **with no human-only wiring** (§4, rewritten to that ruling — the residual risk is stated there, accepted, not forgotten). Nothing here is built yet. [Status and compatibility](status-and-compatibility.md#current-release-state) remains the single owner of shipped truth.
 
 ## 1. The gap, evidenced
 
@@ -54,23 +54,25 @@ Three parts, kept separate on purpose (the Zapier shape): **trigger** (`on`), **
 
 **Actions (v1).** `command: <id>` — any registered Obsidian command, which is also how a QuickAdd choice is invoked (QuickAdd registers `quickadd:choice:<name>`), and how anything Commander exposes is invoked. That single action type covers most of the surveyed demand. Deferred, deliberately: `js:` (arbitrary script — see §4; if it ever ships it is blessed-only and operator-tier), `tool:` (call a published MCP tool through the host — attractive, but it makes the host a dependency rather than an optional peer; revisit after the seam).
 
-## 4. THE SAFETY PROBLEM, and the answer
+## 4. The safety question, and what we are actually doing about it
 
-**A rule note is an agent-writable path to arbitrary command execution.** Any agent that can write a note can write `on: vault:create` + `do: [command: <anything>]` — and commands can delete files, rewrite settings, or invoke another plugin's whole surface. Left naive, this plugin converts "an agent may write notes" into "an agent may run anything, forever, without being asked." That is a bigger escalation than anything else in the suite, and it is inherent to config-as-notes, not incidental.
+**A rule note is a path to arbitrary command execution by whoever can write notes.** Any writer — an agent, a synced device, a script — can author `on: vault:create` + `do: [command: <anything>]`, and it then runs on every matching event, unattended, until someone notices. That is worth stating plainly before the design settles.
 
-The suite already owns the exact mechanism for this and it should be reused rather than reinvented: **honor-only-if-blessed**, the `authority-conferring` protected-property grade (`@vault-mcp/core`'s accept guard, and the `auto-accept` precedent).
+**Ruled (Nelson, 2026-08-27): `enabled:` lives in the note and is read at face value. No blessing machinery, no honor-only-if-blessed, no human-attribution check.** The reasoning, recorded so it is a decision rather than an omission:
 
-The rule, stated once: **a rule fires only if its `enabled: true` was written by a human.** Concretely —
+- **The marginal escalation is narrower than it first looks.** An agent that can write vault notes in this system generally already has the host's command surface (`obsidian_run_command`, gated by the CLI policy). A rule note does not hand such an agent a capability it lacked; it changes *when* the capability fires.
+- **What genuinely IS new is persistence and unattendedness** — a tool call happens once, in a session, in the journal, with someone nearby; a rule fires forever, on events, when nobody is watching. That is the real delta, and it is the thing the visibility machinery below exists to answer.
+- **Blessing machinery has a cost the threat does not justify here**: a second authority concept to learn, an inert-until-blessed state to explain, and a failure mode (silently-inert rules) that is itself a bug factory. This is a single-operator vault, not a multi-tenant surface.
 
-1. `hook-type` and `enabled` are declared **protected properties, `authority-conferring` grade**: no agent transport may introduce, change, or remove them, and their values take effect only once the write that set them is human-attributed or accepted in review.
-2. A rule whose `enabled` was set by an unattributed or agent write is **inert and visibly so** — it appears in the rule list marked *unblessed*, never silently absent. (Absence must not render as emptiness; an inert rule that looks like no rule is how someone concludes the plugin is broken and disables the safety.)
-3. Blessing is a human act with the ordinary Obsidian affordances: edit the note yourself, or use the plugin's own **Enable rule…** command (a real click, listing what the rule will do before it does it).
-4. Without the governance provider installed, "human-attributed" degrades to the honest weaker claim: the plugin's own blessing record, written by its own command. It never degrades to "assume blessed."
+So the safety story is **visibility and reversibility, not gating**:
 
-Two more limits belong here rather than in a settings tab nobody reads:
+1. **Every rule is listed with its state and its terms** — a human can see the full set at a glance, including rules added since they last looked. A rule that exists is never invisible.
+2. **Every firing is recorded** (§7), so "what ran while I was away" is answerable.
+3. **One master brake** — a single refuse-only switch that suspends all rules, rules untouched and resumable. A human reaching for a stop button under stress wants ONE control.
+4. **No `js:` action in v1.** Command ids are inspectable and enumerable; arbitrary script bound to file events is a different product with a different threat model.
+5. **The loop, rate, and startup guards (§5, §6) are structural**, because the realistic damage here is a runaway rule, not a malicious one.
 
-- **No `js:` action in v1.** Blessed-or-not, shipping arbitrary script execution bound to file events is a different product with a different threat model.
-- **A rule can be disabled globally in one gesture** — one master switch, refuse-only (a suspended state runs nothing; rules untouched, resumable). The same brake the governance provider is getting, for the same reason: a human reaching for the stop button under stress wants ONE control.
+**Available without new code, for anyone who wants the stronger posture:** the suite's existing protected-properties setting can declare `hook-type` and `enabled` as `agent-forbidden` or `authority-conferring` — the same mechanism `auto-accept` uses. That is an operator's configuration choice against the existing accept guard, not machinery vault-hooks builds or depends on.
 
 ## 5. The loop problem
 
@@ -109,17 +111,19 @@ The plugin publishes read-mostly tools through `vault-mcp-api`, like any satelli
 - `vault_hooks_explain` — the dry-run: which rules match a given file/event, and what they would do.
 - `vault_hooks_history` — recent firings and failures.
 
-**No agent-facing verb enables a rule, and none creates one in an enabled state.** An agent may draft a rule note like any other note; blessing is §4's human act. This mirrors the governance provider's mandate surface exactly: agents draft, humans grant.
+**No agent-facing verb enables a rule, and none creates one in an enabled state.** An agent may draft a rule note like any other note — the same way it writes any note — but the plugin ships no tool whose purpose is "make this run". Not because the frontmatter is guarded (§4: it is not), but because a verb named for switching on unattended execution is an attractive nuisance, and writing the note already covers the legitimate case.
 
 ## 10. Fit with the suite
 
-A satellite, private-operator tier (D07): it binds arbitrary commands and is therefore not a public-default promise. It depends on the host only for its MCP tools — **the rule engine itself works with no host installed**, exactly like quickadd-choices' palette commands. If the governance provider is present, its accept-guard is what makes §4's blessing meaningful; if absent, the plugin's own blessing record is the honest weaker claim.
+A satellite, private-operator tier (D07): it binds arbitrary commands and is therefore not a public-default promise. It depends on the host only for its MCP tools — **the rule engine itself works with no host installed**, exactly like quickadd-choices' palette commands, and it depends on the governance provider for nothing at all (§4).
 
 Later, once the [governance seam](suite-split-design.md#5-the-seam--the-hosts-governance-hook-api) exists, the seam's write-observer is a natural additional trigger source (`governance:proposal-opened`, `governance:admitted`) — deferred, and named here so the design is not surprised by it.
 
-## 11. Open decisions (Nelson)
+## 11. Decisions (Nelson, 2026-08-27 — all four resolved)
 
-1. **The name.** Recommendation: repo/package/plugin id **`vault-hooks`** — family-consistent with `vault-mcp`, and verified clean at drafting time (no GitHub repo, npm free, no community-registry id; note `rule-engine` and `automation` are taken there).
-2. **Build it when?** Recommendation: after S1–S3 of the suite split. It is a satellite, and satellites are cheaper to add once the host/provider boundary exists — but nothing except review bandwidth stops it from being built earlier.
-3. **The firing log's home**: jsonl beside the plugin (durable, greppable, grows) vs an in-memory ring with a small persisted tail (bounded, loses history on reload). Recommendation: the ring, with the last N failures persisted — history matters most for what went wrong.
-4. **Whether `enabled` lives in the note at all** (§4) — the alternative is a plugin-settings list of blessed rule paths, which is harder to agent-write but also harder for a human to see next to the rule. Recommendation: the note, protected-property-guarded, precisely because it stays visible where the rule is.
+1. **Name: `vault-hooks`.** Verified clean at drafting (no GitHub repo, npm free, no community-registry id; `rule-engine` and `automation` are taken there).
+2. **Build after the suite split's S1–S3.** It is a satellite, and satellites are cheaper once the host/provider boundary exists.
+3. **The firing log's home is a SETTING**, not a design constant — jsonl beside the plugin (durable, greppable) or a bounded in-memory ring with a persisted failure tail, chosen per install. Default to be picked at build time; the ring is the safer default and the setting is the answer to anyone who wants history.
+4. **`enabled:` lives in the note, read at face value — no human-only wiring.** §4 carries the reasoning and the accepted residual.
+
+Nothing further blocks this design; what remains is build sequencing.
