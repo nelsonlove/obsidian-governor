@@ -18,7 +18,7 @@ import { freezeCohort, excludeAndRefreeze } from "../src/governor/kernel/cohorts
 import { verifyCohortCoverage } from "../src/governor/kernel/cohorts/coverage.ts";
 import { buildProposalSubjectFromOperation } from "../src/governor/kernel/proposals/proposal-builder.ts";
 import { openProposal } from "../src/governor/kernel/proposals/proposal.ts";
-import { digestUtf8, digestBytes } from "../src/governor/kernel/contracts/digest.ts";
+import { digestUtf8, digestBytes } from "@vault-mcp/core";
 import { createDefaultPredicateRegistry } from "../src/governor/kernel/verification/predicates.ts";
 import { SubjectInvalidError } from "../src/governor/kernel/contracts/subject-v1.ts";
 

@@ -21,8 +21,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { canonicalize, NoncanonicalValueError } from "../src/governor/kernel/contracts/canonical-json.ts";
-import { digestUtf8, digestBytes, isSha256Digest } from "../src/governor/kernel/contracts/digest.ts";
+import { canonicalize, NoncanonicalValueError, digestUtf8, digestBytes, isSha256Digest } from "@vault-mcp/core";
 import {
   buildProposalItemSubject,
   buildCohortSubject,

@@ -15,8 +15,7 @@
 // the builders because array ORDER IS MEANING once serialized — the
 // canonicalizer deliberately refuses to re-order arrays.
 
-import { canonicalize } from "./canonical-json.js";
-import { digestUtf8, isSha256Digest, type Sha256Digest } from "./digest.js";
+import { canonicalize, digestUtf8, isSha256Digest, type Sha256Digest } from "@vault-mcp/core";
 import { sortClasses, isChangeClass, type ChangeClass } from "./change-class.js";
 
 export const PROPOSAL_ITEM_SCHEMA = "governor.proposal-item/v1";
@@ -46,7 +45,7 @@ export class SubjectDuplicateError extends Error {
 }
 
 /** The value cannot be canonically serialized (re-exported semantics; see canonical-json). */
-export { NoncanonicalValueError } from "./canonical-json.js";
+export { NoncanonicalValueError } from "@vault-mcp/core";
 
 /** The schema string names a version this build does not implement. */
 export class SubjectUnsupportedVersionError extends Error {

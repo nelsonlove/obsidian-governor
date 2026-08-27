@@ -36,7 +36,7 @@ import {
 import { buildProposalSubjectFromOperation } from "../kernel/proposals/proposal-builder.js";
 import { openProposal, type ProposalV1 } from "../kernel/proposals/proposal.js";
 import { productionStampOf } from "../kernel/mandates/policy.js";
-import { digestBytes } from "../kernel/contracts/digest.js";
+import { digestBytes } from "@vault-mcp/core";
 import type { MandateV1 } from "../kernel/mandates/mandate.js";
 import type { MandateUsage } from "../kernel/mandates/budgets.js";
 

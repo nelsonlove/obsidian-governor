@@ -26,7 +26,7 @@ import { proposalRef } from "../src/governor/kernel/history-store/refs.ts";
 import { createProposalStore } from "../src/governor/kernel/proposals/proposal-store.ts";
 import { openProposal } from "../src/governor/kernel/proposals/proposal.ts";
 import { buildProposalSubjectFromOperation } from "../src/governor/kernel/proposals/proposal-builder.ts";
-import { digestBytes } from "../src/governor/kernel/contracts/digest.ts";
+import { digestBytes } from "@vault-mcp/core";
 import { createDefaultPredicateRegistry } from "../src/governor/kernel/verification/predicates.ts";
 import { createTransformationRegistry, tupleOf } from "../src/governor/kernel/transformations/transformation.ts";
 import { createPromotionStore } from "../src/governor/kernel/transformations/promotion.ts";

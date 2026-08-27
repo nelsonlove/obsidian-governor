@@ -1,5 +1,12 @@
 // CANONICAL JSON — version-1 canonical serialization (WP3, D13; RFC 8785).
 //
+// Promoted into @vault-mcp/core (S3, condition 9: "publish canonical-json and
+// digest as contracts") from packages/plugin/src/governor/kernel/contracts/
+// canonical-json.ts, where it originated. Byte-identical logic — this is the
+// module both the host (the session scope digest, a host assertion about a
+// connection) and the governance provider (WP3 subjects) depend on, so it
+// belongs in the shared contract package rather than in either subtree.
+//
 // Everything a signature or full-coverage check covers is first serialized
 // here, so two producers computing "the same subject" MUST emit the same
 // bytes. RFC 8785 (JSON Canonicalization Scheme) gives the rules: object keys
