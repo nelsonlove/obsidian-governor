@@ -26,7 +26,7 @@ import {
   PlaybackUnauthorizedError,
 } from "../src/kernel/observations/store.ts";
 import { payloadDigest } from "../src/kernel/observations/observation.ts";
-import { createLocalBlobStore } from "../src/governor/wiring/observations/local-store.ts";
+import { createLocalBlobStore } from "../src/kernel/observations/local-store.ts";
 
 /** An in-memory content-addressed backing store. */
 function fakeBlobs() {

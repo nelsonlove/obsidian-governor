@@ -52,9 +52,9 @@ import { expiryRefusal, type SessionV1 } from "@vault-mcp/core";
 // them, and now both the host and the governance provider depend on the
 // published contract rather than the host reaching into the provider subtree.
 import { canonicalize, digestUtf8 } from "@vault-mcp/core";
-import { isExcludedTerritory } from "../governor/wiring/territories.js";
+import { isExcludedTerritory } from "@vault-mcp/core";
 import { createObservationStore } from "../kernel/observations/store.js";
-import { createLocalBlobStore } from "../governor/wiring/observations/local-store.js";
+import { createLocalBlobStore } from "../kernel/observations/local-store.js";
 import { vaultSlug } from "../paths.js";
 import { collectPaths } from "../guard.js";
 
@@ -291,7 +291,7 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
     enabled: () => ctx.getSettings().captureObservations === true,
     maxBytes: ctx.getSettings().captureMaxBytes ?? 50 * 1024 * 1024,
     // The same territory list the governance pane enumerates by — one list,
-    // one meaning (governor/wiring/territories.ts). Reads in a guarded territory
+    // one meaning (@vault-mcp/core territories.ts). Reads in a guarded territory
     // stay legal; RETAINING copies of them outside the territory is what this
     // forbids (issue #322).
     excludedSource: isExcludedTerritory,
