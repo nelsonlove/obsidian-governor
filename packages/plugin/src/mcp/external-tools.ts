@@ -26,10 +26,27 @@ export interface ExternalToolEntry {
   spec: ExternalToolSpec;
 }
 
+/**
+ * The tool-publishing half of `app.plugins.plugins['governor'].api`, mirrored
+ * in the `vault-mcp-api` SDK and pinned against it by that package's
+ * contract.test.ts. The api object the host exposes is this PLUS the governance
+ * seam (mcp/seam.ts) — an additive surface, so `apiVersion` stays 1 and every
+ * published SDK build keeps registering.
+ *
+ * `unregisterTools(ownerPluginId)` USED TO LIVE HERE and was removed by S2 of
+ * the suite split (condition 3, a correctness fix rather than armour): it was
+ * ADDRESSED BY OWNER ID, so anyone holding the api object could revoke anyone
+ * else's tools — one `unregisterTools('quickadd')` from a cleanup script and a
+ * publisher's whole surface is gone, with nothing to tell it apart from a
+ * publisher that never registered. The disposer `registerTools` returns is now
+ * the ONLY revocation path, and it can revoke exactly what its holder
+ * registered. The SDK never called the removed method (it has always used the
+ * disposer, see vault-mcp-api's `publishTools`), so the contract it publishes
+ * to third-party plugins is unchanged in practice.
+ */
 export interface VaultMcpApi {
   apiVersion: 1;
   registerTools(ownerPluginId: string, tools: ExternalToolSpec[]): () => void;
-  unregisterTools(ownerPluginId: string): void;
 }
 
 const NAME_RE = /^[a-z][a-z0-9_]*$/;
@@ -82,15 +99,15 @@ export class ExternalToolRegistry {
       this.byName.set(entry.toolName, entry); // replace-on-re-register, by design
       added.push(entry);
     }
-    // Object-identity check makes the disposer idempotent AND stops a stale
-    // disposer from deleting a newer replacement registered under the same name.
+    // THE ONLY REVOCATION PATH (S2, condition 3). The object-identity check
+    // makes the disposer idempotent AND stops a stale disposer from deleting a
+    // newer replacement registered under the same name — it revokes exactly the
+    // entries THIS call inserted, and nothing else. There is deliberately no
+    // id-addressed sibling: an address anyone can name is an address anyone can
+    // forge, and the entries it would revoke belong to another plugin.
     return () => {
       for (const e of added) if (this.byName.get(e.toolName) === e) this.byName.delete(e.toolName);
     };
-  }
-
-  unregisterTools(ownerPluginId: string): void {
-    for (const [name, e] of this.byName) if (e.ownerId === ownerPluginId) this.byName.delete(name);
   }
 
   entries(): ExternalToolEntry[] {

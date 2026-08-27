@@ -16,8 +16,8 @@
  *   the host never imports governor internals except through the explicitly enumerated seam
  *   list below.
  *
- * Why a test and not a convention: S2 replaces these crossings with the hook API (§5) and S3
- * makes the two subtrees two plugin artifacts. Both steps are only reviewable if the set of
+ * Why a test and not a convention: S2 replaces the hook-shaped crossings with the seam (§5) and
+ * S3 makes the two subtrees two plugin artifacts. Both steps are only reviewable if the set of
  * crossings is a checked-in number that a diff moves. A new host→governor import that nobody
  * enumerated is exactly the drift that would make S3's split unplannable, so it fails here.
  *
@@ -26,6 +26,42 @@
  * the work of S2 and S3 — `EXPECTED_HOST_TO_GOVERNOR` should approach "main.ts registers the
  * provider through the seam, and nothing else", and `EXPECTED_GOVERNOR_TO_HOST` should
  * approach "the provider depends on published contracts only".
+ *
+ * ── WHAT S2 MOVED, AND WHAT IT DELIBERATELY DID NOT ─────────────────────────────────────────
+ *
+ * S2 built the seam (`src/mcp/seam.ts`) and consumed it in-tree: 45 host→governor edges became
+ * 32, and the ones that went are the ones the seam was for.
+ *
+ *   • `mcp/tools-core.ts` went from FIVE crossings to ZERO. That file declares `ServerCtx`, the
+ *     host's per-connection context, and it named five provider types purely to carry provider
+ *     PORTS across — the mandate store's verbs, the proposal store's verbs, the session record.
+ *     A host context that describes the provider's data model cannot be a host contract at S3.
+ *     Proposal production went behind `registerWriteObserver`; the mandate tools now arrive as
+ *     registrars from the composition root (`BuildOpts.providerTools`); the session contract
+ *     moved host-side, because the host mints sessions (condition 7).
+ *   • `mcp/server.ts` went from NINE to FOUR. The `propose` block — class firewall, proposal
+ *     builder, mandate stamping, history recording — is now `governor/wiring/write-observer.ts`
+ *     behind the seam, and the session liveness consultation is the seam's refusal hook.
+ *
+ * What S2 did NOT do, so the remaining numbers are not mistaken for drift:
+ *
+ *   • `server.ts` still imports `canonical-json` and `digest`, for the SESSION SCOPE DIGEST —
+ *     a host assertion about a connection. The seam itself does not need them; promoting them
+ *     into `@vault-mcp/core` is S3's contract-publishing package.
+ *   • `server.ts` still imports `territories` and the observation blob store: §5 left the
+ *     observations ruling (host-side capture with territories as host config, or a capture
+ *     hook) open, and it is S3's call.
+ *   • `tools-governance-revision.ts` still crosses twice, one of which is the triage-dispositions
+ *     inversion condition 9 names — also deferred to S3.
+ *   • `tools-governance-mandate.ts` still physically sits in `src/mcp/`. Its registration no
+ *     longer runs through `ServerCtx`, which is what mattered; the file itself moves with the
+ *     rest of the provider's tools at S3.
+ *
+ * The other direction GREW, from 7 to 10, and that is the intended shape rather than a
+ * regression: every new entry is the provider depending on something the HOST is ruled to own —
+ * the session contract (condition 7), the native write action, and the seam's own types. This
+ * list is the "publish as a contract or copy it" work item for S3, so entries arriving here
+ * from the other table is the split proceeding, not decaying.
  *
  * Instrument discipline: the scan is a pure function over a { path -> source } map, and it is
  * exercised against a synthetic tree with a planted violation BEFORE it is trusted against the
@@ -48,20 +84,18 @@ const GOVERNOR_ROOT = "src/governor/";
  * reaches for. Grouped by host file, with why each group exists today.
  */
 const EXPECTED_HOST_TO_GOVERNOR = {
-  // The plugin's composition root. `onload` constructs the provider's stores and wires its
-  // pane/commands — this is the "installing the provider" edge that S3 replaces with two
-  // plugin manifests and the seam's registration call.
+  // The plugin's composition root. `onload` constructs the provider's stores, wires its
+  // pane/commands, and — since S2 — REGISTERS the provider on the seam. This is the
+  // "installing the provider" edge that S3 replaces with two plugin manifests and a
+  // registration call the provider makes for itself.
   "src/main.ts": [
     "src/governor/kernel/history-store/history-scope.js",
     "src/governor/kernel/history-store/refs.js",
     "src/governor/kernel/history-store/repository.js",
     "src/governor/kernel/mandates/budgets.js",
-    "src/governor/kernel/mandates/draft.js",
     "src/governor/kernel/mandates/lifecycle.js",
     "src/governor/kernel/proposals/proposal-store.js",
-    "src/governor/kernel/proposals/proposal.js",
     "src/governor/kernel/sessions/session-store.js",
-    "src/governor/kernel/sessions/session.js",
     "src/governor/kernel/settings.js",
     "src/governor/kernel/transformations/promotion.js",
     "src/governor/kernel/transformations/transformation.js",
@@ -71,42 +105,33 @@ const EXPECTED_HOST_TO_GOVERNOR = {
     "src/governor/wiring/history-store/local-data-root.js",
     "src/governor/wiring/mandate-wiring.js",
     "src/governor/wiring/migration-wiring.js",
-    "src/governor/wiring/mount-state.js",
     "src/governor/wiring/promotion-wiring.js",
     "src/governor/wiring/territories.js",
     "src/governor/wiring/wiring.js",
+    // S2: the proposal producer, registered through `registerWriteObserver`.
+    "src/governor/wiring/write-observer.js",
   ],
   // The settings tab renders the provider's own settings section. UI composition only — it
   // calls a renderer, it holds no authority.
   "src/connection-ui.ts": ["src/governor/wiring/wiring.js"],
-  // The MCP transport. This is the producer-stamping edge the design calls out (§5): a write
-  // completes, the server builds proposal subjects and stamps mandate production, and records
-  // observations. S2 turns this into `registerWriteObserver` and the veto registration.
+  // The MCP transport. S2 retired FIVE of its nine crossings: the producer-stamping block
+  // (class firewall, proposal builder, proposal, mandate policy) became a seam observer, and
+  // the session contract moved host-side. What is left is two contracts the host consults for
+  // its OWN session scope digest, and the two observation-capture edges §5 left for S3.
   "src/mcp/server.ts": [
     "src/governor/kernel/contracts/canonical-json.js",
     "src/governor/kernel/contracts/digest.js",
-    "src/governor/kernel/mandates/policy.js",
-    "src/governor/kernel/proposals/class-firewall.js",
-    "src/governor/kernel/proposals/proposal-builder.js",
-    "src/governor/kernel/proposals/proposal.js",
-    "src/governor/kernel/sessions/session.js",
     "src/governor/wiring/observations/local-store.js",
     "src/governor/wiring/territories.js",
-  ],
-  // The guarded core tools consult session liveness and mandate budgets on the write path —
-  // §5's `registerSessionGate` is the hook this becomes.
-  "src/mcp/tools-core.ts": [
-    "src/governor/kernel/mandates/budgets.js",
-    "src/governor/kernel/mandates/draft.js",
-    "src/governor/kernel/mandates/mandate.js",
-    "src/governor/kernel/proposals/proposal.js",
-    "src/governor/kernel/sessions/session.js",
   ],
   // The module registry reads the governance module's settings shape to render its config
   // section. Settings projection only — the registry mounts read-only-or-nothing.
   "src/mcp/modules-mount.ts": ["src/governor/kernel/settings.js"],
   // The two governance MCP tool files. §6 assigns these to the provider, published through
   // `vault-mcp-api`; they sit in `src/mcp/` today because that is where the tool tables live.
+  // S2 cut the mandate tools' dependency on `ServerCtx` (they register through
+  // `BuildOpts.providerTools`, closed over the provider's own store) but left the FILES where
+  // they are — moving them is part of S3's tool-publishing package, not the seam's proof.
   "src/mcp/tools-governance-mandate.ts": [
     "src/governor/kernel/contracts/change-class.js",
     "src/governor/kernel/mandates/budgets.js",
@@ -120,6 +145,13 @@ const EXPECTED_HOST_TO_GOVERNOR = {
 };
 
 /**
+ * ZERO is the number for `src/mcp/tools-core.ts`, and it is S2's exit criterion, so it gets its
+ * own name rather than being an absence someone has to notice. `ServerCtx` is the host's
+ * per-connection context — the thing S3 keeps — and until S2 it named five provider types.
+ */
+const SERVER_CTX = "src/mcp/tools-core.ts";
+
+/**
  * The other direction, pinned for the same reason: these are the host modules the provider
  * still depends on. S3 must either publish each as a contract or copy it into the provider,
  * so the list is the S3 work item made countable.
@@ -129,10 +161,24 @@ const EXPECTED_GOVERNOR_TO_HOST = {
   "src/governor/kernel/contracts/ids.ts": ["src/kernel/uuidv7.js"],
   "src/governor/kernel/dispositions.ts": ["src/kernel/triage/dispositions.js"],
   "src/governor/kernel/gesture.ts": ["src/kernel/uuidv7.js"],
+  // S2, condition 7: the host mints sessions, so the session CONTRACT is host-owned and the
+  // provider's store consumes it. The store — and the revocation state a human's Revoke
+  // gesture writes into it — stays with the provider, which is what answers the seam's
+  // session-refusal hook.
+  "src/governor/kernel/sessions/session-store.ts": ["src/kernel/sessions/session.js"],
   "src/governor/wiring/history-store/local-data-root.ts": ["src/paths.js"],
   "src/governor/wiring/observations/local-store.ts": [
     "src/kernel/observations/store.js",
     "src/paths.js",
+  ],
+  // S2: the proposal producer, behind the seam. It depends on exactly two host things — the
+  // native write action whose writes it speaks for, and the seam's own `WriteFacts` type. Both
+  // are host contracts by design (§6 assigns the action registry to the host, and the seam IS
+  // the host's published hook API), so this is the provider depending on published surface
+  // rather than on host internals.
+  "src/governor/wiring/write-observer.ts": [
+    "src/kernel/operations/actions/note-write.js",
+    "src/mcp/seam.js",
   ],
 };
 
@@ -287,13 +333,40 @@ describe("THE BOUNDARY — one governance subtree, an enumerated seam", () => {
     );
   });
 
+  test("S2's exit criterion: ServerCtx names ZERO governance-provider types", () => {
+    // The host's per-connection context is the thing S3 keeps. Until S2 it named five provider
+    // types — three for the mandate store's verbs, one for the proposal store's, one for the
+    // session record — purely to carry provider PORTS into the transport. A context that
+    // describes the provider's data model is not a host contract, and no amount of hook API
+    // fixes that; the ports had to go, not merely be routed differently.
+    const { hostToGovernor } = scanBoundary(readSrc());
+    assert.deepEqual(
+      [...(hostToGovernor.get(SERVER_CTX) ?? [])].sort(),
+      [],
+      `${SERVER_CTX} declares ServerCtx and must name NO governor type. A port on the host's ` +
+        `context is how the provider's data model leaks back into the host — put the provider's ` +
+        `state behind the seam (mcp/seam.ts), or hand it in as a registrar from main.ts.`
+    );
+  });
+
   test("the seam is small enough to reason about — a countable, shrinking number", () => {
     const { hostToGovernor, governorToHost } = scanBoundary(readSrc());
-    const crossings = asLines(hostToGovernor).length + asLines(governorToHost).length;
-    // S1 is a rename: this is the pre-existing coupling made visible, not new coupling.
-    // The bound exists so the number can only go DOWN without a deliberate edit here.
+    const host = asLines(hostToGovernor).length;
+    const crossings = host + asLines(governorToHost).length;
+    // Two bounds, because the two directions are meant to move differently.
+    //
+    // host→governor must approach ZERO: every one of these is the host reaching into provider
+    // internals, and at S3 there is no such reach to make. S1 enumerated 45; S2 left 32.
     assert.ok(
-      crossings <= 60,
+      host <= 35,
+      `${host} host→governor imports — this direction only shrinks; route it through the seam`
+    );
+    // The total is the coarse ratchet. It rises slightly slower than host→governor falls,
+    // because a contract moving host-side turns one host→governor edge into one or more
+    // governor→host ones — the provider depending on published host contracts is the TARGET
+    // state for that list, so the total is a guard against sprawl, not a target in itself.
+    assert.ok(
+      crossings <= 50,
       `${crossings} boundary crossings — the split is meant to shrink this, not grow it`
     );
   });

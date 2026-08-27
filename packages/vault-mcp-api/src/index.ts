@@ -19,10 +19,22 @@ export interface ExternalToolSpec {
   handler: (args: Record<string, unknown>) => Promise<unknown> | unknown;
 }
 
+/**
+ * The host's tool-publishing api, mirrored from
+ * packages/plugin/src/mcp/external-tools.ts and pinned against it by
+ * tests/contract.test.ts.
+ *
+ * `unregisterTools(ownerPluginId)` was REMOVED from both sides by S2 of the
+ * suite split: it was addressed by owner id, so any caller holding the api
+ * object could revoke any publisher's tools. The disposer `registerTools`
+ * returns is now the only revocation path — which is what `publishTools` below
+ * has always used, so nothing in this SDK changes behaviour. `apiVersion` stays
+ * 1: the host removed a method it never needed to offer and added the
+ * governance seam beside it, and neither changes what a publisher sends.
+ */
 export interface VaultMcpApi {
   apiVersion: 1;
   registerTools(ownerPluginId: string, tools: ExternalToolSpec[]): () => void;
-  unregisterTools(ownerPluginId: string): void;
 }
 
 // ── Publisher-facing spec ─────────────────────────────────────────────────────
