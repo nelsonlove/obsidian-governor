@@ -235,7 +235,7 @@ test("F7: destructiveHint:true overrides RW base and is reflected in registered 
 // ── F3: allowlist bypass prevention ──────────────────────────────────────────
 
 test("F3: mutating tool with unrecognized args blocked when allowlist is active — and the publisher's handler NEVER RUNS", async () => {
-  // The refuses-before-anything property the quickadd-choices satellite (and
+  // The refuses-before-anything property the quickadd-choices-compile satellite (and
   // every pathless mutating publisher) relies on: the block precedes the
   // handler call, so nothing the publisher would have done — vault
   // enumeration, config writes — has happened when the refusal returns
