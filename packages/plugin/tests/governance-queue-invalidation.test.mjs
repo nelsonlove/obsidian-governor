@@ -17,7 +17,7 @@
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { deleteInvalidatesQueue } from "../src/governance/queue-invalidation.ts";
+import { deleteInvalidatesQueue } from "../src/governor/wiring/queue-invalidation.ts";
 
 const QUEUE = [
   "Records/2026-08.md",

@@ -1,7 +1,7 @@
 // kernel/triage — the disposition substrate (#221) and its second instance,
 // INBOX TRIAGE (#241 phase 3 shape: three built-in primitives + human-declared
 // rows). `dispositions.ts` is the substrate both instances declare against
-// (the acceptance instance lives in kernel/governance); the rest is the
+// (the acceptance instance lives in governor/kernel); the rest is the
 // triage instance itself: built-in descriptors + the merged table, config,
 // queue predicate, planner.
 

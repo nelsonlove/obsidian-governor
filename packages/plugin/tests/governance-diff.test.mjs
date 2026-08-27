@@ -1,9 +1,9 @@
 // Ported from obsidian-stewardship/tests/diff.test.mjs (#83, cycle 1) — the pure
 // handwritten diff (line-LCS + word refinement + git-style hunk collapsing), now at
-// src/kernel/governance/diff.ts. Read-only display data; nothing here writes.
+// src/governor/kernel/diff.ts. Read-only display data; nothing here writes.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { diffFrontmatter, diffLines, wordDiff, diffNote, toHunks } from "../src/kernel/governance/diff.ts";
+import { diffFrontmatter, diffLines, wordDiff, diffNote, toHunks } from "../src/governor/kernel/diff.ts";
 
 function sameLines(n, prefix = "l") {
   return Array.from({ length: n }, (_, i) => ({ status: "same", text: `${prefix}${i}` }));

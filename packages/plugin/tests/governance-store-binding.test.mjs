@@ -13,10 +13,10 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 
-import { bindingVerdict, mintStoreIdGestured } from "../src/kernel/governance/migration/store-binding.ts";
-import { performCutover, bindMarker, rollbackCutover, CutoverRefusedError, CUTOVER_DEFAULT } from "../src/kernel/governance/migration/cutover.ts";
-import { buildMigration } from "../src/governance/migration-wiring.ts";
-import { buildAdmission } from "../src/governance/admission-wiring.ts";
+import { bindingVerdict, mintStoreIdGestured } from "../src/governor/kernel/migration/store-binding.ts";
+import { performCutover, bindMarker, rollbackCutover, CutoverRefusedError, CUTOVER_DEFAULT } from "../src/governor/kernel/migration/cutover.ts";
+import { buildMigration } from "../src/governor/wiring/migration-wiring.ts";
+import { buildAdmission } from "../src/governor/wiring/admission-wiring.ts";
 
 const T0 = 1_900_000_000_000;
 const REPORT = { baselines: 1, acceptanceEvents: { total: 1, humanAccepts: 1, silentAdvances: 0, autoAccepts: 0, reverts: 0, rekeys: 0, dispositions: 0, unknown: 0 }, pendingIndex: false, unparseableLines: 0, totalRecords: 2 };

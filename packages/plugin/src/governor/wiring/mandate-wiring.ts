@@ -19,10 +19,10 @@
 // NOT undo the grant — the mandate is active, the dead session simply can
 // never present the matching identity — but the outcome SAYS so.
 
-import { activateDraft, MandateRefusedError, type MandateRefusalCode, type MandateV1 } from "../kernel/governance/mandates/mandate.js";
-import type { MandateDraftV1 } from "../kernel/governance/mandates/draft.js";
-import type { MandateStore } from "../kernel/governance/mandates/lifecycle.js";
-import type { MandateUsage } from "../kernel/governance/mandates/budgets.js";
+import { activateDraft, MandateRefusedError, type MandateRefusalCode, type MandateV1 } from "../kernel/mandates/mandate.js";
+import type { MandateDraftV1 } from "../kernel/mandates/draft.js";
+import type { MandateStore } from "../kernel/mandates/lifecycle.js";
+import type { MandateUsage } from "../kernel/mandates/budgets.js";
 
 export type MandateActOutcome =
   | { ok: true; mandateId: string; supersededMandateId: string | null; sessionAttachWarning: string | null }

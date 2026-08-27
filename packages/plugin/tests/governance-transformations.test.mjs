@@ -17,7 +17,7 @@ import {
   AUTOMATABLE_CLASSES,
   createTransformationRegistry,
   TransformationRegistryError,
-} from "../src/kernel/governance/transformations/transformation.ts";
+} from "../src/governor/kernel/transformations/transformation.ts";
 import {
   createPromotionStore,
   foldPromotionEvents,
@@ -26,8 +26,8 @@ import {
   promotionVerdictOf,
   tupleKeyOf,
   verifierKeyOf,
-} from "../src/kernel/governance/transformations/promotion.ts";
-import { createPredicateRegistry } from "../src/kernel/governance/verification/registry.ts";
+} from "../src/governor/kernel/transformations/promotion.ts";
+import { createPredicateRegistry } from "../src/governor/kernel/verification/registry.ts";
 
 const T0 = 1_700_000_000_000;
 
@@ -219,16 +219,16 @@ describe("promotion — facts recorded, decision gestured, absence spoken", () =
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { buildAdmission } from "../src/governance/admission-wiring.ts";
-import { createDefaultPredicateRegistry } from "../src/kernel/governance/verification/predicates.ts";
-import { buildPromotionUi } from "../src/governance/promotion-wiring.ts";
-import { openGitRepository } from "../src/governance/history-store/git-repository.ts";
-import { proposalRef } from "../src/kernel/governance/history-store/refs.ts";
-import { createProposalStore } from "../src/kernel/governance/proposals/proposal-store.ts";
-import { openProposal } from "../src/kernel/governance/proposals/proposal.ts";
-import { buildProposalSubjectFromOperation } from "../src/kernel/governance/proposals/proposal-builder.ts";
-import { digestBytes } from "../src/kernel/governance/contracts/digest.ts";
-import { tupleOf } from "../src/kernel/governance/transformations/transformation.ts";
+import { buildAdmission } from "../src/governor/wiring/admission-wiring.ts";
+import { createDefaultPredicateRegistry } from "../src/governor/kernel/verification/predicates.ts";
+import { buildPromotionUi } from "../src/governor/wiring/promotion-wiring.ts";
+import { openGitRepository } from "../src/governor/wiring/history-store/git-repository.ts";
+import { proposalRef } from "../src/governor/kernel/history-store/refs.ts";
+import { createProposalStore } from "../src/governor/kernel/proposals/proposal-store.ts";
+import { openProposal } from "../src/governor/kernel/proposals/proposal.ts";
+import { buildProposalSubjectFromOperation } from "../src/governor/kernel/proposals/proposal-builder.ts";
+import { digestBytes } from "../src/governor/kernel/contracts/digest.ts";
+import { tupleOf } from "../src/governor/kernel/transformations/transformation.ts";
 
 const enc = (s) => new TextEncoder().encode(s);
 

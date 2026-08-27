@@ -34,11 +34,11 @@
 //      Plugin instance, its prototype, the ItemView instance, or anything stored on
 //      app.workspace / a leaf / app.plugins.plugins['vault-mcp'].
 //    - The BaselineStore lives in a module-scope WeakMap keyed by the plugin instance
-//      (governance/wiring.ts `baselineStores`), NOT as `this.store`, so it is not an
+//      (governor/wiring/wiring.ts `baselineStores`), NOT as `this.store`, so it is not an
 //      enumerable own property of the plugin.
-//    - accept/revert are performed by module-scope functions (governance/wiring.ts
+//    - accept/revert are performed by module-scope functions (governor/wiring/wiring.ts
 //      performAccept/performRevert + these exported acceptNote/revertNote). The view
-//      holds its deps in a module-scope WeakMap (governance/pane.ts `viewDeps`), never
+//      holds its deps in a module-scope WeakMap (governor/wiring/pane.ts `viewDeps`), never
 //      as an instance field. The ONLY live reference to an accept-capable callable is
 //      inside each pane button's addEventListener('click') closure, closed over the
 //      specific already-displayed note row.
@@ -86,7 +86,7 @@ export interface SilentAdvanceRecord {
 
 // #101 — the request-changes / withdraw human dispositions log to the SAME
 // acceptance-log.jsonl (uniform audit records for every disposition). Pure
-// record shape only: the actions live in governance/wiring.ts as module-scope
+// record shape only: the actions live in governor/wiring/wiring.ts as module-scope
 // functions reached solely from gesture-gated pane handlers. Neither advances
 // a baseline — they write the agent-legal `revising`/`proposed` transitions —
 // but both confer standing ("a human asked for changes"), so they are audited.
@@ -181,7 +181,7 @@ export interface AcceptDeps {
   // Link-safe write of full content (vault.process in production).
   writeNote(path: string, content: string): Promise<void>;
   /** Write the accepted family into the note's frontmatter. In production this is the
-   * module-scope `stampAcceptedFrontmatter` in governance/wiring.ts — Obsidian's own
+   * module-scope `stampAcceptedFrontmatter` in governor/wiring/wiring.ts — Obsidian's own
    * `app.fileManager.processFrontMatter` — never exported, never a command/tool/method,
    * reached ONLY through this dep on the gesture-gated accept path. */
   stampAccepted(path: string, fields: AcceptanceStampFields): Promise<void>;

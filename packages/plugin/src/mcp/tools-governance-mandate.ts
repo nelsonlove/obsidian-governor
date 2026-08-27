@@ -29,10 +29,10 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ok, codedError } from "./helpers.js";
 import { isVisible, type GuardSettings } from "../guard.js";
-import { openDraft, type MandateDraftV1 } from "../kernel/governance/mandates/draft.js";
-import { MandateRefusedError, type MandateTerms, type MandateV1 } from "../kernel/governance/mandates/mandate.js";
-import type { MandateUsage } from "../kernel/governance/mandates/budgets.js";
-import type { ChangeClass } from "../kernel/governance/contracts/change-class.js";
+import { openDraft, type MandateDraftV1 } from "../governor/kernel/mandates/draft.js";
+import { MandateRefusedError, type MandateTerms, type MandateV1 } from "../governor/kernel/mandates/mandate.js";
+import type { MandateUsage } from "../governor/kernel/mandates/budgets.js";
+import type { ChangeClass } from "../governor/kernel/contracts/change-class.js";
 
 /** What the tools need from the world — narrow store access plus identity facts. */
 export interface MandateToolsSource {

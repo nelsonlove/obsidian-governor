@@ -1,20 +1,20 @@
 // The Proposed-section builder (#221/#164 acceptance convergence) — pure derivation over a
-// metadata-cache fake (kernel/governance/proposed.ts), exactly the #228 Revising-section
+// metadata-cache fake (governor/kernel/proposed.ts), exactly the #228 Revising-section
 // discipline. Pins the three listing rules:
 //   1. `acceptance-status: proposed` notes with NO pending delta are listed;
 //   2. proposed notes that ARE pending are deduped OUT (their queue row already carries the
 //      same context-aware Accept — one note must never render two Accept rows);
 //   3. excluded roots (guarded territories / hold zones) are respected.
 // Plus: the config coercion for the convergence settings (acceptedBy + the conformance-gate
-// key list) in kernel/governance/settings.ts.
+// key list) in governor/kernel/settings.ts.
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { buildProposedList } from "../src/kernel/governance/proposed.ts";
+import { buildProposedList } from "../src/governor/kernel/proposed.ts";
 import {
   governanceAcceptanceSettings,
   DEFAULT_ACCEPTANCE_SETTINGS,
-} from "../src/kernel/governance/settings.ts";
+} from "../src/governor/kernel/settings.ts";
 
 // The same exclusion predicate shape wiring.ts uses (EXCLUDED_PREFIXES).
 const EXCLUDED = ["obsidian-old/", "80-89", "_keep/", "holds/"];

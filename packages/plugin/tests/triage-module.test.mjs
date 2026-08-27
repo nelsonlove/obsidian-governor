@@ -57,7 +57,7 @@ import {
   dispositionsForSurface,
   dispositionByIdIn,
 } from "../src/kernel/triage/index.ts";
-import { DISPOSITIONS } from "../src/kernel/governance/dispositions.ts";
+import { DISPOSITIONS } from "../src/governor/kernel/dispositions.ts";
 import { registerTriageTools, emptyTriageSource } from "../src/mcp/tools-triage.ts";
 import { queryBaseRows } from "../src/mcp/tools-bases.ts";
 import { OPAQUE_ACCEPT_COMMAND_IDS, OPAQUE_ACCEPT_CLI_COMMANDS } from "../src/mcp/cli-policy.ts";

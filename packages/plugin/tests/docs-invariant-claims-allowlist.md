@@ -61,7 +61,7 @@ Known-overstated section instead — see its header for the format.
   source pins "history:restore" — and the command stays in cli-policy.ts's
   UNINSPECTABLE_WRITE_CLI_COMMANDS default-deny set, whose rationale (#110) this sentence
   restates.
-- **This does not touch the agent-side guarantee.** The stamp is an in-app, human-gesture-gated `processFrontMatter` call (`stampAcceptedFrontmatter`, module-scope and unexported in `governance/wiring.ts`, reachable only through the gesture-gated accept handler) — it **bypasses MCP entirely** and is exactly the human path the accept-forbidden guard reserves.
+- **This does not touch the agent-side guarantee.** The stamp is an in-app, human-gesture-gated `processFrontMatter` call (`stampAcceptedFrontmatter`, module-scope and unexported in `governor/wiring/wiring.ts`, reachable only through the gesture-gated accept handler) — it **bypasses MCP entirely** and is exactly the human path the accept-forbidden guard reserves.
   substantiated 2026-08-18 (acceptance convergence, #221/#164): packages/core is diff-zero in
   that change; governance-module.test.mjs pins stampAcceptedFrontmatter as module-scope,
   unexported, with exactly one caller (acceptNote's injected stampAccepted dep on the
@@ -111,7 +111,7 @@ Known-overstated section instead — see its header for the format.
 - **Journal-only.** It is recorded verbatim on the journal record beside `op`/`actor` (`JournalRecord.intent`, `packages/plugin/src/kernel/journal.ts`) and **never reaches note content** — it is peeled before the handler, so it structurally cannot be written into a note's frontmatter or body.
 - **Never an accept or idempotency signal.** It is **excluded from idempotency identity** — a retried call may reword its intent freely and still dedupe — and it is **never read back** as any kind of acceptance or approval signal.
 - **Batch-aware.** `obsidian_write_notes` accepts a batch-level `intent` describing the change-*set*; the guarded single-writer peels it per item, so **every** item's journal record carries it and the Acceptance pane's per-note rows each show it.
-- **It exposes data the governance module published — nothing more.** The folded governance module (`src/governance/wiring.ts`) rewrites a read-only index at `<plugin-dir>/governance/pending-index.json` — beside the acceptance log — on every review-queue refresh (`refresh()`, via the pure serializer in `kernel/governance/pending-index.ts`); this tool reads it.
+- **It exposes data the governance module published — nothing more.** The folded governance module (`src/governor/wiring/wiring.ts`) rewrites a read-only index at `<plugin-dir>/governance/pending-index.json` — beside the acceptance log — on every review-queue refresh (`refresh()`, via the pure serializer in `governor/kernel/pending-index.ts`); this tool reads it.
   approved 2026-08-19 (#261): substantiated by the publisher wired in `refresh()`
   (wiring.ts writes `serializePendingIndex` bytes to `pendingIndexPath` on every queue
   recompute) and the pending-review round-trip tests; the retired stewardship path is dead
@@ -306,7 +306,7 @@ anchor for every target-state claim is docs/status-and-compatibility.md
   tracked by: Gate 3 (signing / portable standing / Sync replicas) per docs/status-and-compatibility.md § Current release state — target-state, not shipped in 0.17.0. [docs/coding-agent-development-guide.md:81]
 - | `packages/plugin/src/mcp/guarded.ts` and other surface registration | Action registry plus surface bindings | Inventory both directions, bind every surface to a versioned action, and make raw handler reachability a build failure |
   tracked by: work-package directive (WP0/WP10 territory), not a shipped claim — the guide speaks in imperatives to its implementer. [docs/coding-agent-development-guide.md:111]
-- | `kernel/governance/auto-accept/*` | Transformation registry, verifiers, and mandate policy | Reassess every class; no legacy entry receives automatic authority merely because it was previously allowlisted |
+- | `governor/kernel/auto-accept/*` | Transformation registry, verifiers, and mandate policy | Reassess every class; no legacy entry receives automatic authority merely because it was previously allowlisted |
   tracked by: work-package directive (WP9 territory), not a shipped claim. [docs/coding-agent-development-guide.md:119]
 - Never write note bodies to the audit journal.
   tracked by: substantiated as of 0.17.0 — kernel digestArgs pins (bodies collapse to `<N chars>`; journal suites). Promotion is the operator's call. [docs/data-flow.md:195]

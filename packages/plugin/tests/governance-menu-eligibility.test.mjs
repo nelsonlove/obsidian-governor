@@ -1,4 +1,4 @@
-// isAcceptEligible / selectAcceptEligible (kernel/governance/menu-eligibility.ts) — the rule
+// isAcceptEligible / selectAcceptEligible (governor/kernel/menu-eligibility.ts) — the rule
 // behind the right-click "Accept" context-menu item. Pins that it matches the pane's own three
 // Accept-bearing sections (pending / proposed / revising), that guarded territory is excluded,
 // and that a multi-select is filtered down to exactly its eligible members (the mixed
@@ -6,7 +6,7 @@
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { isAcceptEligible, selectAcceptEligible } from "../src/kernel/governance/menu-eligibility.ts";
+import { isAcceptEligible, selectAcceptEligible } from "../src/governor/kernel/menu-eligibility.ts";
 
 /** A vault fake: pending queue, per-note acceptance-status, and one excluded root. */
 function ctx({ pending = [], status = {}, excluded = ["80-89"] } = {}) {

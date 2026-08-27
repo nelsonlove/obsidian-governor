@@ -14,10 +14,10 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 
-import { classifyOrigin, classifyChange, shouldAdvanceBaselineSilently } from "../src/kernel/governance/origins/classifier.ts";
-import { reconcileDisposition } from "../src/kernel/governance/origins/reconcile.ts";
-import { classifyModify } from "../src/kernel/governance/classify.ts";
-import { ORIGIN_CONFIDENCE } from "../src/kernel/governance/contracts/origin.ts";
+import { classifyOrigin, classifyChange, shouldAdvanceBaselineSilently } from "../src/governor/kernel/origins/classifier.ts";
+import { reconcileDisposition } from "../src/governor/kernel/origins/reconcile.ts";
+import { classifyModify } from "../src/governor/kernel/classify.ts";
+import { ORIGIN_CONFIDENCE } from "../src/governor/kernel/contracts/origin.ts";
 
 const sig = (over = {}) => ({ recentAgentWrite: false, recentGenuineHumanInput: false, syncEvidence: false, ...over });
 
@@ -156,14 +156,14 @@ describe("origin wiring — produced in the modify listener, persisted on the ad
   const fs = await import("node:fs");
 
   test("wiring.ts evaluates classifyChange (one evaluation), with syncEvidence hard false", () => {
-    const wiring = fs.readFileSync(new URL("../src/governance/wiring.ts", import.meta.url), "utf8");
+    const wiring = fs.readFileSync(new URL("../src/governor/wiring/wiring.ts", import.meta.url), "utf8");
     assert.match(wiring, /classifyChange\(/, "the modify listener produces the origin record");
     assert.match(wiring, /syncEvidence: false/, "no local signal may claim sync attribution");
     assert.ok(!/classifyModify\(/.test(wiring), "the listener no longer calls the bare modify classifier — one evaluation, two consumers");
   });
 
   test("the silent-advance audit record carries the origin", async () => {
-    const { silentAdvanceRecord } = await import("../src/kernel/governance/accept.ts");
+    const { silentAdvanceRecord } = await import("../src/governor/kernel/accept.ts");
     const rec = silentAdvanceRecord({
       ts: "2026-08-21T00:00:00Z",
       path: "A.md",

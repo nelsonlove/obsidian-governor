@@ -25,19 +25,19 @@ import {
   boundaryDisclosure,
   effectiveScope,
   DEFAULT_HISTORY_EXCLUDES,
-} from "../src/kernel/governance/history-store/history-scope.ts";
-import { EXCLUDED_PREFIXES } from "../src/governance/territories.ts";
-import { standingRef, proposalRef, cohortRef, isGovernorRef } from "../src/kernel/governance/history-store/refs.ts";
-import { planRecovery } from "../src/kernel/governance/history-store/recovery.ts";
+} from "../src/governor/kernel/history-store/history-scope.ts";
+import { EXCLUDED_PREFIXES } from "../src/governor/wiring/territories.ts";
+import { standingRef, proposalRef, cohortRef, isGovernorRef } from "../src/governor/kernel/history-store/refs.ts";
+import { planRecovery } from "../src/governor/kernel/history-store/recovery.ts";
 import {
   RefCasError,
   ObjectMissingError,
   ObjectCorruptError,
   RefNameError,
   isObjectId,
-} from "../src/kernel/governance/history-store/types.ts";
-import { openGitRepository, EMPTY_TREE_OID } from "../src/governance/history-store/git-repository.ts";
-import { historyDir } from "../src/governance/history-store/local-data-root.ts";
+} from "../src/governor/kernel/history-store/types.ts";
+import { openGitRepository, EMPTY_TREE_OID } from "../src/governor/wiring/history-store/git-repository.ts";
+import { historyDir } from "../src/governor/wiring/history-store/local-data-root.ts";
 
 const enc = (s) => new TextEncoder().encode(s);
 const dec = (b) => new TextDecoder().decode(b);

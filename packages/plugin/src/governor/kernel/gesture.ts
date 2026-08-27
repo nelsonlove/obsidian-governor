@@ -8,7 +8,7 @@
 // Every accept-class handler (accept / revert / adopt-baseline / setClassEnabled / modal-confirm)
 // must fire ONLY on a real human click. Two independent properties make that true:
 //
-//   LAYER 1 (in governance/pane.ts + governance/wiring.ts) — handlers are wired with
+//   LAYER 1 (in governor/wiring/pane.ts + governor/wiring/wiring.ts) — handlers are wired with
 //   `addEventListener('click', …)`, never `el.onclick = …`. An addEventListener listener is NOT
 //   exposed as a reachable property (`el.onclick` stays null; getEventListeners is devtools-only),
 //   so renderer-JS (js-engine / execute-code / meta-bind / quickadd all run arbitrary JS this vault
@@ -69,7 +69,7 @@ export function isRealGesture(evt?: unknown): evt is Event {
 export type DispositionOutcome = "blocked-untrusted" | "cancelled" | "done";
 export type AdoptOutcome = DispositionOutcome;
 
-import { uuidv7 } from "../uuidv7.js";
+import { uuidv7 } from "../../kernel/uuidv7.js";
 
 // THE ONE SHARED GESTURE GATE for every state-mutating human disposition (#101/#221: gating is
 // applied by authority CLASS, not per-button code). `action` runs only when `evt` is a genuine

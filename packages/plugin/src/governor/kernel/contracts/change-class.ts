@@ -23,7 +23,7 @@
 // Rules 1, 5, and 6 are behavior for the classifier (WP5+); rules 3 and 4 are
 // pure functions and live here.
 
-import { CHANGE_CLASSES, type ChangeClass } from "../../operations/action.js";
+import { CHANGE_CLASSES, type ChangeClass } from "../../../kernel/operations/action.js";
 
 export { CHANGE_CLASSES, type ChangeClass };
 

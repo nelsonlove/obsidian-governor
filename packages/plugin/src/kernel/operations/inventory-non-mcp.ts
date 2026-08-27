@@ -26,7 +26,7 @@
 // rather than assumed, because both are load-bearing and neither was checked
 // by anything before:
 //
-//   • `src/governance/` registers ZERO Obsidian commands. Every command is
+//   • `src/governor/wiring/` registers ZERO Obsidian commands. Every command is
 //     agent-invocable through `obsidian_run_command`'s `executeCommandById`,
 //     so an accept command would be a self-approval primitive one
 //     prompt-injection away.
@@ -43,7 +43,7 @@ import type { SurfaceBinding } from "./surface-binding.js";
 // ── the accept perimeter ─────────────────────────────────────────────────────
 
 /**
- * The module-scope functions in `governance/wiring.ts` that can change
+ * The module-scope functions in `governor/wiring/wiring.ts` that can change
  * authority state. Named here so the test can assert they still exist and are
  * still unexported — an inventory that describes deleted code is worse than
  * none, and an exported one is a hole.
@@ -83,7 +83,7 @@ export const ACCEPT_PERIMETER_FUNCTIONS = [
 ] as const;
 
 /**
- * The exports of `governance/wiring.ts`, pinned.
+ * The exports of `governor/wiring/wiring.ts`, pinned.
  *
  * Checking that the ten perimeter functions are unexported closes those ten
  * instances. Pinning the whole export set closes the CLASS: a new export is a
@@ -121,7 +121,7 @@ export interface AuthorityRow {
   action: string;
   title: string;
   postcondition: string;
-  /** The `governance/wiring.ts` function this surface ultimately calls. */
+  /** The `governor/wiring/wiring.ts` function this surface ultimately calls. */
   implementation: (typeof ACCEPT_PERIMETER_FUNCTIONS)[number];
   paths?: string[];
   /** Change classes beyond `authority`, when the act also alters content. */
@@ -601,7 +601,7 @@ export interface AutomationRow {
 export const AUTOMATION_SURFACES: AutomationRow[] = [
   {
     id: "automation.governance.events",
-    file: "src/governance/wiring.ts",
+    file: "src/governor/wiring/wiring.ts",
     title: "Governance event subscriptions and journal poll",
     postcondition:
       "Keep the review queue current from vault modify/rename/delete events, a 2.5s journal poll and a layout-ready paint.",
@@ -704,7 +704,7 @@ export function nonMcpBindings(): SurfaceBinding[] {
     id: row.id,
     action: row.action,
     actionVersion: 1,
-    source: "src/governance/wiring.ts",
+    source: "src/governor/wiring/wiring.ts",
     note: row.reachability,
   }));
   return [...commands, ...automation, ...authority];
@@ -927,7 +927,7 @@ export const INTERNAL_SURFACES: PlainSurfaceRow[] = [
   {
     id: "internal.governance.publish-pending-index",
     kind: "internal",
-    file: "src/governance/wiring.ts",
+    file: "src/governor/wiring/wiring.ts",
     title: "Publish the pending-review index",
     postcondition:
       "Write the review queue to pending-index.json so obsidian_pending_review can report it — or report it unavailable.",

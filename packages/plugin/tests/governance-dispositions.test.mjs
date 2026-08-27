@@ -2,7 +2,7 @@
  * governance-dispositions.test.mjs — dispositions as data (#101, phase 1 of #221).
  *
  * The acceptance instance's disposition set is a DECLARED table
- * (kernel/governance/dispositions.ts): `{id, authority, surface, label,
+ * (governor/kernel/dispositions.ts): `{id, authority, surface, label,
  * effect, …}` per verb. These tests pin:
  *
  *   • completeness — the set contains exactly the seven declared verbs, and
@@ -32,7 +32,7 @@ import {
   gestureGatedDispositions,
   acceptEffectFor,
   SUBMIT_REVISION_TOOL,
-} from "../src/kernel/governance/dispositions.ts";
+} from "../src/governor/kernel/dispositions.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const src = (rel) => fs.readFileSync(path.join(here, "..", "src", rel), "utf8");
@@ -127,7 +127,7 @@ describe("descriptors are pure data (no callable, frozen)", () => {
 });
 
 describe("the pane renders FROM the descriptor set (source-level completeness)", () => {
-  const pane = src("governance/pane.ts");
+  const pane = src("governor/wiring/pane.ts");
 
   test("pending-item action buttons are built by iterating dispositionsFor('pending-item')", () => {
     assert.match(pane, /for \(const d of dispositionsFor\("pending-item"\)\)/);

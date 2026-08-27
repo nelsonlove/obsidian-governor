@@ -3,7 +3,7 @@
  * settings-tab surface (full-tab parity with the retired standalone stewardship plugin).
  *
  * The settings tab surfaces adopt-baseline + the auto-accept allowlist THROUGH the exact shared
- * helpers the review pane uses — `wireAdoptButton` and `renderAllowlist` (governance/pane.ts). Both
+ * helpers the review pane uses — `wireAdoptButton` and `renderAllowlist` (governor/wiring/pane.ts). Both
  * are obsidian-free DOM functions (they touch only an element + a gesture), so they ARE exercisable
  * headlessly against a fake element, unlike the ItemView/plugin wiring around them. Testing them
  * here proves the SETTINGS-TAB controls are gesture-gated, because the settings-tab render
@@ -27,7 +27,7 @@ import { installObsidianStub } from "./obsidian-stub.mjs";
 
 installObsidianStub();
 const { renderAllowlist, wireAdoptButton, AUTO_ACCEPT_DESC, ADOPT_BASELINE_DESC } = await import(
-  "../src/governance/pane.ts"
+  "../src/governor/wiring/pane.ts"
 );
 
 // A test-only stand-in for a genuine user gesture: a real Event whose isTrusted reads true.

@@ -43,7 +43,7 @@ export class MarkdownView {}
 
 /**
  * Minimal base classes for the governance pane + wiring so those modules LOAD when a test imports
- * a file that transitively pulls them in (connection-ui.ts → governance/wiring.ts → governance/
+ * a file that transitively pulls them in (connection-ui.ts → governor/wiring/wiring.ts → governance/
  * pane.ts). `class GovernanceReviewView extends ItemView` and `new Component()` only need the base
  * class to EXIST at module-eval time; none of their Obsidian behavior is exercised headlessly (the
  * settings-tab render path is verified by build + reasoning + the gesture/tripwire tests). The

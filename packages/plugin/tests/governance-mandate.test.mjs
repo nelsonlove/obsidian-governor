@@ -22,11 +22,11 @@ import {
   revokeMandate,
   supersedeMandate,
   termsInvalidReason,
-} from "../src/kernel/governance/mandates/mandate.ts";
-import { declineDraft, markDraftActivated, openDraft, supersedeDraft } from "../src/kernel/governance/mandates/draft.ts";
-import { budgetBreach, budgetsInvalidReason, chargeUsage, ZERO_USAGE } from "../src/kernel/governance/mandates/budgets.ts";
-import { mandateFitOf, pathWithin } from "../src/kernel/governance/mandates/policy.ts";
-import { createMandateStore, foldMandateEvents } from "../src/kernel/governance/mandates/lifecycle.ts";
+} from "../src/governor/kernel/mandates/mandate.ts";
+import { declineDraft, markDraftActivated, openDraft, supersedeDraft } from "../src/governor/kernel/mandates/draft.ts";
+import { budgetBreach, budgetsInvalidReason, chargeUsage, ZERO_USAGE } from "../src/governor/kernel/mandates/budgets.ts";
+import { mandateFitOf, pathWithin } from "../src/governor/kernel/mandates/policy.ts";
+import { createMandateStore, foldMandateEvents } from "../src/governor/kernel/mandates/lifecycle.ts";
 
 const T0 = 1_700_000_000_000;
 const RAND_A = new Uint8Array(10).fill(1);
@@ -409,11 +409,11 @@ describe("the mandate store — append-only events, one fold", () => {
   });
 });
 
-// ── The UI wiring: buildMandateUi (governance/mandate-wiring.ts) ─────────────
+// ── The UI wiring: buildMandateUi (governor/wiring/mandate-wiring.ts) ─────────────
 
-const { buildMandateUi } = await import("../src/governance/mandate-wiring.ts");
-const { createSessionStore } = await import("../src/kernel/governance/sessions/session-store.ts");
-const { openSession } = await import("../src/kernel/governance/sessions/session.ts");
+const { buildMandateUi } = await import("../src/governor/wiring/mandate-wiring.ts");
+const { createSessionStore } = await import("../src/governor/kernel/sessions/session-store.ts");
+const { openSession } = await import("../src/governor/kernel/sessions/session.ts");
 
 function wiredWorld() {
   const mandateIo = memoryIo();

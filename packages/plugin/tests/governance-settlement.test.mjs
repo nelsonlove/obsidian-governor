@@ -15,14 +15,14 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 
-import { digestUtf8 } from "../src/kernel/governance/contracts/digest.ts";
-import { buildProposalSubjectFromOperation } from "../src/kernel/governance/proposals/proposal-builder.ts";
-import { openProposal, withVerification } from "../src/kernel/governance/proposals/proposal.ts";
-import { createPredicateRegistry } from "../src/kernel/governance/verification/registry.ts";
-import { verifySubject } from "../src/kernel/governance/verification/verify.ts";
-import { createAdmissionService } from "../src/kernel/governance/admission/service.ts";
-import { buildAdmissionClaim, createClaimStore, decideSettlement } from "../src/kernel/governance/admission/settlement.ts";
-import { createStandingResolver } from "../src/kernel/governance/admission/standing-resolver.ts";
+import { digestUtf8 } from "../src/governor/kernel/contracts/digest.ts";
+import { buildProposalSubjectFromOperation } from "../src/governor/kernel/proposals/proposal-builder.ts";
+import { openProposal, withVerification } from "../src/governor/kernel/proposals/proposal.ts";
+import { createPredicateRegistry } from "../src/governor/kernel/verification/registry.ts";
+import { verifySubject } from "../src/governor/kernel/verification/verify.ts";
+import { createAdmissionService } from "../src/governor/kernel/admission/service.ts";
+import { buildAdmissionClaim, createClaimStore, decideSettlement } from "../src/governor/kernel/admission/settlement.ts";
+import { createStandingResolver } from "../src/governor/kernel/admission/standing-resolver.ts";
 
 const d = (t) => digestUtf8(t);
 const T0 = 1_700_000_000_000;

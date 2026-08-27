@@ -20,25 +20,25 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { buildAdmission } from "../src/governance/admission-wiring.ts";
-import { openGitRepository } from "../src/governance/history-store/git-repository.ts";
-import { proposalRef } from "../src/kernel/governance/history-store/refs.ts";
-import { createProposalStore } from "../src/kernel/governance/proposals/proposal-store.ts";
-import { openProposal } from "../src/kernel/governance/proposals/proposal.ts";
-import { buildProposalSubjectFromOperation } from "../src/kernel/governance/proposals/proposal-builder.ts";
-import { digestBytes } from "../src/kernel/governance/contracts/digest.ts";
-import { createDefaultPredicateRegistry } from "../src/kernel/governance/verification/predicates.ts";
-import { createTransformationRegistry, tupleOf } from "../src/kernel/governance/transformations/transformation.ts";
-import { createPromotionStore } from "../src/kernel/governance/transformations/promotion.ts";
-import { createMandateStore } from "../src/kernel/governance/mandates/lifecycle.ts";
-import { openDraft } from "../src/kernel/governance/mandates/draft.ts";
-import { activateDraft } from "../src/kernel/governance/mandates/mandate.ts";
-import { ZERO_USAGE } from "../src/kernel/governance/mandates/budgets.ts";
-import { mandateFitOf, productionStampOf } from "../src/kernel/governance/mandates/policy.ts";
-import { requireCohortAdmissible, requireAdmissible, AdmissionRefusedError } from "../src/kernel/governance/admission/policy.ts";
-import { subjectDigest } from "../src/kernel/governance/contracts/subject-v1.ts";
-import { createClaimStore } from "../src/kernel/governance/admission/settlement.ts";
-import { freezeCohort } from "../src/kernel/governance/cohorts/freeze.ts";
+import { buildAdmission } from "../src/governor/wiring/admission-wiring.ts";
+import { openGitRepository } from "../src/governor/wiring/history-store/git-repository.ts";
+import { proposalRef } from "../src/governor/kernel/history-store/refs.ts";
+import { createProposalStore } from "../src/governor/kernel/proposals/proposal-store.ts";
+import { openProposal } from "../src/governor/kernel/proposals/proposal.ts";
+import { buildProposalSubjectFromOperation } from "../src/governor/kernel/proposals/proposal-builder.ts";
+import { digestBytes } from "../src/governor/kernel/contracts/digest.ts";
+import { createDefaultPredicateRegistry } from "../src/governor/kernel/verification/predicates.ts";
+import { createTransformationRegistry, tupleOf } from "../src/governor/kernel/transformations/transformation.ts";
+import { createPromotionStore } from "../src/governor/kernel/transformations/promotion.ts";
+import { createMandateStore } from "../src/governor/kernel/mandates/lifecycle.ts";
+import { openDraft } from "../src/governor/kernel/mandates/draft.ts";
+import { activateDraft } from "../src/governor/kernel/mandates/mandate.ts";
+import { ZERO_USAGE } from "../src/governor/kernel/mandates/budgets.ts";
+import { mandateFitOf, productionStampOf } from "../src/governor/kernel/mandates/policy.ts";
+import { requireCohortAdmissible, requireAdmissible, AdmissionRefusedError } from "../src/governor/kernel/admission/policy.ts";
+import { subjectDigest } from "../src/governor/kernel/contracts/subject-v1.ts";
+import { createClaimStore } from "../src/governor/kernel/admission/settlement.ts";
+import { freezeCohort } from "../src/governor/kernel/cohorts/freeze.ts";
 
 const enc = (s) => new TextEncoder().encode(s);
 const T0 = 1_700_000_000_000;
@@ -739,7 +739,7 @@ describe("review-of-#358 fixes", () => {
       const pB = await w.produce("Notes/m2.md", "old 2\n", "new 2\n", { classes: ["presentation"] });
       // Bypass freezeCohort's group check by hand-building the frozen shape
       // the way a hostile in-process caller would.
-      const { buildCohortSubject } = await import("../src/kernel/governance/contracts/subject-v1.ts");
+      const { buildCohortSubject } = await import("../src/governor/kernel/contracts/subject-v1.ts");
       const cohortSubject = buildCohortSubject({ items: [pA.subject, pB.subject], resolvedScope: { include: ["Notes"], exclude: [] }, recoveryUnit: "item", excludedProposalIds: [] });
       const frozen = { subject: cohortSubject, digest: subjectDigest(cohortSubject), memberProposalIds: [pA.id, pB.id] };
       const outcome = await w.admission.admitCohortUnderMandate(frozen, [pA, pB], w.mandate.id);
@@ -889,7 +889,7 @@ describe("sweepMandated — automatic admission arrives as a sweep, fully gated"
 // ── WP10c source pins: the poll's era swap and the reconcile gate ────────────
 
 describe("the era swap, pinned at the source (wiring.ts is plugin-bound; the scan proves the paths RUN the guards)", () => {
-  const wiringSrc = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), "../src/governance/wiring.ts"), "utf8");
+  const wiringSrc = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), "../src/governor/wiring/wiring.ts"), "utf8");
 
   test("pollJournal runs the LEGACY sweep only pre-retirement, and the MANDATED sweep only post", () => {
     assert.match(wiringSrc, /if \(!legacyRetired\(plugin\)\) \{\s*\n\s*const accepted = await sweepAutoAccept\(plugin\);/, "the legacy sweep is behind !legacyRetired");
@@ -913,7 +913,7 @@ describe("the era swap, pinned at the source (wiring.ts is plugin-bound; the sca
 
 describe("per-mandate grouping (review of #359: the selector row needed a path that runs it)", () => {
   test("selectProposals filters by mandateId directly", async () => {
-    const { selectProposals } = await import("../src/kernel/governance/cohorts/cohort.ts");
+    const { selectProposals } = await import("../src/governor/kernel/cohorts/cohort.ts");
     const w = await world();
     try {
       const pA = await w.produce("Notes/ga.md", "old a\n", "new a\n");
