@@ -24,17 +24,30 @@ import { buildCommands } from "./commands.js";
 
 export default class QuickAddChoicesPlugin extends Plugin {
   onload(): void {
-    this.register(publishTools(this, [buildCompileTool(this.app)]));
+    // THE HUMAN PATH FIRST (review of #364): the header claims the commands
+    // work without the host, so publishing must not be able to take them
+    // down. publishTools is internally defensive, which makes this ordering
+    // belt rather than fix — but the claim and the code should agree.
     for (const command of buildCommands(this.app)) {
       this.addCommand({
         id: command.id,
         name: command.name,
         callback: () => {
-          void command.run().then((outcome) => {
-            new Notice(outcome.text, outcome.durationMs);
-          });
+          void command
+            .run()
+            .then((outcome) => {
+              // isError is CONSUMED, not just computed: a Notice is
+              // transient and a failure should outlive it.
+              if (outcome.isError) console.error(`[quickadd-choices] ${outcome.text}`);
+              new Notice(outcome.text, outcome.durationMs);
+            })
+            // run() is total by construction, and `new Notice` can throw if
+            // the plugin was disabled mid-compile — either way an unhandled
+            // rejection in a command callback is invisible to everyone.
+            .catch((e) => console.error("[quickadd-choices] compile command failed after the fact", e));
         },
       });
     }
+    this.register(publishTools(this, [buildCompileTool(this.app)]));
   }
 }

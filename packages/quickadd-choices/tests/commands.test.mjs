@@ -80,7 +80,8 @@ describe("the Notice tells the truth", () => {
     assert.equal(out.isError, false);
     assert.match(out.text, /compiled/i);
     assert.match(out.text, /1 added/);
-    assert.match(out.text, /1 choice now live/);
+    assert.match(out.text, /1 compiled choice/);
+    assert.match(out.text, /hand-authored choices are untouched/, "a human with a full palette must not read this as a wipe");
   });
 
   test("PARTIAL COMPILE IS NEVER SILENT: a failing note surfaces in the Notice and flags the outcome", async () => {
@@ -128,7 +129,27 @@ describe("the Notice tells the truth", () => {
     const app = appWith({ quickadd: exploding });
     const out = await commandsOf(app).byId["compile-apply"].run();
     assert.equal(out.isError, true);
+    // An uncoded throw is a FAILURE, not a refusal: "refused" would imply a
+    // policy decision and that nothing changed, which an exception cannot
+    // promise (review of #364 — saveSettings rejects AFTER the config object
+    // was already replaced).
+    assert.match(out.text, /failed/i);
+    assert.ok(!/refused/i.test(out.text), "only a [code] refusal says 'refused'");
+  });
+
+  test("…and not even an unrenderable throw value escapes (String(e) can itself throw)", async () => {
+    const hostile = { get settings() { throw { [Symbol.toPrimitive]() { throw new Error("nope"); } }; } };
+    const app = appWith({ quickadd: hostile });
+    const out = await commandsOf(app).byId["compile-apply"].run();
+    assert.equal(out.isError, true);
+    assert.match(out.text, /could not be rendered|failed/i);
+  });
+
+  test("a CODED refusal still says 'refused' — the two verbs stay distinguishable", async () => {
+    const app = appWith({ quickadd: null });
+    const out = await commandsOf(app).byId["compile-apply"].run();
     assert.match(out.text, /refused/i);
+    assert.match(out.text, /quickadd_unavailable:/);
   });
 });
 
@@ -142,9 +163,30 @@ describe("wiring and boundaries, pinned at the source", () => {
     assert.match(mainSrc, /new Notice\(outcome\.text, outcome\.durationMs\)/);
   });
 
-  test("NO WATCHER: the plugin binds no vault/metadata event and no interval (compiling is asked for, never automatic)", () => {
-    for (const forbidden of ["registerEvent", "registerInterval", "vault.on(", "metadataCache.on(", "setInterval", "onLayoutReady"]) {
-      assert.ok(!mainSrc.includes(forbidden), `main.ts must not use ${forbidden} — auto-compiling would rewrite another plugin's config unasked`);
+  test("NO WATCHER: NOTHING in src/ binds an event or a timer (compiling is asked for, never automatic)", () => {
+    // Sweeps EVERY source file, not just main.ts, and matches any `.on(`
+    // rather than a hand-listed set of receivers — the review of #364 got a
+    // live auto-compile watcher past the old pin twice: once via
+    // `workspace.on` (an unlisted receiver) and once by putting it in
+    // commands.ts (an unread file). This package has no legitimate `.on(`
+    // of its own; the SDK's own workspace.on lives in vault-mcp-api, outside
+    // the sweep.
+    const dir = new URL("../src/", import.meta.url);
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith(".ts"));
+    assert.ok(files.length >= 4, "the sweep must actually see the sources");
+    // `.on(` AND `.on?.(` — the optional-call form slipped the first version
+    // of this pin (a watcher written as `metadataCache?.on?.("changed", …)`
+    // survived), which is the pin-is-not-the-property lesson in miniature.
+    const FORBIDDEN = [/\.on\s*\??\.?\s*\(/, /registerEvent/, /registerInterval/, /setInterval/, /setTimeout/, /onLayoutReady/, /requestIdleCallback/];
+    for (const f of files) {
+      const src = fs.readFileSync(new URL(f, dir), "utf8");
+      // Strip comments — the header EXPLAINS the no-watcher decision, and a
+      // scan that trips on its own explanation teaches people to delete the
+      // explanation.
+      const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+      for (const pattern of FORBIDDEN) {
+        assert.ok(!pattern.test(code), `${f} matches ${pattern} — auto-compiling would rewrite another plugin's config unasked`);
+      }
     }
   });
 
