@@ -152,3 +152,11 @@ export type { Sha256Digest } from "./digest.js";
 // (gesture.ts, contracts/ids.ts), and forking the mint would give one vault
 // two id formats.
 export { uuidv7 } from "./uuidv7.js";
+
+// Guarded territories — vault areas neither half of the suite may review,
+// capture, or retain copies of. PUBLISHED rather than held as host config
+// (suite split, S3, condition 9's ruling): its importers land on both sides of
+// the split, and the alternative — two copies — is the failure its own header
+// names, where a prefix missing from capture's list means capture writes note
+// bodies to disk. Issue #321 still owns making the list real configuration.
+export { EXCLUDED_PREFIXES, isExcludedTerritory } from "./territories.js";

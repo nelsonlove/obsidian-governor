@@ -31,7 +31,7 @@ import { historyDir } from "./governor/wiring/history-store/local-data-root.js";
 import { uuidv7 } from "@vault-mcp/core";
 import { effectiveScope, isTracked } from "./governor/kernel/history-store/history-scope.js";
 import { proposalRef } from "./governor/kernel/history-store/refs.js";
-import { EXCLUDED_PREFIXES } from "./governor/wiring/territories.js";
+import { EXCLUDED_PREFIXES } from "@vault-mcp/core";
 import type { HistoryRepository } from "./governor/kernel/history-store/repository.js";
 import { obsidianProbe, obsidianServerIdentity, obsidianUidSource } from "./kernel/obsidian-probe.js";
 import { DEFAULT_SCHEMES, type SchemeInstanceConfig } from "./kernel/scheme/registry.js";

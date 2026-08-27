@@ -27,8 +27,8 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { stateDir } from "../../../paths.js";
-import type { BlobStore } from "../../../kernel/observations/store.js";
+import { stateDir } from "../../paths.js";
+import type { BlobStore } from "./store.js";
 
 /**
  * A vault slug is one path SEGMENT. `vaultSlug()` already strips separators,
