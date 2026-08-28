@@ -1,0 +1,43 @@
+#!/bin/sh
+# commit-msg — refuse a commit whose MESSAGE carries credentials.
+#
+# THIS IS THE HOOK THAT WOULD HAVE CAUGHT THE REAL INCIDENT, and the reason it
+# exists as a separate file from `pre-commit` is worth stating, because the
+# obvious design misses it entirely.
+#
+# On 2026-08-27 six live credentials were pushed to this public repo — two API
+# keys, a GitHub OAuth token with `repo` + `workflow` scope, and three service
+# tokens. They were NOT in any file. An agent pasted a full `zsh` environment
+# dump into the COMMIT MESSAGE: 249 lines, 96 NAME=value pairs. No file, tree,
+# or branch in this repository has ever contained that text.
+#
+# So a pre-commit hook scanning `git diff --cached` — the standard advice, and
+# the first thing built here — would have sailed straight past it. GitHub scans
+# commit messages; a repo that only scans file content is checking the wrong
+# surface. Both hooks are needed, and only together do they cover what the
+# vendor scanners cover.
+#
+# The message is scanned in full. Every line is treated as "added", because a
+# commit message has no history to diff against — all of it is new.
+
+set -e
+
+MSG_FILE="$1"
+[ -n "$MSG_FILE" ] && [ -f "$MSG_FILE" ] || exit 0
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "commit-msg: node not found; secret scan SKIPPED" >&2
+  exit 0
+fi
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+SCANNER="$REPO_ROOT/scripts/secret-scan.mjs"
+[ -f "$SCANNER" ] || { echo "commit-msg: scanner missing; SKIPPED" >&2; exit 0; }
+
+# Strip comment lines git adds to the template, then mark every remaining line
+# as added so the scanner's diff convention applies uniformly.
+grep -v '^#' "$MSG_FILE" | sed 's/^/+/' | node "$SCANNER" || {
+  echo "The offending text is in your COMMIT MESSAGE, not in a file." >&2
+  echo "Edit the message — the staged changes themselves may be fine." >&2
+  exit 1
+}
