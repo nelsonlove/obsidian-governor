@@ -137,7 +137,12 @@ const HOW = "give a vault-relative prefix like 'Projects', or omit scope to repo
  *
  * Omitting `scope` is how you ask for everything visible, and it is unambiguous.
  */
-function resolveScope(scope: string | undefined, settings?: GuardSettings): { prefix?: string; refusal?: Refusal } {
+/** Exported so `obsidian_lint` (tools-health.ts) guards its own bare `scope`
+ *  argument with THIS logic rather than a second copy — a scope string is not
+ *  in `PATH_KEYS`, so `guardCall` never sees it and each tool taking one must
+ *  check it by hand. Two hand-rolled copies would drift, which is the failure
+ *  this repo has already paid for once with the territory list. */
+export function resolveScope(scope: string | undefined, settings?: GuardSettings): { prefix?: string; refusal?: Refusal } {
   const malformed = (raw: string, why: string) => ({ refusal: { code: "invalid_scope", message: `scope '${raw}' ${why} — ${HOW}` } });
   if (scope === undefined) return {};
   if (scope !== scope.trim()) return malformed(scope, "has leading or trailing whitespace");
@@ -149,7 +154,16 @@ function resolveScope(scope: string | undefined, settings?: GuardSettings): { pr
   const blocked = guardCall({
     isMutating: false,
     args: { path: prefix },
-    settings: settings ?? { readOnly: false, allowlist: [] },
+    // Normalized FIELD BY FIELD, not just `settings ?? default`: `guardCall`
+    // reads `settings.allowlist.length` unguarded, so a partial settings object
+    // (one with no `allowlist` key at all) throws rather than allowing. The
+    // old `??` only covered a wholly-undefined `settings`. Absent means
+    // unrestricted here, which is what an empty allowlist already means.
+    settings: {
+      ...(settings ?? {}),
+      readOnly: settings?.readOnly ?? false,
+      allowlist: settings?.allowlist ?? [],
+    },
   });
   if (blocked) return { refusal: { code: blocked.code, message: `${blocked.message} — narrow the scope, or omit it. Nothing was reported.` } };
   return { prefix };

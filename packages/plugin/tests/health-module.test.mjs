@@ -407,3 +407,50 @@ describe("health module: registration through the module host", () => {
     for (const t of health.directory.tools) assert.equal(t.readOnly, true, `${t.name} readOnly flag`);
   });
 });
+
+// ── the scope guard (2026-08-29 review) ──────────────────────────────────────
+//
+// `obsidian_lint`'s `scope` is a bare string, so it is NOT in guard.ts's
+// PATH_KEYS and `guardCall` never sees it — a tool taking one must check it by
+// hand, and this one did not. A session allowlisted to `Projects/` could lint
+// `Archive/` and get back that folder's dangling-link text, orphan-attachment
+// paths, empty-note paths and duplicate-group paths.
+
+describe("obsidian_lint: the scope argument is guarded by hand, since guardCall cannot see it", () => {
+  const corpus = () =>
+    fakeSource({
+      md: [
+        { path: "Projects/A.md", size: 100 },
+        { path: "Archive/Secret.md", size: 100 },
+      ],
+      bodies: { "Projects/A.md": "hello", "Archive/Secret.md": "hello" },
+    });
+
+  const sandboxed = () => {
+    const server = fakeServer();
+    registerHealthTools(server, corpus(), {
+      config: {},
+      getSettings: () => ({ readOnly: false, allowlist: ["Projects"] }),
+    });
+    return server.tools.get("obsidian_lint").handler;
+  };
+
+  test("a scope outside the allowlist is REFUSED, not quietly reported as empty", async () => {
+    // Refusal rather than a zeroed report on purpose: a zeroed report for a
+    // hidden folder is indistinguishable from a clean one.
+    const res = await sandboxed()({ scope: "Archive" });
+    assert.equal(res.isError, true);
+    assert.match(JSON.stringify(res), /out_of_allowlist/);
+  });
+
+  test("a scope INSIDE the allowlist still works", async () => {
+    const res = await sandboxed()({ scope: "Projects" });
+    assert.equal(res.isError, undefined);
+    assert.equal(res.structuredContent.scope, "Projects");
+  });
+
+  test("a scope that merely CONTAINS the allowlist is out of it too", async () => {
+    const res = await sandboxed()({ scope: "." });
+    assert.equal(res.isError, true);
+  });
+});

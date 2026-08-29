@@ -221,3 +221,54 @@ describe("vault_skills_mark handler: the guard blocks the write, not just the re
     assert.equal(res.isError, true);
   });
 });
+
+// ── the read boundary (2026-08-29 review) ────────────────────────────────────
+//
+// `vault_skills_preview` returned an entry's full compiled body for ANY source
+// note, ignoring the path allowlist — `ctx.getSettings` sat on the context
+// declared and never called. The compile itself is legitimately whole-vault
+// (parent edges span the tree), so the fix filters BODIES, not the compile.
+
+describe("vault_skills_preview: bodies are filtered by the source note's visibility", () => {
+  const twoSkills = {
+    ...inertSkillsSource,
+    notes: async () => [
+      { path: "Projects/Visible.md", frontmatter: { type: "skill" }, body: "VISIBLE-BODY-MARKER" },
+      { path: "Archive/Hidden.md", frontmatter: { type: "skill" }, body: "HIDDEN-BODY-MARKER" },
+    ],
+  };
+
+  const previewWith = (settings) => {
+    const server = fakeServer();
+    registerSkillsTools(server, twoSkills, { config: {}, getSettings: () => settings });
+    return server.tools.get("vault_skills_preview").handler;
+  };
+
+  const SANDBOXED = { readOnly: false, allowlist: ["Projects"] };
+
+  test("content:true never returns a hidden note's body", async () => {
+    const res = await previewWith(SANDBOXED)({ content: true });
+    const blob = JSON.stringify(res.structuredContent ?? res);
+    assert.ok(!blob.includes("HIDDEN-BODY-MARKER"), "a hidden source note's body leaked through preview");
+  });
+
+  test("the visible note's body still comes back — the filter is not a blanket refusal", async () => {
+    const res = await previewWith(SANDBOXED)({ content: true });
+    const blob = JSON.stringify(res.structuredContent ?? res);
+    assert.ok(blob.includes("VISIBLE-BODY-MARKER"), "the in-allowlist body should still be returned");
+  });
+
+  test("addressing a hidden note by path reads as NOT FOUND, not as forbidden", async () => {
+    // Not-found rather than a distinct refusal, matching how uid/scheme
+    // addressing decides: a "forbidden" answer would confirm the note exists.
+    const res = await previewWith(SANDBOXED)({ name: "Archive/Hidden.md" });
+    assert.equal(res.isError, true);
+    assert.ok(!JSON.stringify(res).includes("HIDDEN-BODY-MARKER"));
+  });
+
+  test("with NO allowlist nothing is filtered — the unsandboxed case is unchanged", async () => {
+    const res = await previewWith({ readOnly: false, allowlist: [] })({ content: true });
+    const blob = JSON.stringify(res.structuredContent ?? res);
+    assert.ok(blob.includes("HIDDEN-BODY-MARKER") && blob.includes("VISIBLE-BODY-MARKER"));
+  });
+});

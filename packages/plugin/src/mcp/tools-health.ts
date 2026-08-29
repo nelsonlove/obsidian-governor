@@ -28,7 +28,8 @@
 
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { ok, fail } from "./helpers.js";
+import { ok, fail, codedError } from "./helpers.js";
+import { resolveScope } from "./tools-links.js";
 import type { GuardSettings } from "../guard.js";
 import {
   scanHealth,
@@ -167,6 +168,16 @@ export function registerHealthTools(server: McpServer, source: HealthSource, ctx
     },
     async ({ scope }) => {
       try {
+        // `scope` is a bare string, so it is NOT in guard.ts's PATH_KEYS and
+        // `guardCall` never sees it — a tool taking one must check it by hand.
+        // This one did not: until 2026-08-29 a session allowlisted to
+        // `Projects/` could lint `Archive/Secrets` and get back dangling-link
+        // text, orphan-attachment paths, empty-note paths and duplicate-group
+        // paths for a folder it cannot otherwise see. `ctx.getSettings` sat on
+        // the context declared and never called. Same resolver as
+        // `obsidian_check_links` uses, deliberately, rather than a second copy.
+        const { refusal } = resolveScope(scope, ctx.getSettings?.());
+        if (refusal) return codedError(refusal.code, refusal.message);
         const findings = await scanHealth(source, cfg.emptyChars);
         const scoped = filterFindingsToScope(findings, scope);
         return ok({ scope, emptyChars: cfg.emptyChars, summary: summarize(scoped), ...scoped });

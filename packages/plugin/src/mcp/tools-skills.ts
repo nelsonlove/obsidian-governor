@@ -35,7 +35,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { AcceptForbiddenError, acceptTransitionReason } from "@vault-mcp/core";
 import { ok, fail } from "./helpers.js";
-import type { GuardSettings } from "../guard.js";
+import { isVisible, type GuardSettings } from "../guard.js";
 import {
   analyzeVault,
   previewVault,
@@ -250,14 +250,29 @@ export function registerSkillsTools(server: McpServer, source: SkillsBackend, ct
           errors: p.errors, warnings: p.warnings, counts: p.counts,
           outputDir: p.outputDir, assetsNote: p.assetsNote,
         };
+        // THE COMPILE is whole-vault and must stay that way (parent edges span
+        // the tree, so a partial compile produces a broken plugin). What must
+        // NOT be whole-vault is the CONTENT this hands back: an entry's
+        // `content` is the compiled body of its SOURCE NOTE, so returning it
+        // for a note outside the caller's allowlist is the same read-boundary
+        // leak `obsidian_search_notes` once had. Manifest rows stay — they are
+        // structure, and the counts have to add up — but bodies are filtered.
+        const settings = ctx.getSettings?.();
+        const sourceVisible = (e: { from?: string }) => !settings || !e.from || isVisible(e.from, settings);
+
         if (name) {
           const entry = p.entries.find((x) => x.name === name || x.relOut === name || x.from === name);
-          if (!entry) return fail(new Error(`no preview entry matches "${name}" — try a generated name, output path, or source note path`));
+          // A hidden source reads as NOT FOUND rather than refused, matching how
+          // uid/scheme addressing decides (0 visible candidates ⇒ unresolved):
+          // a distinct "forbidden" answer would confirm the note exists.
+          if (!entry || !sourceVisible(entry)) {
+            return fail(new Error(`no preview entry matches "${name}" — try a generated name, output path, or source note path`));
+          }
           return ok({ entry, ...summary });
         }
         const entries = p.entries.map((e) => {
           const { cachedContent: _cached, content: full, ...rest } = e;
-          return content ? { ...rest, content: full } : rest;
+          return content && sourceVisible(e) ? { ...rest, content: full } : rest;
         });
         return ok({ entries, ...summary });
       } catch (e) {
@@ -360,11 +375,21 @@ export function registerSkillsTools(server: McpServer, source: SkillsBackend, ct
     },
   );
 
-  // NOTE (flagged for review): the read/compile tools (validate / tree /
-  // preview / export) run over the WHOLE vault — a partial compile produces a
-  // broken plugin (parent edges span the tree), so the allowlist is not
-  // applied to them. `ctx.getSettings` is retained for when a later cycle
-  // scopes the read surface. The mutating surface is still gated: export /
-  // release are read-only-mode-blocked, and `vault_skills_mark` is
-  // path-scoped + accept-guarded at the interception point.
+  // THE COMPILE is whole-vault and stays that way: parent edges span the tree,
+  // so a partial compile produces a broken plugin. `validate` and `tree` return
+  // structural summaries over that whole-vault compile and are unfiltered by
+  // design — they name paths, they do not return note bodies.
+  //
+  // `preview` is the one that returns CONTENT, and since 2026-08-29 it filters
+  // bodies by the source note's visibility. Before that it did not, and
+  // `ctx.getSettings` sat on the context declared-but-never-called while
+  // `{name: "<any source note path>"}` returned that note's full compiled body
+  // regardless of the allowlist — the same shape as the `obsidian_search_notes`
+  // leak that motivated the read-boundary sweep. If you add another tool here
+  // that returns bodies, filter it the same way; if it returns only structure,
+  // it does not need to.
+  //
+  // The mutating surface is gated separately: export / release are
+  // read-only-mode-blocked, and `vault_skills_mark` is path-scoped +
+  // accept-guarded at the interception point.
 }
