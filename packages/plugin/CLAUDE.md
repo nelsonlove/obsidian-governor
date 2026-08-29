@@ -66,3 +66,15 @@ Pure logic (`guard.ts`, `mcp/guarded.ts`, `mcp/tools-locks.ts`, `mcp/tools-uid.t
 ## Git
 
 Feature branch per milestone, PR to `main`, don't self-merge. Auto-review PRs you author.
+
+**Run `./scripts/install-hooks.sh` once per clone.** It points `core.hooksPath` at `.githooks/`, enabling a `pre-commit` scan of staged content and a `commit-msg` scan of the message. Git cannot auto-install hooks, so a fresh clone is unprotected until you run it.
+
+**NEVER paste command output into a commit message or a file without reading it first.** This is not a style rule; it is the rule that exists because it was broken. On 2026-08-27 an agent session ran a full `zsh` environment dump and pasted it into a COMMIT MESSAGE — 249 lines, 96 `NAME=value` pairs — and pushed it to this public repo. Six live credentials went out: two API keys, a GitHub OAuth token with `repo` + `workflow` scope, and three service tokens. GitHub's scanner caught it in seconds and two vendors auto-revoked; the GitHub token was still live fifteen hours later.
+
+Three things about that are worth carrying:
+
+- **It was in the message, not a file.** No file, tree, or branch in this repo has ever contained that text. A `.gitignore` rule could not have helped, and a hook that only scans `git diff --cached` — the obvious design, and the first thing built here — sails straight past it. That is why there are two hooks.
+- **It is unfixable after the fact.** The commit reached `main` through a squash-merge, so it is in the permanent history of a public repo. Deleting a branch does nothing. Rotation is the only real remedy, which is why the hooks refuse rather than warn.
+- **Half the secrets had no vendor prefix.** `NGROK_AUTHTOKEN`, `SEMGREP_APP_TOKEN` and a gateway token are invisible to GitHub's scanner — nothing recognizes their shape. `scripts/secret-scan.mjs` catches them by the NAME they are bound to, and refuses any block of 20+ `NAME=value` lines outright regardless of content, because the next dump will contain a token format nobody has a rule for.
+
+Redact before you paste; better, do not paste environment output at all. If you need to show a variable exists, show the name.

@@ -1,0 +1,38 @@
+#!/bin/sh
+# pre-commit — refuse a commit carrying credential-shaped content.
+#
+# Thin on purpose: all detection lives in scripts/secret-scan.mjs, which is a
+# pure function with its own test suite. This file is only plumbing — it decides
+# WHAT to scan (the staged diff, added lines only) and nothing about what counts
+# as a secret.
+#
+# Installed by pointing git at this directory, which `scripts/install-hooks.sh`
+# does and the README documents:
+#
+#     git config core.hooksPath .githooks
+#
+# Note that a hooksPath is per-clone: cloning this repo fresh does NOT get the
+# hook until that command runs. Git has no mechanism to ship an auto-installing
+# hook, and one that installed itself on checkout would be a different security
+# problem. So this is a seatbelt, not a wall — the wall is that secrets never
+# reach a file in the first place.
+
+set -e
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "pre-commit: node not found; secret scan SKIPPED" >&2
+  echo "pre-commit: install node or run the scan by hand before pushing" >&2
+  exit 0
+fi
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+SCANNER="$REPO_ROOT/scripts/secret-scan.mjs"
+
+if [ ! -f "$SCANNER" ]; then
+  echo "pre-commit: $SCANNER missing; secret scan SKIPPED" >&2
+  exit 0
+fi
+
+# -U0 keeps context lines out, so only genuinely ADDED content is judged —
+# otherwise editing next to a pre-existing match would fail every later commit.
+git diff --cached -U0 --no-color | node "$SCANNER"
