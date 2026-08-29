@@ -111,3 +111,44 @@ export type { IndexStatus, IndexedNote } from "./fs-backend/index-store.js";
 // Vault watcher
 export { startVaultWatcher } from "./fs-backend/vault-watcher.js";
 export type { VaultWatcherOptions, VaultWatcherHandle } from "./fs-backend/vault-watcher.js";
+
+// Sessions — the CONTRACT only (suite split, S3, condition 7: "the HOST keeps
+// minting ... SessionV1 therefore becomes a published contract"). The mint
+// itself (`openSession`) stays host-side, because minting is a host
+// responsibility, not because of where a dependency happens to live.
+export {
+  SESSION_TTL_MS,
+  SessionNotLiveError,
+  isLive,
+  livenessOf,
+  expiryRefusal,
+  attachMandate,
+  closeSession,
+  revokeSession,
+  expireSession,
+} from "./session.js";
+export type { SessionId, SessionStatus, SessionV1 } from "./session.js";
+
+// Dispositions — the GENERIC descriptor substrate only (suite split, S3,
+// condition 9). Triage's own descriptors stay host-side (triage is a future
+// satellite, and the provider must not depend on a satellite); the provider's
+// acceptance-specific unions and verb table stay with the provider.
+export {
+  dispositionsForSurface,
+  dispositionByIdIn,
+  gestureGatedIn,
+} from "./dispositions.js";
+export type { DispositionAuthority, DispositionDescriptorShape } from "./dispositions.js";
+
+// Canonical JSON + digests — published as contracts at the suite split's S3
+// (condition 9). The host needs them for its OWN session scope digest, which
+// is a host assertion about a connection, so they cannot stay provider-internal.
+export { canonicalize, NoncanonicalValueError } from "./canonical-json.js";
+export type { CanonicalValue } from "./canonical-json.js";
+export { digestBytes, digestUtf8, isSha256Digest } from "./digest.js";
+export type { Sha256Digest } from "./digest.js";
+
+// Id generation — shared, not host-private: the provider mints ids too
+// (gesture.ts, contracts/ids.ts), and forking the mint would give one vault
+// two id formats.
+export { uuidv7 } from "./uuidv7.js";

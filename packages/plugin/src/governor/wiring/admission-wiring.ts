@@ -33,7 +33,7 @@ import { selectProposals, type CohortSelector } from "../kernel/cohorts/cohort.j
 import { createClaimStore, type ClaimIo } from "../kernel/admission/settlement.js";
 import { AdmissionRefusedError } from "../kernel/admission/policy.js";
 import { buildProposalItemSubject, subjectDigest } from "../kernel/contracts/subject-v1.js";
-import { digestBytes } from "../kernel/contracts/digest.js";
+import { digestBytes } from "@vault-mcp/core";
 import { standingRef } from "../kernel/history-store/refs.js";
 import { RefCasError, type ObjectId } from "../kernel/history-store/types.js";
 import type { HistoryRepository } from "../kernel/history-store/repository.js";

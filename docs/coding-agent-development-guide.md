@@ -177,8 +177,13 @@ packages/plugin/src/governor/kernel/contracts/
   origin.ts             four origin classes and confidence
   states.ts             development, verification, authority, record, operational axes
   subject-v1.ts         proposal-item and cohort schemas
+
+packages/core/src/          (published contracts — moved out of the provider at the suite split's S3a)
   canonical-json.ts     version-1 canonical serialization
   digest.ts             SHA-256 digests over exact UTF-8 bytes
+  uuidv7.ts             id minting, shared because both halves mint
+  session.ts            the SessionV1 contract (the HOST mints; condition 7)
+  dispositions.ts       the generic disposition-descriptor substrate
 ```
 
 Keep exact note-content digests byte-preserving. Do not normalize the note before hashing it. Version-1 structured manifests use RFC 8785 JSON canonicalization, contain no floating-point fields, encode integer counts as non-negative safe integers, and use explicit `null` where the schema requires an absence marker. Schema strings are validated before serialization; canonicalization does not reinterpret note content.

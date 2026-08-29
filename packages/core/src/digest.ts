@@ -1,5 +1,12 @@
 // DIGEST — SHA-256 over exact UTF-8 bytes (WP3, D13).
 //
+// Promoted into @vault-mcp/core (S3, condition 9: "publish canonical-json and
+// digest as contracts") from packages/plugin/src/governor/kernel/contracts/
+// digest.ts, where it originated. Byte-identical logic — the host computes the
+// SESSION SCOPE DIGEST (a host assertion about a connection) and the
+// governance provider computes WP3 subject digests, so it belongs in the
+// shared contract package rather than in either subtree.
+//
 // The one rule that matters here is BYTE PRESERVATION: a note's content digest
 // is the hash of exactly the bytes the note holds, never a normalized form.
 // D13 makes the canonical subject a security contract — "signatures and

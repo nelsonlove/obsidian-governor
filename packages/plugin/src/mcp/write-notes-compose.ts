@@ -74,11 +74,11 @@ export function canonicalOrder(fm: Record<string, unknown>): Record<string, unkn
 
 // ── UUIDv7 ────────────────────────────────────────────────────────────────────
 //
-// Moved to kernel/uuidv7.ts when the governance contracts became a second
-// consumer; re-exported so existing importers keep working. For note uids the
-// timestamp is seeded from the note's `created`, so a uid minted for an old
-// note sorts by when the note was authored, not when it was stamped.
-export { uuidv7 } from "../kernel/uuidv7.js";
+// Promoted into @vault-mcp/core (S3, condition 9); re-exported so existing
+// importers keep working. For note uids the timestamp is seeded from the
+// note's `created`, so a uid minted for an old note sorts by when the note
+// was authored, not when it was stamped.
+export { uuidv7 } from "@vault-mcp/core";
 
 // ── local timestamp formatting ────────────────────────────────────────────────
 //

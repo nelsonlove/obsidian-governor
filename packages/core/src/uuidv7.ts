@@ -1,10 +1,16 @@
-// UUIDv7 (RFC 9562) — the one implementation, moved here from
-// mcp/write-notes-compose.ts when the governance contracts became its second
-// consumer (WP3 requires UUIDv7 for newly minted session, mandate, proposal,
-// cohort, replica, and key-registration ids). The kernel cannot import from
-// mcp/, and forking the mint would eventually give the vault two subtly
-// different uid formats — so the function moved down a layer and mcp imports
-// it from here. Byte-identical to the original.
+// UUIDv7 (RFC 9562) — the one implementation.
+//
+// Originated in packages/plugin/src/mcp/write-notes-compose.ts, moved to
+// packages/plugin/src/kernel/uuidv7.ts when the governance contracts became
+// its second consumer (WP3 requires UUIDv7 for newly minted session, mandate,
+// proposal, cohort, replica, and key-registration ids), and promoted here into
+// @vault-mcp/core (S3, condition 9) because the governance provider imported
+// it from the host at two call sites (governor/kernel/contracts/ids.ts,
+// governor/kernel/gesture.ts) — a host module the provider must publish as a
+// contract or copy. Forking the mint would eventually give the vault two
+// subtly different uid formats, so it lives in the one place both the host
+// and the provider can depend on without crossing the host/governor line.
+// Byte-identical to the original.
 //
 // The 48-bit big-endian millisecond timestamp is the caller's `ms` — for note
 // uids that is the note's `created` (so uids sort by authorship time), for

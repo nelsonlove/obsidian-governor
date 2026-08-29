@@ -12,7 +12,7 @@ import { ExternalToolRegistry, type VaultMcpApi } from "./mcp/external-tools.js"
 import { createGovernanceSeam, type GovernanceSeam } from "./mcp/seam.js";
 import type { ProviderToolRegistrar } from "./mcp/server.js";
 import { registerMandateTools } from "./mcp/tools-governance-mandate.js";
-import { isLive, livenessOf } from "./kernel/sessions/session.js";
+import { isLive, livenessOf } from "@vault-mcp/core";
 import { Kernel, WriteQueue, WriteJournal, IdempotencyStore, LockStore, UidIndex, loadInstallId, migrateLegacyModuleIds, DEFAULT_VOCABULARIES, type VocabInstanceSettings, type ModuleSettings } from "./kernel/index.js";
 import { createSessionStore } from "./governor/kernel/sessions/session-store.js";
 import { createProposalStore } from "./governor/kernel/proposals/proposal-store.js";
@@ -28,7 +28,7 @@ import { createPromotionStore } from "./governor/kernel/transformations/promotio
 import { createDefaultPredicateRegistry } from "./governor/kernel/verification/predicates.js";
 import { openGitRepository } from "./governor/wiring/history-store/git-repository.js";
 import { historyDir } from "./governor/wiring/history-store/local-data-root.js";
-import { uuidv7 } from "./kernel/uuidv7.js";
+import { uuidv7 } from "@vault-mcp/core";
 import { effectiveScope, isTracked } from "./governor/kernel/history-store/history-scope.js";
 import { proposalRef } from "./governor/kernel/history-store/refs.js";
 import { EXCLUDED_PREFIXES } from "./governor/wiring/territories.js";
@@ -888,7 +888,7 @@ export default class VaultMcpPlugin extends Plugin {
         // mutation may proceed is asking PERMISSION, and that question now
         // goes to the seam's session-refusal hook, which the provider answers
         // from this same store (see the registration below).
-        open: (session: import("./kernel/sessions/session.js").SessionV1, now: number) => sessionStore.open(session, now),
+        open: (session: import("@vault-mcp/core").SessionV1, now: number) => sessionStore.open(session, now),
         close: (sessionId: string, now: number) => sessionStore.close(sessionId, now),
         markExpired: (sessionId: string, now: number) => sessionStore.markExpired(sessionId, now),
         replicaId: install,

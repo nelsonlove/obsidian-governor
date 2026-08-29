@@ -25,7 +25,7 @@ import { createProposalStore } from "../src/governor/kernel/proposals/proposal-s
 import { openProposal } from "../src/governor/kernel/proposals/proposal.ts";
 import { buildProposalSubjectFromOperation } from "../src/governor/kernel/proposals/proposal-builder.ts";
 import { subjectDigest } from "../src/governor/kernel/contracts/subject-v1.ts";
-import { digestBytes } from "../src/governor/kernel/contracts/digest.ts";
+import { digestBytes } from "@vault-mcp/core";
 import { createStandingResolver } from "../src/governor/kernel/admission/standing-resolver.ts";
 import { createClaimStore } from "../src/governor/kernel/admission/settlement.ts";
 import { runGuardedDisposition } from "../src/governor/kernel/gesture.ts";

@@ -21,7 +21,7 @@
 // structure is deep-frozen as belt; the recomputation is the suspenders.
 
 import { buildCohortSubject, subjectDigest, SubjectInvalidError, type CohortSubjectV1 } from "../contracts/subject-v1.js";
-import type { Sha256Digest } from "../contracts/digest.js";
+import type { Sha256Digest } from "@vault-mcp/core";
 import { groupIneligibilityOf } from "./cohort.js";
 import type { ProposalV1 } from "../proposals/proposal.js";
 

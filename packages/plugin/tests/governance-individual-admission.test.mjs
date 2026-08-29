@@ -15,7 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { digestUtf8 } from "../src/governor/kernel/contracts/digest.ts";
+import { digestUtf8 } from "@vault-mcp/core";
 import { buildProposalSubjectFromOperation, ProposalDependencyError } from "../src/governor/kernel/proposals/proposal-builder.ts";
 import { openProposal, withVerification } from "../src/governor/kernel/proposals/proposal.ts";
 import { createProposalStore } from "../src/governor/kernel/proposals/proposal-store.ts";

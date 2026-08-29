@@ -10,7 +10,7 @@
 // is explicit that content class requires human or qualified substantive
 // review, which is exactly what the Accept gesture is.
 
-import { digestBytes } from "../contracts/digest.js";
+import { digestBytes } from "@vault-mcp/core";
 import type { PredicateV1 } from "./predicate.js";
 import { createPredicateRegistry, type PredicateRegistry } from "./registry.js";
 

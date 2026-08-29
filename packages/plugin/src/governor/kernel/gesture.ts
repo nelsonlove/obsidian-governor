@@ -69,7 +69,7 @@ export function isRealGesture(evt?: unknown): evt is Event {
 export type DispositionOutcome = "blocked-untrusted" | "cancelled" | "done";
 export type AdoptOutcome = DispositionOutcome;
 
-import { uuidv7 } from "../../kernel/uuidv7.js";
+import { uuidv7 } from "@vault-mcp/core";
 
 // THE ONE SHARED GESTURE GATE for every state-mutating human disposition (#101/#221: gating is
 // applied by authority CLASS, not per-button code). `action` runs only when `evt` is a genuine

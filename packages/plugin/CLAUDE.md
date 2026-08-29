@@ -49,7 +49,7 @@ An Obsidian plugin (id `governor`; `vault-mcp` before 0.12.0) embedding an MCP s
 
 ## Build / test
 
-- `npm run build` — esbuild, emits `main.js` (+ `bridge.mjs`). `npm test` — `tsc --noEmit && node --import tsx --test`.
+- `npm run build` — esbuild, emits `main.js` (+ `bridge.mjs`). `npm test` — `pretest` builds `@vault-mcp/core`, then `tsc --noEmit && node --import tsx --test`. **The `pretest` is load-bearing, not tidiness:** since S3a the plugin's tests import several contracts (`digest`, `canonical-json`, `uuidv7`, `SessionV1`, the disposition substrate) from `@vault-mcp/core`, which resolves to `packages/core/dist` — the COMPILED output. Without the rebuild, editing `packages/core/src` and running the plugin suite tests the previous build's bytes and passes green on stale code. Do not remove it to save a few seconds.
 - **The editor LSP lags** in this repo — trust `npx tsc --noEmit` (real exit code), not inline diagnostics.
 - Install for testing: `cp main.js manifest.json ~/obsidian/.obsidian/plugins/governor/` then reload the plugin (or `app.plugins.disablePlugin('governor').then(()=>app.plugins.enablePlugin('governor'))` via Advanced URI eval).
 

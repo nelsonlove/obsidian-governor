@@ -15,7 +15,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 
-import { digestUtf8 } from "../src/governor/kernel/contracts/digest.ts";
+import { digestUtf8 } from "@vault-mcp/core";
 import { buildProposalSubjectFromOperation } from "../src/governor/kernel/proposals/proposal-builder.ts";
 import { openProposal, withVerification } from "../src/governor/kernel/proposals/proposal.ts";
 import { createPredicateRegistry } from "../src/governor/kernel/verification/registry.ts";
