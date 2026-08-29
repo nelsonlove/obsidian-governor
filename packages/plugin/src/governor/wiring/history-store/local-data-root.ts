@@ -1,7 +1,7 @@
 // LOCAL DATA ROOT — where the history repository's git directory lives (WP4, D10).
 //
 // OUTSIDE the vault and OUTSIDE Obsidian Sync, for the same reason the
-// observation store is (see governor/wiring/observations/local-store.ts, which
+// observation store is (see kernel/observations/local-store.ts, which
 // carries the full argument): Git retains historical bytes, deletion and
 // redaction propagate through the vault but not through history, and a synced
 // or in-vault object database would carry removed bytes to every replica

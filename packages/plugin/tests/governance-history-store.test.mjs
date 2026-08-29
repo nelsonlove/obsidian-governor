@@ -26,7 +26,7 @@ import {
   effectiveScope,
   DEFAULT_HISTORY_EXCLUDES,
 } from "../src/governor/kernel/history-store/history-scope.ts";
-import { EXCLUDED_PREFIXES } from "../src/governor/wiring/territories.ts";
+import { EXCLUDED_PREFIXES } from "../../core/src/territories.ts";
 import { standingRef, proposalRef, cohortRef, isGovernorRef } from "../src/governor/kernel/history-store/refs.ts";
 import { planRecovery } from "../src/governor/kernel/history-store/recovery.ts";
 import {

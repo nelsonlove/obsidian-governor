@@ -61,21 +61,36 @@
  *     inversion, and it retires when the file moves with the provider's tools.
  *   • `SessionV1` (condition 7) — DONE, published rather than borrowed.
  *
+ * ── WHAT S3b DID (the observations ruling, executed) ────────────────────────────────────────
+ *
+ * S3a left `server.ts` with two crossings and called them "ruled but not moved". S3b moved
+ * them, and `src/mcp/server.ts` is now ABSENT from the table below — the MCP transport reaches
+ * into the provider ZERO times, down from nine at S1:
+ *
+ *   • the observation blob store moved to `src/kernel/observations/`. It was HOST machinery
+ *     misfiled under `governor/` — one consumer (the transport), and it already imported the
+ *     host's own observation store and paths, which is what its two GOVERNOR→HOST back-edges
+ *     were really evidence of. No capture hook was added: the seam gains no surface for a
+ *     registrant that does not exist.
+ *   • `territories` was PUBLISHED into `@vault-mcp/core` rather than held as host config as
+ *     §5 drafted. Its importers land on both sides of the split, so host-only config cannot
+ *     serve the provider's review pane, and the only alternative is two copies of a list whose
+ *     drift writes note bodies to disk.
+ *
  * What is still open, so the remaining numbers are not mistaken for drift:
  *
- *   • `server.ts` still imports `territories` and the observation blob store. The observations
- *     question §5 left open is now RULED (see condition 9's ruling in the design doc: host-side
- *     capture, territories published as a contract, no capture hook) — but RULED is not MOVED.
- *     The code move is the next package, and this table describes today.
- *   • `tools-governance-mandate.ts` still physically sits in `src/mcp/`. Its registration no
- *     longer runs through `ServerCtx`, which is what mattered; the file itself moves with the
- *     rest of the provider's tools.
+ *   • `main.ts` — the composition root, still 19 crossings. This is the "installing the
+ *     provider" edge, and it goes when there are two plugin manifests.
+ *   • `connection-ui.ts`, `modules-mount.ts` — settings/UI composition, one each.
+ *   • `tools-governance-mandate.ts` and `tools-governance-revision.ts` still physically sit in
+ *     `src/mcp/`. Their registration no longer runs through `ServerCtx`, which is what
+ *     mattered; the files move with the rest of the provider's tools.
  *
- * The other direction went 7 → 10 at S2 → 6 at S3a. The S2 growth was intended (the provider
- * depending on things the host is RULED to own); S3a shrank it by publishing four of those as
- * contracts instead. This list is the "publish as a contract or copy it" work item, so entries
- * arriving here from the other table is the split proceeding, and entries leaving via
- * `@vault-mcp/core` is that work item being discharged.
+ * The other direction went 7 → 10 at S2 → 6 at S3a → 4 at S3b. The S2 growth was intended (the
+ * provider depending on things the host is RULED to own); S3a and S3b shrank it by publishing
+ * those as contracts, or by moving a misfiled module to the side it belonged on. This list is
+ * the "publish as a contract or copy it" work item, so entries arriving here from the other
+ * table is the split proceeding, and entries leaving is that work item being discharged.
  *
  * Instrument discipline: the scan is a pure function over a { path -> source } map, and it is
  * exercised against a synthetic tree with a planted violation BEFORE it is trusted against the
@@ -120,7 +135,8 @@ const EXPECTED_HOST_TO_GOVERNOR = {
     "src/governor/wiring/mandate-wiring.js",
     "src/governor/wiring/migration-wiring.js",
     "src/governor/wiring/promotion-wiring.js",
-    "src/governor/wiring/territories.js",
+    // `territories` is GONE from this list: S3 published it into `@vault-mcp/core`, so the
+    // composition root reads the guarded prefixes from the contract, not from the provider.
     "src/governor/wiring/wiring.js",
     // S2: the proposal producer, registered through `registerWriteObserver`.
     "src/governor/wiring/write-observer.js",
@@ -128,21 +144,23 @@ const EXPECTED_HOST_TO_GOVERNOR = {
   // The settings tab renders the provider's own settings section. UI composition only — it
   // calls a renderer, it holds no authority.
   "src/connection-ui.ts": ["src/governor/wiring/wiring.js"],
-  // The MCP transport. S2 retired FIVE of its nine crossings: the producer-stamping block
-  // (class firewall, proposal builder, proposal, mandate policy) became a seam observer, and
-  // the session contract moved host-side.
+  // `src/mcp/server.ts` IS ABSENT, and that is the entry. The MCP transport crossed the
+  // boundary NINE times at S1. S2 retired five (the producer-stamping block became a seam
+  // observer; the session contract moved host-side). S3 retired the last four:
   //
-  // S3 retired the two contract edges: `canonical-json` and `digest` are published in
-  // `@vault-mcp/core` now (condition 9), because the host consults them for its OWN session
-  // scope digest and a host cannot depend on a provider for an assertion about its own
-  // connection. What remains is the two observation-capture edges — RULED at S3 (see the
-  // ruling folded into condition 9): the blob store moves host-side and territories is
-  // published as a contract, which retires both. The code move is the next S3 package; until
-  // it lands these two stay listed, because this table is descriptive of today.
-  "src/mcp/server.ts": [
-    "src/governor/wiring/observations/local-store.js",
-    "src/governor/wiring/territories.js",
-  ],
+  //   • `canonical-json` + `digest` — published in `@vault-mcp/core` (condition 9). The host
+  //     consults them for its OWN session scope digest, and a host cannot depend on a provider
+  //     for an assertion about its own connection.
+  //   • `observations/local-store` — the blob store was HOST machinery misfiled under
+  //     `governor/`. It had one consumer (this file) and already imported the host's own
+  //     observation store and paths, so it moved to `src/kernel/observations/`. No capture
+  //     hook was added: the seam gains no surface for a registrant that does not exist.
+  //   • `territories` — published as a CONTRACT rather than held as host config, because its
+  //     importers land on both sides of the split and two copies is the failure its own header
+  //     names (a prefix missing from capture's list means capture writes note bodies to disk).
+  //
+  // The transport is the host's, and it now reaches into the provider zero times. Do not
+  // re-add an entry here without the design conversation that earns it.
   // The module registry reads the governance module's settings shape to render its config
   // section. Settings projection only — the registry mounts read-only-or-nothing.
   "src/mcp/modules-mount.ts": ["src/governor/kernel/settings.js"],
@@ -193,10 +211,11 @@ const EXPECTED_GOVERNOR_TO_HOST = {
   //     mints, which makes `SessionV1` a published contract rather than a host internal the
   //     provider borrows. `openSession` stays host-side ON THE RULING, not on a dependency.
   "src/governor/wiring/history-store/local-data-root.ts": ["src/paths.js"],
-  "src/governor/wiring/observations/local-store.ts": [
-    "src/kernel/observations/store.js",
-    "src/paths.js",
-  ],
+  // `wiring/observations/local-store.ts` is GONE from this table because the FILE left the
+  // governor tree entirely (S3): its two back-edges here — the host's observation store and
+  // the host's paths — were the evidence that it was host machinery filed on the wrong side,
+  // not a provider module with an awkward dependency. It now lives at
+  // `src/kernel/observations/local-store.ts`, where those imports are ordinary neighbours.
   // S2: the proposal producer, behind the seam. It depends on exactly two host things — the
   // native write action whose writes it speaks for, and the seam's own `WriteFacts` type. Both
   // are host contracts by design (§6 assigns the action registry to the host, and the seam IS
@@ -383,14 +402,14 @@ describe("THE BOUNDARY — one governance subtree, an enumerated seam", () => {
     //
     // host→governor must approach ZERO: every one of these is the host reaching into provider
     // internals, and at S3 there is no such reach to make. S1 enumerated 45; S2 left 32; S3a
-    // leaves 30.
+    // left 30; S3b leaves 27.
     //
     // The bound is set to the CURRENT number, not a round number above it. A ratchet with slack
     // is a ratchet that lets the next few regressions through silently, which is the opposite of
     // what it is for — it sat at 35 against an actual 32 through all of S2 and would not have
     // caught three new crossings. Tighten it in the same commit that lowers the count.
     assert.ok(
-      host <= 30,
+      host <= 27,
       `${host} host→governor imports — this direction only shrinks; route it through the seam`
     );
     // The total is the coarse ratchet. It rises slightly slower than host→governor falls,
@@ -398,7 +417,7 @@ describe("THE BOUNDARY — one governance subtree, an enumerated seam", () => {
     // governor→host ones — the provider depending on published host contracts is the TARGET
     // state for that list, so the total is a guard against sprawl, not a target in itself.
     assert.ok(
-      crossings <= 36,
+      crossings <= 31,
       `${crossings} boundary crossings — the split is meant to shrink this, not grow it`
     );
   });
