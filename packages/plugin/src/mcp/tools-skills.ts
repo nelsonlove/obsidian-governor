@@ -258,7 +258,42 @@ export function registerSkillsTools(server: McpServer, source: SkillsBackend, ct
         // leak `obsidian_search_notes` once had. Manifest rows stay — they are
         // structure, and the counts have to add up — but bodies are filtered.
         const settings = ctx.getSettings?.();
-        const sourceVisible = (e: { from?: string }) => !settings || !e.from || isVisible(e.from, settings);
+
+        // A compiled entry's `content` is ASSEMBLED, not copied — so checking
+        // the entry's own `from` is not enough, and the first version of this
+        // filter got that wrong. Three notes can contribute bytes to one body:
+        //
+        //   1. the entry's own source note (`from`);
+        //   2. every note it TRANSCLUDES — `![[Other]]` inlines that note's
+        //      stripped body verbatim, and those paths are collected in
+        //      `sources`;
+        //   3. every `type: policy` note injected into an AGENT's definition —
+        //      the policy's full body is appended, and the policy's path is
+        //      NOT in `sources`. `p.policies` records which genNames each
+        //      policy landed in, which is the only place that edge is visible.
+        //
+        // So a sandboxed session could author a visible note transcluding a
+        // hidden one, or park a policy at a hidden path under a visible agent,
+        // and read the hidden bytes straight back out of the compiled body.
+        // All three contributors must be visible before a body is returned.
+        //
+        // `(static)` is the exporter's marker for its own compiled-in files
+        // (exporter.ts) — not a vault path, so it can never be "visible", and
+        // treating it as a real path silently made the plugin's own shipped
+        // content unpreviewable under any allowlist.
+        const pathVisible = (path: string | undefined): boolean =>
+          !settings || !path || path === "(static)" || isVisible(path, settings);
+
+        // genNames whose compiled body carries a policy from outside the allowlist.
+        const tainted = new Set<string>();
+        for (const pol of p.policies ?? []) {
+          if (!pathVisible(pol.path)) for (const a of pol.agents ?? []) tainted.add(a);
+        }
+
+        const sourceVisible = (e: { from?: string; name?: string; sources?: string[] }): boolean =>
+          pathVisible(e.from) &&
+          (e.sources ?? []).every(pathVisible) &&
+          !(e.name !== undefined && tainted.has(e.name));
 
         if (name) {
           const entry = p.entries.find((x) => x.name === name || x.relOut === name || x.from === name);

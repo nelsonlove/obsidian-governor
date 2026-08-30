@@ -272,3 +272,70 @@ describe("vault_skills_preview: bodies are filtered by the source note's visibil
     assert.ok(blob.includes("HIDDEN-BODY-MARKER") && blob.includes("VISIBLE-BODY-MARKER"));
   });
 });
+
+// ── the ASSEMBLED-body vectors (found by an independent review of the first fix)
+//
+// The first version of the preview filter gated `content` on the entry's own
+// `from` alone. But a compiled body is assembled from up to three notes, and
+// the other two both carry bytes out of hidden paths:
+//
+//   • TRANSCLUSION — `![[Hidden]]` inlines that note's stripped body verbatim.
+//   • POLICY INJECTION — a `type: policy` note's full body is appended to every
+//     agent it is parented to, and its path never appears in `sources`.
+//
+// A sandboxed session can trigger both by authoring an ordinary note INSIDE its
+// own allowlist. These are the regression tests for that.
+
+describe("vault_skills_preview: assembled bodies cannot smuggle hidden notes out", () => {
+  const SANDBOXED = { readOnly: false, allowlist: ["Projects"] };
+
+  const previewFor = (notes, embed) => {
+    const server = fakeServer();
+    registerSkillsTools(
+      server,
+      {
+        ...inertSkillsSource,
+        notes: async () => notes,
+        embed: embed ?? (async () => null),
+        // The inert source resolves nothing, which would leave a policy's
+        // `parent` dangling — the policy would then be DROPPED as an error and
+        // the test would pass vacuously (it did, on the first attempt). Resolve
+        // a linkpath to whichever supplied note has that basename.
+        resolveLink: (linkpath) =>
+          notes.find((n) => n.path.split("/").pop().replace(/\.md$/, "") === linkpath.replace(/\.md$/, ""))?.path ??
+          null,
+      },
+      { config: {}, getSettings: () => SANDBOXED }
+    );
+    return server.tools.get("vault_skills_preview").handler;
+  };
+
+  test("a VISIBLE skill that transcludes a HIDDEN note does not return the hidden body", async () => {
+    const handler = previewFor(
+      [{ path: "Projects/Host.md", frontmatter: { type: "skill" }, body: "intro ![[Archive/Secret]] outro" }],
+      async (linkpath) =>
+        linkpath.includes("Secret") ? { path: "Archive/Secret.md", content: "SMUGGLED-VIA-TRANSCLUSION" } : null
+    );
+    const res = await handler({ content: true });
+    assert.ok(
+      !JSON.stringify(res).includes("SMUGGLED-VIA-TRANSCLUSION"),
+      "a transcluded hidden note's body leaked through the compiled content"
+    );
+  });
+
+  test("a HIDDEN policy attached to a VISIBLE agent does not return the policy body", async () => {
+    const handler = previewFor([
+      { path: "Projects/Agent.md", frontmatter: { type: "agent" }, body: "agent body" },
+      {
+        path: "Archive/Policy.md",
+        frontmatter: { type: "policy", parent: "[[Agent]]" },
+        body: "SMUGGLED-VIA-POLICY",
+      },
+    ]);
+    const res = await handler({ content: true });
+    assert.ok(
+      !JSON.stringify(res).includes("SMUGGLED-VIA-POLICY"),
+      "an injected hidden policy's body leaked through the compiled content"
+    );
+  });
+});
