@@ -35,7 +35,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { AcceptForbiddenError, acceptTransitionReason } from "@vault-mcp/core";
 import { ok, fail } from "./helpers.js";
-import type { GuardSettings } from "../guard.js";
+import { isVisible, type GuardSettings } from "../guard.js";
 import {
   analyzeVault,
   previewVault,
@@ -250,14 +250,64 @@ export function registerSkillsTools(server: McpServer, source: SkillsBackend, ct
           errors: p.errors, warnings: p.warnings, counts: p.counts,
           outputDir: p.outputDir, assetsNote: p.assetsNote,
         };
+        // THE COMPILE is whole-vault and must stay that way (parent edges span
+        // the tree, so a partial compile produces a broken plugin). What must
+        // NOT be whole-vault is the CONTENT this hands back: an entry's
+        // `content` is the compiled body of its SOURCE NOTE, so returning it
+        // for a note outside the caller's allowlist is the same read-boundary
+        // leak `obsidian_search_notes` once had. Manifest rows stay — they are
+        // structure, and the counts have to add up — but bodies are filtered.
+        const settings = ctx.getSettings?.();
+
+        // A compiled entry's `content` is ASSEMBLED, not copied — so checking
+        // the entry's own `from` is not enough, and the first version of this
+        // filter got that wrong. Three notes can contribute bytes to one body:
+        //
+        //   1. the entry's own source note (`from`);
+        //   2. every note it TRANSCLUDES — `![[Other]]` inlines that note's
+        //      stripped body verbatim, and those paths are collected in
+        //      `sources`;
+        //   3. every `type: policy` note injected into an AGENT's definition —
+        //      the policy's full body is appended, and the policy's path is
+        //      NOT in `sources`. `p.policies` records which genNames each
+        //      policy landed in, which is the only place that edge is visible.
+        //
+        // So a sandboxed session could author a visible note transcluding a
+        // hidden one, or park a policy at a hidden path under a visible agent,
+        // and read the hidden bytes straight back out of the compiled body.
+        // All three contributors must be visible before a body is returned.
+        //
+        // `(static)` is the exporter's marker for its own compiled-in files
+        // (exporter.ts) — not a vault path, so it can never be "visible", and
+        // treating it as a real path silently made the plugin's own shipped
+        // content unpreviewable under any allowlist.
+        const pathVisible = (path: string | undefined): boolean =>
+          !settings || !path || path === "(static)" || isVisible(path, settings);
+
+        // genNames whose compiled body carries a policy from outside the allowlist.
+        const tainted = new Set<string>();
+        for (const pol of p.policies ?? []) {
+          if (!pathVisible(pol.path)) for (const a of pol.agents ?? []) tainted.add(a);
+        }
+
+        const sourceVisible = (e: { from?: string; name?: string; sources?: string[] }): boolean =>
+          pathVisible(e.from) &&
+          (e.sources ?? []).every(pathVisible) &&
+          !(e.name !== undefined && tainted.has(e.name));
+
         if (name) {
           const entry = p.entries.find((x) => x.name === name || x.relOut === name || x.from === name);
-          if (!entry) return fail(new Error(`no preview entry matches "${name}" — try a generated name, output path, or source note path`));
+          // A hidden source reads as NOT FOUND rather than refused, matching how
+          // uid/scheme addressing decides (0 visible candidates ⇒ unresolved):
+          // a distinct "forbidden" answer would confirm the note exists.
+          if (!entry || !sourceVisible(entry)) {
+            return fail(new Error(`no preview entry matches "${name}" — try a generated name, output path, or source note path`));
+          }
           return ok({ entry, ...summary });
         }
         const entries = p.entries.map((e) => {
           const { cachedContent: _cached, content: full, ...rest } = e;
-          return content ? { ...rest, content: full } : rest;
+          return content && sourceVisible(e) ? { ...rest, content: full } : rest;
         });
         return ok({ entries, ...summary });
       } catch (e) {
@@ -360,11 +410,21 @@ export function registerSkillsTools(server: McpServer, source: SkillsBackend, ct
     },
   );
 
-  // NOTE (flagged for review): the read/compile tools (validate / tree /
-  // preview / export) run over the WHOLE vault — a partial compile produces a
-  // broken plugin (parent edges span the tree), so the allowlist is not
-  // applied to them. `ctx.getSettings` is retained for when a later cycle
-  // scopes the read surface. The mutating surface is still gated: export /
-  // release are read-only-mode-blocked, and `vault_skills_mark` is
-  // path-scoped + accept-guarded at the interception point.
+  // THE COMPILE is whole-vault and stays that way: parent edges span the tree,
+  // so a partial compile produces a broken plugin. `validate` and `tree` return
+  // structural summaries over that whole-vault compile and are unfiltered by
+  // design — they name paths, they do not return note bodies.
+  //
+  // `preview` is the one that returns CONTENT, and since 2026-08-29 it filters
+  // bodies by the source note's visibility. Before that it did not, and
+  // `ctx.getSettings` sat on the context declared-but-never-called while
+  // `{name: "<any source note path>"}` returned that note's full compiled body
+  // regardless of the allowlist — the same shape as the `obsidian_search_notes`
+  // leak that motivated the read-boundary sweep. If you add another tool here
+  // that returns bodies, filter it the same way; if it returns only structure,
+  // it does not need to.
+  //
+  // The mutating surface is gated separately: export / release are
+  // read-only-mode-blocked, and `vault_skills_mark` is path-scoped +
+  // accept-guarded at the interception point.
 }

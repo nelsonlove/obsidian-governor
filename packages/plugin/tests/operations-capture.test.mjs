@@ -363,7 +363,13 @@ describe("capture — a guarded territory is never retained outside itself", () 
     // predicate, and the predicate must come from @vault-mcp/core territories.
     const fs = await import("node:fs");
     const server = fs.readFileSync(new URL("../src/mcp/server.ts", import.meta.url), "utf8");
-    assert.match(server, /excludedSource:\s*isExcludedTerritory/, "createCapture must receive the territory predicate");
+    // Anchored with a trailing boundary. Without it this was a PREFIX match, so
+    // `excludedSource: isExcludedTerritoryOverride` — a local always-false stub,
+    // with the real import left unused (tsconfig sets no noUnusedLocals) — satisfied
+    // the pin while disabling the guard that keeps capture from retaining 80-89
+    // content. Found in the 2026-08-29 review; the companion import pin below was
+    // already anchored, this one was not.
+    assert.match(server, /excludedSource:\s*isExcludedTerritory\s*[,)}]/, "createCapture must receive the territory predicate");
     // Matched as the WHOLE import statement binding this specific name, not a bare
     // `from "@vault-mcp/core"` — server.ts imports several things from the contract
     // package, so a package-only match would keep passing if `isExcludedTerritory`

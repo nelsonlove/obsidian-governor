@@ -188,15 +188,28 @@ export function createCapture(opts: CaptureOpts): Capture {
           };
         }
 
+        // RESERVED BEFORE THE WRITE, not after it. Reads deliberately never
+        // queue, so several captures can be in flight at once; incrementing
+        // after `await store.put(...)` meant each of them checked the cap
+        // against the same stale count and they all passed, overshooting by
+        // roughly the concurrency. Reserving first makes the check-and-claim
+        // atomic with respect to other captures, since nothing awaits between
+        // the comparison above and this line.
+        //
+        // Failure direction is deliberate: if the put below throws, the bytes
+        // stay counted. That over-counts, which stops capture EARLIER — the
+        // safe way for a cap to be wrong. The next connection reseeds from
+        // disk truth anyway.
+        storedBytes = (storedBytes ?? 0) + size;
+
         const payloadObject =
           decision.level === "replayable" ? await opts.store.put(payload, { sources: input.sources }) : null;
-        // The counter is deliberately approximate. A deduplicated put adds no
-        // disk yet still increments (reads high); this increment measures the
-        // payload while the stored envelope also carries provenance (reads low
-        // by that small overhead). Neither drift compounds: the next
-        // connection reseeds from the disk truth, and the cap is a stopgap
-        // against unbounded growth, not an accounting system.
-        storedBytes = (storedBytes ?? 0) + size;
+        // The counter remains deliberately approximate for the reasons it
+        // always was: a deduplicated put adds no disk yet still increments
+        // (reads high); this increment measures the payload while the stored
+        // envelope also carries provenance (reads low by that small overhead).
+        // Neither drift compounds, and the cap is a stopgap against unbounded
+        // growth, not an accounting system.
 
         const observation = buildObservation({
           id: newId(),

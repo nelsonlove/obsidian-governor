@@ -22,7 +22,7 @@
 import { opendir, readFile } from "node:fs/promises";
 import { realpathSync, lstatSync, readlinkSync } from "node:fs";
 import { join, relative, resolve, dirname, basename, sep } from "node:path";
-import { parseAllFrontmatter, stripLeadingFrontmatter } from "@vault-mcp/core";
+import { parseAllFrontmatter, stripLeadingFrontmatter, EXCLUDED_PREFIXES } from "@vault-mcp/core";
 import type { VocabNote } from "../kernel/vocab/blueprint.js";
 import type { SourceFile, VaultSnapshot } from "./rule-pack.js";
 import { intendedRealPath, isInside } from "./path-identity.js";
@@ -92,6 +92,32 @@ const DEFAULT_SKIP = new Set([".git", ".obsidian", ".trash", "node_modules"]);
 // `isInside` resolves its inputs where `isWithin` assumed pre-resolved ones),
 // and `isInside` is the strictly more defensive of the pair.
 
+/**
+ * The guarded-territory names, DERIVED from `@vault-mcp/core`'s published list
+ * rather than restated here.
+ *
+ * This file used to hardcode its own three checks. That was the second
+ * implementation of one rule, and it had already drifted: core's list carries
+ * `_keep/`, which this file never denied. The suite split's S3b published
+ * `EXCLUDED_PREFIXES` precisely so there is ONE list — the failure it names is
+ * a prefix present in one copy and missing from another, which is how guarded
+ * content reaches somewhere it should never be. Deriving keeps this rail in
+ * step with issue #321 when the list finally becomes real configuration.
+ *
+ * The SEGMENT semantics stay local and are deliberately stricter than core's
+ * path-prefix matching: every segment of a resolved real path is checked, so a
+ * symlink cannot launder a guarded directory into the middle of an allowed one.
+ */
+const DENIED_SEGMENTS: ReadonlyArray<string> = EXCLUDED_PREFIXES.map((p) =>
+  p.replace(/\/+$/, "").toLowerCase()
+);
+
+/** Human names for the territories that have one; others report generically. */
+const TERRITORY_NAMES: Readonly<Record<string, string>> = {
+  "obsidian-old": "the retired ~/obsidian-old vault",
+  "80-89": "80-89 legal material",
+};
+
 /** A single path SEGMENT (one directory or file name — no separators) that is
  * refused EVEN WHEN it falls inside a declared boundary and even when the
  * caller asks for it explicitly by name — the one case where an explicit
@@ -102,8 +128,18 @@ const DEFAULT_SKIP = new Set([".git", ".obsidian", ".trash", "node_modules"]);
  * (cheap — no need to re-resolve a real path for something that is already
  * known not to be a symlink). */
 function deniedSegment(seg: string): string | null {
-  if (seg.toLowerCase() === "obsidian-old") return "the retired ~/obsidian-old vault";
-  if (/^80-89\b/.test(seg)) return "80-89 legal material";
+  const s = seg.toLowerCase();
+  for (const denied of DENIED_SEGMENTS) {
+    // Equality, or the prefix followed by a non-alphanumeric — so `80-89` and
+    // `80-89 Divorce` match while `80-891` does not (the `\b` the hand-rolled
+    // regex used).
+    const boundary = s.length === denied.length || !/[a-z0-9]/.test(s.charAt(denied.length));
+    if (s.startsWith(denied) && boundary) {
+      return TERRITORY_NAMES[denied] ?? `the guarded territory '${denied}'`;
+    }
+  }
+  // Broader than the published list on purpose: catches `hold` and `holds`
+  // anywhere in a segment, not only as a top-level root.
   if (/\bholds?\b/i.test(seg)) return "a path under a hold";
   return null;
 }

@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
-# block-record-writes.sh — PreToolUse hook for Bash and mcp__vault-mcp__* tools.
+# block-record-writes.sh — PreToolUse hook for Bash and mcp__(vault-mcp|governor)__* tools.
+#
+# BOTH id prefixes are matched, deliberately. The plugin id was `vault-mcp`
+# before 0.12.0, is `governor` today, and the suite split returns the HOST to
+# `vault-mcp` — so a single-prefix match silently stops guarding on every
+# rename. It already did: this hook matched only `mcp__vault-mcp__*` from the
+# 0.12.0 rename until 2026-08-29, which means it never fired for any MCP tool
+# call in that whole window. The Bash half was unaffected.
 #
 # Guards record-class files — the byte-verbatim, write-once fold archives under
 # any "Machinery record/" folder — against the write paths a plain Edit/Write
@@ -123,10 +130,10 @@ case "$tool" in
         fi
         exit 0
         ;;
-    mcp__vault-mcp__obsidian_append_note)
+    mcp__vault-mcp__obsidian_append_note|mcp__governor__obsidian_append_note)
         exit 0
         ;;
-    mcp__vault-mcp__obsidian_call_tool)
+    mcp__vault-mcp__obsidian_call_tool|mcp__governor__obsidian_call_tool)
         # Code Mode tunnels every call through obsidian_call_tool — apply the
         # same policy to the INNER tool name.
         inner=$(jq -r '.tool_input.name // empty' <<<"$input")
@@ -141,7 +148,7 @@ case "$tool" in
             *) exit 0 ;;
         esac
         ;;
-    mcp__vault-mcp__*)
+    mcp__vault-mcp__*|mcp__governor__*)
         case "$tool" in
             *read*|*search*|*list*|*get_*|*find_*|*check_links*|*resolve*|*note_history*|*note_diff*|*jump_to*|*open_*|*doctor*|*info*|*tags_list*|*conformance*|*pending_review*)
                 exit 0 ;;

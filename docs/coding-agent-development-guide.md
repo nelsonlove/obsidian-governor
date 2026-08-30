@@ -159,10 +159,12 @@ packages/plugin/src/kernel/effects/
   effect.ts             intended, attempted, and observed effect contracts
   settlement.ts         late, partial, uncertain, and correction semantics
 
-packages/plugin/src/governor/wiring/observations/
-  local-store.ts        protected replica-local replay payload adapter
+packages/plugin/src/kernel/observations/
+  local-store.ts        protected replica-local replay payload adapter (HOST-side)
   retention.ts          audited expiry, export, dependency check, and deletion
 ```
+
+The observation store is **host** machinery, not governance. It was filed under `governor/wiring/` until the suite split's S3b, when condition 9's ruling (2026-08-27) moved it: it had one consumer — the host's own transport — and already imported the host's observation store and paths, so its position under `governor/` was a filing error rather than a design. The provider reasons about observation REFERENCES (`{id, digest, capture}`) in `governor/kernel/contracts/subject-v1.ts` and never touches the store. `retention.ts` does not exist yet; it is target state, and it belongs beside `local-store.ts` on the host side when it is built.
 
 The executor is not a second mutation kernel. It becomes the seam around the existing `Kernel.runMutation` and guarded MCP path, then absorbs their responsibilities as native actions migrate. Compatibility bindings make only claims the current implementation proves: no invented replayability, observed effects, mandate eligibility, or verified admission.
 
