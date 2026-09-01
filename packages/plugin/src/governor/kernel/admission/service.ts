@@ -19,9 +19,18 @@
 //   5. refresh rebuildable projections    (a callback; failures degrade)
 //
 // A crash between 2 and 3 leaves a retriable claim; between 3 and 4 leaves a
-// consistent-but-unrecorded settlement the recovery pass completes. Nothing
-// in any window leaves a ref pointing at evidence that does not exist,
-// because the claim lands BEFORE the ref moves.
+// consistent-but-unrecorded settlement, and NOTHING COMPLETES IT. This comment
+// used to say "the recovery pass completes" that window; there is no recovery
+// pass. `decideSettlement` — which classified exactly these windows — was
+// deleted in #379 as dead code, and `history-store/recovery.ts`'s
+// `planRecovery` has no caller in `src/` either. The window is real and
+// unrepaired; say so rather than implying machinery that does not run.
+//
+// What DOES hold, and is the property worth relying on: no window leaves a ref
+// pointing at evidence that does not exist, because the claim lands BEFORE the
+// ref moves. The cost of the unrepaired window is a settlement that happened
+// without a record of it having happened — recoverable by reading the claim
+// and the ref, which both survive.
 
 import { AdmissionRefusedError, requireAdmissible, requireCohortAdmissible, type AdmissionRequest, type CohortAdmissionRequest, type MandateAdmissionContext } from "./policy.js";
 import { mintId } from "../contracts/ids.js";
