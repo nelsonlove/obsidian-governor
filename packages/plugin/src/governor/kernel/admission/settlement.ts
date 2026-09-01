@@ -1,19 +1,19 @@
-// SETTLEMENT — durable admission claims and crash-recovery decisions (WP6, §10).
+// SETTLEMENT — durable admission claims (WP6, §10).
 //
-// Two artifact kinds live here. The ADMISSION CLAIM is the durable statement
-// "this exact subject was admitted under this authority at this moment" —
-// content the standing ref points at, conceptually. The SETTLEMENT DECISION
-// is what recovery concludes when the claim and the ref disagree after a
-// crash. The guide's two sentences are the whole law:
+// The ADMISSION CLAIM is the durable statement "this exact subject was
+// admitted under this authority at this moment" — content the standing ref
+// points at, conceptually.
 //
-//   "An admission claim written without a ref advance is unattached evidence
-//    and can be retried safely. A ref that points to a missing or invalid
-//    claim is a critical health failure and must not be presented as
-//    standing."
-//
-// Asymmetric on purpose: the first is the objects-first-ref-last crash
-// window and self-heals; the second means something advanced authority
-// without evidence, and nothing self-heals THAT — it surfaces.
+// (This file previously also defined a crash-recovery decision function and
+// type, plus a companion read-side chain-walking resolver in a sibling
+// module, encoding the guide's two asymmetric rules from §10: "An admission
+// claim written without a ref advance is unattached evidence and can be
+// retried safely. A ref that points to a missing or invalid claim is a
+// critical health failure and must not be presented as standing." Neither
+// had a caller outside its own tests, so both were removed dead (issue
+// #379) — the doctrine they documented now lives only in git history and in
+// that issue, a loss Nelson accepted deliberately, not one that was
+// overlooked.)
 
 import { mintId } from "../contracts/ids.js";
 import type { Sha256Digest } from "@vault-mcp/core";
@@ -52,10 +52,12 @@ export interface AdmissionClaimV1 {
    * suppliable list would be a second, softer answer to "what did this click
    * admit?" arriving by a quieter door, the caller-supplied-verification
    * shape again). One entry for an item claim; every member for a cohort
-   * claim (WP7b), pinned equal to the manifest. The resolver's chain walk
-   * decides supersession NOTE-WISE from these: a subject is superseded only
-   * by a newer claim covering the SAME note, never by an unrelated
-   * admission.
+   * claim (WP7b), pinned equal to the manifest. Designed so a chain walk
+   * could decide supersession NOTE-WISE from these — a subject superseded
+   * only by a newer claim covering the SAME note, never by an unrelated
+   * admission — though the resolver that walked the chain (#334) was
+   * removed dead (#379); this shape is otherwise still load-bearing for
+   * `bySubject`/claim identity below.
    *
    * DECIDED (#335 review, finding 2): forSubject is a PER-ITEM question.
    * A cohort claim's own subjectDigest (the cohort manifest digest) has no
@@ -164,41 +166,4 @@ export function createClaimStore(io: ClaimIo): ClaimStore {
       return parsed();
     },
   };
-}
-
-// ── recovery decisions ───────────────────────────────────────────────────────
-
-export type SettlementDecision =
-  | { kind: "settled"; detail: string }
-  | { kind: "retry-ref-advance"; detail: string }
-  | { kind: "critical-health-failure"; detail: string };
-
-/**
- * Decide what a claim/ref pair means after a crash. Pure and total; the two
- * asymmetric rules from the header, plus the quiet case.
- */
-export function decideSettlement(args: {
-  /** The claim, if it is readable in the store. */
-  claim: AdmissionClaimV1 | null;
-  /** Whether the standing ref currently reflects this admission. */
-  refReflectsClaim: boolean;
-  /** Whether the ref names an admission for which NO readable claim exists. */
-  refWithoutClaim: boolean;
-}): SettlementDecision {
-  if (args.refWithoutClaim) {
-    return {
-      kind: "critical-health-failure",
-      detail: "the standing ref advanced without a readable admission claim; this must not be presented as standing — surface to a human, never rebuild the claim from the ref",
-    };
-  }
-  if (args.claim && !args.refReflectsClaim) {
-    return {
-      kind: "retry-ref-advance",
-      detail: `claim ${args.claim.id} is durable but the standing ref does not reflect it; the CAS advance crashed and can be retried safely`,
-    };
-  }
-  if (args.claim && args.refReflectsClaim) {
-    return { kind: "settled", detail: "claim and standing ref agree" };
-  }
-  return { kind: "settled", detail: "nothing claimed, nothing advanced" };
 }
