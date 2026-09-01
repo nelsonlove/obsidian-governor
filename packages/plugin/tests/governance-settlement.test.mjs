@@ -1,15 +1,15 @@
 /**
- * governance-settlement.test.mjs — WP6, crash windows and the two asymmetric
- * rules (§10).
+ * governance-settlement.test.mjs — WP6, admission crash windows (§10).
  *
- * "An admission claim written without a ref advance is unattached evidence
- * and can be retried safely. A ref that points to a missing or invalid claim
- * is a critical health failure and must not be presented as standing."
+ * The claim is written before the standing ref is ever asked to move, so a
+ * crash between the two leaves durable, unattached evidence rather than a
+ * ref naming something that doesn't exist. Every test here is one crash
+ * window through the real admission service and claim store.
  *
- * Every test here is one crash window or one side of that asymmetry. The
- * dangerous direction — manufacturing authority during recovery — must be
- * structurally unavailable, and the ordering (claim BEFORE ref) is what
- * guarantees no window leaves a ref naming evidence that does not exist.
+ * (This file used to also cover a crash-recovery decision function/type and
+ * a companion chain-walking resolver — both removed dead in #379, no caller
+ * outside their own tests. That coverage went with them; see the commit
+ * that made this removal for why it was safe.)
  */
 
 import { test, describe } from "node:test";
@@ -21,8 +21,7 @@ import { openProposal, withVerification } from "../src/governor/kernel/proposals
 import { createPredicateRegistry } from "../src/governor/kernel/verification/registry.ts";
 import { verifySubject } from "../src/governor/kernel/verification/verify.ts";
 import { createAdmissionService } from "../src/governor/kernel/admission/service.ts";
-import { buildAdmissionClaim, createClaimStore, decideSettlement } from "../src/governor/kernel/admission/settlement.ts";
-import { createStandingResolver } from "../src/governor/kernel/admission/standing-resolver.ts";
+import { buildAdmissionClaim, createClaimStore } from "../src/governor/kernel/admission/settlement.ts";
 
 const d = (t) => digestUtf8(t);
 const T0 = 1_700_000_000_000;
@@ -61,48 +60,6 @@ function subjectFixture() {
   });
 }
 
-// ── the settlement decision table ────────────────────────────────────────────
-
-describe("settlement decisions — the two asymmetric rules", () => {
-  const claim = buildAdmissionClaim({
-    subjectDigest: d("x"),
-    proposalId: "p-1",
-    authority: { kind: "human-gesture", gestureRef: "g" },
-    verification: [],
-    expectedStanding: null,
-    coveredNotes: [{ vaultId: "v", noteId: "n", subjectDigest: d("x").value }],
-    now: T0,
-    rand: RAND,
-  });
-
-  test("claim without ref advance → retriable, never discarded, never auto-authoritative", () => {
-    const dec = decideSettlement({ claim, refReflectsClaim: false, refWithoutClaim: false });
-    assert.equal(dec.kind, "retry-ref-advance");
-  });
-
-  test("ref without readable claim → critical health failure, never presented as standing", () => {
-    const dec = decideSettlement({ claim: null, refReflectsClaim: false, refWithoutClaim: true });
-    assert.equal(dec.kind, "critical-health-failure");
-    assert.match(dec.detail, /never rebuild the claim from the ref/);
-  });
-
-  test("agreement is settled; absence of both is settled", () => {
-    assert.equal(decideSettlement({ claim, refReflectsClaim: true, refWithoutClaim: false }).kind, "settled");
-    assert.equal(decideSettlement({ claim: null, refReflectsClaim: false, refWithoutClaim: false }).kind, "settled");
-  });
-
-  test("no decision kind can assert an admission happened — the enum is the guarantee", () => {
-    const kinds = new Set(["settled", "retry-ref-advance", "critical-health-failure"]);
-    for (const c of [claim, null]) {
-      for (const reflects of [true, false]) {
-        for (const orphanRef of [true, false]) {
-          assert.ok(kinds.has(decideSettlement({ claim: c, refReflectsClaim: reflects, refWithoutClaim: orphanRef }).kind));
-        }
-      }
-    }
-  });
-});
-
 // ── crash windows through the real service ───────────────────────────────────
 
 describe("admission crash windows — claim always lands before the ref moves", () => {
@@ -116,7 +73,7 @@ describe("admission crash windows — claim always lands before the ref moves", 
     return { proposal, subject, authority: { kind: "human-gesture", gestureRef: "g" } };
   }
 
-  test("crash BETWEEN claim and ref: the claim is durable and unattached; recovery says retry", async () => {
+  test("crash BETWEEN claim and ref: the claim is durable and unattached; authority never moves", async () => {
     const claims = createClaimStore(memoryIo());
     let standing = null;
     const service = createAdmissionService({
@@ -133,12 +90,10 @@ describe("admission crash windows — claim always lands before the ref moves", 
 
     const all = await claims.all();
     assert.equal(all.length, 1, "the claim landed before the crash");
-    const dec = decideSettlement({ claim: all[0], refReflectsClaim: false, refWithoutClaim: false });
-    assert.equal(dec.kind, "retry-ref-advance", "recovery treats it as safely retriable");
     assert.equal(standing, null, "authority never moved");
   });
 
-  test("crash BETWEEN ref and settlement record: the admission stands; recovery completes the record", async () => {
+  test("crash BETWEEN ref and settlement record: the admission stands despite the recording failure", async () => {
     const claims = createClaimStore(memoryIo());
     let standing = null;
     const service = createAdmissionService({
@@ -160,7 +115,6 @@ describe("admission crash windows — claim always lands before the ref moves", 
     const all = await claims.all();
     assert.equal(all.length, 1);
     assert.equal(standing, all[0].id, "the ref reflects the claim");
-    assert.equal(decideSettlement({ claim: all[0], refReflectsClaim: true, refWithoutClaim: false }).kind, "settled");
   });
 
   test("a projection failure costs nothing — rebuildable by definition", async () => {
@@ -182,18 +136,9 @@ describe("admission crash windows — claim always lands before the ref moves", 
   });
 });
 
-// ── the resolver refuses to present the critical failure as standing ─────────
+// ── claim store durability ────────────────────────────────────────────────────
 
-describe("standing resolver — a ref naming a missing claim is unresolvable, not empty", () => {
-  test("forSubject answers unresolvable; current() throws rather than returning null", async () => {
-    const claims = createClaimStore(memoryIo());
-    const resolver = createStandingResolver({ claims, standingChain: async () => ["ghost-claim-id"] });
-    const answer = await resolver.forSubject(d("anything").value);
-    assert.equal(answer.state, "unresolvable");
-    assert.match(answer.detail, /critical health failure/);
-    await assert.rejects(() => resolver.current(), /critical health failure/);
-  });
-
+describe("claim store — a corrupt tail does not corrupt neighbors", () => {
   test("claim-store garbage does not corrupt neighbors", async () => {
     const io = memoryIo();
     const claims = createClaimStore(io);

@@ -5,10 +5,9 @@
  * history repository. The properties: the frozen digest is RECOMPUTED at
  * decision time (tampering refuses); any drifted member aborts WHOLE with
  * the items named; coverage is the service's own run; the claim's
- * coveredNotes are DERIVED from the manifest (pinned equal); the resolver
- * answers per member off the real chain; split-by-finding stages a
- * successor that is its own decision; and §15's family binds the cohort
- * gesture identically.
+ * coveredNotes are DERIVED from the manifest (pinned equal); split-by-finding
+ * stages a successor that is its own decision; and §15's family binds the
+ * cohort gesture identically.
  */
 
 import { test, describe, before, after } from "node:test";
@@ -26,7 +25,6 @@ import { openProposal } from "../src/governor/kernel/proposals/proposal.ts";
 import { buildProposalSubjectFromOperation } from "../src/governor/kernel/proposals/proposal-builder.ts";
 import { subjectDigest } from "../src/governor/kernel/contracts/subject-v1.ts";
 import { digestBytes } from "@vault-mcp/core";
-import { createStandingResolver } from "../src/governor/kernel/admission/standing-resolver.ts";
 import { createClaimStore } from "../src/governor/kernel/admission/settlement.ts";
 import { runGuardedDisposition } from "../src/governor/kernel/gesture.ts";
 
@@ -103,7 +101,7 @@ describe("the cohort gesture — one claim covering N, against the real reposito
   });
   after(() => h.cleanup());
 
-  test("freeze the selection, admit under ONE gesture, resolve every member off the real chain", async () => {
+  test("freeze the selection, admit under ONE gesture, coveredNotes derived equal to the manifest", async () => {
     for (let i = 0; i < 5; i++) await h.produce(`Notes/batch-${i}.md`, `old ${i}\n`, `new ${i}\n`);
     const sel = await h.admission.freezeSelection({ folder: "Notes" }, "item");
     assert.ok(sel.ok, sel.reason);
@@ -124,17 +122,6 @@ describe("the cohort gesture — one claim covering N, against the real reposito
       "coveredNotes IS the manifest, derived, never supplied"
     );
 
-    // The resolver answers per member off the real standing chain.
-    const chain = async () => {
-      const oids = await h.repo.log(standingRef(), 100);
-      return oids.map((c) => /^admission ([0-9a-f-]+)/.exec(c.message + "\n")[1]);
-    };
-    const resolver = createStandingResolver({ claims, standingChain: chain });
-    for (const item of sel.frozen.subject.items) {
-      const answer = await resolver.forSubject(subjectDigest(item).value);
-      assert.equal(answer.state, "admitted", `${item.noteId} stands`);
-      assert.equal(answer.claim.id, outcome.claimId);
-    }
     // Projections caught up.
     for (const m of sel.members) {
       assert.equal((await h.proposals.get(m.id)).authority, "admitted");
@@ -198,9 +185,9 @@ describe("the cohort gesture — one claim covering N, against the real reposito
     }
   });
 
-  test("re-admitting the SAME cohort refuses already_admitted; a MEMBER re-admitted individually flips alone", async () => {
-    const p0 = await h.produce("Chain2/x.md", "v0\n", "v1\n");
-    const p1 = await h.produce("Chain2/y.md", "w0\n", "w1\n");
+  test("re-admitting the SAME cohort refuses already_admitted; an individual member can still be re-admitted solo", async () => {
+    await h.produce("Chain2/x.md", "v0\n", "v1\n");
+    await h.produce("Chain2/y.md", "w0\n", "w1\n");
     const sel = await h.admission.freezeSelection({ folder: "Chain2" }, "item");
     assert.ok(sel.ok);
     const first = await h.admission.admitCohortWithGesture(sel.frozen, sel.members, "g-1");
@@ -209,17 +196,11 @@ describe("the cohort gesture — one claim covering N, against the real reposito
     assert.ok(!again.ok);
     assert.equal(again.code, "already_admitted");
 
-    // Individually re-admit x at new content: only x flips.
+    // Individually re-admit x at new content: the item path still works
+    // after the note was previously covered by a cohort admission.
     const p2 = await h.produce("Chain2/x.md", "v1\n", "v2\n");
     const solo = await h.admission.admitWithGesture(p2.id, "g-3");
     assert.ok(solo.ok, JSON.stringify(solo));
-    const claims = createClaimStore(h.claimIo);
-    const chain = async () => (await h.repo.log(standingRef(), 100)).map((c) => /^admission ([0-9a-f-]+)/.exec(c.message + "\n")[1]);
-    const resolver = createStandingResolver({ claims, standingChain: chain });
-    const xOld = await resolver.forSubject(subjectDigest(sel.frozen.subject.items.find((i) => i.noteId === p0.subject.noteId)).value);
-    assert.equal(xOld.state, "superseded", "x's cohort-covered subject is superseded by its solo re-admission");
-    const y = await resolver.forSubject(subjectDigest(sel.frozen.subject.items.find((i) => i.noteId === p1.subject.noteId)).value);
-    assert.equal(y.state, "admitted", "y stands untouched");
   });
 });
 
