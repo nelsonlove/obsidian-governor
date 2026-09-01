@@ -28,7 +28,6 @@ import {
 } from "../src/governor/kernel/history-store/history-scope.ts";
 import { EXCLUDED_PREFIXES } from "../../core/src/territories.ts";
 import { standingRef, proposalRef, cohortRef, isGovernorRef } from "../src/governor/kernel/history-store/refs.ts";
-import { planRecovery } from "../src/governor/kernel/history-store/recovery.ts";
 import {
   RefCasError,
   ObjectMissingError,
@@ -161,72 +160,6 @@ describe("refs — the internal namespace", () => {
       assert.throws(() => proposalRef(evil), RefNameError, `should refuse '${evil}'`);
     }
     assert.equal(proposalRef("0190a1b2-dead-7000-8000-000000000001"), "refs/governor/proposals/0190a1b2-dead-7000-8000-000000000001");
-  });
-});
-
-// ── recovery — plans never invent authority ──────────────────────────────────
-
-describe("recovery — settlement plans", () => {
-  const A = "a".repeat(40);
-  const B = "b".repeat(40);
-
-  test("matching state is consistent", () => {
-    const plan = planRecovery(
-      { ref: "refs/governor/standing", expectedCommit: A },
-      { actualCommit: A, expectedCommitReadable: true, actualObjectsReadable: true }
-    );
-    assert.equal(plan.kind, "consistent");
-  });
-
-  test("objects landed but the ref did not advance — ref-behind", () => {
-    const plan = planRecovery(
-      { ref: "refs/governor/standing", expectedCommit: A },
-      { actualCommit: B, expectedCommitReadable: true, actualObjectsReadable: true }
-    );
-    assert.equal(plan.kind, "ref-behind");
-  });
-
-  test("objects never landed — re-record from the journal", () => {
-    const plan = planRecovery(
-      { ref: "refs/governor/standing", expectedCommit: A },
-      { actualCommit: B, expectedCommitReadable: false, actualObjectsReadable: true }
-    );
-    assert.equal(plan.kind, "re-record");
-  });
-
-  test("corruption always surfaces to a human — no automatic rewrite", () => {
-    const plan = planRecovery(
-      { ref: "refs/governor/standing", expectedCommit: A },
-      { actualCommit: A, expectedCommitReadable: true, actualObjectsReadable: false }
-    );
-    assert.equal(plan.kind, "surface-to-human");
-  });
-
-  test("a ref the journal never intended surfaces to a human", () => {
-    const plan = planRecovery(
-      { ref: "refs/governor/standing", expectedCommit: null },
-      { actualCommit: A, expectedCommitReadable: null, actualObjectsReadable: true }
-    );
-    assert.equal(plan.kind, "surface-to-human");
-  });
-
-  test("no plan kind can assert an admission happened — the enum is the guarantee", () => {
-    // Structural: the dangerous repair (deciding an admission DID happen) has
-    // no representation. If someone adds one, this pins the decision surface.
-    const kinds = new Set(["consistent", "re-record", "ref-behind", "surface-to-human"]);
-    for (const expected of [null, A]) {
-      for (const actual of [null, A, B]) {
-        for (const readable of [true, false, null]) {
-          for (const clean of [true, false]) {
-            const plan = planRecovery(
-              { ref: "r", expectedCommit: expected },
-              { actualCommit: actual, expectedCommitReadable: readable, actualObjectsReadable: clean }
-            );
-            assert.ok(kinds.has(plan.kind), `unexpected plan kind ${plan.kind}`);
-          }
-        }
-      }
-    }
   });
 });
 

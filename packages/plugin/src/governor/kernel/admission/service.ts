@@ -21,10 +21,12 @@
 // A crash between 2 and 3 leaves a retriable claim; between 3 and 4 leaves a
 // consistent-but-unrecorded settlement, and NOTHING COMPLETES IT. This comment
 // used to say "the recovery pass completes" that window; there is no recovery
-// pass. `decideSettlement` — which classified exactly these windows — was
-// deleted in #379 as dead code, and `history-store/recovery.ts`'s
-// `planRecovery` has no caller in `src/` either. The window is real and
-// unrepaired; say so rather than implying machinery that does not run.
+// pass and there is no longer any code that pretended to be one. Both halves
+// were built, tested, and never called from `src/`, so both were deleted as
+// dead code (#379): `decideSettlement`, which classified exactly these
+// windows, and `history-store/recovery.ts`'s `planRecovery`, which planned the
+// repair. The window is real and unrepaired; say so rather than implying
+// machinery that does not run.
 //
 // What DOES hold, and is the property worth relying on: no window leaves a ref
 // pointing at evidence that does not exist, because the claim lands BEFORE the
