@@ -606,3 +606,68 @@ describe("the migration section's own fixes are pinned — eleventh-instance clo
     assert.ok(!tryPattern.test(stripped), "removing the try is caught");
   });
 });
+
+// ── the cutover gate on the LEGACY BASELINE REPAIR paths ─────────────────────
+//
+// Found in the wild (Nelson's console, 2026-09-01):
+//
+//   governor governance: baseline reconcile failed LegacyWriterDisabledError:
+//   rekey (baseline re-addressing) is disabled — the authority cutover has run
+//
+// The guard was doing its job. The CALLER was wrong: `reconcileBaselines` built
+// a whole-vault uid map, planned the repoints, and then threw on the first
+// `rekey` — on an operator whose cutover ran months ago. Same for the rename
+// handler, which logged "baseline rekey failed" on every rename.
+//
+// This is a SOURCE pin, and it says so: the wiring layer calls `app.*` and
+// cannot be driven headlessly (CLAUDE.md's "Verifying tools live"). It is
+// anchored on the gate appearing BEFORE the expensive work and before the
+// refusing call, because "the gate exists somewhere in the file" is the weak
+// form that lets a reordering slip through.
+
+describe("cutover gate — the legacy baseline repair paths must not run post-cutover", () => {
+  const wiringSource = () =>
+    fs.readFileSync(new URL("../src/governor/wiring/wiring.ts", import.meta.url), "utf8");
+
+  /** Strip `//` comments. Without this the pin indexes PROSE: the gate's own
+   *  explanatory comment names `getMarkdownFiles()`, so an ordering check found
+   *  the comment before the real call and failed against correct code. A source
+   *  pin that reads comments is measuring the wrong artifact. */
+  const stripComments = (s) => s.replace(/^[ \t]*\/\/.*$/gm, "");
+
+  /** The body of a top-level `async function <name>`, up to the next top-level declaration. */
+  const bodyOf = (src, name) => {
+    const start = src.indexOf(`async function ${name}(`);
+    assert.ok(start !== -1, `${name} not found — did it get renamed?`);
+    const rest = src.slice(start + 1);
+    const end = rest.search(/\n(?:export )?(?:async )?function /);
+    return stripComments(end === -1 ? rest : rest.slice(0, end));
+  };
+
+  test("reconcileBaselines returns on legacyRetired BEFORE it sweeps the vault", () => {
+    const body = bodyOf(wiringSource(), "reconcileBaselines");
+    const gate = body.indexOf("legacyRetired(plugin)");
+    const sweep = body.indexOf("getMarkdownFiles(");
+    const rekey = body.indexOf(".rekey(");
+    assert.ok(gate !== -1, "reconcileBaselines must consult the cutover gate");
+    assert.ok(sweep !== -1 && gate < sweep, "the gate must precede the whole-vault sweep, not follow it");
+    assert.ok(rekey !== -1 && gate < rekey, "the gate must precede the refusing rekey call");
+  });
+
+  test("the gate is an early RETURN, not a logged warning", () => {
+    // A gate that logs and continues would still reach the throw. Match the
+    // return on the same line as the condition.
+    const body = bodyOf(wiringSource(), "reconcileBaselines");
+    assert.match(body, /if\s*\(\s*legacyRetired\(plugin\)\s*\)\s*return\s*;/);
+  });
+
+  test("VACUITY: the pin fails when the gate is removed", () => {
+    // Proves the assertions above are load-bearing rather than incidentally true.
+    const neutered = wiringSource().replace(/if \(legacyRetired\(plugin\)\) return;/g, "");
+    const start = neutered.indexOf("async function reconcileBaselines(");
+    const rest = neutered.slice(start + 1);
+    const end = rest.search(/\n(?:export )?(?:async )?function /);
+    const body = stripComments(end === -1 ? rest : rest.slice(0, end));
+    assert.equal(body.indexOf("legacyRetired(plugin)"), -1, "the planted removal must actually remove the gate");
+  });
+});

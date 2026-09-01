@@ -894,6 +894,20 @@ class AdapterBlobFs implements BlobFs {
 async function reconcileBaselines(plugin: Plugin): Promise<void> {
   const store = baselineStores.get(plugin);
   if (!store) return;
+  // AFTER THE CUTOVER THIS PASS CANNOT SUCCEED, so it must not run.
+  //
+  // Reconcile repairs LEGACY baselines by re-addressing them (`store.rekey`),
+  // and `rekey` refuses once the authority cutover has run — standing advances
+  // only through admission from then on. So post-cutover this function built a
+  // whole-vault uid map, planned the repoints, threw `LegacyWriterDisabledError`
+  // on the FIRST one, and logged "baseline reconcile failed" — every time it was
+  // triggered, on an operator whose cutover ran months ago.
+  //
+  // The guard was doing its job; the caller was wrong to call it. Two costs,
+  // both removed by returning here: a misleading error in the console that reads
+  // like a fault, and a `getMarkdownFiles()` sweep plus uid map over the whole
+  // vault performed purely to reach a throw.
+  if (legacyRetired(plugin)) return;
   try {
     const byUid = new Map<string, string[]>();
     for (const file of plugin.app.vault.getMarkdownFiles()) {
@@ -1360,6 +1374,11 @@ export async function wireGovernance(plugin: Plugin, deps: GovernanceWireDeps): 
     // acceptance nobody gave (see BaselineStore.rekey).
     const store = baselineStores.get(plugin);
     if (!store) return;
+    // Same reason as reconcileBaselines: post-cutover `rekey` refuses, so this
+    // would log "baseline rekey failed" on EVERY rename. A legacy baseline that
+    // no longer follows a rename is the intended consequence of the cutover,
+    // not a failure to report.
+    if (legacyRetired(plugin)) return;
     const moving = store.get(oldPath);
     void store.rekey(oldPath, file.path).then(async (outcome) => {
       if (outcome !== "moved" || !moving) return;
