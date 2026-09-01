@@ -200,7 +200,7 @@ packages/plugin/src/governor/kernel/history-store/
   history-scope.ts      stable human-chosen include/exclude policy
   refs.ts               internal ref names behind one service
   repository.ts         interface used by proposal and admission services
-  recovery.ts           settlement inspection and repair plans
+  (recovery.ts          BUILT, NEVER CALLED, DELETED — see below)
 
 packages/plugin/src/governor/wiring/history-store/
   git-repository.ts     live standard-Git implementation
@@ -237,7 +237,14 @@ packages/plugin/src/governor/kernel/admission/
   policy.ts
   service.ts
   settlement.ts
-  standing-resolver.ts
+  (standing-resolver.ts BUILT, NEVER CALLED, DELETED — see below)
+
+> [!warning] Two entries in the listings above were BUILT AND THEN DELETED (#379, 2026-08-31)
+> `recovery.ts` (`planRecovery`) and `standing-resolver.ts` (`createStandingResolver`), plus `decideSettlement` in `settlement.ts`, were all written to spec, fully unit-tested, and **never called from `src/`**. Between them they classified the admission crash windows and planned the repair, so they read as a working recovery system — and `admission/service.ts` said one existed. None of it ran.
+>
+> Nelson's ruling was to delete rather than wire. The consequence is recorded honestly in `admission/service.ts`'s header: the window between the standing-ref advance and the settlement append is real and **unrepaired**. What still holds is that no ref ever points at evidence that does not exist, because the claim lands before the ref moves.
+>
+> These lines are left in the listings rather than removed because this document is a decision record: a coding agent that builds `recovery.ts` from this spec would be rebuilding something already deliberately removed. If the crash window is later judged to matter, wire it — do not re-derive it, the implementation is in git history.
 
 packages/plugin/src/governor/kernel/origins/
   classifier.ts

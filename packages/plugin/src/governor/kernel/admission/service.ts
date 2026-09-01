@@ -74,7 +74,10 @@ export interface AdmissionDeps {
   verifyCohort?: (frozenSubject: CohortSubjectV1, cohortDigest: string, memberProposals: readonly ProposalV1[]) => Promise<CohortCoverageOutcome>;
   /** Current standing claim id, read fresh — the CAS expectation. */
   currentStanding: () => Promise<string | null>;
-  /** Step 4: append the settlement record. Failures here are retried by recovery, not silently dropped. */
+  /** Step 4: append the settlement record. A failure here is NOT unwound (the admission HAS
+   *  happened) and NOT retried — the recovery machinery that would have completed it was deleted
+   *  as dead code in #379, having never had a caller. The record is reconstructable by hand from
+   *  the claim and the ref, both of which survive; see the crash-window note in this file's header. */
   recordSettlement: (record: { claimId: string; subjectDigest: string; at: number; authority: string }) => Promise<void>;
   /**
    * Resolve the mandate refusal table's facts (WP10b) — mandate record,
@@ -316,7 +319,10 @@ export function createAdmissionService(deps: AdmissionDeps): AdmissionService {
         await deps.standingAdvance(expected, claim.id);
 
         // 4. Settlement record. A failure here is NOT unwound (the admission
-        //    HAS happened); recovery completes the record from the claim.
+        //    HAS happened) and nothing completes it afterwards — the caller is
+        //    told via `degraded: true` and that is the end of the automation.
+        //    The claim and the ref both survive, so the record can be rebuilt
+        //    by hand; nothing rebuilds it for you (#379).
         await deps.recordSettlement({ claimId: claim.id, subjectDigest: claim.subjectDigest.value, at: now, authority: "human-gesture" });
 
         // 5. Projections: best-effort, rebuildable by definition — D05's own
