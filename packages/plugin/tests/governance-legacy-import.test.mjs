@@ -661,6 +661,32 @@ describe("cutover gate — the legacy baseline repair paths must not run post-cu
     assert.match(body, /if\s*\(\s*legacyRetired\(plugin\)\s*\)\s*return\s*;/);
   });
 
+  test("the RENAME handler is gated too — not just the reconcile pass", () => {
+    // Fable's review of #385 caught this gap: the prose above says "same for the
+    // rename handler", but only reconcileBaselines was pinned. Removing the
+    // rename gate alone would have shipped silently — it only regresses to a
+    // noisy log per rename, which is exactly the kind of thing nobody notices
+    // until it is in someone's console again.
+    const src = stripComments(wiringSource());
+    const heal = src.indexOf("recordRename(plugin, file.path, oldPath)");
+    assert.ok(heal !== -1, "the rename handler's recordRename CALL moved — re-anchor this pin");
+    const region = src.slice(heal);
+    const gate = region.indexOf("legacyRetired(plugin)");
+    const rekey = region.indexOf("store.rekey(oldPath");
+    assert.ok(rekey !== -1, "the rename handler no longer rekeys — re-anchor this pin");
+    assert.ok(gate !== -1 && gate < rekey, "the cutover gate must precede the rename rekey");
+  });
+
+  test("the rename gate sits AFTER recordRename — the heal oracle still sees every rename", () => {
+    // Placement, not just presence: gating before `recordRename` would stop the
+    // link-heal detector recording renames post-cutover, which has nothing to do
+    // with legacy baselines.
+    const src = stripComments(wiringSource());
+    const heal = src.indexOf("recordRename(plugin, file.path, oldPath)");
+    const gate = src.indexOf("legacyRetired(plugin)", heal);
+    assert.ok(heal < gate, "recordRename must run before the cutover gate returns");
+  });
+
   test("VACUITY: the pin fails when the gate is removed", () => {
     // Proves the assertions above are load-bearing rather than incidentally true.
     const neutered = wiringSource().replace(/if \(legacyRetired\(plugin\)\) return;/g, "");
