@@ -218,7 +218,7 @@ export async function openGitRepository(opts: GitRepositoryOpts): Promise<Histor
       });
 
       // Objects first, ref last — a crash mid-way leaves content-addressed
-      // objects without a ref (recovery: ref-behind / re-record), never a ref
+      // objects without a ref (a recoverable state), never a ref
       // naming objects that do not exist.
       const entries: TreeEntry[] = [];
       const missing: string[] = [];

@@ -115,7 +115,9 @@ export type AdmitOutcome =
   | {
       ok: true;
       claimId: string;
-      /** True when the settlement record failed AFTER the CAS: the admission stands; the record is catching up (journal.status "degraded"). */
+      /** True when the settlement record failed AFTER the CAS: the admission stands and the record
+       *  is MISSING. Nothing catches it up — this flag is report-only (journal.status "degraded").
+       *  It used to say "catching up", which implied machinery that was deleted in #379. */
       degraded: boolean;
       /** Receipt material — the never-say rules need subject, predicate, verifier, and coverage NAMED. */
       receipt: { subjectDigest: string; predicates: string[]; verifier: string; coverage: "exact-and-total" };
