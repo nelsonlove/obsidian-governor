@@ -23,7 +23,7 @@ other, never both).  Not counted here (outside the locked `obsidian_*` family):
 the always-on `governance_submit_revision` + `governance_revisions` (2 tools, see their section below),
 the default-ENABLED `bases` module (`base_list` + `base_query`, 2 tools,
 Bases-API-gated — see Section 2b), and
-the default-disabled `skills` (`vault_skills_*`), `provenance`
+the default-disabled `provenance`
 (`provenance_*`), `fileclass` (`fileclass_*`, 8 tools, plugin+binary-gated),
 `crosssession` (`crosssession_*`, 4 tools), and `triage` (`triage_*`, 2 tools)
 module surfaces — see Section 2c and their own module docs.
@@ -314,14 +314,21 @@ Registered through the module host like Section 2b, but these modules ship
 `enabled: false` — a human turns them on in the config tab, and the tools appear
 on the next session connect. `health` (2 tools) and `jd-scaffold` (7 tools,
 Stage A + A2 + A3 of the jd-dashboard fold) both use the locked `obsidian_*`
-naming, so both are documented here in full. (The `skills`, `provenance`, `fileclass`, `crosssession`
+naming, so both are documented here in full. (The `provenance`, `fileclass`, `crosssession`
 and `triage` modules also ship disabled, but their tools are named
-`vault_skills_*` / `provenance_*` / `fileclass_*` / `crosssession_*` / `triage_*`,
-outside the `obsidian_*` family this inventory locks, so the first two are
-documented in their own module docs; `fileclass`, `crosssession` and `triage` are
+`provenance_*` / `fileclass_*` / `crosssession_*` / `triage_*`,
+outside the `obsidian_*` family this inventory locks, so the first is
+documented in its own module doc; `fileclass`, `crosssession` and `triage` are
 documented just below — fileclass because it is also plugin-gated, crosssession
 because it is the cross-session coordination surface (#232), triage because it is
 the inbox-triage disposition surface, #221 phase 2.)
+
+The `skills` module used to be listed here. It is no longer a module of this
+plugin at all: the skills compiler became its own plugin at the suite split's S4
+(`packages/skills`, id `vault-skills`) and publishes its six `vault_skills_*`
+tools through the external-tool registry, like any third-party publisher. This
+inventory locks the `obsidian_*` family and has never counted external tools, so
+the totals are unchanged — see `docs/skills.md` and `packages/skills/README.md`.
 
 ### `tools-health.ts` — `registerHealthTools` via the `health` module (2 tools)
 
@@ -345,7 +352,7 @@ scheme module is path-canonical, the filename already carries the address,
 same call already made for the jd-numbering fold); a template-created note's
 frontmatter is whatever the user's own template file contains, copied through
 substitution like any other placeholder.
-Takes an injected `JdScaffoldSource` (mirroring `vocabSource`/`skillsSource`),
+Takes an injected `JdScaffoldSource` (mirroring `vocabSource`/`provenanceSource`),
 not a raw `App` — the live adapter is `obsidian-jd-scaffold-source.ts`. The
 three template-creation tools take `templates_folder` as an explicit argument
 (no module-level config yet) and check it against the allowlist same as

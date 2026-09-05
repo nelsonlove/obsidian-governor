@@ -1,0 +1,9 @@
+{
+  "id": "vault-skills",
+  "name": "Vault Skills",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Compiles the vault's skill / agent / policy / command notes into a Claude Code plugin on disk: a preview pane, commands, and export-on-save, plus six MCP tools published through the Governor host.",
+  "author": "Nelson Love",
+  "isDesktopOnly": true
+}

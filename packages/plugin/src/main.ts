@@ -42,7 +42,6 @@ import { buildMigration, type Migration } from "./governor/wiring/migration-wiri
 // HOST already uses it for the scheme panes below — a shared helper living in
 // the provider's subtree would have been one more thing S3 has to untangle.
 import { mountAction } from "./mount-state.js";
-import { wireSkills } from "./skills/wiring.js";
 import { wireSchemePanes, registerSchemeCommands } from "./scheme/wiring.js";
 import { runFolderMigration, LEGACY_PLUGIN_ID } from "./id-migration.js";
 
@@ -1089,31 +1088,14 @@ export default class VaultMcpPlugin extends Plugin {
       void this.setGovernanceMounted(true);
     }
 
-    // ── skills GUI (#82 residuals: the human affordances the fold left out) ────
-    // Wired ONLY when the skills module is enabled (default OFF — the module default is
-    // `enabled: false`, so an absent settings row means off). Same toggle that mounts the six
-    // MCP tools per connection: enabling the skills module turns on both its tools AND this
-    // in-Obsidian GUI (Preview pane, six commands, ribbon, opt-in export-on-save). The GUI is
-    // additive — the tool surface + compiler core are unchanged. Read once at onload like the
-    // governance pane; toggling it takes effect on plugin reload (the tools take effect on the
-    // next session connect). See src/skills/.
-    if (this.settings.modules?.skills?.enabled === true) {
-      try {
-        wireSkills(this, {
-          getConfig: () => (this.settings.modules?.skills?.config ?? {}) as Record<string, unknown>,
-        });
-      } catch (e) {
-        console.error("[governor] skills GUI wiring failed", e);
-      }
-    }
-
     // ── scheme Inbox + Drift panes (jd-dashboard fold, Stages B/C) ─────────────
     // Mounted on the scheme module's own enabled flag, matching its
     // default-true semantics elsewhere (modules-mount.ts:
     // `settings.modules?.scheme?.enabled === false` is the disabled check, so
     // an absent settings row means on) — both panes are meaningless without
-    // scheme addressing configured, same reasoning as skills' GUI riding its
-    // own module's toggle above. LIVE mount/unmount (governor#286, fixed
+    // scheme addressing configured, the same reasoning the skills GUI used to
+    // ride its own module's toggle here before skills became its own plugin.
+    // LIVE mount/unmount (governor#286, fixed
     // after #285/#287 shipped with the pre-#200 onload-only shape): flipping
     // the toggle in settings mounts or unmounts both panes immediately, no
     // plugin reload, via `setSchemePanesMounted` below — same pattern as

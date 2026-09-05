@@ -384,19 +384,21 @@ describe("non-MCP inventory — bridge, settings and internal surfaces", () => {
     //
     // Computed over every family, not just PLAIN_SURFACES. The first draft
     // scoped it to the bridge/settings rows while claiming to describe the
-    // whole plugin, which silently omitted the skills export and release
-    // commands and their export-on-save timer — all three write outside the
-    // vault. A disclosure scoped to one row family is not a disclosure.
+    // whole plugin, which at the time silently omitted the skills export and
+    // release COMMANDS and their export-on-save TIMER — three writes outside
+    // the vault, in two families the computation never looked at. Skills has
+    // since become its own plugin, so those three ids are gone from this list
+    // and the example is historical; the rule it bought is not. A disclosure
+    // scoped to one row family is not a disclosure, and the next command or
+    // timer that writes outside the vault must land here without anyone
+    // remembering to widen the computation.
     const outside = outsideVaultSurfaces().map((r) => r.id);
     assert.deepEqual(outside, [
-      "automation.skills.export-on-save",
       "bridge.claude-register",
       "bridge.ensure-connect-plugin",
       "bridge.remove-discovery",
       "bridge.write-bridge",
       "bridge.write-discovery",
-      "command:skills-export",
-      "command:skills-release",
       "settings.connect-claude-code",
       "settings.disconnect",
     ]);

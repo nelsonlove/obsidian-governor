@@ -22,6 +22,9 @@
  *   - src/conformance/packs/structure.ts    FM_STRIP + noteInfo (BOM+CRLF-blind)
  *   - src/kernel/vocab/blueprint.ts         `scanFrontmatter`  (BOM+CRLF-blind)
  *   - src/kernel/skills/transclude.ts       `stripFrontmatter` (BOM-blind)
+ *     — MOVED OUT: the skills compiler is its own plugin since the suite
+ *     split S4; that site is now pinned by
+ *     packages/skills/tests/transclude-frontmatter.test.mjs
  *   - src/mcp/tools-complementary.ts        obsidian_read_note_parsed body strip
  *                                                              (BOM-blind)
  */
@@ -32,7 +35,6 @@ import assert from "node:assert/strict";
 import { driftPack, DEFAULT_REGISTRIES_ROOT } from "../src/conformance/packs/index.ts";
 import { noteInfo, emittedH2s } from "../src/conformance/packs/structure.ts";
 import { scanFrontmatter } from "../src/kernel/vocab/blueprint.ts";
-import { stripFrontmatter } from "../src/kernel/skills/transclude.ts";
 
 // U+FEFF by code point, never a literal BOM byte in source (accept-guard.ts's
 // own convention — stripLeadingBom compares 0xfeff the same way).
@@ -166,29 +168,15 @@ describe("vocab blueprint.ts scanFrontmatter binds to the shared recognizer (#18
   });
 });
 
-// ── site 4: kernel/skills/transclude.ts `stripFrontmatter` ────────────────────
-
-describe("transclude.ts stripFrontmatter binds to the shared recognizer (#189)", () => {
-  test("LF note strips as before (regression)", () => {
-    assert.equal(stripFrontmatter("---\na: 1\n---\nbody\n"), "body\n");
-    assert.equal(stripFrontmatter("---\na: 1\n---\n\n\nbody\n"), "body\n"); // ^\s+ trim preserved
-  });
-
-  test("CRLF note strips as before (the old regex already handled CRLF — regression)", () => {
-    assert.equal(stripFrontmatter("---\r\na: 1\r\n---\r\nbody\r\n"), "body\r\n");
-  });
-
-  test("BOM note strips its frontmatter (pre-fix the fence rode into transcluded output)", () => {
-    assert.equal(stripFrontmatter(BOM + "---\na: 1\n---\nbody\n"), "body\n");
-  });
-
-  test("no frontmatter: leading-whitespace trim unchanged; a leading BOM is dropped", () => {
-    assert.equal(stripFrontmatter("\n\nhello\n"), "hello\n");
-    // Same either way: stripLeadingBom drops it now; the old `^\s+` trim
-    // happened to swallow it too (JS \s matches U+FEFF). Pinned as regression.
-    assert.equal(stripFrontmatter(BOM + "hello\n"), "hello\n");
-  });
-});
+// ── site 4 LEFT THIS PACKAGE ─────────────────────────────────────────────────
+//
+// `stripFrontmatter` was `src/kernel/skills/transclude.ts`, the fourth of #189's
+// five sites. The skills compiler became its own plugin at the suite split's S4,
+// so the site and its four assertions moved with the code, unchanged, to
+// packages/skills/tests/transclude-frontmatter.test.mjs. The per-site
+// non-vacuity property this file exists for is preserved — it is just enforced
+// in the package that now owns the site. THE OTHER FOUR SITES STAY HERE, and a
+// sixth site appearing in this package still belongs in this file.
 
 // ── site 5: mcp/tools-complementary.ts obsidian_read_note_parsed body ─────────
 

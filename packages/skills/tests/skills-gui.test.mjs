@@ -19,9 +19,9 @@
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { debounce, handleNoteChanged } from "../src/skills/export-trigger.ts";
-import { bumpPatch } from "../src/skills/version.ts";
-import { skillsConfigOf, DEFAULT_SKILLS_CONFIG } from "../src/kernel/skills/skills-config.ts";
+import { debounce, handleNoteChanged } from "../src/export-trigger.ts";
+import { bumpPatch } from "../src/version.ts";
+import { skillsConfigOf, DEFAULT_SKILLS_CONFIG } from "../src/kernel/skills-config.ts";
 
 // ── 1. debounce ─────────────────────────────────────────────────────────────
 

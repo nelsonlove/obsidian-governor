@@ -160,3 +160,13 @@ export { uuidv7 } from "./uuidv7.js";
 // names, where a prefix missing from capture's list means capture writes note
 // bodies to disk. Issue #321 still owns making the list real configuration.
 export { EXCLUDED_PREFIXES, isExcludedTerritory } from "./territories.js";
+
+// Path-allowlist visibility — the one-path disclosure predicate, published at
+// the skills satellite extraction (suite split, S4). A satellite that filters
+// what it discloses must ask the SAME question the host asks; a forked copy of
+// a guard predicate is the drift this repo has already paid for twice. The
+// host's guard.ts keeps everything that knows the tool surface's argument
+// shapes (mapPaths / collectPaths / guardCall / visiblePaths) and defines its
+// allowlist branch over this function.
+export { isVisible } from "./visibility.js";
+export type { GuardSettings } from "./visibility.js";

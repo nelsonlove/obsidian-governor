@@ -7,7 +7,7 @@
 // These are HUMAN gestures in Obsidian, not MCP calls, so they don't ride the MCP transport's
 // per-connection guard/queue/journal. But the ONE security-critical path — `cmdMark`, which
 // writes note frontmatter — routes through the SAME accept-forbidden guard the MCP
-// `vault_skills_mark` tool uses (`guardSkillsMark` in mcp/tools-skills.ts, which runs the
+// `vault_skills_mark` tool uses (`guardSkillsMark` in tools.ts, which runs the
 // shared `acceptTransitionReason` predicate). A mark that would introduce/change an
 // acceptance assertion throws and nothing is written. `cmdValidate`/`cmdTree` are read-only;
 // `cmdRelease` calls the folded `runExport` core directly (the exact function the MCP
@@ -25,8 +25,8 @@ import {
   expandTilde,
   type MarkInput,
   type SkillsConfig,
-} from "../kernel/skills/index.js";
-import { guardSkillsMark, type SkillsBackend } from "../mcp/tools-skills.js";
+} from "./kernel/index.js";
+import { guardSkillsMark, type SkillsBackend } from "./tools.js";
 import { bumpPatch } from "./version.js";
 
 /** What the skills commands need: the Obsidian app (active file + frontmatter writes via the

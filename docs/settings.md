@@ -274,7 +274,6 @@ Optional modules use one common availability vocabulary: available, disabled, mi
 | Conformance | Off until baselined | New-drift reporting | Accepted baseline and declared territory | Run report-only, repair or review debt |
 | Triage | Off | Governed queue and dispositions | Configured queue and actions | Disable; use ordinary operations |
 | Cross-session coordination | Off | Read receipts and guarded posting | Channel convention | Disable and use manual coordination |
-| Skills | Off | Compile/export/author agent-facing projections | Vault skill/policy sources and destination bindings | Disable; preserve source and generated diff |
 | Provenance | Off | Freshness, reconciliation, and governed regeneration | Declared sources and generator | Report only or restore prior generated artifact |
 | Health | Off | Scoped or whole-vault reports | Scanner rules and resource budget | Disable or narrow scan |
 | Fileclass | Off | Schema inspection and governed representation changes | Compatible Fileclass plugin and CLI surface | Disable or edit through ordinary note operations |
@@ -283,9 +282,9 @@ Optional modules use one common availability vocabulary: available, disabled, mi
 | Survey | Report-only when available | Deterministic observations for planning | Survey adapters | Disable or use direct reads |
 | QuickAdd bindings | Off until explicitly bound | Named choice capabilities | Installed QuickAdd and declared binding manifests | Disable binding; opaque choices remain private |
 
-The complete module list and each module's target default are in the [Module directory](modules.md); this summary is not a second inventory owner.
+The complete module list and each module's target default are in the [Module directory](modules.md); this summary is not a second inventory owner. Skills is no longer a module of this plugin's settings tab — its config moved to the separate `vault-skills` plugin's own settings tab, with a one-shot adoption of the recognized keys out of this plugin's former `modules.skills.config` on that plugin's first load (see [skills.md](skills.md)).
 
-For the first Community release, skills/policy compilation, cross-session coordination, JD scaffolding, triage mutations, QuickAdd execution bindings, and provenance regeneration are private/operator features and are absent from the public bundle. Bases, scheme, vocabulary, conformance, health, survey, Fileclass inspection, and provenance inspection may ship as bounded public optionals when their dependencies and manifests are satisfied.
+For the first Community release, skills/policy compilation (now the separate `vault-skills` satellite plugin), cross-session coordination, JD scaffolding, triage mutations, QuickAdd execution bindings, and provenance regeneration are private/operator features and are absent from the public bundle. Bases, scheme, vocabulary, conformance, health, survey, Fileclass inspection, and provenance inspection may ship as bounded public optionals when their dependencies and manifests are satisfied.
 
 ## Operation evidence and retention
 

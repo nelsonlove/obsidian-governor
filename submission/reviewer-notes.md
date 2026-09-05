@@ -136,7 +136,7 @@ Reviewers should be able to confirm these are absent, not merely default-off:
 - destructive import; and
 - authority-restoring version restoration.
 
-Private-pack documentation exists to make the boundary explicit. It is not evidence that private code belongs in the submitted bundle. Beyond the exclusions above, six in-repo capabilities are **target-private in the first release** and must also be absent from the bundle: skills/policy compilation, cross-session coordination, JD scaffolding, triage mutations, QuickAdd execution, and provenance regeneration ([Status and compatibility](../docs/status-and-compatibility.md)).
+Private-pack documentation exists to make the boundary explicit. It is not evidence that private code belongs in the submitted bundle. Beyond the exclusions above, four in-repo capabilities are **target-private in the first release** and must also be absent from the bundle: cross-session coordination, JD scaffolding, triage mutations, and provenance regeneration ([Status and compatibility](../docs/status-and-compatibility.md)). Two further target-private capabilities, skills/policy compilation and QuickAdd execution, are no longer part of this plugin: each has been extracted into its own satellite plugin in this monorepo (`packages/skills`, id `vault-skills`; `packages/quickadd-choices-compile`), built as a separate artifact from a separate manifest. They are absent from the submitted bundle structurally — the bundle is one plugin's `main.js` and `manifest.json` — rather than by an in-plugin exclusion a reviewer has to verify.
 
 ## Known residual risks
 

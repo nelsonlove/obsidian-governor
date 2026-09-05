@@ -204,7 +204,7 @@ export const DEFAULT_PROVENANCE_CONFIG: ProvenanceConfig = {
 /** Coerce a merged config record (defaults + user override, as `register()`
  *  receives it) into a typed ProvenanceConfig, falling back to the default for
  *  a value of the wrong shape — a hand-edited data.json must never crash a
- *  tool, only degrade to the default (the skills/vocab/scheme skip-and-report
+ *  tool, only degrade to the default (the health/vocab/scheme skip-and-report
  *  discipline). A blank notesDir degrades to the default too: an empty vault
  *  path would resolve the audit to the vault root, not what any user means. */
 export function provenanceConfigOf(config: Record<string, unknown>): ProvenanceConfig {

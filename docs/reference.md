@@ -1,6 +1,6 @@
 # Reference — addressing, queue & journal semantics, allowlist, external tools
 
-> Scope: the cross-cutting tool semantics and the core tool families. Module tool families (fileclass, skills, triage, provenance, cross-session, Bases, survey, governance revisions) are inventoried in the [module directory](modules.md) with their own deep references.
+> Scope: the cross-cutting tool semantics and the core tool families. Module tool families (fileclass, triage, provenance, cross-session, Bases, survey, governance revisions) are inventoried in the [module directory](modules.md) with their own deep references. Skills is no longer one of this plugin's module tool families — it ships as the separate `vault-skills` satellite plugin (see [skills.md](skills.md)).
 
 > **Deep reference for the shipped implementation.** Canonical concepts and the target design live in the [documentation corpus](README.md); what is shipped versus target is owned by [status-and-compatibility.md](status-and-compatibility.md).
 

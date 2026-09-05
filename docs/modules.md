@@ -23,7 +23,6 @@ Absent, disabled, incompatible, unavailable, unhealthy, and empty are different 
 |---|---|---|---|---|
 | **Scheme** | Resolve, validate, allocate, and place notes under configured addressing systems | Reads by default; placement and renumbering are preview-first structural work | Enabled for resolution; mutating actions separately authorized | An open address is computed, not reserved; exclusions bound the scheme, not vault access |
 | **Vocabulary** | Resolve controlled values and validate their scoped use in configured properties, tags, or designated fields | Report-first; repairs are separate representation or content proposals | Enabled when configured | It does not police arbitrary prose; unseeded or unavailable vocabulary is not a clean bill of health |
-| **Skills** | Compile, export, release, and author agent-facing skills and policies from vault sources | Representation/content/authority-sensitive; disabled until mandated | Disabled | Vault source owns status; generated files do not become a second constitution |
 | **Provenance** | Inspect source relationships, freshness, reconcile generated artifacts, and regenerate them | Reports are read-only; regeneration is representation/content work | Disabled | Provenance is not acceptance; stale source must not be reported as current output |
 | **Health** | Run whole-vault or scoped health and lint reports | Read/report | Disabled opt-in for potentially expensive scans | Findings are evidence, not automatic repair instructions |
 | **Fileclass** | Inspect and apply note-class schemas | Reads may be enabled; writes are representation/content work | Disabled | Depends on supported Fileclass surface; missing dependency is unavailable, not empty |
@@ -32,6 +31,8 @@ Absent, disabled, incompatible, unavailable, unhealthy, and empty are different 
 | **Bases** | Evaluate Obsidian Base views and return scoped rows | Read-only | Enabled when supported API exists | Base is presentation, not authority; evaluated rows come from Obsidian's engine |
 | **JD scaffolding** | Create and maintain configured Johnny Decimal structures and identifiers | Structural and representation work | Disabled | Exact templates and scopes required; allocation and placement remain distinct |
 | **Triage** | Expose bounded queues and apply declared dispositions | Read queue plus governed mutations | Disabled | A disposition is a named action contract; opaque macros require a private pack |
+
+Skills — compile, export, release, and author agent-facing skills and policies from vault sources — is no longer a built-in module of this table: it was extracted to its own satellite plugin, `vault-skills`, per `docs/suite-split-design.md` §6. See [skills.md](skills.md) for its deep reference.
 
 The target defaults above describe the coherent product, not proof of a particular build. [Status and compatibility](status-and-compatibility.md) owns promotion to shipped status.
 
@@ -119,7 +120,7 @@ The first Community bundle has an exact distribution profile.
 
 **Private/operator in the first release:**
 
-- skills and policy compilation or export;
+- skills and policy compilation or export (now the separate `vault-skills` satellite plugin — absent from the Community bundle because it is simply not part of it, not because of a manifest exclusion decision);
 - cross-session fleet coordination;
 - JD scaffolding;
 - triage mutations;

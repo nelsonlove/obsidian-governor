@@ -43,7 +43,7 @@
 //   public-optional  scoped writes; scheme resolution and preview-first
 //                    placement; vocabulary; conformance, health and survey
 //                    REPORTS; Bases read evaluation; provenance inspection
-//   private          skills/policy compilation, cross-session coordination,
+//   private          cross-session coordination,
 //                    JD scaffolding, triage, QuickAdd execution bindings,
 //                    provenance regeneration, plugin lifecycle, opaque or
 //                    pathless third-party mutations
@@ -346,16 +346,13 @@ const FILECLASS: McpSurfaceRow[] = [
   { tool: "fileclass_set_where", readOnly: false, module: "fileclass", distribution: "private", refusesUnderScope: true, postcondition: "Bulk-set a field across a fileClass; dry-run unless apply is requested.", gate: "Fileclass plugin loaded AND CLI binary resolves" },
 ];
 
-// ── module: skills (private — compiles the agent-facing corpus) ──────────────
-
-const SKILLS: McpSurfaceRow[] = [
-  { tool: "vault_skills_validate", readOnly: true, module: "skills", distribution: "private", postcondition: "Run the compile transform without writing and report errors, warnings and preload counts." },
-  { tool: "vault_skills_tree", readOnly: true, module: "skills", distribution: "private", postcondition: "Return the agent and skill hierarchy." },
-  { tool: "vault_skills_preview", readOnly: true, module: "skills", distribution: "private", paths: ["name"], postcondition: "Diff compiled output against the current export without writing." },
-  { tool: "vault_skills_export", readOnly: false, module: "skills", distribution: "private", postcondition: "Write compiled skills and agents to the configured output directory, outside the vault." },
-  { tool: "vault_skills_release", readOnly: false, module: "skills", distribution: "private", paths: ["dir"], postcondition: "Export into a repository checkout and stamp a version." },
-  { tool: "vault_skills_mark", readOnly: false, module: "skills", distribution: "private", paths: ["path"], discovered: "none", postcondition: "Mark a note's kind in frontmatter; accept-forbidden guarded." },
-];
+// The six `vault_skills_*` rows were HERE until the S4 satellite extraction.
+// This inventory describes THIS PLUGIN's surface, and the skills compiler is
+// now a separate plugin (`packages/skills`, id `vault-skills`) that publishes
+// its tools through the external-tool registry like any third-party publisher.
+// External tools are deliberately outside this inventory: they are not ours to
+// declare, and the surface scan that pins this file against the source would
+// find no registration for them here.
 
 // ── module: crosssession (private — fleet coordination) ──────────────────────
 
@@ -403,7 +400,6 @@ export const MCP_SURFACE_INVENTORY: McpSurfaceRow[] = [
   ...PROVENANCE,
   ...SURVEY,
   ...FILECLASS,
-  ...SKILLS,
   ...CROSSSESSION,
   ...JD_SCAFFOLD,
   ...TRIAGE,

@@ -20,14 +20,9 @@ async function buildBridgeOnce() {
 
 const bridgeText = hasBridge ? await buildBridgeOnce() : "";
 
-// The skills module's bundled "new-skill" static skill (#82): its SKILL.md +
-// conventions.md are embedded at build time and emitted by the exporter into
-// the output dir (src/kernel/skills/static-skills.ts reads these defines).
-// Absent assets ⇒ empty defines ⇒ STATIC_FILES is empty, exactly as under
-// tsx (tests), which run without the defines at all.
-const readAsset = (p) => (fs.existsSync(p) ? fs.readFileSync(p, "utf8") : "");
-const newSkillMd = readAsset("assets/new-skill/SKILL.md");
-const conventionsMd = readAsset("assets/new-skill/conventions.md");
+// The skills module's bundled "new-skill" static skill and its two esbuild
+// defines left with the module at the S4 satellite extraction — they now live
+// in packages/skills/esbuild.config.mjs beside packages/skills/assets/.
 
 const plugin = {
   entryPoints: ["src/main.ts"],
@@ -36,8 +31,6 @@ const plugin = {
   // `define` replaces the bare identifier __BRIDGE_SOURCE__ (see src/bridge-asset.ts).
   define: {
     __BRIDGE_SOURCE__: JSON.stringify(bridgeText),
-    __NEW_SKILL_MD__: JSON.stringify(newSkillMd),
-    __NEW_SKILL_CONVENTIONS__: JSON.stringify(conventionsMd),
   },
   outfile: "main.js",
   sourcemap: production ? false : "inline",

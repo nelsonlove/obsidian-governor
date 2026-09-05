@@ -29,7 +29,7 @@
 //     it registers `readOnlyHint: false`.
 //
 // Obsidian-free by construction: vault state arrives through the injected
-// ProvenanceBackend (structurally typed, like SkillsBackend / VocabSource), so
+// ProvenanceBackend (structurally typed, like HealthSource / VocabSource), so
 // every handler and the write guard are unit-testable headlessly. The Obsidian
 // adapter is `obsidianProvenanceBackend(app)` — the only vault coupling.
 
@@ -61,7 +61,7 @@ export interface ProvenanceToolsCtx {
    * enabled state. */
   config: Record<string, unknown>;
   /** The guard's settings — retained for a future cycle that scopes the audit
-   * read surface to the allowlist. Like the skills read tools, the audit here
+   * read surface to the allowlist. The audit here
    * runs over the whole configured notes-dir (a partial audit is a misleading
    * one), so it is not applied today. Absent ⇒ unfiltered. */
   getSettings?: () => GuardSettings;
@@ -126,7 +126,7 @@ async function globVaultRoot(adapter: VaultAdapter, pattern: string): Promise<st
 }
 
 /** The Obsidian adapter — the ONLY vault coupling for provenance in vault-mcp,
- * and (like `obsidianSkillsBackend`) the one part not headlessly unit-tested;
+ * and (like `obsidianHealthBackend`) the one part not headlessly unit-tested;
  * verify it against a running Obsidian. Duck-typed against `app` (no `obsidian`
  * import) so this file stays headless-testable. */
 export function obsidianProvenanceBackend(app: {

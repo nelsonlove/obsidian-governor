@@ -13,7 +13,7 @@
 // tools mutate real vault NOTES, not another plugin's config, so nothing
 // blocks them from going the module-host route and picking up its free
 // settings-tab enable/disable toggle. That route means this file takes an
-// injected JdScaffoldSource (mirroring vocabSource/skillsSource/
+// injected JdScaffoldSource (mirroring vocabSource/healthSource/
 // provenanceSource) rather than a raw `App` — modules-mount.ts's MountDeps
 // deliberately never carries one, so the Obsidian binding lives in the
 // adapter (obsidian-jd-scaffold-source.ts) instead, keeping this file

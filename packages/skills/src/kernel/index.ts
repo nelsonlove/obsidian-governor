@@ -1,12 +1,15 @@
-// kernel/skills — the pure skills-export core, folded in from
-// obsidian-vault-skills (cycle 2 of the vault-skills -> vault-mcp fold, #82).
+// src/kernel — the pure skills-export core of the vault-skills satellite.
+//
+// Lineage: written for the standalone obsidian-vault-skills plugin, folded into
+// the Governor host as `src/kernel/skills/` (#82, cycle 2), and extracted back
+// out to its own plugin at the suite split's S4. The code is the same code; the
+// three homes differ only in who mounts it.
 //
 // Every file here is Obsidian-free: the exporter/transform/transclude compiler
-// runs over an injected `SkillsSource` (skills-source.ts), exactly the seam
-// pattern the vault-mcp module system already uses (LinkSource / VocabSource /
-// UidSource). The Obsidian-facing adapter and the six MCP tools live in
-// mcp/tools-skills.ts; the module registration + manifest live in
-// mcp/modules-mount.ts. Nothing here imports `obsidian` or the MCP SDK.
+// runs over an injected `SkillsSource` (skills-source.ts). The Obsidian-facing
+// adapter and the six tool specs live in ../tools.ts; the pane, commands and
+// export-on-save wiring in ../wiring.ts. Nothing here imports `obsidian` or the
+// MCP SDK, which is why the whole compiler is unit-tested headlessly.
 
 export type { SkillsSource, SourceNote, EmbedLookup } from "./skills-source.js";
 export {

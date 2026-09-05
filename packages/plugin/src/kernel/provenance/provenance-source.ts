@@ -4,7 +4,7 @@
 // Obsidian-backed implementation is `obsidianProvenanceBackend(app)`
 // (mcp/tools-provenance.ts); tests inject an in-memory fake. This mirrors the
 // injected-source pattern the vault-mcp module system is built around
-// (SkillsSource / LinkSource / VocabSource / UidSource).
+// (LinkSource / VocabSource / UidSource).
 //
 // Ported from the standalone `obsidian-provenance` Python CLI, whose
 // `frontmatter.py` / `sources.py` / `plugins.py` read the vault filesystem

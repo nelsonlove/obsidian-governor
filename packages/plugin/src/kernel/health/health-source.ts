@@ -3,7 +3,7 @@
 // `obsidian` / `app` / `metadataCache` import. The Obsidian-backed implementation
 // is `obsidianHealthBackend(app)` (mcp/tools-health.ts); tests inject an in-memory
 // fake. This mirrors the injected-source pattern the vault-mcp module system is
-// built around (ProvenanceSource / SkillsSource / LinkSource / VocabSource).
+// built around (ProvenanceSource / LinkSource / VocabSource).
 //
 // Ported from the standalone `obsidian-vault-health` Bash+eval scanner, whose
 // live half read Obsidian's resolver via one Advanced-URI `eval` (link/attachment/
