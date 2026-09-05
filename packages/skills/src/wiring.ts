@@ -1,21 +1,27 @@
-// The skills GUI wiring — the in-Obsidian human surface for the skills module: the Preview
-// pane, the six commands, the ribbon icon, and the (opt-in) export-on-save trigger. Ported
-// from the standalone vault-skills plugin's main.ts + commands.ts as part of the GUI fold
-// (#82 residuals). `wireSkills(plugin, deps)` is called ONCE from the vault-mcp plugin's
-// onload, ONLY when the skills module is enabled in settings — the exact counterpart to
-// `wireGovernance`, gated on `settings.modules.skills.enabled === true`.
+// The skills GUI wiring — the in-Obsidian HUMAN surface: the Preview pane, the six commands,
+// the ribbon icon, and the (opt-in) export-on-save trigger. Written for the standalone
+// vault-skills plugin, folded into the Governor host (#82 residuals), and extracted back into
+// this satellite at the suite split's S4. `wireSkills(plugin, deps)` is called ONCE from
+// main.ts's onload — UNCONDITIONALLY now, because this plugin being installed and enabled IS
+// the toggle. There is no host module flag to consult any more.
 //
-// The agent-facing surface (the six MCP tools + compiler core + config) was folded in 0.8.2
-// and is UNCHANGED by this file — this adds only the human affordances. The read/compile
-// tools and this pane share the one folded core (`previewVault` / `analyzeVault` / `runExport`
-// in kernel/skills), so the GUI and the tools can never disagree about the same vault.
+// THIS HALF WORKS WITH NO HOST INSTALLED. The pane, the commands, the ribbon and export-on-save
+// are pure Obsidian + the compiler core; nothing here touches vault-mcp-api. If Governor is
+// absent, all of this still runs and only the six MCP tools go unpublished — which is the
+// standalone-operation promise in the README, expressed in code rather than in prose.
+//
+// The agent-facing surface (the six tool specs in tools.ts) shares the one compiler core with
+// this pane (`previewVault` / `analyzeVault` / `runExport` in ./kernel), so the GUI and the
+// tools can never disagree about the same vault.
 //
 // ── What routes through the guarded core ─────────────────────────────────────
 // The mutating command `mark` writes note frontmatter through `guardSkillsMark` — the SAME
-// accept-forbidden guard the MCP `vault_skills_mark` tool uses (see commands.ts). `export` /
-// `release` call the folded `runExport` core directly — the exact function the MCP tools call
-// — materializing to a disk dir outside the vault (no note frontmatter touched, so no accept
-// guard needed). Nothing here reimplements a write or bypasses the mark guard.
+// accept-forbidden guard the `vault_skills_mark` tool uses (see commands.ts). `export` /
+// `release` call `runExport` directly — the exact function the tools call — materializing to a
+// disk dir outside the vault (no note frontmatter touched, so no accept guard needed). Nothing
+// here reimplements a write or bypasses the mark guard. Extraction changed none of that: the
+// accept predicate is `acceptTransitionReason` from @vault-mcp/core, a published contract, so
+// leaving the host did not leave the guard behind.
 //
 // Everything registered is torn down by Obsidian's own registerX cleanup on unload; the one
 // thing that isn't (the export-on-save debounce timer) is cancelled by a `plugin.register`
@@ -31,25 +37,26 @@ import {
   expandTilde,
   type SkillsConfig,
   type PreviewResult,
-} from "../kernel/skills/index.js";
-import { obsidianSkillsBackend, type SkillsBackend } from "../mcp/tools-skills.js";
+} from "./kernel/index.js";
+import { obsidianSkillsBackend, type SkillsBackend } from "./tools.js";
 import { SkillsPreviewView, SKILLS_PREVIEW_VIEW_TYPE, SKILLS_EXPORTED_EVENT, type SkillsPreviewController } from "./pane.js";
 import { cmdValidate, cmdTree, cmdMark, cmdRelease, type SkillsGuiCtx } from "./commands.js";
 import { debounce, handleNoteChanged, type Debounced } from "./export-trigger.js";
 
 const EXPORT_ON_SAVE_DEBOUNCE_MS = 750;
 
-/** What wireSkills needs from the host plugin beyond the base Plugin surface: a reader for the
- * skills module's config (`settings.modules.skills.config`), from which the typed SkillsConfig
- * (output dir, plugin name, detection mode, exportOnSave, …) is derived per read. Plain data. */
+/** What wireSkills needs beyond the base Plugin surface: a reader for this plugin's own config
+ * record (settings.ts's `config`, which carries the same keys the host's
+ * `modules.skills.config` did), from which the typed SkillsConfig (output dir, plugin name,
+ * detection mode, exportOnSave, …) is derived per read. Plain data — read per call, so a change
+ * in the settings tab lands without a plugin reload. */
 export interface SkillsWireDeps {
   getConfig: () => Record<string, unknown>;
 }
 
 /**
- * Wire the skills GUI into the host plugin. Called ONCE from onload, ONLY when the skills
- * module is enabled (a human turned it on in the config tab — the same toggle that mounts the
- * six MCP tools). Additive: it leaves the MCP tool surface and compiler core untouched.
+ * Wire the skills GUI into this plugin. Called ONCE from onload. Additive: it leaves the
+ * published tool surface and the compiler core untouched, and needs no host.
  */
 export function wireSkills(plugin: Plugin, deps: SkillsWireDeps): void {
   const app = plugin.app;

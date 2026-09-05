@@ -22,7 +22,7 @@
 // itself (verify it against a running Obsidian); the core is fully headless.
 //
 // Obsidian-free by construction: vault state arrives through the injected
-// HealthSource (structurally typed, like ProvenanceSource / SkillsBackend), so
+// HealthSource (structurally typed, like ProvenanceSource / VocabSource), so
 // every handler is unit-testable headlessly. The Obsidian adapter is
 // `obsidianHealthBackend(app)` — the only vault coupling.
 

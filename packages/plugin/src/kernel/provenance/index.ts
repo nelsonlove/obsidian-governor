@@ -3,7 +3,7 @@
 //
 // Every file here is Obsidian-free: the freshness / reconcile / regen engines
 // run over an injected `ProvenanceSource` (provenance-source.ts), exactly the
-// seam pattern the vault-mcp module system already uses (SkillsSource /
+// seam pattern the vault-mcp module system already uses (HealthSource /
 // LinkSource / VocabSource / UidSource). The Obsidian-facing adapter and the
 // three MCP tools live in mcp/tools-provenance.ts; the module registration +
 // manifest live in mcp/modules-mount.ts. Nothing here imports `obsidian` or the

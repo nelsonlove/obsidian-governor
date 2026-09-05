@@ -161,15 +161,14 @@ Three details of that note in particular:
   that was absent from the start. The same class as the third row of the limits table
   above; narrow in practice, since Obsidian writes that file on the first enable.
 
-Two other Governor generators were considered and deliberately **not** stamped:
+One other Governor generator was considered and deliberately **not** stamped:
 
 - the **conformance debt register** (`src/conformance/debt-register.ts`) stamps
   `generated` + `generator` but declares **no `derived-from`** — its inputs are a
   findings run and a baseline, not a resolvable file set, so `provenance_check`
-  cannot check it at all and a source count would witness nothing;
-- the **skills export** writes a Claude Code plugin directory outside the vault
-  (its manifest already records `count` + `files`), not a derived *note* with
-  frontmatter.
+  cannot check it at all and a source count would witness nothing.
+
+(This list used to name a second generator, the **skills export**, which wrote a Claude Code plugin directory outside the vault rather than a derived *note* with frontmatter — it left this plugin's outside-vault footprint entirely with the S4 satellite extraction (`docs/suite-split-design.md` §6) and is no longer one of this plugin's generators to consider.)
 
 Vault-side generators (QuickAdd macros, scripts, anything outside this repo) are
 not touched: the field is simply **readable** if they choose to stamp it.

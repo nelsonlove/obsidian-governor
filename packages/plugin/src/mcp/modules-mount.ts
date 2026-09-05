@@ -17,8 +17,8 @@
 //     — a read-only registration cannot reach the write queue, the write
 //     primitive, or the accept-guard's territory at all (the guard routes
 //     ONLY `readOnlyHint === false` calls to the kernel's mutation path).
-//     `mutating: true` is a real, deliberate escape hatch (six modules use
-//     it today: skills, provenance, fileclass, crosssession, jd-scaffold,
+//     `mutating: true` is a real, deliberate escape hatch (five modules use
+//     it today: provenance, fileclass, crosssession, jd-scaffold,
 //     triage), not a bypass of this gate — a module that does NOT declare it still gets the
 //     original all-read-only enforcement. Pinned by test: the mount's
 //     registerAll gate refuses a non-mutating module's tool whose
@@ -55,8 +55,6 @@ import { validateJdConfig, type JdConfig } from "../kernel/scheme/jd.js";
 import type { VocabInstanceSettings } from "../kernel/index.js";
 import { registerSchemeTools } from "./tools-scheme.js";
 import { registerVocabTools, type VocabSource, type VocabToolsCtx } from "./tools-vocab.js";
-import { registerSkillsTools, type SkillsBackend, type SkillsToolsCtx } from "./tools-skills.js";
-import { DEFAULT_SKILLS_CONFIG, validateSkillsConfig } from "../kernel/skills/index.js";
 import { registerProvenanceTools, type ProvenanceToolsCtx } from "./tools-provenance.js";
 import { DEFAULT_PROVENANCE_CONFIG, validateProvenanceConfig, DEFAULT_NOTES_DIR, DEFAULT_AUDIT_NOTE, type ProvenanceBackend } from "../kernel/provenance/index.js";
 import { registerHealthTools, type HealthToolsCtx } from "./tools-health.js";
@@ -385,95 +383,10 @@ const VOCAB_MANIFEST: ModuleManifest = {
   },
 };
 
-// ── skills module manifest (#82: the vault-skills → vault-mcp fold) ─────────
-//
-// The FIRST mutating capability module. Its config is a NEW module (no
-// ConfigBinding): it lives at `modules.skills.config`, the default location,
-// so the manifest's flat field keys map straight through. Fields mirror the
-// standalone plugin's settings tab, INCLUDING `exportOnSave` (re-added with the
-// GUI fold — the in-Obsidian skills GUI has the vault-side save hook a tool-only
-// deployment lacked; opt-in, default off). The directory documents all SIX
-// tools — three read, three mutating — so they render in the config tab +
-// capability directory, and the drift checks pin the manifest to what actually
-// registers.
-const SKILLS_CONFIG_FIELDS: ConfigField[] = [
-  { key: "outputDir", label: "Output plugin directory", type: "text", help: "Where vault_skills_export writes the generated Claude Code plugin (skills/ + agents/). ~ is expanded." },
-  { key: "pluginName", label: "Plugin name", type: "text", help: "Claude Code plugin name — also the command/subagent namespace." },
-  { key: "typeSource", label: "Type source", type: "select", options: ["frontmatter", "tags"], help: "How a note declares its kind: the `type` frontmatter field, or a kind tag." },
-  { key: "tagPrefix", label: "Tag prefix", type: "text", help: "Tags mode: kind tags are #{prefix}skill / #{prefix}agent / … (e.g. agent/ → #agent/skill)." },
-  { key: "fieldMode", label: "Frontmatter field mode", type: "select", options: ["prefix", "nested"], help: "How vault-skills fields are namespaced: prefix (bare/prefixed top-level fields) or nested (all under one key)." },
-  { key: "fieldPrefix", label: "Field prefix", type: "text", help: "prefix mode: prefixes each field, e.g. vs- → vs-type. Blank ⇒ bare top-level fields (type, parent, …)." },
-  { key: "fieldKey", label: "Field key", type: "text", help: "nested mode: nests every field under this one key, e.g. vault-skills." },
-  { key: "assetsRoot", label: "Supporting-files tree", type: "text", help: "Root of a parallel filesystem tree of skills' supporting files. Blank ⇒ none. ~ is expanded." },
-  { key: "releaseDir", label: "Release repo directory", type: "text", help: "A git checkout vault_skills_release targets. Blank ⇒ release disabled. ~ is expanded." },
-  { key: "exportOnSave", label: "Export on save (GUI)", type: "toggle", help: "When on, the in-Obsidian skills GUI re-exports automatically (debounced) whenever a skill/agent/policy/command note changes. Off ⇒ export only when you run it. Ignored by the MCP tool surface." },
-  { key: "preloadCap", label: "Preload cap (warn above)", type: "number", help: "How many `preload: true` skills may be compiled into one agent's `skills:` list before the compile warns. A warning, not a refusal — preloading is context provisioning, and a large set spends the fresh context window a subagent is delegated for." },
-];
-
-const SKILLS_MANIFEST: ModuleManifest = {
-  summary:
-    "Compile the vault's skill / agent / policy / command notes into a Claude Code plugin and materialize it to " +
-    "disk. Read tools inspect and preview the compile; the mutating tools export to the configured output dir, " +
-    "package a versioned release into a repo, and mark a note's kind in its frontmatter. Mark can never write an " +
-    "acceptance field — like every write, it routes through the accept-forbidden guard.",
-  config: {
-    fields: SKILLS_CONFIG_FIELDS,
-    defaults: { ...DEFAULT_SKILLS_CONFIG } as Record<string, unknown>,
-    validate: validateSkillsConfig,
-  },
-  directory: {
-    tools: [
-      {
-        name: "vault_skills_validate",
-        purpose: "Collect skill/agent/policy/command notes and run the transform without writing; report errors, warnings, counts, multi-parent attachments, and each agent's preload set.",
-        readOnly: true,
-        caveats: [
-          "A note may name several parents: the first is primary (tree edge, breadcrumb, level), the rest are recorded attachments. Every named parent is validated — it must resolve and be an agent.",
-          "The compiled `skills:` list is PRELOAD (context provisioning), not an allowlist: skills a subagent isn't given stay invokable through the Skill tool. Past the configured cap the compile warns.",
-        ],
-      },
-      { name: "vault_skills_tree", purpose: "Return the current agent/skill hierarchy (name, kind, primary parent, level, owned skills, children, extra-parent attachments, preload flags).", readOnly: true },
-      {
-        name: "vault_skills_preview",
-        purpose: "Run the transform without writing and diff it against the current export.",
-        readOnly: true,
-        options: [
-          { name: "name", what: "return one entry (by generated name, output path, or source note path) in full" },
-          { name: "content", what: "include full compiled content for every entry (large)" },
-        ],
-      },
-      { name: "vault_skills_export", purpose: "Write skills/agents to the configured output dir (then /reload-plugins in Claude Code).", readOnly: false },
-      {
-        name: "vault_skills_release",
-        purpose: "Export the full plugin into a git checkout and stamp a version into .claude-plugin/plugin.json (no commit/tag/push).",
-        readOnly: false,
-        options: [
-          { name: "version", what: "release version (semver, e.g. 1.2.0)" },
-          { name: "dir", what: "target repo directory; defaults to the release repo dir from config" },
-        ],
-      },
-      {
-        name: "vault_skills_mark",
-        purpose: "Mark an existing note skill/agent/policy/command in its frontmatter, honoring the detection + field mode.",
-        readOnly: false,
-        options: [
-          { name: "path", what: "vault-relative path of the note to mark" },
-          { name: "type", what: "skill / agent / policy / command" },
-          { name: "parent", what: "parent agent basename or [[wikilink]]; omit for root, ignored for commands" },
-          { name: "description", what: "written to the note's description field" },
-        ],
-        caveats: [
-          "Routes through the accept-forbidden write guard: it can never introduce or change an accepted / " +
-            "accepted-by / accepted-on field, nor set acceptance-status to an accepted value.",
-        ],
-      },
-    ],
-  },
-};
-
 // ── provenance module manifest (the obsidian-provenance CLI fold) ──────────
 //
-// The SECOND mutating capability module (after skills). Ported from the
+// The second mutating capability module (after skills, which left for its own
+// plugin at the S4 satellite extraction). Ported from the
 // standalone `obsidian-provenance` Python CLI. Its config is a NEW module (no
 // ConfigBinding): it lives at `modules.provenance.config`, so the manifest's
 // flat field keys map straight through. One field today — the plugin-notes
@@ -568,7 +481,7 @@ const PROVENANCE_MANIFEST: ModuleManifest = {
 
 // ── health module manifest (the obsidian-vault-health scanner fold) ────────
 //
-// A READ-ONLY capability module (unlike skills/provenance, which are mutating).
+// A READ-ONLY capability module (unlike provenance, which is mutating).
 // Ported from the standalone `obsidian-vault-health` Bash+eval scanner. It emits
 // tiered findings and NEVER mutates — the fixing is a separate skill, out of
 // scope — so both its tools register `readOnlyHint: true`, it declares NO
@@ -636,7 +549,7 @@ const HEALTH_MANIFEST: ModuleManifest = {
 //
 // A MUTATING capability module that proxies the standalone `fileclass` CLI
 // (github.com/mdelobelle/fileclass-cli — the terminal for the Fileclass
-// typed-frontmatter plugin). Unlike skills/provenance, its tools mount ONLY when
+// typed-frontmatter plugin). Unlike provenance, its tools mount ONLY when
 // the Fileclass plugin is LOADED and the CLI binary is present — the module's
 // registrar (registerFileclassTools) gates on both and registers nothing when
 // either is absent, so it degrades cleanly to absent (issue #188). It shells out
@@ -648,7 +561,7 @@ const HEALTH_MANIFEST: ModuleManifest = {
 // through the accept-forbidden guard (a field-write can never assert acceptance)
 // and the guard-patched registrar (read-only mode, queue, journal, if_rev,
 // path allowlist). set-where is DRY-RUN by default. Default DISABLED (opt-in),
-// consistent with skills/provenance/health — a newly-folded surface stays off
+// consistent with provenance/health — a newly-folded surface stays off
 // until a human turns it on in the config tab.
 //
 // One config field: an explicit `binaryPath` override for the `fileclass` CLI
@@ -1428,9 +1341,6 @@ export interface MountDeps {
   schemeNotes: () => string[];
   /** The vocab module's injected vault reader (obsidianVocabSource live). */
   vocabSource: VocabSource;
-  /** The skills module's injected backend (obsidianSkillsBackend live) — the
-   * exporter read seam plus the mark write primitive. */
-  skillsSource: SkillsBackend;
   /** The provenance module's injected backend (obsidianProvenanceBackend live)
    * — the freshness/reconcile read seam plus the regen write primitive. */
   provenanceSource: ProvenanceBackend;
@@ -1595,23 +1505,18 @@ export function builtinModules(deps: MountDeps): VaultModule[] {
         ...(deps.getVocabularies ? { getVocabularies: deps.getVocabularies } : {}),
       }),
     ),
-    // The skills module (#82): the first MUTATING capability module. It
-    // declares `mutating: true`, which the mount gate honors to let its three
-    // write tools (export / release / mark) register with `readOnlyHint:
-    // false` — still through the guard-patched registrar (read-only mode,
-    // allowlist, queue, journal) and, for mark, the accept-forbidden write
-    // guard. Default DISABLED: a newly-folded mutating surface stays off until
-    // a human turns it on in the config tab (this is acceptance-adjacent —
-    // flagged for review). Config lives at `modules.skills.config` (a new
-    // module, no ConfigBinding), so `config` here is that record merged over
-    // the manifest defaults.
-    moduleFromRegistrar(
-      { id: "skills", capabilities: ["compile", "export", "authoring"], enabled: false, mutating: true, manifest: SKILLS_MANIFEST },
-      (server: any, ctx: SkillsToolsCtx) => registerSkillsTools(server, deps.skillsSource, ctx),
-      (_host, config) => ({ config, getSettings: deps.getSettings }),
-    ),
-    // The provenance module (the obsidian-provenance CLI fold): the SECOND
-    // mutating capability module. Like skills it declares `mutating: true`,
+    // THE SKILLS MODULE IS GONE FROM HERE (suite split, S4). It was the FIRST
+    // mutating capability module and it is the precedent several comments below
+    // still cite; it now ships as its own plugin, `packages/skills` (plugin id
+    // `vault-skills`), publishing the same six `vault_skills_*` tools through
+    // vault-mcp-api like any third-party publisher. Its config left with it —
+    // a stale `modules.skills` row in an existing data.json is simply an
+    // unknown module id now, and the satellite adopts a copy of
+    // `modules.skills.config` once, on its own first load, without writing
+    // anything here.
+    //
+    // The provenance module (the obsidian-provenance CLI fold): the second
+    // mutating capability module. Like skills was, it declares `mutating: true`,
     // which the mount gate honors to let its one write tool (regen) register
     // with `readOnlyHint: false` — still through the guard-patched registrar
     // (read-only mode, allowlist, queue, journal) and the accept-forbidden
@@ -1625,7 +1530,7 @@ export function builtinModules(deps: MountDeps): VaultModule[] {
       (_host, config) => ({ config, getSettings: deps.getSettings }),
     ),
     // The health module (the obsidian-vault-health scanner fold): a READ-ONLY
-    // capability module. Unlike skills/provenance it declares NO `mutating` flag
+    // capability module. Unlike provenance it declares NO `mutating` flag
     // — both its tools (obsidian_health / obsidian_lint) register with
     // `readOnlyHint: true`, so the mount's read-only-only registrar gate passes
     // them without any exemption, and there is no write tool, write guard, or
@@ -1640,7 +1545,7 @@ export function builtinModules(deps: MountDeps): VaultModule[] {
     ),
     // The fileclass module (#188: the fileclass CLI fold): a MUTATING capability
     // module that PROXIES the standalone `fileclass` CLI (execFile, the
-    // obsidian_cli precedent). Like skills/provenance it declares `mutating:
+    // obsidian_cli precedent). Like provenance it declares `mutating:
     // true`, so its two write tools (set / set_where) register with
     // `readOnlyHint: false` — through the guard-patched registrar (read-only
     // mode, path allowlist, queue, journal, if_rev) and the accept-forbidden
@@ -1796,8 +1701,10 @@ export function builtinModules(deps: MountDeps): VaultModule[] {
 export function mountModules(registerTool: ToolRegistrar, deps: MountDeps): ModuleRegistry {
   const modules = builtinModules(deps);
   const registry = new ModuleRegistry(modules, deps.getSettings().modules ?? {});
-  // The modules that have EARNED the right to contribute mutating tools (the
-  // skills module today), by declaring `mutating` — see VaultModule.mutating.
+  // The modules that have EARNED the right to contribute mutating tools
+  // (provenance, fileclass, crosssession, jd-scaffold and triage today; skills
+  // set the precedent before it left for its own plugin), by declaring
+  // `mutating` — see VaultModule.mutating.
   // Every other module is still held to read-only, so a mutating handler
   // cannot drift into a read-only module unreviewed.
   const mutatingModules = new Set(modules.filter((m) => m.mutating).map((m) => m.id));

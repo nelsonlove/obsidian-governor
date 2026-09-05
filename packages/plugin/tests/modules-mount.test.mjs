@@ -36,19 +36,6 @@ const vocabSource = {
   body: async () => null,
 };
 
-/** A no-op skills backend — the skills module registers over it without ever
- * calling a handler in these tests (registration only), so an inert stub is
- * all the mount needs. */
-const skillsSource = {
-  notes: async () => [],
-  resolveLink: () => null,
-  embed: async () => null,
-  basePath: () => null,
-  frontmatterOf: () => null,
-  exists: () => false,
-  applyFrontmatter: async () => {},
-};
-
 /** A no-op pending-review source for the governance module — the module registers
  * obsidian_pending_review over it without ever calling the handler in these tests. */
 const pendingReviewSource = { read: async () => null };
@@ -101,7 +88,6 @@ function deps(overrides = {}) {
     getSettings: () => ({ ...(overrides.settings ?? {}) }),
     schemeNotes: () => NOTES,
     vocabSource,
-    skillsSource,
     pendingReviewSource,
     provenanceSource,
     healthSource,
@@ -146,7 +132,7 @@ describe("mountModules: the two built-in modules register through the registry",
     }
     assert.deepEqual(registry.problems, []);
     const described = registry.describe();
-    // skills (#82), provenance (the obsidian-provenance fold), health (the
+    // provenance (the obsidian-provenance fold), health (the
     // obsidian-vault-health fold), fileclass (#188, the fileclass CLI fold),
     // governance (#83), crosssession (#232, the cross-session channel
     // module), jd-scaffold (Stage A of the jd-dashboard fold) and triage
@@ -154,17 +140,16 @@ describe("mountModules: the two built-in modules register through the registry",
     // surfaces a human turns on), so they contribute nothing here — scheme +
     // vocab + bases (#243, the read-only default-enabled Bases surface) are
     // the live trio.
-    assert.deepEqual(described.map((d) => d.id), ["scheme", "vocab", "skills", "provenance", "health", "fileclass", "acceptance", "crosssession", "bases", "jd-scaffold", "triage"]);
+    assert.deepEqual(described.map((d) => d.id), ["scheme", "vocab", "provenance", "health", "fileclass", "acceptance", "crosssession", "bases", "jd-scaffold", "triage"]);
     for (const d of described) {
-      if (["skills", "provenance", "health", "fileclass", "acceptance", "crosssession", "jd-scaffold", "triage"].includes(d.id)) {
+      if (["provenance", "health", "fileclass", "acceptance", "crosssession", "jd-scaffold", "triage"].includes(d.id)) {
         assert.equal(d.enabled, false);
         assert.deepEqual(d.tools, []);
       } else {
         assert.ok(d.enabled && d.tools.length > 0);
       }
     }
-    // No skills/provenance/health/fileclass/crosssession tool leaked onto the surface while the modules are off.
-    assert.ok(!names.some((n) => n.startsWith("vault_skills_")));
+    // No provenance/health/fileclass/crosssession tool leaked onto the surface while the modules are off.
     assert.ok(!names.some((n) => n.startsWith("provenance_")));
     assert.ok(!names.includes("obsidian_health") && !names.includes("obsidian_lint"));
     assert.ok(!names.some((n) => n.startsWith("fileclass_")));
@@ -276,12 +261,11 @@ describe("mount gate 2: the host ctx handed to modules is minimal", () => {
     assert.deepEqual(host.visible(["Projects/a.md", "Archive/b.md"]), ["Projects/a.md"]);
   });
 
-  test("builtinModules declares the eleven capability modules (skills + provenance + fileclass + crosssession + jd-scaffold + triage mutating; health/governance/bases NOT)", () => {
+  test("builtinModules declares the ten capability modules (provenance + fileclass + crosssession + jd-scaffold + triage mutating; health/governance/bases NOT)", () => {
     const mods = builtinModules(deps());
     assert.deepEqual(mods.map((m) => [m.id, m.posture]), [
       ["scheme", "capability"],
       ["vocab", "capability"],
-      ["skills", "capability"],
       ["provenance", "capability"],
       // health (the obsidian-vault-health fold) is a READ-ONLY capability module —
       // no `mutating` flag, both tools readOnlyHint:true.
@@ -307,10 +291,10 @@ describe("mount gate 2: the host ctx handed to modules is minimal", () => {
       // retypes / trashes inbox notes through the shared guarded primitives).
       ["triage", "capability"],
     ]);
-    // skills, provenance, fileclass, crosssession, jd-scaffold and triage are the
+    // provenance, fileclass, crosssession, jd-scaffold and triage are the
     // modules that declare they may contribute mutating tools; health and
     // governance are NOT mutating.
-    assert.deepEqual(mods.filter((m) => m.mutating).map((m) => m.id), ["skills", "provenance", "fileclass", "crosssession", "jd-scaffold", "triage"]);
+    assert.deepEqual(mods.filter((m) => m.mutating).map((m) => m.id), ["provenance", "fileclass", "crosssession", "jd-scaffold", "triage"]);
   });
 });
 
@@ -372,7 +356,7 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
   test("drift check: every ToolDoc names a tool the module ACTUALLY contributed on registerAll, and vice versa", () => {
     // Enable every default-off module so all modules contribute — the drift check
     // needs a contributed tool list to compare each manifest against.
-    const { registry } = mount({ settings: { modules: { skills: { enabled: true }, provenance: { enabled: true }, health: { enabled: true }, fileclass: { enabled: true }, acceptance: { enabled: true }, crosssession: { enabled: true }, "jd-scaffold": { enabled: true }, triage: { enabled: true } } } });
+    const { registry } = mount({ settings: { modules: { provenance: { enabled: true }, health: { enabled: true }, fileclass: { enabled: true }, acceptance: { enabled: true }, crosssession: { enabled: true }, "jd-scaffold": { enabled: true }, triage: { enabled: true } } } });
     const described = registry.describe();
     for (const d of described) {
       const mod = builtinModules(deps()).find((m) => m.id === d.id);
@@ -382,7 +366,7 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
   });
 
   test("readOnly drift: every ToolDoc's readOnly matches the tool's real registered annotation", () => {
-    const { server } = mount({ settings: { modules: { skills: { enabled: true }, provenance: { enabled: true }, health: { enabled: true }, fileclass: { enabled: true }, acceptance: { enabled: true }, crosssession: { enabled: true }, "jd-scaffold": { enabled: true }, triage: { enabled: true } } } });
+    const { server } = mount({ settings: { modules: { provenance: { enabled: true }, health: { enabled: true }, fileclass: { enabled: true }, acceptance: { enabled: true }, crosssession: { enabled: true }, "jd-scaffold": { enabled: true }, triage: { enabled: true } } } });
     const mods = builtinModules(deps());
     const annotationsByName = Object.fromEntries([...server.tools].map(([name, { def }]) => [name, def.annotations]));
     for (const mod of mods) {
@@ -453,21 +437,12 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
     const settings = { schemes: [{ id: "jd", provider: "johnny-decimal", config: { contentDecimalFloor: 20 } }], modules: {} };
     const mods = builtinModules(deps({ settings }));
     const hosted = collect(mods, settings.modules, settings);
-    assert.deepEqual(hosted.map((h) => h.id), ["scheme", "vocab", "skills", "provenance", "health", "fileclass", "acceptance", "crosssession", "bases", "jd-scaffold", "triage"]);
+    assert.deepEqual(hosted.map((h) => h.id), ["scheme", "vocab", "provenance", "health", "fileclass", "acceptance", "crosssession", "bases", "jd-scaffold", "triage"]);
     const scheme = hosted.find((h) => h.id === "scheme");
     assert.equal(scheme.fields.find((f) => f.key === "contentDecimalFloor").value, 20);
     const vocab = hosted.find((h) => h.id === "vocab");
     assert.deepEqual(vocab.fields, []);
     assert.ok(vocab.directory.tools.length > 0);
-    // The skills module renders its own config tab: eleven config fields (default
-    // values from the manifest — the nine folded from the standalone settings tab,
-    // the exportOnSave GUI toggle, and the preload cap (#292)) plus a six-tool
-    // capability directory.
-    const skills = hosted.find((h) => h.id === "skills");
-    assert.equal(skills.fields.length, 11);
-    assert.equal(skills.fields.find((f) => f.key === "preloadCap").value, 5);
-    assert.equal(skills.fields.find((f) => f.key === "pluginName").value, "vault-skills");
-    assert.equal(skills.directory.tools.length, 6);
     // The governance module renders its section too — two badge-display toggles
     // (ribbon + pane-tab, default ON) plus the two acceptance-convergence fields
     // (#221/#164: acceptedBy text, requiredFrontmatterKeys csv) and an EMPTY capability

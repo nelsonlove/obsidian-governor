@@ -21,7 +21,6 @@ import { registerLinkTools, obsidianLinkSource } from "./tools-links.js";
 import { registerConformanceDebtTools, registerConformanceDebtRenderTool } from "./tools-conformance-debt.js";
 import { obsidianDebtRenderSource } from "./obsidian-debt-source.js";
 import { obsidianVocabSource } from "./tools-vocab.js";
-import { obsidianSkillsBackend } from "./tools-skills.js";
 import { obsidianProvenanceBackend } from "./tools-provenance.js";
 import { obsidianHealthBackend } from "./tools-health.js";
 import { mountModules } from "./modules-mount.js";
@@ -540,7 +539,7 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
       console.error("[governor] provider tool registrar failed", e);
     }
   }
-  // ── capability modules: scope-provider + vocab + skills ────────────────────
+  // ── capability modules: scope-provider + vocab + the rest ──────────────────
   // Ruled decision #2 realized: the two capability modules register THROUGH
   // the ModuleRegistry — settings-toggleable (`modules.<id>.enabled`), behind
   // the accept/baseline tripwire, collision refusal, and the mount's
@@ -552,7 +551,6 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
     getVocabularies: ctx.getVocabularies,
     schemeNotes: () => app.vault.getMarkdownFiles().map((f) => f.path),
     vocabSource: obsidianVocabSource(app),
-    skillsSource: obsidianSkillsBackend(app),
     provenanceSource: obsidianProvenanceBackend(app),
     healthSource: obsidianHealthBackend(app),
     // The fileclass module (#188) pins the CLI to THIS vault and gates on the

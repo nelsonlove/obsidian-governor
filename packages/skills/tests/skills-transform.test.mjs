@@ -28,8 +28,8 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import * as os from "node:os";
 import * as path from "node:path";
-import { transformAll, DEFAULT_PRELOAD_CAP } from "../src/kernel/skills/transform.ts";
-import { analyzeVault, previewVault } from "../src/kernel/skills/exporter.ts";
+import { transformAll, DEFAULT_PRELOAD_CAP } from "../src/kernel/transform.ts";
+import { analyzeVault, previewVault } from "../src/kernel/exporter.ts";
 
 const OPTS = { pluginName: "vault-skills", synthesizeRoot: false };
 

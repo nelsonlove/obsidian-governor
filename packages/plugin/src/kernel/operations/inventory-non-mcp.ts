@@ -531,56 +531,9 @@ export const COMMAND_SURFACES: CommandRow[] = [
     distribution: "public-optional",
     readOnly: true,
   },
-  {
-    id: "skills-export",
-    title: "Skills: export skills & agents to Claude Code",
-    postcondition: "Write the compiled skills and agents to the configured output directory, outside the vault.",
-    owner: "skills",
-    distribution: "private",
-    readOnly: false,
-    outsideVault: true,
-  },
-  {
-    id: "skills-validate",
-    title: "Skills: validate tree",
-    postcondition: "Report compile errors, warnings and preload counts without writing.",
-    owner: "skills",
-    distribution: "private",
-    readOnly: true,
-  },
-  {
-    id: "skills-tree",
-    title: "Skills: show tree",
-    postcondition: "Display the agent and skill hierarchy.",
-    owner: "skills",
-    distribution: "private",
-    readOnly: true,
-  },
-  {
-    id: "skills-mark",
-    title: "Skills: mark note as skill / agent / policy / command",
-    postcondition: "Set the active note's skills frontmatter, through the accept-forbidden guard.",
-    owner: "skills",
-    distribution: "private",
-    readOnly: false,
-  },
-  {
-    id: "skills-release",
-    title: "Skills: export release to repo",
-    postcondition: "Export the compiled corpus into a repository checkout and stamp a version.",
-    owner: "skills",
-    distribution: "private",
-    readOnly: false,
-    outsideVault: true,
-  },
-  {
-    id: "skills-preview",
-    title: "Skills: preview compiled output",
-    postcondition: "Activate the skills preview view.",
-    owner: "skills",
-    distribution: "private",
-    readOnly: true,
-  },
+  // The six `skills-*` command rows lived here until the S4 satellite
+  // extraction; they moved out with the commands themselves, which are now
+  // registered by the `vault-skills` plugin (packages/skills/src/wiring.ts).
 ];
 
 // ── automation ───────────────────────────────────────────────────────────────
@@ -626,23 +579,6 @@ export const AUTOMATION_SURFACES: AutomationRow[] = [
     postcondition: "Rescan the inbox view when notes are created, deleted or renamed.",
     owner: "scheme",
     touchesAuthority: false,
-  },
-  {
-    id: "automation.skills.preview-refresh",
-    file: "src/skills/pane.ts",
-    title: "Skills preview refresh",
-    postcondition: "Recompile the preview when its sources change.",
-    owner: "skills",
-    touchesAuthority: false,
-  },
-  {
-    id: "automation.skills.export-on-save",
-    file: "src/skills/wiring.ts",
-    title: "Skills export on save",
-    postcondition: "Re-export the compiled corpus after a debounce when the opt-in setting is on.",
-    owner: "skills",
-    touchesAuthority: false,
-    outsideVault: true,
   },
 ];
 
@@ -976,10 +912,14 @@ export const PLAIN_SURFACES: PlainSurfaceRow[] = [...BRIDGE_SURFACES, ...SETTING
  * Every surface that writes outside the vault, ACROSS ALL FAMILIES.
  *
  * The first draft computed this over `PLAIN_SURFACES` alone while claiming it
- * was "the plugin's whole footprint outside the vault." It was not: the skills
- * export and release commands write to a directory outside the vault, and
- * their export-on-save automation re-triggers the same write on a timer. A
- * disclosure scoped to one row family is not a disclosure of the plugin.
+ * was "the plugin's whole footprint outside the vault." It was not: at the time
+ * the skills export and release COMMANDS wrote to a directory outside the vault
+ * and their export-on-save AUTOMATION re-triggered the same write on a timer,
+ * and a `PLAIN_SURFACES`-only computation reported none of the three. Skills
+ * has since left for its own plugin, so the specific example is historical —
+ * the lesson is not. A disclosure scoped to one row family is not a disclosure
+ * of the plugin, and the next command or timer that writes outside the vault
+ * must be caught by construction rather than by remembering to widen this.
  *
  * The footprint is a property of the PLUGIN, so it is computed over every
  * family and pinned by one test.

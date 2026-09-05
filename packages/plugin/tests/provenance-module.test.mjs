@@ -697,15 +697,6 @@ function deps(settings = {}) {
     getSettings: () => settings,
     schemeNotes: () => [],
     vocabSource: { paths: () => [], frontmatter: () => null, body: async () => null },
-    skillsSource: {
-      notes: async () => [],
-      resolveLink: () => null,
-      embed: async () => null,
-      basePath: () => null,
-      frontmatterOf: () => null,
-      exists: () => false,
-      applyFrontmatter: async () => {},
-    },
     provenanceSource: inertProvenance,
   };
 }

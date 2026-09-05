@@ -13,7 +13,7 @@
 // the cache has settled and every cascaded link rewrite is done, so validation always runs
 // against the consistent post-rename tree.
 
-import { fieldView, detectKind, type DetectConfig } from "../kernel/skills/exporter.js";
+import { fieldView, detectKind, type DetectConfig } from "./kernel/exporter.js";
 
 /** A debounced trigger, plus a `cancel()` to drop a pending call (e.g. on plugin unload,
  *  so a queued export never fires against a torn-down plugin). */

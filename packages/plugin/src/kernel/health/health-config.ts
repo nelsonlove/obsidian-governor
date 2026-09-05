@@ -32,7 +32,7 @@ export const DEFAULT_HEALTH_CONFIG: HealthConfig = {
 /** Coerce a merged config record (defaults + user override, as `register()`
  *  receives it) into a typed HealthConfig, falling back to the default for a
  *  value of the wrong shape — a hand-edited data.json must never crash a tool,
- *  only degrade to the default (the provenance/skills/vocab skip-and-report
+ *  only degrade to the default (the provenance/vocab skip-and-report
  *  discipline). A non-integer, negative, or non-finite threshold degrades to the
  *  default; a fractional value is floored (a char count is a whole number). */
 export function healthConfigOf(config: Record<string, unknown>): HealthConfig {

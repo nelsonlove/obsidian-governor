@@ -168,7 +168,7 @@ export function registerConformanceDebtTools(server: McpServer, source: DebtSour
 //
 // `obsidian_conformance_debt_render` MATERIALIZES the debt report into the
 // vault as ONE generated note (`Conformance debt.md`, default: beside the
-// baseline/sidecar) that Obsidian renders natively — the skills-export
+// baseline/sidecar) that Obsidian renders natively — the materialize-to-disk
 // pattern: MCP only triggers the write; the artifact lives on disk. It is the
 // module's one MUTATING tool: `readOnlyHint: false`, so it inherits the
 // guard-patched registrar's queue/journal/read-only-mode/kernel-args

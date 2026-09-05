@@ -390,7 +390,7 @@ export async function scanUnknownRegistrationCallees() {
  * Every Obsidian command the plugin registers, from `addCommand({ id: "…" })`.
  *
  * Both the multi-line form (`main.ts`) and the single-line form
- * (`skills/wiring.ts`, `scheme/wiring.ts`) occur, so the id is matched within
+ * (`scheme/wiring.ts`) occur, so the id is matched within
  * the object literal rather than at a fixed offset.
  */
 export async function scanCommands() {

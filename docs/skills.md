@@ -1,17 +1,30 @@
-# The skills module — compiling vault notes into a Claude Code plugin
+# The vault-skills plugin — compiling vault notes into a Claude Code plugin
 
-> **Deep reference for the shipped implementation.** Canonical concepts and the target design live in the [documentation corpus](README.md); what is shipped versus target is owned by [status-and-compatibility.md](status-and-compatibility.md).
+> **Deep reference for the shipped implementation.** Canonical concepts and the target design live in the [documentation corpus](README.md); what is shipped versus target is owned by [status-and-compatibility.md](status-and-compatibility.md). Since the S4 satellite extraction (`docs/suite-split-design.md` §6), this reference documents the standalone `vault-skills` plugin, not a module of the host plugin (`governor`).
 
 
-The `skills` module (default off, mutating) compiles the vault's `type: skill` / `agent` /
+The `vault-skills` plugin (default off, mutating) compiles the vault's `type: skill` / `agent` /
 `policy` / `command` notes into a Claude Code plugin on disk: `skills/<name>/SKILL.md`,
 `agents/<name>.md`, `commands/<name>.md`. Three read tools (`vault_skills_validate`,
 `vault_skills_tree`, `vault_skills_preview`), three mutating (`vault_skills_export`,
 `vault_skills_release`, `vault_skills_mark`).
 
-Files: `packages/plugin/src/kernel/skills/` (pure compiler — `transform.ts`, `exporter.ts`,
-`skills-config.ts`), `packages/plugin/src/mcp/tools-skills.ts` (tools + the Obsidian adapter),
-`packages/plugin/src/skills/` (the in-Obsidian GUI).
+Files: `packages/skills/src/kernel/` (pure compiler — `transform.ts`, `exporter.ts`, `transclude.ts`,
+`assets.ts`, `skills-config.ts`, `skills-source.ts`, `static-skills.ts`), `packages/skills/src/tools.ts`
+(the six tool specs, the Obsidian adapter `obsidianSkillsBackend`, and the accept guard `guardSkillsMark`),
+`packages/skills/src/wiring.ts` / `pane.ts` / `commands.ts` / `export-trigger.ts` / `version.ts` (the
+in-Obsidian human surface), and `packages/skills/src/settings.ts` / `settings-tab.ts` (its own settings
+plus the one-shot adoption) — all under `packages/skills/`, alongside `assets/new-skill/` and `tests/`.
+
+## Now a satellite plugin
+
+This capability shipped as the host plugin's `skills` module through 2026-08; as of the S4 extraction it is its own Obsidian plugin, id `vault-skills`, publishing its tools to the host through the `vault-mcp-api` SDK's `publishTools` — exactly like the `quickadd-choices-compile` pilot satellite. It is no longer a `modules.skills` entry in the host's module registry.
+
+The six tool names are unchanged on the wire — `vault_skills_validate`, `vault_skills_tree`, `vault_skills_preview`, `vault_skills_export`, `vault_skills_release`, `vault_skills_mark` — because the plugin id `vault-skills` sanitizes to `vault_skills`, and the host publishes an external tool as `<sanitized owner id>_<bare name>`, so the spellings survive the move exactly.
+
+**Allowlist posture.** The host distrusts an external tool's `readOnlyHint: true` claim unless the publisher's raw plugin id is in the host's `trustedReadOnlyPlugins` setting, so all six tools register as MUTATING regardless of their own read/write nature. The host also BLOCKS OUTRIGHT any external tool — trusted or not — whose arguments carry no recognized path key while a path allowlist is active. The wholesale block applies to trusted publishers TOO (2026-09-05, found by this extraction's review): trust decides read-only-mode eligibility, never scoping — before that ruling, adding `vault-skills` to `trustedReadOnlyPlugins` would have reopened the exact hidden-body leak the in-tree filter closed. Five of the six (validate, tree, preview, export, release) carry no path argument, so under an allowlist they are refused wholesale — strictly stricter than the old in-module body filtering. Only `vault_skills_mark` carries `path` and is scoped normally. The in-tool visibility filter (which uses `isVisible`, now published in `@vault-mcp/core`) is retained inside the satellite as defence in depth, and does nothing without host settings, which nothing supplies today.
+
+**Settings adoption.** The satellite reads the host's `modules.skills.config` ONCE on first load and copies the recognized keys into its own `data.json`, then latches (`adoptedFromHost`). It never writes the host's settings. The satellite's own values win where it already has one. If the host is absent, nothing is adopted and the latch is not set, so the one chance survives to a later load.
 
 ## The output is flat
 
@@ -109,7 +122,7 @@ emitted plugin, not a claim about anything else the agent can reach.
 
 ## Config
 
-`modules.skills.config` (rendered in the config tab): `outputDir`, `pluginName`, `typeSource`
+The `vault-skills` plugin's own settings tab (formerly rendered as `modules.skills.config` in the host's config tab — see "Now a satellite plugin" above for the one-shot adoption path): `outputDir`, `pluginName`, `typeSource`
 (`frontmatter` | `tags`), `tagPrefix`, `fieldMode` (`prefix` | `nested`), `fieldPrefix`,
 `fieldKey`, `assetsRoot`, `releaseDir`, `exportOnSave` (GUI only), `preloadCap` (default 5).
 

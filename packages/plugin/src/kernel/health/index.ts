@@ -5,7 +5,7 @@
 //
 // Every file here is Obsidian-free: the scan runs over an injected `HealthSource`
 // (health-source.ts), exactly the seam pattern the vault-mcp module system uses
-// (ProvenanceSource / SkillsSource / LinkSource / VocabSource). The Obsidian-
+// (ProvenanceSource / LinkSource / VocabSource). The Obsidian-
 // facing adapter (`obsidianHealthBackend`) and the read-only MCP tools live in
 // mcp/tools-health.ts; the module registration + manifest live in
 // mcp/modules-mount.ts. Nothing here imports `obsidian` or the MCP SDK.

@@ -206,11 +206,21 @@ export function registerExternalTools(server: McpServer, app: App, ctx: ServerCt
           const currentOwner = (app as any).plugins?.plugins?.[ownerId];
           if (ownerAtBuild === undefined || currentOwner !== ownerAtBuild)
             return fail(new Error(`publisher plugin '${ownerId}' was reloaded or unloaded since this session connected; reconnect to use its tools`));
-          // F3: when an allowlist is active, mutating tools that carry no recognized
-          // path argument cannot be scoped — block them outright. `isReadOnly` is
-          // the TRUSTED verdict, not the publisher's claim: an untrusted
-          // read-only tool is scoped like any other mutator.
-          if (!isReadOnly) {
+          // F3: when an allowlist is active, a tool that carries no recognized
+          // path argument cannot be scoped — block it outright. This applies to
+          // EVERY external tool, trusted or not (2026-09-05, found by the skills
+          // satellite's review): trust (`trustedReadOnlyPlugins`) answers the
+          // READ-ONLY-MODE question — "may this tool run in a session that
+          // cannot write?" — and must not also answer the ALLOWLIST question,
+          // because a trusted read-only tool that enumerates or returns vault
+          // content with no path argument is exactly the read-boundary bypass
+          // the allowlist sweep closed in-tree (`vault_skills_preview` returned
+          // hidden note bodies; as a satellite tool under a trusted publisher it
+          // would have again). A satellite cannot consult the host's allowlist,
+          // so the host must refuse what it cannot scope. Fail closed; the cost
+          // is that trusted pathless read tools are unavailable under an
+          // allowlist, which is the documented posture, not a bug.
+          {
             const settings = ctx.getSettings();
             if (settings.allowlist.length > 0 && collectPaths(args ?? {}).length === 0)
               return fail(new Error(

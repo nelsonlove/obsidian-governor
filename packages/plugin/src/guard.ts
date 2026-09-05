@@ -1,6 +1,14 @@
-import { posix } from "node:path";
+// `isVisible` and `GuardSettings` now live in @vault-mcp/core (published at the
+// skills satellite extraction — the skills compiler is its own plugin and asks
+// the same disclosure question, and a second copy of a guard predicate is the
+// drift this repo has paid for twice). Everything that knows the TOOL SURFACE's
+// argument shapes stays here: mapPaths / collectPaths / guardCall /
+// visiblePaths. `guardCall`'s allowlist branch is defined over core's
+// `isVisible`, so the one-path answer and the whole-call answer cannot disagree.
+import { isVisible, type GuardSettings } from "@vault-mcp/core";
 
-export interface GuardSettings { readOnly: boolean; allowlist: string[]; }
+export { isVisible };
+export type { GuardSettings };
 
 // Path-bearing argument keys across the tool surface.
 // `output_folder` is obsidian_import_apple_notes' landing folder (every file
@@ -126,16 +134,12 @@ export function visiblePaths(paths: string[], settings?: GuardSettings | null): 
   return paths.filter((path) => isVisible(path, settings));
 }
 
-/**
- * `visiblePaths` for ONE path — for the surfaces whose disclosure is a single
- * name rather than a list (the active note, a link's resolved destination).
- * Defined over the same guardCall so the one-path and many-path answers cannot
- * disagree.
- */
-export function isVisible(path: string, settings?: GuardSettings | null): boolean {
-  if (!settings?.allowlist?.length) return true;
-  return !guardCall({ isMutating: false, args: { path }, settings });
-}
+// `isVisible` — `visiblePaths` for ONE path, for the surfaces whose disclosure
+// is a single name rather than a list (the active note, a link's resolved
+// destination, a skills preview body). It is re-exported at the top of this
+// file from @vault-mcp/core, where it now lives so the extracted satellites can
+// ask the identical question. `visiblePaths` and `guardCall` are both defined
+// over it, so the one-path, many-path, and whole-call answers cannot disagree.
 
 // Returns a blocking reason, or null if the call is allowed.
 export function guardCall(opts: {
@@ -148,15 +152,16 @@ export function guardCall(opts: {
     return { code: "read_only", message: "governor is in read-only mode; mutating tools are blocked. Turn it off in the plugin settings." };
   }
   if (settings.allowlist.length) {
-    const norm = settings.allowlist.map((p) => p.replace(/\/+$/, "")).filter(Boolean);
+    // One path at a time through core's `isVisible` — which normalizes first
+    // (collapsing "." / ".." so "20-29 People/../00-09 System/x.md" cannot pass
+    // the prefix check and then resolve elsewhere inside Obsidian: the
+    // allowlist traversal bypass) and then prefix-matches at a segment
+    // boundary. Defining the whole-call check over the one-path check is what
+    // keeps them from ever disagreeing.
     for (const raw of collectPaths(args)) {
-      // Normalize first: collapse "." / ".." so a path like
-      // "20-29 People/../00-09 System/x.md" can't pass the prefix check and
-      // then resolve elsewhere inside Obsidian (allowlist traversal bypass).
-      const p = posix.normalize(raw);
-      const allowed =
-        !p.startsWith("..") && norm.some((prefix) => p === prefix || p.startsWith(prefix + "/"));
-      if (!allowed) return { code: "out_of_allowlist", message: `path '${raw}' is outside the governor allowlist` };
+      if (!isVisible(raw, settings)) {
+        return { code: "out_of_allowlist", message: `path '${raw}' is outside the governor allowlist` };
+      }
     }
   }
   return null;

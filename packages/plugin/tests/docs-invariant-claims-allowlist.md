@@ -91,7 +91,10 @@ Known-overstated section instead — see its header for the format.
   (fs backend, ObsidianBackend, composeNote, append_at_heading, CLI property/content,
   fileclass, skills, provenance, revision, debt-register) enforces it with zero call-site
   changes; protected-properties.test.ts, protected-properties-fs.test.ts and
-  protected-properties-transports.test.mjs are the per-transport sweep. "No agent path
+  protected-properties-transports.test.mjs are the per-transport sweep. (The skills call
+  site left this package at the suite split's S4; the satellite runs the identical
+  `acceptTransitionReason` from `@vault-mcp/core`, which is why moving it did not move the
+  guard.) "No agent path
   writes plugin config" carries the standing settings-surface caveat: settings are
   data.json, mutable by any local process outside the plugin's transports — the same
   residual the class allowlist documents (a tampered list can only extend the perimeter;

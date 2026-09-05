@@ -295,7 +295,15 @@ test("F3: mutating tool passes when allowlist is empty (no restriction)", async 
   assert.deepEqual(res.structuredContent, { ok: 1 });
 });
 
-test("F3: TRUSTED read-only tool not blocked by allowlist check", async () => {
+test("F3: even a TRUSTED read-only pathless tool is blocked under an allowlist — trust answers read-only mode, not scoping", async () => {
+  // DELIBERATE INVERSION of the pin that used to live here (2026-09-05). The old
+  // rule let a trusted publisher's pathless read tool through under an active
+  // allowlist, and the skills satellite's review showed what that costs: a
+  // trusted `vault_skills_preview {content: true}` would return hidden note
+  // bodies — the exact read-boundary bypass the in-tree sweep closed. Trust
+  // decides whether a tool may run in READ-ONLY MODE; it must not also decide
+  // the allowlist question, because a satellite cannot consult the host's
+  // allowlist and the host cannot scope a call that names no path. Fail closed.
   const entries = [{ ownerId: "p", toolName: "p_ro", spec: spec("ro", { annotations: { readOnlyHint: true } }) }];
   const server = fakeServer();
   registerExternalTools(
@@ -303,8 +311,21 @@ test("F3: TRUSTED read-only tool not blocked by allowlist check", async () => {
     fakeApp(["p"]),
     fakeCtx({ readOnly: false, allowlist: ["ok"], trustedReadOnlyPlugins: ["p"] }, entries)
   );
-  const res = await server.calls[0].handler({ note: "x" }); // no recognized path key — but read-only: allowed
-  assert.equal(res.isError, undefined);
+  const res = await server.calls[0].handler({ note: "x" }); // no recognized path key
+  assert.equal(res.isError, true, "trusted + pathless + allowlist must refuse");
+  assert.match(JSON.stringify(res), /cannot be scoped/);
+});
+
+test("F3: a TRUSTED read-only pathless tool still works with NO allowlist — trust keeps its read-only-mode meaning", async () => {
+  const entries = [{ ownerId: "p", toolName: "p_ro", spec: spec("ro", { annotations: { readOnlyHint: true } }) }];
+  const server = fakeServer();
+  registerExternalTools(
+    server,
+    fakeApp(["p"]),
+    fakeCtx({ readOnly: true, allowlist: [], trustedReadOnlyPlugins: ["p"] }, entries)
+  );
+  const res = await server.calls[0].handler({ note: "x" });
+  assert.equal(res.isError, undefined, "read-only mode + trusted read-only tool + no allowlist must still work");
 });
 
 test("F3: mutating tool with recognized path arg passes F3 check (guard prefix check separate)", async () => {

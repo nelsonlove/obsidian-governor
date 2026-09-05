@@ -2,7 +2,7 @@
 // exporter emits these into the output dir alongside generated content, so a single export produces
 // the complete Claude Code plugin at the load location — no symlink needed.
 //
-// The SKILL.md source lives in ../assets and is embedded at build time by esbuild (the
+// The SKILL.md source lives in ../../assets/new-skill and is embedded at build time by esbuild (the
 // __NEW_SKILL_MD__ define). Under `tsx` (tests) the define is absent, so STATIC_FILES is
 // empty — the emission path is exercised by the real build, not the unit tests.
 

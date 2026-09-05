@@ -21,7 +21,7 @@
 // leaf marks itself dirty instead of re-running the pipeline, and re-renders on reveal.
 
 import { ItemView, type WorkspaceLeaf, type TFile } from "obsidian";
-import type { PreviewEntry, PreviewResult, DetectConfig } from "../kernel/skills/index.js";
+import type { PreviewEntry, PreviewResult, DetectConfig } from "./kernel/index.js";
 import { debounce, handleNoteChanged, type Debounced } from "./export-trigger.js";
 
 export const SKILLS_PREVIEW_VIEW_TYPE = "vault-mcp-skills-preview";

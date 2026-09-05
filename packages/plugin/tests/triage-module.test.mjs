@@ -1129,15 +1129,6 @@ describe("module-host conformance", () => {
     getSettings: () => ({ ...settings }),
     schemeNotes: () => NOTES,
     vocabSource: { paths: () => NOTES, frontmatter: () => null, body: async () => null },
-    skillsSource: {
-      notes: async () => [],
-      resolveLink: () => null,
-      embed: async () => null,
-      basePath: () => null,
-      frontmatterOf: () => null,
-      exists: () => false,
-      applyFrontmatter: async () => {},
-    },
     provenanceSource: { noteFrontmatter: () => null, read: async () => null, stat: async () => null, glob: async () => [], writeNote: async () => {} },
     healthSource: {
       resolvedLinks: () => ({}),
