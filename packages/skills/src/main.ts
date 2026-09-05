@@ -117,7 +117,13 @@ export default class VaultSkillsPlugin extends Plugin {
     let hostSettings: unknown;
     for (const id of HOST_PLUGIN_IDS) {
       const host = plugins?.[id];
-      if (host) { hostSettings = host.settings ?? {}; break; }
+      // `settings` is declared without an initializer on the host and only
+      // assigned mid-onload — a plugin instance can be visible in the map
+      // before that assignment runs. Treating that as "host present, empty
+      // settings" would burn the one-shot latch on nothing and the user's
+      // config would never adopt. An undefined settings bag reads as HOST NOT
+      // READY, exactly like an absent host: adoption retries next load.
+      if (host && host.settings !== undefined) { hostSettings = host.settings; break; }
     }
     const adopted = adoptHostConfig(this.settings, hostSettings);
     if (!adopted) return;

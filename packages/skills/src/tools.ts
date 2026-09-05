@@ -293,9 +293,13 @@ export function buildSkillsTools(source: SkillsBackend, ctx: SkillsToolsCtx): Sd
         // The enforced boundary moved to the HOST, and it is STRICTER than this
         // filter ever was. An external tool's `readOnlyHint: true` is a claim the
         // host distrusts unless the raw publisher id is in `trustedReadOnlyPlugins`,
-        // so all six of these register as MUTATING; and a mutating external tool
-        // whose arguments carry no recognized path key is BLOCKED OUTRIGHT while
-        // a path allowlist is active. `preview` takes `name`/`content`, neither a
+        // so all six of these register as MUTATING; and an external tool —
+        // TRUSTED OR NOT — whose arguments carry no recognized path key is
+        // BLOCKED OUTRIGHT while a path allowlist is active. The trusted case
+        // was a real hole this extraction's review found: trust used to exempt
+        // a read-only pathless tool from that block, so trusting this publisher
+        // would have reopened the hidden-body leak. The host now scopes by what
+        // it can check, never by who is asking. `preview` takes `name`/`content`, neither a
         // path key — so under an allowlist it is refused wholesale rather than
         // body-filtered. Fail-closed, one owner, no partial answer.
         //
@@ -395,6 +399,14 @@ export function buildSkillsTools(source: SkillsBackend, ctx: SkillsToolsCtx): Sd
     ...RW,
     handler: async (args: Record<string, unknown>) => {
       const version = args.version as string;
+      // Re-validated HERE, not only in the zod schema above: these specs cross
+      // the host boundary as JSON Schema, and the host's json-schema-to-zod
+      // subset drops `pattern`/`minLength` — so the schema's regex never runs
+      // for an MCP caller. Without this line `{version: "garbage"}` stamped
+      // "garbage" into plugin.json (found by the satellite extraction's review).
+      if (!/^\d+\.\d+\.\d+$/.test(version ?? "")) {
+        throw new Error(`version must be semver (\d+.\d+.\d+), got: ${String(version)}`);
+      }
       const dir = args.dir as string | undefined;
       const { cfg, fields } = resolve();
       const releaseDir = expandTilde(dir ?? cfg.releaseDir);
