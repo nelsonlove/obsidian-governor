@@ -66,6 +66,13 @@ function basenameOf(path: string): string {
  * path key, see tools.ts. Messages use the wire name, which is what a caller
  * can act on.) */
 function targetProblem(target: string): string | null {
+  // Backslash is refused OUTRIGHT (2026-09-05, satellite review): every check
+  // downstream — the whitelist prefix, the host guard's isVisible, this
+  // function's own segment walk — splits on "/" alone, so "Tasks/x\..\..\y"
+  // reads as one opaque segment here and a traversal to whatever normalizes
+  // it later. Obsidian paths never legitimately contain "\\"; refusing is
+  // free and closes the class rather than the instance.
+  if (target.includes("\\")) return "contains a backslash";
   if (target.trim() === "") return "target_path must be a non-empty folder path";
   if (target !== target.trim()) return "target_path must not have leading/trailing whitespace";
   if (target.startsWith("/") || /^[A-Za-z]:/.test(target)) return "target_path must be a vault-relative folder path, not absolute";
@@ -181,10 +188,10 @@ export function planDispose(input: DisposeInput): { refusal: DisposeRefusal } | 
       refusal: {
         code: "patch_unresolved",
         message: d.builtin
-          ? "built-in 'stamp' has no configured patch — set modules.triage.config.stampFrontmatter, or declare " +
+          ? "built-in 'stamp' has no configured patch — set stampFrontmatter in the Vault Triage settings tab, or declare " +
             "a stamp disposition row with its own patch"
           : `disposition '${d.id}' has an empty patch — nothing would change; configure its patch ` +
-            "(for the default escalate row: modules.triage.config.escalateFrontmatter)",
+            "(for the default escalate row: escalateFrontmatter in the Vault Triage settings tab)",
       },
     };
   }

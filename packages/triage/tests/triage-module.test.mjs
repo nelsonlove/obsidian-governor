@@ -1293,3 +1293,16 @@ describe("settings adoption (pure)", () => {
     }
   });
 });
+
+test("a backslash anywhere in target_path or a configured destination is refused (traversal-class close, 2026-09-05)", async () => {
+  // Through the PUBLIC surface, not the private validator: planDispose is what
+  // the tool calls, so this pins the refusal where a caller would meet it.
+  const { destinationProblem, triageConfigOf } = await import("../src/kernel/config.ts");
+  const config = triageConfigOf({ moveWhitelist: ["Tasks"] });
+  const denied = planDispose({ path: "00.10 Inbox for testing/n.md", disposition: "move", target: "Tasks/x\\..\\..\\Secret", config });
+  assert.ok("refusal" in denied, "a backslash target must refuse, not plan");
+  assert.match(JSON.stringify(denied.refusal), /backslash/);
+  const okPlan = planDispose({ path: "00.10 Inbox for testing/n.md", disposition: "move", target: "Tasks/ordinary", config });
+  assert.ok("plan" in okPlan, "plain forward-slash targets still plan");
+  assert.match(destinationProblem("Tasks\\..\\Secret") ?? "", /backslash/);
+});
