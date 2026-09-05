@@ -179,3 +179,17 @@ test("collectPaths recurses into objects inside paths[]", () => {
   const result = collectPaths({ paths: [{ path: "inner.md" }, "flat.md"] });
   assert.deepEqual(result.sort(), ["flat.md", "inner.md"]);
 });
+
+test("crosssession tool arguments are NOT path keys — the tripwire that actually fires (2026-09-05)", () => {
+  // The vault-crosssession satellite's whole guard posture rests on this fact:
+  // `collectPaths` over its arguments is empty, so the allowlist cannot
+  // wholesale-refuse the live coordination channel and the record guard cannot
+  // fire on the folder note. The satellite pins its own copy of PATH_KEYS, but
+  // a copy is a snapshot — THIS test reads the live list, so the day someone
+  // adds `channel` (or a sibling) to PATH_KEYS, the failure happens HERE, in
+  // the same PR, instead of silently on the operator's live channel. If you
+  // hit this: read packages/crosssession/CLAUDE.md's guard-posture section
+  // before deciding anything.
+  const paths = collectPaths({ handle: "h", channel: "c", body: "b", through_stamp: "s" });
+  assert.deepEqual(paths, [], "a crosssession argument became a recognized path key — coordinate with the satellite");
+});

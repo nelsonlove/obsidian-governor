@@ -124,15 +124,19 @@ export class ReceiptStore implements ReceiptStoreLike {
    * host's copy is unmistakably READ-ONLY here: there is no write counterpart
    * that takes a directory.
    */
-  async loadFrom(dir: string): Promise<ReceiptsState> {
+  async loadFrom(dir: string): Promise<ReceiptsState | null> {
     const file = `${dir}/${RECEIPTS_FILE}`;
     try {
       if (!(await this.adapter.exists(file))) return {};
       return sane(JSON.parse(await this.adapter.read(file)));
     } catch {
-      // Unreadable or malformed ⇒ nothing to adopt. Never fatal: the plugin
-      // must load with or without a predecessor's state.
-      return {};
+      // NULL, not {} — the distinction is what the adoption latch runs on
+      // (found in review, 2026-09-05): "the host has no receipts" answers the
+      // adoption question and may latch; "the host's file could not be read"
+      // does not, and returning {} for both meant one transient I/O error at
+      // first load permanently dropped the host's live receipts. Never fatal
+      // either way: the plugin must load with or without a predecessor's state.
+      return null;
     }
   }
 
@@ -143,7 +147,7 @@ export class ReceiptStore implements ReceiptStoreLike {
    * recorded is never rolled back to the host's older position. Returns the
    * number of (channel, handle) pairs actually adopted.
    */
-  async merge(incoming: ReceiptsState): Promise<number> {
+  async merge(incoming: ReceiptsState): Promise<{ adopted: number; persisted: boolean }> {
     const state = await this.load();
     let adopted = 0;
     for (const [ck, handles] of Object.entries(sane(incoming))) {
@@ -155,8 +159,14 @@ export class ReceiptStore implements ReceiptStoreLike {
       }
       state[ck] = row;
     }
-    if (adopted > 0) await this.write(state);
-    return adopted;
+    if (adopted === 0) return { adopted, persisted: true };
+    // Persistence is REPORTED, not assumed (review, 2026-09-05): `write`
+    // swallows failures by design — right for attest/post, where a lost
+    // receipt only costs a re-served delta — but the one-shot adoption latch
+    // must not burn on a merge that never reached disk while logging that it
+    // adopted N receipts.
+    const persisted = await this.write(state);
+    return { adopted, persisted };
   }
 
   async set(channelKey: string, handle: string, through: string, at: string): Promise<void> {
@@ -167,15 +177,18 @@ export class ReceiptStore implements ReceiptStoreLike {
     await this.write(state);
   }
 
-  private async write(state: ReceiptsState): Promise<void> {
+  private async write(state: ReceiptsState): Promise<boolean> {
     try {
       if (!(await this.adapter.exists(this.dir))) await this.adapter.mkdir(this.dir);
       await this.adapter.write(this.file, JSON.stringify(state, null, 2) + "\n");
+      return true;
     } catch (e) {
       // A receipt that could not persist is logged and lost on reload — the
       // caller's operation (attest / post) still succeeded; the next delta
-      // simply re-serves what the lost receipt would have covered.
+      // simply re-serves what the lost receipt would have covered. The boolean
+      // exists for ONE caller: adoption, whose latch must not burn on this.
       console.error("[vault-crosssession] crosssession receipt could not be persisted", e);
+      return false;
     }
   }
 }

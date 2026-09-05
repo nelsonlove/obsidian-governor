@@ -996,7 +996,7 @@ describe("receipt adoption from the host's plugin dir", () => {
     const store = new ReceiptStore(adapter, "mine");
     const incoming = await store.loadFrom("hostdir");
     assert.deepEqual(incoming, { "uid-1": { alpha: R("2026-08-19T04:1x") } });
-    assert.equal(await store.merge(incoming), 1);
+    assert.deepEqual(await store.merge(incoming), { adopted: 1, persisted: true });
     assert.deepEqual(await store.get("uid-1", "alpha"), R("2026-08-19T04:1x"));
     // Rule 1: the host's copy is never written. Structural, not merely
     // intended — there is no write counterpart that takes a directory.
@@ -1007,7 +1007,7 @@ describe("receipt adoption from the host's plugin dir", () => {
   test("OWN values win per (channel, handle); only the gaps are filled", async () => {
     const adapter = diskAdapter({ [MINE]: JSON.stringify({ "uid-1": { alpha: R("2026-08-30T09:00") } }) });
     const store = new ReceiptStore(adapter, "mine");
-    const adopted = await store.merge({ "uid-1": { alpha: R("2026-08-19T04:1x"), beta: R("2026-08-24T01:0x") } });
+    const { adopted } = await store.merge({ "uid-1": { alpha: R("2026-08-19T04:1x"), beta: R("2026-08-24T01:0x") } });
     assert.equal(adopted, 1, "only beta is new");
     assert.deepEqual(await store.get("uid-1", "alpha"), R("2026-08-30T09:00"), "a newer own receipt is never rolled back");
     assert.deepEqual(await store.get("uid-1", "beta"), R("2026-08-24T01:0x"));
@@ -1017,14 +1017,14 @@ describe("receipt adoption from the host's plugin dir", () => {
     const adapter = diskAdapter();
     const store = new ReceiptStore(adapter, "mine");
     assert.deepEqual(await store.loadFrom("hostdir"), {}, "an absent host file is empty, never a throw");
-    assert.equal(await store.merge({}), 0);
+    assert.deepEqual(await store.merge({}), { adopted: 0, persisted: true });
     assert.deepEqual(adapter.writes, []);
   });
 
-  test("a corrupt host file adopts nothing rather than failing the load", async () => {
+  test("a corrupt host file reads as null — unreadable, not empty — so adoption retries next load (2026-09-05 review)", async () => {
     const adapter = diskAdapter({ [HOST_FILE]: "{not json" });
     const store = new ReceiptStore(adapter, "mine");
-    assert.deepEqual(await store.loadFrom("hostdir"), {});
+    assert.equal(await store.loadFrom("hostdir"), null, "corrupt reads as UNREADABLE (null) so the adoption latch holds open — not as empty, which would burn it");
   });
 
   test("a malformed row in the host's file is dropped, not imported", async () => {
@@ -1048,4 +1048,27 @@ describe("receipt adoption from the host's plugin dir", () => {
     assert.equal(res.isError, undefined, errText(res));
     assert.ok(files[FLEET_LOG].endsWith("\n## 2026-08-18T16:00 · gamma\n\nPost-migration.\n"));
   });
+});
+
+test("a merge whose persist fails reports persisted:false — the adoption latch must not burn on it (2026-09-05 review)", async () => {
+  // The failure Fable found: `write` swallows persist errors by design (right
+  // for attest/post), so merge used to return a happy count while nothing
+  // reached disk — and main.ts latched AND logged "adopted N receipts". The
+  // union was memory-only and the host's live receipts were permanently
+  // dropped on the next reload.
+  // Self-contained adapter: the shared diskAdapter helper is scoped to the
+  // adoption describe above; this test needs only exists/read/mkdir + a write
+  // that fails.
+  const files = { "hostdir/crosssession-receipts.json": JSON.stringify({ "uid-1": { alpha: { through: "s", at: "t" } } }) };
+  const adapter = {
+    exists: async (p) => p in files || p === "own",
+    read: async (p) => { if (p in files) return files[p]; throw new Error("missing"); },
+    mkdir: async () => {},
+    write: async () => { throw new Error("disk full"); },
+  };
+  const store = new ReceiptStore(adapter, "own");
+  const incoming = await store.loadFrom("hostdir");
+  const result = await store.merge(incoming);
+  assert.equal(result.adopted, 1, "the union itself happened");
+  assert.equal(result.persisted, false, "but the caller must know it never reached disk");
 });

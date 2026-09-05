@@ -215,18 +215,28 @@ export default class VaultCrosssessionPlugin extends Plugin {
       ? [host.manifest.dir]
       : HOST_PLUGIN_IDS.map((id) => `${configDir}/plugins/${id}`);
     let adopted = 0;
-    try {
-      for (const dir of dirs) {
-        const incoming = await this.receipts.loadFrom(dir);
-        if (Object.keys(incoming).length === 0) continue;
-        adopted = await this.receipts.merge(incoming);
-        break;
+    // Failure paths hold the latch OPEN so the next load retries — and since
+    // the review (2026-09-05) that promise is implemented rather than merely
+    // written down: `loadFrom` returns NULL for an unreadable/corrupt host
+    // file (only a genuinely absent one reads as "nothing to adopt"), and
+    // `merge` reports whether the union actually reached disk. Before that,
+    // both failures were swallowed into their happy-path shapes, the latch
+    // burned, and the host's live receipts were permanently dropped while the
+    // log said they were adopted.
+    for (const dir of dirs) {
+      const incoming = await this.receipts.loadFrom(dir);
+      if (incoming === null) {
+        console.error(`[vault-crosssession] could not read the host's receipt file in ${dir}; will retry next load`);
+        return;
       }
-    } catch (e) {
-      // A failed adoption must never stop the plugin loading. Leave the latch
-      // UNSET so the next load retries — the cost of retrying is one file read.
-      console.error("[vault-crosssession] adopting the host's read receipts failed; will retry next load", e);
-      return;
+      if (Object.keys(incoming).length === 0) continue;
+      const result = await this.receipts.merge(incoming);
+      if (!result.persisted) {
+        console.error("[vault-crosssession] adopted receipts could not be persisted; will retry next load");
+        return;
+      }
+      adopted = result.adopted;
+      break;
     }
     // Latch even when nothing was adopted: the question was asked and answered
     // (a host with no receipt file has none to give), and re-asking every load

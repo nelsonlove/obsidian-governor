@@ -86,10 +86,12 @@ export class RecordImmutableError extends Error {
  *      argument at all.
  *
  * So exempting it would change no behavior now while WIDENING a protective set
- * on a guess about a future argument shape. The satellite pins the other half
- * — that none of its four tools carries a host path key — in its own
- * publication tests, so `channel` becoming path-keyed fails a test on both
- * sides rather than silently starting to refuse. Pinned by a test below the
+ * on a guess about a future argument shape. The tripwire that ACTUALLY fires
+ * lives host-side: guard.test.mjs asserts `collectPaths` over the
+ * crosssession argument names is empty against the LIVE PATH_KEYS — the
+ * satellite's own pin runs against a snapshot copy (its host-shim), which is
+ * a review aid rather than a live check, and claiming otherwise was an
+ * inflated guard-rail the 2026-09-05 review corrected. Pinned by a test below the
  * exemption test; the day `channel` becomes path-keyed (or the tool gains a
  * `path`), appending to a record-flagged channel note starts refusing and this
  * set is where that gets decided, on purpose, by a human.
