@@ -54,8 +54,9 @@
  *     host assertion about a connection, so a host depending on a provider for them was always
  *     backwards. `server.ts` went from FOUR crossings to TWO.
  *   • The triage-dispositions inversion (condition 9) — DONE. The generic descriptor substrate
- *     is in `@vault-mcp/core`; triage's own descriptors stayed host-side, because triage becomes
- *     a SATELLITE and a provider must not depend on one. Note this retired the GOVERNOR→HOST
+ *     is in `@vault-mcp/core`; triage's own descriptors stayed host-side because triage was to
+ *     become a SATELLITE and a provider must not depend on one. It DID at S5, and the foresight
+ *     paid: triage left without this table changing. Note the inversion retired the GOVERNOR→HOST
  *     edge (`governor/kernel/dispositions.ts`). `src/mcp/tools-governance-revision.ts` still
  *     crosses twice in the other direction — that is the file's own placement, not the
  *     inversion, and it retires when the file moves with the provider's tools.
@@ -203,10 +204,11 @@ const EXPECTED_GOVERNOR_TO_HOST = {
   //     the mint is shared surface; forking it would give one vault two id formats. The host's
   //     `kernel/uuidv7.ts` is GONE rather than left as a re-export — a shim that only the
   //     composition root uses is a crossing waiting to be re-added by the next author.
-  //   • `dispositions.ts` → `kernel/triage/dispositions.js`. Only the GENERIC descriptor
-  //     substrate moved; triage's own descriptors stay host-side because triage becomes a
-  //     SATELLITE, and a provider that depends on a satellite is the layering inversion this
-  //     entry was recording.
+  //   • `dispositions.ts` → the former `kernel/triage/dispositions.js`. Only the GENERIC descriptor
+  //     substrate moved; triage's own descriptors stayed host-side because triage was to become
+  //     a SATELLITE, and a provider that depends on a satellite is the layering inversion this
+  //     entry was recording. Triage became one at S5 and took its descriptors with it, so
+  //     neither the crossing nor the file it named exists any more.
   //   • `sessions/session-store.ts` → `kernel/sessions/session.js`. Condition 7 ruled the host
   //     mints, which makes `SessionV1` a published contract rather than a host internal the
   //     provider borrows. `openSession` stays host-side ON THE RULING, not on a dependency.

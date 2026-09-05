@@ -30,8 +30,12 @@
 //
 //  The GENERIC descriptor shape was extracted to the disposition substrate
 //  (#221 phase 2) and, at the suite split's S3 (condition 9), published to
-//  `@vault-mcp/core` — the provider must not depend on `kernel/triage/`,
-//  which is destined to become its own satellite plugin. This file keeps the
+//  `@vault-mcp/core` — the provider must not depend on the triage instance,
+//  which was destined to become its own satellite plugin and DID at S5
+//  (`packages/triage`, id `vault-triage`). The foresight paid off exactly as
+//  intended: triage left the host without this file changing a line of code,
+//  because both instances already declared against a published shape rather
+//  than against each other. This file keeps the
 //  ACCEPTANCE-SPECIFIC halves — the closed id/surface unions, the frozen
 //  seven-verb table, and the accept-effect display text — and its exports
 //  are unchanged (same names, same shapes, same behavior). The substrate
@@ -40,8 +44,10 @@
 //  and no runtime module edge (the governance tripwire pins that), so the
 //  shared shape binds at compile time while reachability is exactly what it
 //  was. The substrate's generic helpers are equivalent to the one-line
-//  filters below (the triage instance uses the shared ones; the equivalence
-//  is pinned by test).
+//  filters below; that equivalence is pinned by test in
+//  tests/governance-dispositions.test.mjs. (The triage instance uses the
+//  shared helpers too, and pins the same equivalence for its own table in
+//  packages/triage — one shape, two suites, no shared build.)
 // ============================================================================
 
 export type DispositionId =

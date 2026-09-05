@@ -84,8 +84,9 @@ leaf and removing the host div, and a `cancelled` flag stops the poll loop after
 - `base_list` filters the `.base` paths through the host's visibility filter **before**
   reading any file — a hidden base is absent from the answer, not refused.
 - `base_query` **refuses** `out_of_allowlist` for a hidden base (a belt to the guard's own
-  path-argument check — the handler is also reachable with no guard in front, and the triage
-  queue's `base` argument is not a guard-recognized path key).
+  path-argument check — the handler is also reachable with no guard in front, and a direct
+  caller of the seam may pass a `.base` under an argument name the guard does not recognize
+  as a path key).
 - Result **rows for hidden notes drop silently**; under an active allowlist the response
   carries a boolean **`some_rows_hidden`** — a boolean and not a count, per the
   visible-totals precedent against cardinality oracles. With no allowlist the field is
@@ -96,15 +97,23 @@ leaf and removing the host div, and a `cancelled` flag stops the poll loop after
   view's own `limit` consumes slots on hidden rows — visible rows past that limit silently
   fail to appear.
 
-## The triage named-queues consumer
+## `queryBaseRows` — the factored seam, and why it stayed here
 
 The whole `base_query` evaluation path — validation, view selection, the serialized +
 belt-deadlined capture, the allowlist row bound — is one exported function,
-**`queryBaseRows`** (`tools-bases.ts`), and the triage module's Base-backed queues (#241)
-consume it directly: `triage_queue {base, view?}` or a config-named `{queue}` evaluates a
-`.base` through the *same* serializer, capture and typed refusals as `base_query`, so one
-human-authored Base definition drives the human's native Bases view and the agent's sweep.
-Two gates give typed refusals instead of silent degradation: a pre-Bases Obsidian refuses
-`bases_unavailable` via the source's own availability probe, and a disabled bases module
-refuses `bases_unavailable` from the triage seam (a queue is load-bearing, not advisory).
-See [triage.md](triage.md).
+**`queryBaseRows`** (`tools-bases.ts`); `base_query`'s own handler is a thin shell over it.
+
+It was factored out for a second consumer, the triage module's Base-backed queues (#241):
+`triage_queue {base, view?}` or a config-named `{queue}` evaluated a `.base` through the
+*same* serializer, capture and typed refusals as `base_query`, so one human-authored Base
+definition drove the human's native Bases view and the agent's sweep.
+
+**That consumer left this plugin at the suite split's S5 and did not take the seam with
+it.** The capture drives a hidden Bases leaf, which is a *global* resource — the
+module-scoped `captureSerializer` exists to hold it to one capture at a time, and a copy of
+that serializer in a second plugin would race the one in this plugin over the one leaf. The
+seam also reaches this module's own config and typed-refusal vocabulary, neither of which is
+published. So `vault_triage_queue`'s base-backed forms now refuse `bases_unavailable`, and
+callers wanting evaluated Base rows use `base_query` directly. The factored shape stays,
+both because `base_query` reads better as a shell over it and because it is what a published
+Bases service would expose if `vault-mcp-api` ever grows one. See [triage.md](triage.md).

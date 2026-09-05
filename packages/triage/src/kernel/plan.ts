@@ -61,14 +61,17 @@ function basenameOf(path: string): string {
   return segs[segs.length - 1];
 }
 
-/** A `target` argument that cannot name a destination folder. */
+/** A `target_path` argument that cannot name a destination folder. (The plan
+ * input's field is `target`; the WIRE name is `target_path` — a guard-recognized
+ * path key, see tools.ts. Messages use the wire name, which is what a caller
+ * can act on.) */
 function targetProblem(target: string): string | null {
-  if (target.trim() === "") return "target must be a non-empty folder path";
-  if (target !== target.trim()) return "target must not have leading/trailing whitespace";
-  if (target.startsWith("/") || /^[A-Za-z]:/.test(target)) return "target must be a vault-relative folder path, not absolute";
+  if (target.trim() === "") return "target_path must be a non-empty folder path";
+  if (target !== target.trim()) return "target_path must not have leading/trailing whitespace";
+  if (target.startsWith("/") || /^[A-Za-z]:/.test(target)) return "target_path must be a vault-relative folder path, not absolute";
   const trimmed = target.replace(/\/+$/, "");
   if (trimmed === "" || trimmed.split("/").some((seg) => seg === "" || seg === "." || seg === "..")) {
-    return "target must not contain empty, '.' or '..' path segments";
+    return "target_path must not contain empty, '.' or '..' path segments";
   }
   return null;
 }
@@ -141,7 +144,7 @@ export function planDispose(input: DisposeInput): { refusal: DisposeRefusal } | 
       return {
         refusal: {
           code: "target_unsupported",
-          message: `disposition '${d.id}' takes no target — it ${does} the note where it is`,
+          message: `disposition '${d.id}' takes no target_path — it ${does} the note where it is`,
         },
       };
     }
@@ -153,7 +156,7 @@ export function planDispose(input: DisposeInput): { refusal: DisposeRefusal } | 
     return {
       refusal: {
         code: "target_required",
-        message: `disposition '${d.id}' requires a target folder — it moves the note somewhere only the caller can name`,
+        message: `disposition '${d.id}' requires a target_path folder — it moves the note somewhere only the caller can name`,
       },
     };
   } else {

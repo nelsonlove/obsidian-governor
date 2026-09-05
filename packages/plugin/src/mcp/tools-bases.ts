@@ -140,8 +140,8 @@ function pathVisible(visible: BasesToolsCtx["visible"], path: string): boolean {
 
 /** Whether a path allowlist is active — gates whether `some_rows_hidden` is
  * disclosed at all (with no allowlist it is a constant false and says
- * nothing). Exported for the triage module's base-backed queues, which follow
- * the identical disclosure rule. */
+ * nothing). Exported alongside `queryBaseRows` below: the two travel together
+ * for any consumer of the seam, and the seam's test suite drives both. */
 export function allowlistActive(ctx: Pick<BasesToolsCtx, "getSettings">): boolean {
   const s = ctx.getSettings?.();
   const allow = (s as { allowlist?: string[] } | undefined)?.allowlist;
@@ -152,10 +152,20 @@ export function allowlistActive(ctx: Pick<BasesToolsCtx, "getSettings">): boolea
 //
 // The WHOLE base_query evaluation path — validation, view selection, the
 // serialized + belt-deadlined capture, and the allowlist row bound — as one
-// reusable function, so the triage module's base-backed queues consume the
-// SAME machinery (same serializer, same hidden-leaf capture, same typed
-// refusals) instead of duplicating any of it. base_query's own handler is a
-// thin shell over this.
+// reusable function. `base_query`'s own handler is a thin shell over this.
+//
+// It was factored out for a SECOND consumer: the triage module's base-backed
+// queues, which needed the same machinery (same serializer, same hidden-leaf
+// capture, same typed refusals) rather than a duplicate of it. That consumer
+// left this plugin at the suite split's S5 and did NOT take the seam with it —
+// the capture drives a hidden Bases leaf, which is a GLOBAL resource that the
+// module-scoped `captureSerializer` below exists to hold to one capture at a
+// time, and a copy of the serializer in a second plugin would race the one in
+// this one. So `vault_triage_queue`'s base-backed forms refuse
+// `bases_unavailable` and callers use `base_query` directly. The factored shape
+// stays, both because base_query reads better as a shell over it and because it
+// is what a published bases service would expose if apiVersion 2 ever offers
+// one.
 
 export type BaseRowsRefusal = {
   code:
@@ -186,8 +196,8 @@ export async function queryBaseRows(
 ): Promise<{ refusal: BaseRowsRefusal } | { result: BaseRowsResult }> {
   const refuse = (code: BaseRowsRefusal["code"], message: string) => ({ refusal: { code, message } });
   // The feature gate, callable-level: registerBasesTools checks this before
-  // registering, but the triage module reaches this function directly and
-  // must get a TYPED refusal (not a hang) on a pre-Bases Obsidian.
+  // registering, but a direct caller of this function (as the triage module
+  // was) must get a TYPED refusal, not a hang, on a pre-Bases Obsidian.
   if (!source.available()) {
     return refuse(
       "bases_unavailable",
@@ -197,9 +207,10 @@ export async function queryBaseRows(
   const cfg = basesConfigOf(ctx.config);
   const { path, view, limit } = args;
   if (!path.endsWith(".base")) return refuse("not_a_base", `base queries evaluate .base files; got: ${path}`);
-  // Belt to the guard's own path-arg allowlist check (the handler is also
-  // reachable through module-host tests with no guard in front, and the
-  // triage queue's `base` argument is not a guard-recognized path key).
+  // Belt to the guard's own path-arg allowlist check: the handler is also
+  // reachable through module-host tests with no guard in front, and a direct
+  // caller may pass a `base` under an argument name the guard does not
+  // recognize as a path key.
   if (!pathVisible(ctx.visible, path)) {
     return refuse("out_of_allowlist", `path is outside the configured allowlist: ${path}`);
   }
@@ -315,8 +326,9 @@ export function registerBasesTools(server: McpServer, source: BasesSource, ctx: 
     },
     async ({ path, view, limit }: { path: string; view?: string; limit?: number }) => {
       try {
-        // The whole evaluation path lives in queryBaseRows — the seam shared
-        // with the triage module's base-backed queues (#241).
+        // The whole evaluation path lives in queryBaseRows — the seam factored
+        // out for the triage module's base-backed queues (#241), which left for
+        // its own plugin at S5 without taking it. See the seam's own note.
         const outcome = await queryBaseRows(source, { config: ctx.config, visible: ctx.visible }, { path, view, limit });
         if ("refusal" in outcome) return codedError(outcome.refusal.code, outcome.refusal.message);
         const r = outcome.result;

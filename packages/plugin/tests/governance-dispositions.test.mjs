@@ -33,6 +33,7 @@ import {
   acceptEffectFor,
   SUBMIT_REVISION_TOOL,
 } from "../src/governor/kernel/dispositions.ts";
+import { dispositionsForSurface, dispositionByIdIn, gestureGatedIn } from "@vault-mcp/core";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const src = (rel) => fs.readFileSync(path.join(here, "..", "src", rel), "utf8");
@@ -157,6 +158,44 @@ describe("the pane renders FROM the descriptor set (source-level completeness)",
     assert.ok(
       !/registerTool\(\s*"governance_submit_revision"/.test(tool),
       "the registrar must register via the SUBMIT_REVISION_TOOL constant",
+    );
+  });
+});
+
+// ── the shared substrate, from this side of the split ───────────────────────
+//
+// The GENERIC descriptor shape and its three helpers live in `@vault-mcp/core`
+// (#221 phase 2, published at the suite split's S3 condition 9). This block
+// pins that the acceptance instance behaves identically through the SHARED
+// helpers as through its own one-line filters — the equivalence the
+// dispositions.ts header claims.
+//
+// It used to live in the host's triage-module test, beside the same assertion
+// for the triage table, which is what made "both instances declare against one
+// shape" visible in a single file. Triage left for its own plugin at S5, so the
+// claim is now pinned from both sides: here for the acceptance instance, and in
+// packages/triage's suite for the triage instance. That the two suites no
+// longer share a build is exactly why the shape had to be published first.
+
+describe("the disposition substrate: the acceptance instance through the shared helpers", () => {
+  test("surface, id lookup and gesture-gating agree with the local filters", () => {
+    assert.deepEqual(
+      dispositionsForSurface(DISPOSITIONS, "pending-item").map((d) => d.id),
+      ["accept", "revert", "request-changes"],
+    );
+    assert.deepEqual(
+      dispositionsForSurface(DISPOSITIONS, "pending-item").map((d) => d.id),
+      dispositionsFor("pending-item").map((d) => d.id),
+    );
+    assert.equal(dispositionByIdIn(DISPOSITIONS, "adopt").confirm, true);
+    assert.equal(dispositionByIdIn(DISPOSITIONS, "adopt"), dispositionById("adopt"));
+    assert.deepEqual(
+      gestureGatedIn(DISPOSITIONS).map((d) => d.id).sort(),
+      ["accept", "adopt", "request-changes", "revert", "withdraw"],
+    );
+    assert.deepEqual(
+      gestureGatedIn(DISPOSITIONS).map((d) => d.id).sort(),
+      gestureGatedDispositions().map((d) => d.id).sort(),
     );
   });
 });

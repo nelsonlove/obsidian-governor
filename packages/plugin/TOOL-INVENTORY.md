@@ -24,8 +24,8 @@ the always-on `governance_submit_revision` + `governance_revisions` (2 tools, se
 the default-ENABLED `bases` module (`base_list` + `base_query`, 2 tools,
 Bases-API-gated — see Section 2b), and
 the default-disabled `provenance`
-(`provenance_*`), `fileclass` (`fileclass_*`, 8 tools, plugin+binary-gated),
-`crosssession` (`crosssession_*`, 4 tools), and `triage` (`triage_*`, 2 tools)
+(`provenance_*`), `fileclass` (`fileclass_*`, 8 tools, plugin+binary-gated), and
+`crosssession` (`crosssession_*`, 4 tools)
 module surfaces — see Section 2c and their own module docs.
 
 Cross-check: the observed live set with Dataview + Templater + Metadata Menu
@@ -314,14 +314,13 @@ Registered through the module host like Section 2b, but these modules ship
 `enabled: false` — a human turns them on in the config tab, and the tools appear
 on the next session connect. `health` (2 tools) and `jd-scaffold` (7 tools,
 Stage A + A2 + A3 of the jd-dashboard fold) both use the locked `obsidian_*`
-naming, so both are documented here in full. (The `provenance`, `fileclass`, `crosssession`
-and `triage` modules also ship disabled, but their tools are named
-`provenance_*` / `fileclass_*` / `crosssession_*` / `triage_*`,
+naming, so both are documented here in full. (The `provenance`, `fileclass`
+and `crosssession` modules also ship disabled, but their tools are named
+`provenance_*` / `fileclass_*` / `crosssession_*`,
 outside the `obsidian_*` family this inventory locks, so the first is
-documented in its own module doc; `fileclass`, `crosssession` and `triage` are
+documented in its own module doc; `fileclass` and `crosssession` are
 documented just below — fileclass because it is also plugin-gated, crosssession
-because it is the cross-session coordination surface (#232), triage because it is
-the inbox-triage disposition surface, #221 phase 2.)
+because it is the cross-session coordination surface (#232).)
 
 The `skills` module used to be listed here. It is no longer a module of this
 plugin at all: the skills compiler became its own plugin at the suite split's S4
@@ -329,6 +328,14 @@ plugin at all: the skills compiler became its own plugin at the suite split's S4
 tools through the external-tool registry, like any third-party publisher. This
 inventory locks the `obsidian_*` family and has never counted external tools, so
 the totals are unchanged — see `docs/skills.md` and `packages/skills/README.md`.
+
+The `triage` module used to be listed here too. It is no longer a module of this
+plugin at all: it became its own plugin at the suite split's S5 (`packages/triage`,
+id `vault-triage`) and publishes through the external-tool registry, like any
+third-party publisher. Its tools are on the wire as `vault_triage_queue` /
+`vault_triage_dispose` because the plugin id is the tool namespace. This
+inventory locks the `obsidian_*` family and has never counted external tools, so
+the totals are unchanged — see `docs/triage.md` and `packages/triage/README.md`.
 
 ### `tools-health.ts` — `registerHealthTools` via the `health` module (2 tools)
 
@@ -438,52 +445,6 @@ lock-claim precedent).
 | `crosssession_delta` | R | Entries newer than your attested position, `{stamp, handle, body}` from both forms, oldest first; capped (default 20, never bisecting a same-stamp group) with `more` + `next_stamp`; own entries omitted |
 | `crosssession_attest` | W | Record a read receipt (`through_stamp` ≤ newest entry; `stamp_ahead` otherwise) — a read-receipt, not authority; mutates module state only |
 | `crosssession_post` | W | Append one `## <stamp> · <handle>` section (run clock, minutes precision) to the channel's log file; **refuses `stale_read` before any write** while unread entries exist; auto-attests through its own entry on success |
-
-### `tools-triage.ts` — `registerTriageTools` via the `triage` module (2 tools)
-
-The inbox-triage surface (#221 phase 2, **phase-3 shape per #241**): the
-disposition substrate's second instance, successor to the vault's retired
-`dispose-inbox-item` QuickAdd flow. The built-in set is the three
-**primitives** (`kernel/triage/descriptors.ts` — trash, move, stamp; the
-frozen substrate instance, all `authority: "agent"`); everything richer is a
-**human-declared config row** (`declaredDispositions`: `{id, label?,
-description?, action: trash|move|stamp|choice, patch?, destination?,
-inPlace?, choice?}`), with **one default declared row — escalate**
-(stamp-in-place; its patch/tag configured via `escalateFrontmatter`,
-deletable like any row). The tool surface renders from the **merged**
-(built-in ∪ declared) table, single-sourced; id collisions are refused
-loudly. Built-in descriptions are human-overridable (`builtinDescriptions`)
-in the same description field declared rows carry. The module has **no pane
-UI at all** (queue views for humans are native Bases; nothing here confers
-standing).
-
-A declared **`choice` row** binds a QuickAdd choice through the shared #225
-`executeChoice` seam (`quickadd-choice.ts`, the same path
-`obsidian_run_command`'s `variables` form rides): the agent-facing surface is
-the disposition id ONLY — the binding is human-only-mutable config, so the
-`quickadd:*`/`js-engine:*` opaque-execution denies are not weakened. Choice
-rows **cannot dry-run** (typed `choice_dry_run_unsupported` without an
-explicit `dry_run: false`) and report `effects_unknown` (script writes
-surface in the acceptance review queue via non-human attribution).
-
-Moves ride the **shared link-healing move primitive** (`moveOne`), never
-overwrite, and honor the configured **`moveWhitelist`/`moveBlacklist`**
-(path prefixes; enforced at plan AND re-checked at apply — `move_denied`).
-Trash is Obsidian's recoverable trash; frontmatter goes through
-`processFrontMatter` with the shared accept-forbidden rule re-checked over
-every patch. `triage_dispose` is **dry-run by default** and its computed
-destination is allowlist-re-checked in the handler. `triage_queue` serves the
-marker queue (default) or a **Base-backed queue** (`{base, view?}` or a
-config-named `{queue}` from `queues`) — evaluated rows via the bases module's
-shared `queryBaseRows` capture seam, allowlist discipline identical to
-`base_query`, typed `bases_unavailable` when the Bases API is absent or the
-bases module disabled. A phase-2 config stays sane (legacy keys ignored;
-`escalateFrontmatter` still feeds the default escalate row).
-
-| Tool name | R/W | Description |
-|---|---|---|
-| `triage_queue` | R | Default: inbox notes (any ancestor folder matching a configured marker; the inbox's own folder note excluded), allowlist-visible only, with path/inbox/created/modified/age/frontmatter type+status — oldest first, capped (`limit`, default 50) with `truncated` + the total. With `base`/`view` or `queue`: the evaluated rows of that `.base` (engine order, `{path, properties}`), rows allowlist-filtered with boolean-only `some_rows_hidden`; typed refusals (`bases_unavailable`, `unknown_queue`, `invalid_arguments`, plus `base_query`'s own) |
-| `triage_dispose` | W | Apply ONE merged-table disposition to an inbox note (`{path, disposition, target?, dry_run?}`); **dry-run by default** (choice rows refuse without explicit `dry_run: false`); `target` required for the built-in move (and declared movers without a destination), an override for rows with one, refused for trash / in-place stamps / choice rows; typed refusals (`not_inbox`, `unknown_disposition`, `target_required`, `target_unsupported`, `invalid_target`, `patch_unresolved`, `move_denied`, `destination_occupied`, `out_of_allowlist`, `choice_dry_run_unsupported`, `accept_forbidden`) |
 
 ---
 

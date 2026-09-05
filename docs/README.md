@@ -110,8 +110,8 @@ The documents above own the concepts and the target design. The shipped implemen
 - [Acceptance model](acceptance-model.md) — **the legacy acceptance system**, the standing authority until the 2026-08-23 cutover; its writers now refuse (see its banner)
 - [Review SOP](review-sop.md) — the shipped review workflow
 - [Module system](module-system.md) — how capability modules register and gate (the mechanism; the [module directory](modules.md) is the inventory)
-- Module deep references: [conformance](conformance.md), [triage](triage.md), [cross-session](crosssession.md), [provenance](provenance.md), [Bases](bases.md), [vocabulary provider](vocabulary-module.md), [scope provider](scope-provider.md), [identity and links](identity-and-links.md)
-- Satellite plugin deep reference: [skills](skills.md) — `vault-skills`, extracted from the module list above per `docs/suite-split-design.md` §6
+- Module deep references: [conformance](conformance.md), [cross-session](crosssession.md), [provenance](provenance.md), [Bases](bases.md), [vocabulary provider](vocabulary-module.md), [scope provider](scope-provider.md), [identity and links](identity-and-links.md)
+- Satellite plugin deep references: [skills](skills.md) — `vault-skills`, and [triage](triage.md) — `vault-triage`, both extracted from the module list above per `docs/suite-split-design.md` §6
 - [WP8 cutover runbook](../packages/plugin/docs/wp8-cutover-runbook.md) — the operator's one-page procedure for the authority cutover
 
 ## Documentation layers

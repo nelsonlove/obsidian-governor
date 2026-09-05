@@ -354,7 +354,7 @@ Which current modules belong in the initial Community product rather than the pr
 - skills/policy compilation and export (now ships as the separate `vault-skills` satellite plugin — see [skills.md](skills.md) and `docs/suite-split-design.md` §6);
 - cross-session fleet coordination;
 - JD scaffolding;
-- triage mutations;
+- triage mutations (now ships as the separate `vault-triage` satellite plugin — see [triage.md](triage.md) and `docs/suite-split-design.md` §6);
 - QuickAdd execution bindings;
 - provenance regeneration with external outputs;
 - opaque or pathless third-party mutations;

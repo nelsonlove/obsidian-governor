@@ -148,6 +148,19 @@ describe("runCommandRefusal: command ids", () => {
     assert.deepEqual([...OPAQUE_ACCEPT_COMMAND_IDS], ["quickadd:*", "js-engine:*"]);
   });
 
+  test("the default CLI command set is exactly the five opaque-execution spellings", () => {
+    // NON-WEAKENING PIN. The exact set used to be asserted a second time in the
+    // host's triage-module suite, so that a triage change relaxing it failed
+    // there too. Triage left for its own plugin at S5 and cannot import these
+    // constants, so the pin consolidates HERE — the one place that owns them.
+    // The satellite keeps its own half of the claim (its agent-facing surface
+    // is a disposition id, never a command id or macro name) in its suite.
+    assert.deepEqual(
+      [...OPAQUE_ACCEPT_CLI_COMMANDS],
+      ["quickadd", "quickadd:run", "quickadd:run-template", "eval", "command"],
+    );
+  });
+
   test("js-engine:* ids are denied by default — both built-in execute and vault-minted cmd-* ids", () => {
     // js-engine's commands execute arbitrary vault JS: the built-in file
     // runner, and the `js-engine:cmd-*` ids a register-commands startup

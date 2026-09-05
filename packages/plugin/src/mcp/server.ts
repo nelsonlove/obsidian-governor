@@ -26,7 +26,6 @@ import { obsidianHealthBackend } from "./tools-health.js";
 import { mountModules } from "./modules-mount.js";
 import { FILECLASS_PLUGIN_ID } from "./tools-fileclass.js";
 import { obsidianCrosssessionSource, obsidianReceiptStore } from "./tools-crosssession.js";
-import { obsidianTriageSource } from "./obsidian-triage-source.js";
 import { obsidianBasesSource } from "./obsidian-bases-source.js";
 import { obsidianJdScaffoldSource } from "./obsidian-jd-scaffold-source.js";
 import { registerCodeModeTools, makeCaptureRegister, type CapturedRegistry } from "./tools-code-mode.js";
@@ -429,8 +428,10 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   // "QuickAdd choices as notes" EXTRACTED (suite-split, first satellite):
   // it now lives in packages/quickadd-choices-compile, publishing
   // `quickadd_choices_compile_run` through vault-mcp-api like any third-party
-  // plugin. The execution seam (quickadd-choice.ts, running a choice) stays
-  // here — it serves obsidian_run_command and triage, not authoring.
+  // plugin. The execution seam (running a choice) moved to `@vault-mcp/core`
+  // at S5, when triage left too: its two callers — obsidian_run_command here
+  // and the vault-triage satellite's declared choice rows — are now in
+  // different plugins, and the seam exists so they cannot drift.
   registerComplementaryTools(server, app, ctx);
   // ctx: obsidian_list_bookmarks enumerates paths the human bookmarked, which
   // is another argument-less read of vault structure.
@@ -571,10 +572,6 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
     // attested cross-session entries. Same threading as the sibling
     // `obsidianPendingReviewSource(app, ctx.pluginDir)` above.
     crosssessionReceipts: obsidianReceiptStore(app as any, ctx.pluginDir),
-    // The triage module (#221 phase 2): reads via the metadata cache, writes
-    // via the SHARED primitives — moveOne (link-healing renameFile),
-    // fileManager.trashFile, processFrontMatter — see obsidian-triage-source.ts.
-    triageSource: obsidianTriageSource(app),
     // The bases module (#243): the hidden-leaf capture over Obsidian's own
     // Bases engine. The adapter feature-detects the public Bases API itself
     // and the registrar registers nothing when it is absent.

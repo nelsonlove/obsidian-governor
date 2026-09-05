@@ -1,20 +1,26 @@
 // quickadd-choice.ts — the ONE executeChoice-with-variables seam (#225),
 // shared by the two surfaces that drive a QuickAdd choice headlessly:
 //
-//   - `obsidian_run_command` (tools-complementary.ts): the AGENT-NAMED path —
-//     the caller supplies a `quickadd:*` command id, which the cli-policy
-//     opaque-execution deny refuses by default (a human re-enables specific
-//     ids via `allowOpaque`);
-//   - the triage module's declared `choice` dispositions
-//     (obsidian-triage-source.ts): the HUMAN-BOUND path — the agent-facing
-//     surface is the disposition id only, and the choice binding lives in
-//     human-only-mutable module config, so the binding itself IS the human
-//     re-enable. Neither path weakens the other: this helper contains NO
+//   - `obsidian_run_command` (the host plugin's tools-complementary.ts): the
+//     AGENT-NAMED path — the caller supplies a `quickadd:*` command id, which
+//     the cli-policy opaque-execution deny refuses by default (a human
+//     re-enables specific ids via `allowOpaque`);
+//   - the triage satellite's declared `choice` dispositions
+//     (packages/triage/src/obsidian-source.ts): the HUMAN-BOUND path — the
+//     agent-facing surface is the disposition id only, and the choice binding
+//     lives in human-only-mutable plugin config, so the binding itself IS the
+//     human re-enable. Neither path weakens the other: this helper contains NO
 //     policy decision — each caller applies (or embodies) its own gate BEFORE
 //     reaching here, and nothing below consults or bypasses cli-policy.
 //
-// Extracted (not duplicated) from the run_command handler so the two surfaces
-// cannot drift on how a choice is resolved and invoked: quickadd presence is
+// It lives in `@vault-mcp/core` since the suite split's S5, when triage became
+// its own plugin and those two surfaces stopped sharing a build. Publishing it
+// is the whole point: this file was written as an EXTRACTION rather than a
+// duplication, and letting the satellite carry a copy would have reinstated
+// exactly the drift it exists to prevent. It takes `app` duck-typed and imports
+// nothing from `obsidian`, so it sits here with no new dependency.
+//
+// The properties that must not drift: quickadd presence is
 // probed on the LOADED instance, a command id is stripped to its raw choice
 // id and resolved via getChoiceById (executeChoice takes the choice's NAME,
 // not its id), `_invoked-by` defaults to "agent" (the vault's dual-mode
