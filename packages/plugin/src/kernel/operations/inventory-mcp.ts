@@ -44,7 +44,7 @@
 //                    placement; vocabulary; conformance, health and survey
 //                    REPORTS; Bases read evaluation; provenance inspection
 //   private          cross-session coordination,
-//                    JD scaffolding, triage, QuickAdd execution bindings,
+//                    JD scaffolding, QuickAdd execution bindings,
 //                    provenance regeneration, plugin lifecycle, opaque or
 //                    pathless third-party mutations
 //   excluded         capabilities whose effects cannot be bounded or
@@ -375,12 +375,12 @@ const JD_SCAFFOLD: McpSurfaceRow[] = [
   { tool: "obsidian_jd_new_stem", readOnly: false, module: "jd-scaffold", distribution: "private", paths: ["folder_path", "templates_folder"], discovered: "none", postcondition: "Create a stem note from a template." },
 ];
 
-// ── module: triage (private — bounded queues and dispositions) ───────────────
-
-const TRIAGE: McpSurfaceRow[] = [
-  { tool: "triage_queue", readOnly: true, module: "triage", distribution: "private", paths: ["base"], postcondition: "List an inbox-marker or Base-backed triage queue.", gate: "base-backed mode additionally requires the bases module" },
-  { tool: "triage_dispose", readOnly: false, module: "triage", distribution: "private", paths: ["path", "target"], postcondition: "Apply one declared disposition to a queued note; dry-run by default." },
-];
+// The two `triage_*` rows were HERE until the S5 satellite extraction, for the
+// same reason the six `vault_skills_*` rows left at S4: inbox triage is now a
+// separate plugin (`packages/triage`, id `vault-triage`) publishing through the
+// external-tool registry. Its tools are on the wire as `vault_triage_queue` /
+// `vault_triage_dispose` — the plugin id IS the tool namespace — and, like every
+// external tool, they are outside this inventory.
 
 /** Every declared MCP surface, in one list. */
 export const MCP_SURFACE_INVENTORY: McpSurfaceRow[] = [
@@ -402,7 +402,6 @@ export const MCP_SURFACE_INVENTORY: McpSurfaceRow[] = [
   ...FILECLASS,
   ...CROSSSESSION,
   ...JD_SCAFFOLD,
-  ...TRIAGE,
 ];
 
 /**

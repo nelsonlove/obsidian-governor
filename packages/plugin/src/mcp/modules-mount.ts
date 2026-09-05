@@ -17,9 +17,9 @@
 //     — a read-only registration cannot reach the write queue, the write
 //     primitive, or the accept-guard's territory at all (the guard routes
 //     ONLY `readOnlyHint === false` calls to the kernel's mutation path).
-//     `mutating: true` is a real, deliberate escape hatch (five modules use
-//     it today: provenance, fileclass, crosssession, jd-scaffold,
-//     triage), not a bypass of this gate — a module that does NOT declare it still gets the
+//     `mutating: true` is a real, deliberate escape hatch (four modules use
+//     it today: provenance, fileclass, crosssession,
+//     jd-scaffold), not a bypass of this gate — a module that does NOT declare it still gets the
 //     original all-read-only enforcement. Pinned by test: the mount's
 //     registerAll gate refuses a non-mutating module's tool whose
 //     annotations are not read-only (see `mountModules`), so a future module
@@ -73,18 +73,9 @@ import {
   memoryReceiptStore,
   type ReceiptStoreLike,
 } from "../kernel/crosssession/index.js";
-import { registerTriageTools, emptyTriageSource, type TriageSource, type TriageToolsCtx } from "./tools-triage.js";
-import { registerBasesTools, emptyBasesSource, queryBaseRows, type BasesSource, type BasesToolsCtx } from "./tools-bases.js";
+import { registerBasesTools, emptyBasesSource, type BasesSource, type BasesToolsCtx } from "./tools-bases.js";
 import { registerJdScaffoldTools, emptyJdScaffoldSource, type JdScaffoldSource, type JdScaffoldToolsCtx } from "./tools-jd-scaffold.js";
 import { DEFAULT_BASES_CONFIG, validateBasesConfig } from "../kernel/bases/index.js";
-import {
-  DEFAULT_TRIAGE_CONFIG,
-  validateTriageConfig,
-  triageConfigOf,
-  mergedDispositionsOf,
-  mergedIds,
-  mergedLines,
-} from "../kernel/triage/index.js";
 
 // ── manifests (#81: config-host — see
 //    docs/superpowers/specs/2026-08-10-config-host-design.md) ──────────────
@@ -934,214 +925,6 @@ const CROSSSESSION_MANIFEST: ModuleManifest = {
     ],
   },
 };
-
-// ── triage module manifest (#221 phase 2, phase-3 shape per #241) ──────────
-//
-// Successor to the vault's retired `dispose-inbox-item` QuickAdd flow.
-// Phase 3 (Nelson's 2026-08-19 ruling) REPLACED phase 2's ten-verb table:
-// the built-ins are the three PRIMITIVES (trash / move / stamp,
-// kernel/triage/descriptors.ts — still the frozen substrate instance), and
-// everything richer is a HUMAN-DECLARED config row (`declaredDispositions`,
-// default: one row — escalate, stamp-in-place). The tool surface renders
-// from the MERGED (built-in ∪ declared) table, single-sourced. A declared
-// `choice` row binds a QuickAdd choice (the #225 executeChoice seam): the
-// agent-facing surface is the disposition id ONLY — the binding is
-// human-only-mutable config, so the quickadd:*/js-engine:* opaque-execution
-// denies are not weakened. Choice rows cannot dry-run (opaque) and their
-// script effects surface in the governance review queue via non-human
-// attribution.
-//
-// triage_queue additionally serves BASE-BACKED queues ({base}/{view} or a
-// config-named {queue}): the evaluated rows of a .base file through the
-// bases module's shared capture seam (tools-bases.ts's queryBaseRows — same
-// serializer, same typed refusals, same allowlist row discipline), so one
-// human-authored Base definition drives the human view AND the agent sweep.
-// Feature-gated: with the Bases API absent (or the bases module disabled)
-// base-backed queues refuse typed; the marker queue still works.
-//
-// A MUTATING capability module (`mutating: true`): triage_dispose moves notes
-// (through the SAME shared link-healing move primitive every move tool uses,
-// bounded by the configured move whitelist/blacklist at plan AND apply),
-// edits frontmatter (processFrontMatter), trashes (Obsidian trash, never a
-// hard delete), or runs a declared choice — all through the guard-patched
-// registrar (read-only mode, path allowlist, queue, journal, kernel args),
-// with the shared accept-forbidden rule re-checked over every frontmatter
-// patch. NO ACCEPTANCE SEMANTICS ANYWHERE in the module.
-//
-// Vault semantics are configuration (the standing rule): inbox recognition,
-// the stamp/escalate patches, move bounds, declared rows and named queues
-// are all per-vault config — nothing scheme-semantic is hardwired. Default
-// DISABLED (opt-in), like every newly-folded mutating surface. Config lives
-// at `modules.triage.config` (a new module, no ConfigBinding); a config
-// carrying the OLD phase-2 keys stays sane (unknown keys ignored;
-// escalateFrontmatter keeps feeding the default escalate row — see
-// docs/triage.md's migration note).
-const TRIAGE_CONFIG_FIELDS: ConfigField[] = [
-  {
-    key: "inboxMarkers",
-    label: "Inbox folder markers",
-    type: "lines",
-    help:
-      "Substrings (one per line) that mark a folder as an inbox: a note is an inbox item when any ancestor " +
-      'folder\'s name contains one of these. Blank ⇒ the default (" Inbox for ", the live vault convention — ' +
-      'e.g. "03.10 Inbox for 03 Agents"). The inbox folder\'s own folder note is never an item.',
-    caveats: ["Matching is case-sensitive, per folder-name segment."],
-  },
-  {
-    key: "stampFrontmatter",
-    label: "Built-in stamp patch",
-    type: "text",
-    help:
-      "JSON object the built-in `stamp` disposition applies in place (array values union with the existing " +
-      "value; scalars overwrite). Blank ⇒ unconfigured: built-in stamp refuses `patch_unresolved` until this is " +
-      "set or a stamp row is declared. It can never carry an acceptance field (validated, and re-checked at " +
-      "write time).",
-  },
-  {
-    key: "escalateFrontmatter",
-    label: "Escalate patch (default declared row)",
-    type: "text",
-    help:
-      "JSON object the DEFAULT `escalate` declared row stamps in place — this is where the escalate tag is " +
-      'configured. Default: {"tags": ["attention/user"]}. Only consulted while "Declared dispositions" below is ' +
-      "blank (an explicit declared list carries its own escalate row, or none). Same union/overwrite semantics " +
-      "and acceptance ban as every patch.",
-  },
-  {
-    key: "moveWhitelist",
-    label: "Move destination whitelist",
-    type: "lines",
-    help:
-      "Vault-relative folder prefixes (one per line) move destinations must fall under. Blank ⇒ any destination. " +
-      "Enforced when a disposition plans a move AND re-checked at apply (`move_denied`).",
-    caveats: ["Prefix matching is segment-boundary and case-sensitive."],
-  },
-  {
-    key: "moveBlacklist",
-    label: "Move destination blacklist",
-    type: "lines",
-    help:
-      "Vault-relative folder prefixes (one per line) move destinations may NEVER fall under. Beats the " +
-      "whitelist. Blank ⇒ none.",
-    caveats: ["Prefix matching is segment-boundary and case-sensitive."],
-  },
-  {
-    key: "declaredDispositions",
-    label: "Declared dispositions",
-    type: "text",
-    help:
-      "JSON array of human-declared disposition rows `{id, label?, description?, action: trash|move|stamp|choice, " +
-      "patch?, destination?, inPlace?, choice?}` — the module's verb menu beyond the three built-in primitives. " +
-      "Blank ⇒ the one default row, escalate (stamp-in-place with the escalate patch above; delete it by setting " +
-      "this to a list without it, e.g. []). A `choice` row binds a QuickAdd choice (name or id) the agent can " +
-      "invoke ONLY by this row's id — the binding itself is never agent-writable. Rows whose id collides with a " +
-      "built-in or an earlier row are refused loudly and ignored.",
-  },
-  {
-    key: "builtinDescriptions",
-    label: "Built-in description overrides",
-    type: "text",
-    help:
-      'JSON object overriding the built-ins\' descriptive text, e.g. {"move": "route the note to its scope ' +
-      'folder"} — the same description field declared rows carry (descriptions exist to help agents pick the ' +
-      "right verb). Blank ⇒ the defaults.",
-  },
-  {
-    key: "queues",
-    label: "Named Base-backed queues",
-    type: "text",
-    help:
-      'JSON array of named queues `{id, base, view?}`, e.g. [{"id": "acceptance", "base": ' +
-      '"Views/Acceptance.base"}] — `triage_queue {queue: "<id>"}` then evaluates that Base through the bases ' +
-      "module's capture path. Blank ⇒ none (the inbox-marker queue always works).",
-  },
-];
-
-/** The DEFAULT merged disposition table (built-ins ∪ the default escalate
- * row) — the manifest's single source for ids/lines. A vault's declared rows
- * extend this per-config; the directory documents the stock shape. */
-const TRIAGE_DEFAULT_TABLE = mergedDispositionsOf(triageConfigOf(DEFAULT_TRIAGE_CONFIG));
-
-const TRIAGE_MANIFEST: ModuleManifest = {
-  summary:
-    "Inbox triage — the disposition substrate's second instance (#221, phase-3 shape per #241): THREE built-in " +
-    "primitives (trash, move, stamp) plus human-declared disposition rows in config (default: one declared row, " +
-    "escalate — stamp-in-place with the configured escalate patch), merged into ONE guarded mutating tool, plus a " +
-    "read-only queue view for agents (humans use native Bases — no pane UI: nothing here confers standing). " +
-    "triage_queue can also serve a Base-backed queue ({base}/{view}, or a config-named {queue}) — the evaluated " +
-    "rows of a .base file through the bases module's capture path, so the human-authored Base predicate drives " +
-    "the human view AND the agent sweep. triage_dispose is DRY-RUN BY DEFAULT (a declared `choice` row — a " +
-    "human-bound QuickAdd choice — cannot dry-run and requires an explicit dry_run: false); moves ride the shared " +
-    "link-healing move primitive, never overwrite, and honor the configured move whitelist/blacklist; trash is " +
-    "Obsidian's recoverable trash, never a hard delete; frontmatter patches can never carry an acceptance field. " +
-    "Inbox recognition, patches, move bounds, declared rows and named queues are all per-vault config — nothing " +
-    "vault-semantic is hardwired.",
-  config: {
-    fields: TRIAGE_CONFIG_FIELDS,
-    defaults: { ...DEFAULT_TRIAGE_CONFIG },
-    validate: validateTriageConfig,
-  },
-  directory: {
-    tools: [
-      {
-        name: "triage_queue",
-        purpose:
-          "List a triage queue: default the inbox-marker queue (path, inbox, created/modified, age, frontmatter " +
-          "type/status — oldest first, capped); with base/view or a config-named queue, the EVALUATED rows of " +
-          "that .base (Obsidian's own engine computes, in the Base's own order).",
-        readOnly: true,
-        options: [
-          { name: "limit", what: "maximum rows to return (default 50, max 200)" },
-          { name: "base", what: "vault-relative .base path to evaluate as the queue" },
-          { name: "view", what: "declared view name within base (default: the file's first view)" },
-          { name: "queue", what: "a config-declared named queue id (modules.triage.config.queues)" },
-        ],
-        caveats: [
-          "The agent's view of the queue — queue VIEWS for humans are native Bases, and a base-backed queue is " +
-            "driven by the SAME .base definition.",
-          "Only allowlist-visible notes are listed or read; base rows are filtered like base_query (boolean-only " +
-            "some_rows_hidden).",
-          "Base-backed queues refuse typed (bases_unavailable) when the Bases API is absent or the bases module " +
-            "is disabled; the marker queue still works.",
-        ],
-      },
-      {
-        name: "triage_dispose",
-        purpose:
-          "Apply ONE disposition from the merged (built-in ∪ declared) table to an inbox note. Stock table: " +
-          mergedLines(TRIAGE_DEFAULT_TABLE).join("; ") +
-          ".",
-        readOnly: false,
-        options: [
-          { name: "path", what: "vault-relative path of the inbox note" },
-          { name: "disposition", what: `a merged-table id (stock: ${mergedIds(TRIAGE_DEFAULT_TABLE).join(" / ")})` },
-          {
-            name: "target",
-            what:
-              "destination folder — required for the built-in move (and declared moving rows without a " +
-              "configured destination), an override for rows with one, refused for trash / in-place stamps / " +
-              "choice rows",
-          },
-          { name: "dry_run", what: "DEFAULT TRUE — report only; pass false to apply (choice rows require it)" },
-        ],
-        caveats: [
-          "DRY-RUN BY DEFAULT — nothing is written until dry_run: false; a declared `choice` row cannot be " +
-            "previewed at all and refuses (choice_dry_run_unsupported) without an explicit dry_run: false.",
-          "Moves go through the shared link-healing move primitive (fileManager.renameFile), never overwrite " +
-            "(`destination_occupied`), create missing parent folders, and are checked against the configured " +
-            "move whitelist/blacklist at plan AND apply (`move_denied`); trash is Obsidian's recoverable trash.",
-          "Frontmatter patches route through the shared accept-forbidden rule — the tool can never write an " +
-            "acceptance field.",
-          "A choice row's QuickAdd binding lives in human-only config; the agent surface is the row id only, and " +
-            "the script's effects surface in the governance review queue via non-human attribution.",
-          "With the scheme module enabled the report carries a `scheme` advisory (the note's address + expected " +
-            "folder); with scheme disabled the field is simply absent.",
-        ],
-      },
-    ],
-  },
-};
-
 // ── bases module manifest (#243: evaluated Base rows for agents) ────────────
 //
 // A READ-ONLY capability module (like health): both tools readOnlyHint: true,
@@ -1376,19 +1159,11 @@ export interface MountDeps {
    * MountDeps (the module's registrar then registers nothing, exactly like a
    * pre-1.10 Obsidian). */
   basesSource?: BasesSource;
-  /** The triage module's injected vault reader/writer (obsidianTriageSource
-   * live — the shared moveOne / trashFile / processFrontMatter primitives).
-   * Absent ⇒ an inert empty source, so the settings-UI's stand-in deps and
-   * pre-triage callers still satisfy MountDeps (the module registers, the
-   * queue answers empty, and any write refuses). */
-  triageSource?: TriageSource;
-  /** Injectable clock for triage queue ages (tests). */
-  triageNow?: () => Date;
   /** The jd-scaffold module's injected vault reader/writer
    *  (obsidianJdScaffoldSource live — standard-zeros creation, category-index
    *  self-heal, promote-to-folder). Absent ⇒ emptyJdScaffoldSource(): reads
    *  answer empty, writes refuse with a clear error rather than a silent
-   *  no-op — same "registers, degrades cleanly" shape as bases/triage. */
+   *  no-op — same "registers, degrades cleanly" shape as bases. */
   jdScaffoldSource?: JdScaffoldSource;
   /** Feeds jd-scaffold's template-creation tools' accept-forbidden content
    *  scan (same `{parseYaml}` shape `registerCliTools` already takes) —
@@ -1397,66 +1172,6 @@ export interface MountDeps {
    *  template refuses (fails closed, not open — matches the guard's own
    *  documented "unverifiable = refuse" contract). */
   jdScaffoldParseYaml?: (yaml: string) => unknown;
-}
-
-/**
- * The triage module's OPTIONAL scheme consultation: the note's own address
- * plus the folder the scheme expects it in — obsidian_expected_location's
- * path-direction answer, computed over the same allowlist-visible listing the
- * scheme tools use. Returns null (clean degradation, never a throw) when the
- * scheme MODULE is disabled, no configured instance recognizes the path, or
- * anything at all goes wrong: the advisory is a hint, never load-bearing.
- */
-function triageSchemeExpected(deps: MountDeps, host: ModuleHostCtx): TriageToolsCtx["schemeExpected"] {
-  return (path: string) => {
-    try {
-      const settings = deps.getSettings();
-      if (settings.modules?.scheme?.enabled === false) return null;
-      const registry = makeRegistry(settings.schemes ?? DEFAULT_SCHEMES);
-      const visible = host.visible ?? ((p: string[]) => p);
-      const notes = visible(deps.schemeNotes());
-      for (const instance of registry.instances()) {
-        const addr = instance.provider.addressOf(path);
-        if (!addr) continue;
-        // An instance does not speak for its own excluded territory — the
-        // obsidian_expected_location fall-through.
-        if (excludeRoots([path], instance.excludedRoots).length === 0) continue;
-        const scoped = excludeRoots(notes, instance.excludedRoots);
-        return {
-          address: instance.provider.format(addr),
-          expected_folder: instance.provider.expectedFolder(addr, scoped),
-        };
-      }
-      return null;
-    } catch {
-      return null;
-    }
-  };
-}
-
-/**
- * The triage module's Base-backed-queue seam (#241): bind tools-bases.ts's
- * `queryBaseRows` — the SAME serialized capture path base_query rides — to
- * the live BasesSource and the bases module's own config. TYPED refusals,
- * never a silent degrade: a disabled bases module refuses `bases_unavailable`
- * (the source's own available() gate covers a pre-Bases Obsidian the same
- * way), because a queue is load-bearing where the scheme advisory is a hint.
- */
-function triageBaseQuery(deps: MountDeps, host: ModuleHostCtx): NonNullable<TriageToolsCtx["baseQuery"]> {
-  return async (args) => {
-    const settings = deps.getSettings();
-    if (settings.modules?.bases?.enabled === false) {
-      return {
-        refusal: {
-          code: "bases_unavailable" as const,
-          message: "the bases module is disabled — base-backed queues ride its capture path (enable modules.bases)",
-        },
-      };
-    }
-    const source = deps.basesSource ?? emptyBasesSource();
-    const config = (settings.modules?.bases?.config as Record<string, unknown> | undefined) ?? {};
-    return queryBaseRows(source, { config, visible: host.visible }, args);
-  };
 }
 
 /** The ModuleHostCtx modules receive — deliberately minimal (gate point 2).
@@ -1648,36 +1363,6 @@ export function builtinModules(deps: MountDeps): VaultModule[] {
         registerJdScaffoldTools(server, deps.jdScaffoldSource ?? emptyJdScaffoldSource(), ctx),
       () => ({ getSettings: deps.getSettings, parseYaml: deps.jdScaffoldParseYaml }),
     ),
-    // The triage module (#221 phase 2, phase-3 shape per #241): the
-    // disposition substrate's second instance — inbox triage. A MUTATING
-    // capability module (`mutating: true`): triage_dispose moves (the shared
-    // link-healing moveOne, bounded by the configured move white/blacklist),
-    // stamps frontmatter (processFrontMatter, accept-forbidden re-checked),
-    // trashes (Obsidian trash), or runs a human-declared choice row (the
-    // shared #225 executeChoice seam) through the guard-patched registrar
-    // (read-only mode, path allowlist, queue, journal, kernel args);
-    // triage_queue is the read-only agent queue view (marker-based, or
-    // Base-backed via the `baseQuery` seam below). NO pane UI — nothing here
-    // confers standing, so there is nothing to gesture-gate; human queue
-    // views are native Bases, and Base-backed queues read the same .base.
-    // A NEW module, so it follows the adapters doc: it reads `host`/`config`
-    // and filters with `host.visible`. The scheme consultation is an OPTIONAL
-    // read service that degrades to absent when the scheme module is off;
-    // the base-query seam instead REFUSES typed when unavailable (a queue is
-    // load-bearing, not advisory). Default DISABLED (opt-in). Config lives at
-    // `modules.triage.config` (no ConfigBinding).
-    moduleFromRegistrar(
-      { id: "triage", capabilities: ["triage"], enabled: false, mutating: true, manifest: TRIAGE_MANIFEST },
-      (server: any, ctx: TriageToolsCtx) => registerTriageTools(server, deps.triageSource ?? emptyTriageSource(), ctx),
-      (host, config) => ({
-        config,
-        getSettings: deps.getSettings,
-        visible: host.visible,
-        schemeExpected: triageSchemeExpected(deps, host),
-        baseQuery: triageBaseQuery(deps, host),
-        ...(deps.triageNow ? { now: deps.triageNow } : {}),
-      }),
-    ),
   ];
 }
 
@@ -1702,8 +1387,8 @@ export function mountModules(registerTool: ToolRegistrar, deps: MountDeps): Modu
   const modules = builtinModules(deps);
   const registry = new ModuleRegistry(modules, deps.getSettings().modules ?? {});
   // The modules that have EARNED the right to contribute mutating tools
-  // (provenance, fileclass, crosssession, jd-scaffold and triage today; skills
-  // set the precedent before it left for its own plugin), by declaring
+  // (provenance, fileclass, crosssession and jd-scaffold today; skills and
+  // triage each set the precedent before leaving for their own plugins), by declaring
   // `mutating` — see VaultModule.mutating.
   // Every other module is still held to read-only, so a mutating handler
   // cannot drift into a read-only module unreviewed.

@@ -239,20 +239,40 @@ bypass the MCP server entirely are out of scope by the stated threat model.
 ## docs/triage.md
 
 Reviewed at authoring time (#221 phase 2), re-reviewed for the phase-3
-rewrite (#241). Each claim is substantiated by
-`tests/triage-module.test.mjs`: the all-agent built-in table + empty
-gesture-gated set, the merged-table collision/enum pins (no accept-shaped
-id, a raw command id is not a disposition), the acceptance-patch
-refuse-at-validation + sanitize/drop-at-coercion pins (config patches AND
-declared-row patches) with the handler's accept-forbidden re-check belt,
-the destination_occupied / out_of_allowlist / move_denied refusals (dry-run
-included, apply re-check proven), and — for the move-primitive claim — the
-shared `moveOne` seam pinned by `tests/link-healing.test.mjs`'s source scan.
+rewrite (#241), and again at the S5 satellite extraction (triage is now the
+`vault-triage` plugin, so both substantiating suites live in
+`packages/triage/tests/` rather than here). Each claim is substantiated by
+`packages/triage/tests/triage-module.test.mjs`: the all-agent built-in table
++ empty gesture-gated set, the merged-table collision/enum pins (no
+accept-shaped id, a raw command id is not a disposition), the
+acceptance-patch refuse-at-validation + sanitize/drop-at-coercion pins
+(config patches AND declared-row patches) with the handler's
+accept-forbidden re-check belt, the destination_occupied / out_of_allowlist
+/ move_denied refusals (dry-run included, apply re-check proven), and — for
+the move-primitive claim — `packages/triage/tests/link-healing.test.mjs`,
+which drives the real adapter against a fake app whose `vault.rename` throws
+and scans that package's own source for any call to it.
+
+The two claims about the guarded registration point and the dormant
+in-handler allowlist re-check were added at S5. The first is substantiated by
+`tests/external-tools.test.mjs` here (external tools register through the
+guard-patched `buildMcpServer` path, are treated as mutating unless the
+publisher is trusted, and are blocked outright under an allowlist when they
+carry no recognized path key) plus
+`packages/triage/tests/triage-module.test.mjs`'s publication block, which pins
+that `vault_triage_dispose` carries `path` and `target_path` — both host
+PATH_KEYS — and that the queue carries none. The second is a claim about what
+is NOT enforced and is the honest counterpart: the satellite supplies no
+`visible`, which that same block documents, and the real bound on a declared
+row's configured destination is `moveWhitelist`/`moveBlacklist`, pinned at
+plan time and re-checked at apply.
 
 - The **authority axis** sorts every verb with one rule: a disposition that **confers standing** (accept, adopt, revert-of-standing) is a human gesture — never an API; a disposition that is an ordinary reversible write is agent-expressible through the guarded path.
-- Declared rows are *not* runtime additions to that table: they are **configuration** the planner interprets — human-only-mutable data whose authority answer is uniform (every declared row is exercised by an agent through the one guarded `triage_dispose` tool; none confers standing).
+- Declared rows are *not* runtime additions to that table: they are **configuration** the planner interprets — human-only-mutable data whose authority answer is uniform (every declared row is exercised by an agent through the one guarded `vault_triage_dispose` tool; none confers standing).
 - A patch carrying an acceptance field is refused at validation AND sanitized/dropped at coercion — it can never reach a note.
-- Moves ride the shared link-healing move primitive (`moveOne` — `fileManager.renameFile`, parents created, **never an overwrite**: `destination_occupied`); trash is Obsidian's trash; frontmatter transitions go through `processFrontMatter` with the shared accept-forbidden rule re-checked over every effective patch.
+- Moves ride a link-healing rename (`fileManager.renameFile`, parents created, **never an overwrite**: `destination_occupied`); trash is Obsidian's trash; frontmatter transitions go through `processFrontMatter` with the shared accept-forbidden rule re-checked over every effective patch.
+- Both tools are published external tools and register at the host's guarded registration point like every built-in: read-only mode, path allowlist, serialized write queue, journal, kernel args.
+- The in-handler re-check of the computed destination against the allowlist is retained in the code but is dormant, since a satellite cannot reach the host's guard settings.
 
 
 Orphan purge (2026-08-23): the allowlist→docs direction was added to

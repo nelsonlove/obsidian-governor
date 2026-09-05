@@ -51,7 +51,7 @@ import {
   makeSerializer,
   BaseTimeoutError,
 } from "../src/kernel/bases/index.ts";
-import { registerBasesTools, emptyBasesSource } from "../src/mcp/tools-bases.ts";
+import { registerBasesTools, emptyBasesSource, queryBaseRows } from "../src/mcp/tools-bases.ts";
 import { mountModules, builtinModules } from "../src/mcp/modules-mount.ts";
 import { visiblePaths } from "../src/guard.ts";
 import { memoryReceiptStore } from "../src/kernel/crosssession/index.ts";
@@ -618,5 +618,69 @@ describe("TOOL-INVENTORY documents the bases surface", () => {
     const doc = readFileSync(path.join(HERE, "..", "TOOL-INVENTORY.md"), "utf8");
     assert.ok(doc.includes("`base_list`"), "TOOL-INVENTORY.md must document base_list");
     assert.ok(doc.includes("`base_query`"), "TOOL-INVENTORY.md must document base_query");
+  });
+});
+
+// ── the shared evaluated-rows seam, tested directly ─────────────────────────
+//
+// `queryBaseRows` is the whole base_query evaluation path factored out. It was
+// factored out for the triage module's base-backed queues, and these tests came
+// back HERE when triage left for its own plugin at S5 — the seam is host code
+// and its coverage belongs with the module that owns it. The satellite does not
+// consume it (see the seam's own note in tools-bases.ts for why a copy would
+// have raced this file's module-scoped capture serializer), so what these pin
+// is base_query's shell contract: the callable-level feature gate, the typed
+// refusals, and the allowlist row bound.
+
+describe("queryBaseRows: the shared seam itself (fake BasesSource)", () => {
+  const baseSource = (over = {}) => ({
+    available: () => true,
+    listBasePaths: () => ["V/A.base"],
+    readBaseConfig: async () => ({
+      exists: true,
+      config: { views: [{ name: "q", type: "table", order: ["note.status"] }] },
+    }),
+    capture: async () => ({
+      columns: ["note.status"],
+      rows: [
+        { path: "A/x.md", values: { "note.status": "open" } },
+        { path: "Secret/z.md", values: { "note.status": "open" } },
+      ],
+    }),
+    ...over,
+  });
+
+  test("unavailable source ⇒ typed bases_unavailable (the callable-level feature gate)", async () => {
+    const out = await queryBaseRows(baseSource({ available: () => false }), { config: {} }, { path: "V/A.base" });
+    assert.equal(out.refusal.code, "bases_unavailable");
+  });
+
+  test("rows are allowlist-filtered (identical to base_query's discipline)", async () => {
+    const out = await queryBaseRows(
+      baseSource(),
+      { config: {}, visible: (paths) => paths.filter((p) => !p.startsWith("Secret/")) },
+      { path: "V/A.base", view: "q" },
+    );
+    assert.deepEqual(out.result.rows.map((r) => r.path), ["A/x.md"]);
+    assert.equal(out.result.someRowsHidden, true);
+  });
+
+  test("a hidden base refuses out_of_allowlist; a non-.base refuses not_a_base", async () => {
+    const hidden = await queryBaseRows(
+      baseSource(),
+      { config: {}, visible: () => [] },
+      { path: "V/A.base" },
+    );
+    assert.equal(hidden.refusal.code, "out_of_allowlist");
+    const notBase = await queryBaseRows(baseSource(), { config: {} }, { path: "note.md" });
+    assert.equal(notBase.refusal.code, "not_a_base");
+  });
+
+  test("view selection + refusal, and the limit cap", async () => {
+    const missing = await queryBaseRows(baseSource(), { config: {} }, { path: "V/A.base", view: "nope" });
+    assert.equal(missing.refusal.code, "view_not_found");
+    const capped = await queryBaseRows(baseSource(), { config: {} }, { path: "V/A.base", limit: 1 });
+    assert.equal(capped.result.rows.length, 1);
+    assert.equal(capped.result.truncated, true);
   });
 });

@@ -5,6 +5,7 @@ import {
   AcceptForbiddenError,
   acceptTransitionReason,
   acceptTransitionNeedsBefore,
+  executeQuickAddChoice,
   parseGuardFrontmatter,
   stripLeadingFrontmatter,
   unverifiableProtectedPropertyIn,
@@ -13,7 +14,6 @@ import { ok, fail, codedError } from "./helpers.js";
 import { visiblePaths } from "../guard.js";
 import type { ServerCtx } from "./tools-core.js";
 import { runCommandRefusal } from "./cli-policy.js";
-import { executeQuickAddChoice } from "./quickadd-choice.js";
 
 // ── accept-forbidden guard for obsidian_append_at_heading (#109) ──────────────
 //
@@ -272,10 +272,12 @@ export function registerComplementaryTools(server: McpServer, app: App, ctx: Ser
         // a non-QuickAdd id carrying `variables` falls through to the plain
         // command path below rather than misrouting into a choice lookup
         // that was never going to resolve. The resolution + invocation seam
-        // is SHARED with the triage module's declared choice dispositions
-        // (quickadd-choice.ts) — one executeChoice path, two policy gates
-        // (the cli-policy deny above for agent-named ids here; human-only
-        // config binding there).
+        // is SHARED with the vault-triage satellite's declared choice
+        // dispositions — one executeChoice path, two policy gates (the
+        // cli-policy deny above for agent-named ids here; human-only config
+        // binding there). The seam moved to `@vault-mcp/core` at the triage
+        // extraction (S5): the two callers are now in different plugins, and
+        // the file exists precisely so they cannot drift.
         const isQuickAddId = command_id.startsWith("quickadd:");
         if (variables && isQuickAddId) {
           let run;

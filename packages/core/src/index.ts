@@ -170,3 +170,17 @@ export { EXCLUDED_PREFIXES, isExcludedTerritory } from "./territories.js";
 // allowlist branch over this function.
 export { isVisible } from "./visibility.js";
 export type { GuardSettings } from "./visibility.js";
+
+// The QuickAdd executeChoice seam, published at the triage satellite extraction
+// (suite split, S5) for the same reason as `isVisible`. Its own header already
+// said it exists so the two surfaces that drive a choice headlessly "cannot
+// drift on how a choice is resolved and invoked" — and after S5 those two
+// surfaces are in DIFFERENT PLUGINS: the host's `obsidian_run_command` (the
+// agent-named path, gated by the cli-policy opaque-execution deny) and the
+// triage satellite's declared `choice` dispositions (the human-bound path,
+// where the config binding IS the human re-enable). Copying it into the
+// satellite would have made the drift the file was written to prevent. It
+// contains NO policy decision and takes `app` duck-typed, so it carries no
+// `obsidian` import and belongs here cleanly.
+export { executeQuickAddChoice } from "./quickadd-choice.js";
+export type { ChoiceOutcome } from "./quickadd-choice.js";

@@ -97,6 +97,9 @@ export const DEFAULT_TRIAGE_CONFIG: Record<string, unknown> = {
  * ("unconfigured"). */
 export function destinationProblem(value: string): string | null {
   if (value === "") return null;
+  // Backslash refused outright — same traversal-class close as plan.ts's
+  // targetProblem (2026-09-05): every downstream check splits on "/" alone.
+  if (value.includes("\\")) return "contains a backslash";
   if (value !== value.trim()) return "must not have leading/trailing whitespace";
   if (value.startsWith("/") || /^[A-Za-z]:/.test(value)) return "must be a vault-relative folder path, not absolute";
   if (value.split("/").some((seg) => seg === "" || seg === "." || seg === "..")) {

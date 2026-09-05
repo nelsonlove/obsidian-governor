@@ -1,6 +1,8 @@
-// obsidian-bases-source.ts — the Bases module's live adapter (the
-// obsidian-triage-source.ts pattern: a separate file so tools-bases.ts stays
-// obsidian-free and headless-testable; only server.ts imports this).
+// obsidian-bases-source.ts — the Bases module's live adapter: a separate file
+// so tools-bases.ts stays obsidian-free and headless-testable; only server.ts
+// imports this. (The pattern was named after obsidian-triage-source.ts, which
+// left with the triage satellite at S5 and is now packages/triage's
+// src/obsidian-source.ts; the discipline is unchanged.)
 //
 // ── The capture mechanism, and why it looks like this (live findings) ───────
 //

@@ -142,7 +142,7 @@ type ModuleSettings = Record<string, { enabled?: boolean; config?: Record<string
 ## The built-in modules
 
 The authoritative inventory is the [module directory](modules.md); this table is the
-mount-registration view (id, default, declared posture). Ten modules register today:
+mount-registration view (id, default, declared posture). Nine modules register today:
 
 | Module id | Default | Posture | Capabilities |
 | --- | --- | --- | --- |
@@ -155,9 +155,10 @@ mount-registration view (id, default, declared posture). Ten modules register to
 | `fileclass` | disabled | **mutating** | `fileclass` |
 | `crosssession` | disabled | **mutating** | `coordination` — deep ref: [crosssession.md](crosssession.md) |
 | `jd-scaffold` | disabled | **mutating** | `scaffolding` |
-| `triage` | disabled | **mutating** | `triage` — deep ref: [triage.md](triage.md) |
 
 Skills is no longer a built-in module: it now ships as its own satellite plugin, `vault-skills`, publishing the same six tools through `vault-mcp-api` — see [skills.md](skills.md).
+
+Triage is no longer a built-in module either: it now ships as its own satellite plugin, `vault-triage`, publishing the same two tools through `vault-mcp-api` — see [triage.md](triage.md).
 
 The first two (`scheme`, `vocab`) pre-date the host, so their config rows still live in the top-level `schemes` /
 `vocabularies` settings (not `modules.<id>.config`) and their tool layers filter via their own

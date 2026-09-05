@@ -22,8 +22,10 @@
 //
 //  SUBSTRATE DISCIPLINE, unchanged: the FROZEN code-level instance table is
 //  the three built-ins below, declared against the shared
-//  DispositionDescriptorShape (dispositions.ts — untouched; the governance
-//  instance keeps declaring against the same shape). Declared rows are NOT
+//  DispositionDescriptorShape — which lives in `@vault-mcp/core`, so the
+//  governance instance (still in the host's provider) keeps declaring against
+//  the very same shape now that this instance ships as its own plugin.
+//  Declared rows are NOT
 //  runtime additions to that table: they are CONFIGURATION the planner
 //  interprets — human-only-mutable data whose authority answer is uniform
 //  (every declared row is exercised by an agent through the one guarded
@@ -39,13 +41,13 @@
 //  pick the right verb, wherever the verb came from.
 // ============================================================================
 
-import type { DispositionDescriptorShape } from "./dispositions.js";
+import type { DispositionDescriptorShape } from "@vault-mcp/core";
 
 /** The closed built-in id set — the three primitives. */
 export type TriageBuiltinId = "trash" | "move" | "stamp";
 
 /** The one surface this instance has: every verb is a guarded MCP tool call
- * (they share the single `triage_dispose` tool, selected by `disposition`). */
+ * (they share the single `vault_triage_dispose` tool, selected by `disposition`). */
 export type TriageDispositionSurface = "mcp-tool";
 
 /** What a disposition does to the note. `choice` (declared rows only) runs a
@@ -91,7 +93,7 @@ export const TRIAGE_DISPOSITIONS: ReadonlyArray<TriageDispositionDescriptor> = O
     label: "Stamp",
     action: "stamp",
     effect:
-      "apply the configured stamp frontmatter patch (modules.triage.config.stampFrontmatter; array values union, " +
+      "apply the configured stamp frontmatter patch (the Vault Triage settings tab (stampFrontmatter); array values union, " +
       "scalars overwrite) and leave the note in place",
   } as const),
 ]);
@@ -229,7 +231,7 @@ export function mergedById(table: MergedDisposition[], id: string): MergedDispos
   return table.find((d) => d.id === id);
 }
 
-/** The merged id list, in declared order — the `triage_dispose` enum's single
+/** The merged id list, in declared order — the `vault_triage_dispose` enum's single
  * source. */
 export function mergedIds(table: MergedDisposition[]): string[] {
   return table.map((d) => d.id);

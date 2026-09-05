@@ -30,9 +30,10 @@ Absent, disabled, incompatible, unavailable, unhealthy, and empty are different 
 | **Cross-session** | Discover channels, read deltas, attest read position, and post guarded updates | Operational mutation | Disabled | Handles are cooperative labels; session binding comes from Governor; unread-entry guard is coordination, not authentication |
 | **Bases** | Evaluate Obsidian Base views and return scoped rows | Read-only | Enabled when supported API exists | Base is presentation, not authority; evaluated rows come from Obsidian's engine |
 | **JD scaffolding** | Create and maintain configured Johnny Decimal structures and identifiers | Structural and representation work | Disabled | Exact templates and scopes required; allocation and placement remain distinct |
-| **Triage** | Expose bounded queues and apply declared dispositions | Read queue plus governed mutations | Disabled | A disposition is a named action contract; opaque macros require a private pack |
 
 Skills — compile, export, release, and author agent-facing skills and policies from vault sources — is no longer a built-in module of this table: it was extracted to its own satellite plugin, `vault-skills`, per `docs/suite-split-design.md` §6. See [skills.md](skills.md) for its deep reference.
+
+Triage — expose bounded queues and apply declared dispositions — is no longer a built-in module of this table either: it was extracted to its own satellite plugin, `vault-triage`, per `docs/suite-split-design.md` §6. See [triage.md](triage.md) for its deep reference.
 
 The target defaults above describe the coherent product, not proof of a particular build. [Status and compatibility](status-and-compatibility.md) owns promotion to shipped status.
 
@@ -123,7 +124,7 @@ The first Community bundle has an exact distribution profile.
 - skills and policy compilation or export (now the separate `vault-skills` satellite plugin — absent from the Community bundle because it is simply not part of it, not because of a manifest exclusion decision);
 - cross-session fleet coordination;
 - JD scaffolding;
-- triage mutations;
+- triage mutations (now the separate `vault-triage` satellite plugin — absent from the Community bundle because it is simply not part of it, not because of a manifest exclusion decision);
 - QuickAdd execution bindings;
 - provenance regeneration with external outputs;
 - opaque or pathless third-party mutations; and

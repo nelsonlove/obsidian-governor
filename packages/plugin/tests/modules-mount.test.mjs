@@ -135,14 +135,14 @@ describe("mountModules: the two built-in modules register through the registry",
     // provenance (the obsidian-provenance fold), health (the
     // obsidian-vault-health fold), fileclass (#188, the fileclass CLI fold),
     // governance (#83), crosssession (#232, the cross-session channel
-    // module), jd-scaffold (Stage A of the jd-dashboard fold) and triage
-    // (#221 phase 2, the inbox-triage module) all ship DISABLED (opt-in
-    // surfaces a human turns on), so they contribute nothing here — scheme +
-    // vocab + bases (#243, the read-only default-enabled Bases surface) are
-    // the live trio.
-    assert.deepEqual(described.map((d) => d.id), ["scheme", "vocab", "provenance", "health", "fileclass", "acceptance", "crosssession", "bases", "jd-scaffold", "triage"]);
+    // module) and jd-scaffold (Stage A of the jd-dashboard fold) all ship
+    // DISABLED (opt-in surfaces a human turns on), so they contribute nothing
+    // here — scheme + vocab + bases (#243, the read-only default-enabled Bases
+    // surface) are the live trio. (Triage was a tenth module until S5; it is
+    // now the `vault-triage` satellite plugin and mounts nothing here.)
+    assert.deepEqual(described.map((d) => d.id), ["scheme", "vocab", "provenance", "health", "fileclass", "acceptance", "crosssession", "bases", "jd-scaffold"]);
     for (const d of described) {
-      if (["provenance", "health", "fileclass", "acceptance", "crosssession", "jd-scaffold", "triage"].includes(d.id)) {
+      if (["provenance", "health", "fileclass", "acceptance", "crosssession", "jd-scaffold"].includes(d.id)) {
         assert.equal(d.enabled, false);
         assert.deepEqual(d.tools, []);
       } else {
@@ -154,7 +154,10 @@ describe("mountModules: the two built-in modules register through the registry",
     assert.ok(!names.includes("obsidian_health") && !names.includes("obsidian_lint"));
     assert.ok(!names.some((n) => n.startsWith("fileclass_")));
     assert.ok(!names.some((n) => n.startsWith("crosssession_")));
-    assert.ok(!names.some((n) => n.startsWith("triage_")));
+    // Nothing triage-shaped can leak from the mount at all now: the module is
+    // gone. Kept as a pin because the satellite publishes through the EXTERNAL
+    // registry, which is a different surface with a different gate.
+    assert.ok(!names.some((n) => n.startsWith("triage_") || n.startsWith("vault_triage_")));
     // obsidian_pending_review is NEVER on the MODULE surface (#83 cycle 2): it is
     // registered always-on in server.ts, decoupled from the governance toggle, so the
     // mount never contributes it whether governance is on or off.
@@ -261,7 +264,7 @@ describe("mount gate 2: the host ctx handed to modules is minimal", () => {
     assert.deepEqual(host.visible(["Projects/a.md", "Archive/b.md"]), ["Projects/a.md"]);
   });
 
-  test("builtinModules declares the ten capability modules (provenance + fileclass + crosssession + jd-scaffold + triage mutating; health/governance/bases NOT)", () => {
+  test("builtinModules declares the nine capability modules (provenance + fileclass + crosssession + jd-scaffold mutating; health/governance/bases NOT)", () => {
     const mods = builtinModules(deps());
     assert.deepEqual(mods.map((m) => [m.id, m.posture]), [
       ["scheme", "capability"],
@@ -287,14 +290,15 @@ describe("mount gate 2: the host ctx handed to modules is minimal", () => {
       // module (standard_zeros / ensure_category_indexes / promote_to_folder
       // create/rename real vault notes and folders).
       ["jd-scaffold", "capability"],
-      // triage (#221 phase 2) is a MUTATING capability module (dispose moves /
-      // retypes / trashes inbox notes through the shared guarded primitives).
-      ["triage", "capability"],
+      // triage (#221 phase 2) WAS a tenth, mutating capability module here. It
+      // left for the `vault-triage` satellite plugin at S5 and its dispositions
+      // now reach the vault through the external-tool registry instead — same
+      // guarded interception point, different publisher.
     ]);
-    // provenance, fileclass, crosssession, jd-scaffold and triage are the
-    // modules that declare they may contribute mutating tools; health and
-    // governance are NOT mutating.
-    assert.deepEqual(mods.filter((m) => m.mutating).map((m) => m.id), ["provenance", "fileclass", "crosssession", "jd-scaffold", "triage"]);
+    // provenance, fileclass, crosssession and jd-scaffold are the modules that
+    // declare they may contribute mutating tools; health and governance are NOT
+    // mutating.
+    assert.deepEqual(mods.filter((m) => m.mutating).map((m) => m.id), ["provenance", "fileclass", "crosssession", "jd-scaffold"]);
   });
 });
 
@@ -356,7 +360,7 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
   test("drift check: every ToolDoc names a tool the module ACTUALLY contributed on registerAll, and vice versa", () => {
     // Enable every default-off module so all modules contribute — the drift check
     // needs a contributed tool list to compare each manifest against.
-    const { registry } = mount({ settings: { modules: { provenance: { enabled: true }, health: { enabled: true }, fileclass: { enabled: true }, acceptance: { enabled: true }, crosssession: { enabled: true }, "jd-scaffold": { enabled: true }, triage: { enabled: true } } } });
+    const { registry } = mount({ settings: { modules: { provenance: { enabled: true }, health: { enabled: true }, fileclass: { enabled: true }, acceptance: { enabled: true }, crosssession: { enabled: true }, "jd-scaffold": { enabled: true } } } });
     const described = registry.describe();
     for (const d of described) {
       const mod = builtinModules(deps()).find((m) => m.id === d.id);
@@ -366,7 +370,7 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
   });
 
   test("readOnly drift: every ToolDoc's readOnly matches the tool's real registered annotation", () => {
-    const { server } = mount({ settings: { modules: { provenance: { enabled: true }, health: { enabled: true }, fileclass: { enabled: true }, acceptance: { enabled: true }, crosssession: { enabled: true }, "jd-scaffold": { enabled: true }, triage: { enabled: true } } } });
+    const { server } = mount({ settings: { modules: { provenance: { enabled: true }, health: { enabled: true }, fileclass: { enabled: true }, acceptance: { enabled: true }, crosssession: { enabled: true }, "jd-scaffold": { enabled: true } } } });
     const mods = builtinModules(deps());
     const annotationsByName = Object.fromEntries([...server.tools].map(([name, { def }]) => [name, def.annotations]));
     for (const mod of mods) {
@@ -437,7 +441,7 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
     const settings = { schemes: [{ id: "jd", provider: "johnny-decimal", config: { contentDecimalFloor: 20 } }], modules: {} };
     const mods = builtinModules(deps({ settings }));
     const hosted = collect(mods, settings.modules, settings);
-    assert.deepEqual(hosted.map((h) => h.id), ["scheme", "vocab", "provenance", "health", "fileclass", "acceptance", "crosssession", "bases", "jd-scaffold", "triage"]);
+    assert.deepEqual(hosted.map((h) => h.id), ["scheme", "vocab", "provenance", "health", "fileclass", "acceptance", "crosssession", "bases", "jd-scaffold"]);
     const scheme = hosted.find((h) => h.id === "scheme");
     assert.equal(scheme.fields.find((f) => f.key === "contentDecimalFloor").value, 20);
     const vocab = hosted.find((h) => h.id === "vocab");
@@ -497,28 +501,9 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
       crosssession.directory.tools.filter((t) => t.readOnly === false).map((t) => t.name),
       ["crosssession_attest", "crosssession_post"],
     );
-    // The triage module (#221 phase 2, phase-3 shape per #241) renders its own
-    // config tab: eight config fields (inbox markers, the stamp/escalate
-    // patches, the move white/blacklist, the declared-dispositions and
-    // built-in-description JSON blobs, the named queues) and a two-tool
-    // capability directory (one read: queue; one write: dispose). Ships disabled.
-    const triage = hosted.find((h) => h.id === "triage");
-    assert.deepEqual(triage.fields.map((f) => f.key), [
-      "inboxMarkers",
-      "stampFrontmatter",
-      "escalateFrontmatter",
-      "moveWhitelist",
-      "moveBlacklist",
-      "declaredDispositions",
-      "builtinDescriptions",
-      "queues",
-    ]);
-    assert.deepEqual(triage.fields.find((f) => f.key === "inboxMarkers").value, [" Inbox for "]);
-    assert.equal(triage.enabled, false);
-    assert.equal(triage.directory.tools.length, 2);
-    assert.deepEqual(
-      triage.directory.tools.filter((t) => t.readOnly === false).map((t) => t.name),
-      ["triage_dispose"],
-    );
+    // The triage module rendered its own eight-field config tab here until S5.
+    // Its fields now live in packages/triage/src/settings.ts (ported verbatim,
+    // pinned by that package's own suite) and the host hosts nothing for it.
+    assert.equal(hosted.find((h) => h.id === "triage"), undefined);
   });
 });

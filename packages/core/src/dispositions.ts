@@ -20,8 +20,9 @@
 //    - the ACCEPTANCE instance (governor/kernel/dispositions.ts, the
 //      governance PROVIDER) — the review pane's seven verbs, mixed
 //      human/agent authority;
-//    - the INBOX-TRIAGE instance (kernel/triage/descriptors.ts, HOST — a
-//      future satellite plugin) — THREE mechanical primitives (trash / move /
+//    - the INBOX-TRIAGE instance (packages/triage/src/kernel/descriptors.ts,
+//      the `vault-triage` SATELLITE plugin since S5) — THREE mechanical
+//      primitives (trash / move /
 //      stamp), ALL agent authority (none confers standing), no pane surface at
 //      all. Anything richer is a human-declared config row, not a built-in.
 //      (This said "ten verbs" until S3a. That was the pre-#241 table; Nelson's
@@ -32,12 +33,14 @@
 //
 //  PUBLISHED HERE (@vault-mcp/core) rather than living in either subtree: the
 //  provider's dispositions module type-imported this shape from the host's
-//  `kernel/triage/dispositions.ts`, but triage is destined to become its own
+//  `kernel/triage/dispositions.ts`, but triage was destined to become its own
 //  SATELLITE plugin (§6) — the governance provider must not depend on a
-//  satellite. Only this GENERIC shape (the descriptor interface and its three
-//  pure helpers) is shared; the triage-specific content — the built-in
-//  primitive table, the merged-table logic, config, queue predicate, planner
-//  — stays host-side in `kernel/triage/`, and the acceptance-specific content
+//  satellite. It became one at S5, and the publication is what made that a
+//  file move rather than a refactor: neither instance changed. Only this
+//  GENERIC shape (the descriptor interface and its three pure helpers) is
+//  shared; the triage-specific content — the built-in primitive table, the
+//  merged-table logic, config, queue predicate, planner — went WITH the
+//  satellite, and the acceptance-specific content
 //  — the closed id/surface unions, the frozen seven-verb table, the
 //  accept-effect display text — stays with the provider in
 //  `governor/kernel/dispositions.ts`. Both instance modules import this
