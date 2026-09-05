@@ -354,14 +354,14 @@ const FILECLASS: McpSurfaceRow[] = [
 // declare, and the surface scan that pins this file against the source would
 // find no registration for them here.
 
-// ── module: crosssession (private — fleet coordination) ──────────────────────
-
-const CROSSSESSION: McpSurfaceRow[] = [
-  { tool: "crosssession_channels", readOnly: true, module: "crosssession", distribution: "private", postcondition: "Discover coordination channels by fileClass and audience." },
-  { tool: "crosssession_delta", readOnly: true, module: "crosssession", distribution: "private", paths: ["channel"], postcondition: "Return channel entries newer than this caller's attested read position." },
-  { tool: "crosssession_attest", readOnly: false, module: "crosssession", distribution: "private", discovered: "none", paths: ["channel"], postcondition: "Record a read receipt in module state; writes no vault content." },
-  { tool: "crosssession_post", readOnly: false, module: "crosssession", distribution: "private", paths: ["channel"], discovered: "none", postcondition: "Append one entry to a channel, refusing on a stale read before writing anything." },
-];
+// The four `crosssession_*` rows were HERE until the S6 satellite extraction,
+// for the same reason the six `vault_skills_*` rows left at S4 and the two
+// `triage_*` rows at S5: fleet coordination is now a separate plugin
+// (`packages/crosssession`, id `vault-crosssession`) publishing through the
+// external-tool registry. Its tools are on the wire as
+// `vault_crosssession_channels` / `_delta` / `_attest` / `_post` — the plugin
+// id IS the tool namespace — and, like every external tool, they are outside
+// this inventory by design.
 
 // ── module: jd-scaffold (private — vault-convention scaffolding) ─────────────
 
@@ -400,7 +400,6 @@ export const MCP_SURFACE_INVENTORY: McpSurfaceRow[] = [
   ...PROVENANCE,
   ...SURVEY,
   ...FILECLASS,
-  ...CROSSSESSION,
   ...JD_SCAFFOLD,
 ];
 

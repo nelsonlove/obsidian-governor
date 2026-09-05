@@ -26,7 +26,8 @@
  *      the registry (read-only, no `mutating` flag — the registerAll gate
  *      passes both tools without exemption), degrades to absent when the
  *      source reports the Bases API missing, and TOOL-INVENTORY.md documents
- *      both names (the crosssession precedent for non-obsidian_* names).
+ *      both names (the crosssession precedent for non-obsidian_* names, set
+ *      before that module left for the vault-crosssession satellite).
  *
  * The one un-headless seam is the live adapter (obsidian-bases-source.ts):
  * the detached-leaf construction, the hidden-host isShown trick, and the
@@ -54,7 +55,6 @@ import {
 import { registerBasesTools, emptyBasesSource, queryBaseRows } from "../src/mcp/tools-bases.ts";
 import { mountModules, builtinModules } from "../src/mcp/modules-mount.ts";
 import { visiblePaths } from "../src/guard.ts";
-import { memoryReceiptStore } from "../src/kernel/crosssession/index.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -543,8 +543,6 @@ describe("module-host conformance", () => {
     },
     vaultName: "TestVault",
     fileclassPresent: () => false,
-    crosssessionSource: { paths: () => [], frontmatter: () => null, read: async () => null, append: async () => {} },
-    crosssessionReceipts: memoryReceiptStore(),
     basesSource,
   });
 
@@ -611,7 +609,8 @@ describe("module-host conformance", () => {
   });
 });
 
-// ── inventory doc lock (the crosssession precedent for non-obsidian_* names) ─
+// ── inventory doc lock (the precedent set by the since-extracted crosssession
+// module, for tool families whose names are not obsidian_*) ─────────────────
 
 describe("TOOL-INVENTORY documents the bases surface", () => {
   test("both tool names appear in TOOL-INVENTORY.md", () => {

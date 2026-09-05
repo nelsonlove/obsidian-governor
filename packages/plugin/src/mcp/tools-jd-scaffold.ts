@@ -96,7 +96,8 @@ export interface JdScaffoldToolsCtx {
 }
 
 /** MountDeps.jdScaffoldSource's absent-case fallback — matches the
- *  emptyBasesSource/crosssession-empty-source precedent: reads answer empty
+ *  emptyBasesSource inert-source precedent (the crosssession module set it
+ *  too, before it left for the vault-crosssession satellite): reads answer empty
  *  rather than throwing (so dry_run always works), writes throw a clear
  *  error that applyCreates' per-item catch (or the tool's own thrown-error
  *  path for promote) turns into a refusal rather than a silent no-op. */

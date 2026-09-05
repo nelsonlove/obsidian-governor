@@ -17,9 +17,9 @@
 //     — a read-only registration cannot reach the write queue, the write
 //     primitive, or the accept-guard's territory at all (the guard routes
 //     ONLY `readOnlyHint === false` calls to the kernel's mutation path).
-//     `mutating: true` is a real, deliberate escape hatch (four modules use
-//     it today: provenance, fileclass, crosssession,
-//     jd-scaffold), not a bypass of this gate — a module that does NOT declare it still gets the
+//     `mutating: true` is a real, deliberate escape hatch (three modules use
+//     it today: provenance, fileclass, jd-scaffold), not a bypass of this gate
+//     — a module that does NOT declare it still gets the
 //     original all-read-only enforcement. Pinned by test: the mount's
 //     registerAll gate refuses a non-mutating module's tool whose
 //     annotations are not read-only (see `mountModules`), so a future module
@@ -61,18 +61,6 @@ import { registerHealthTools, type HealthToolsCtx } from "./tools-health.js";
 import { DEFAULT_HEALTH_CONFIG, validateHealthConfig, DEFAULT_EMPTY_CHARS, type HealthSource } from "../kernel/health/index.js";
 import { registerFileclassTools, type FileclassToolsCtx } from "./tools-fileclass.js";
 import { DEFAULT_GOVERNANCE_SETTINGS, DEFAULT_ACCEPTANCE_SETTINGS } from "../governor/kernel/settings.js";
-import {
-  registerCrosssessionTools,
-  emptyCrosssessionSource,
-  type CrosssessionSource,
-  type CrosssessionToolsCtx,
-} from "./tools-crosssession.js";
-import {
-  DEFAULT_CROSSSESSION_CONFIG,
-  validateCrosssessionConfig,
-  memoryReceiptStore,
-  type ReceiptStoreLike,
-} from "../kernel/crosssession/index.js";
 import { registerBasesTools, emptyBasesSource, type BasesSource, type BasesToolsCtx } from "./tools-bases.js";
 import { registerJdScaffoldTools, emptyJdScaffoldSource, type JdScaffoldSource, type JdScaffoldToolsCtx } from "./tools-jd-scaffold.js";
 import { DEFAULT_BASES_CONFIG, validateBasesConfig } from "../kernel/bases/index.js";
@@ -799,132 +787,6 @@ const ACCEPTANCE_MANIFEST: ModuleManifest = {
   },
 };
 
-// ── crosssession module manifest (#232: the cross-session channel module) ───
-//
-// The fleet's coordination-log conventions given an agent surface: channel
-// discovery by fileclass + `audience:` frontmatter (never by path), delta
-// reads against a per-handle read position, read-receipt attestation, and
-// posting that is REFUSED (`stale_read`, typed, before any write) while
-// unread foreign entries exist. A MUTATING capability module (`mutating:
-// true`): crosssession_post appends a `## <stamp> · <handle>` section to the
-// channel's log file, and crosssession_attest writes MODULE STATE (the
-// receipt file beside the journal — the lock-tools "journaling matters more
-// than the queue slot" precedent), so both register readOnlyHint: false and
-// ride the guard-patched registrar (read-only mode, queue, journal, kernel
-// args). Entries are BODY APPENDS at end-of-file — the posting path composes
-// no frontmatter, so there is no acceptance field for it to assert; the
-// receipt store touches no note at all (see kernel/crosssession/receipts.ts).
-// Handles are COOPERATIVE (self-declared tool arguments, not authenticated) —
-// the fleet's fallible-not-adversarial threat model, documented on every
-// tool. Default DISABLED (opt-in), like every newly-folded mutating surface.
-// Config lives at `modules.crosssession.config` (a new module, no
-// ConfigBinding); the defaults mirror the live vault conventions.
-const CROSSSESSION_CONFIG_FIELDS: ConfigField[] = [
-  {
-    key: "channelFileclass",
-    label: "Channel fileClass",
-    type: "text",
-    help:
-      "The fileClass a channel's folder note carries. A note with this fileClass AND an `audience:` frontmatter " +
-      `value is a channel. Blank ⇒ the default (${DEFAULT_CROSSSESSION_CONFIG.channelFileclass}).`,
-  },
-  {
-    key: "messageFileclass",
-    label: "Per-message note fileClass",
-    type: "text",
-    help:
-      "The fileClass a channel's per-message notes carry (filename `<stamp> · <handle>.md`, write-once). Blank ⇒ " +
-      `the default (${DEFAULT_CROSSSESSION_CONFIG.messageFileclass}).`,
-  },
-  {
-    key: "deltaCap",
-    label: "Delta cap",
-    type: "number",
-    help:
-      "Maximum entries crosssession_delta returns per channel per call (a `more` marker + `next_stamp` continue a " +
-      `truncated read). Blank ⇒ the default (${DEFAULT_CROSSSESSION_CONFIG.deltaCap}).`,
-  },
-];
-
-const CROSSSESSION_MANIFEST: ModuleManifest = {
-  summary:
-    "Cross-session coordination channels: discover the fleet's coordination logs by fileclass + `audience:` " +
-    "frontmatter (never by path), read the entries newer than your attested position, attest read receipts, and " +
-    "post — with posting refused while unread entries exist (\"posting asserts you are current\", enforced " +
-    "mechanically). Handles are cooperative, self-declared session names, not authenticated identities: the module " +
-    "catches honest lapses (posting without reading), not adversaries. Read positions are per-handle module state " +
-    "in the plugin's own directory — never note frontmatter, never data.json. Attestation is a read-receipt, not " +
-    "authority: it grants nothing and gates only this module's own posting tool.",
-  config: {
-    fields: CROSSSESSION_CONFIG_FIELDS,
-    defaults: { ...DEFAULT_CROSSSESSION_CONFIG } as Record<string, unknown>,
-    validate: validateCrosssessionConfig,
-  },
-  directory: {
-    tools: [
-      {
-        name: "crosssession_channels",
-        purpose:
-          "Discover every channel by fileclass + audience frontmatter: uid, path, audience, linked projects, entry " +
-          "count, newest stamp, and recorded read receipts (which handles are behind).",
-        readOnly: true,
-        options: [{ name: "handle", what: "your session handle — adds your read position + unread count per channel" }],
-        caveats: ["A channel outside the path allowlist is invisible — absent from the answer, not refused."],
-      },
-      {
-        name: "crosssession_delta",
-        purpose:
-          "Entries newer than your attested read position, parsed {stamp, handle, body} from both forms (log-file " +
-          "sections + per-message notes), oldest first, capped with a `more` marker.",
-        readOnly: true,
-        options: [
-          { name: "handle", what: "your session handle (self-declared)" },
-          { name: "channel", what: "channel uid, folder-note path, or folder; omit for all visible channels" },
-        ],
-        caveats: [
-          "Your own entries are omitted — they are exempt from staleness.",
-          "Stamps are opaque ordered strings (the live file contains imprecise stamps like `…T14:2x`); never parsed " +
-            "as datetimes.",
-        ],
-      },
-      {
-        name: "crosssession_attest",
-        purpose: "Record a read receipt: your handle has read a channel through a stamp.",
-        readOnly: false,
-        options: [
-          { name: "handle", what: "your session handle (self-declared)" },
-          { name: "channel", what: "channel uid, folder-note path, or folder" },
-          { name: "through_stamp", what: "the last entry stamp you have read, verbatim" },
-        ],
-        caveats: [
-          "A read-receipt, not authority: it grants nothing, writes no note, and feeds only crosssession_post's " +
-            "staleness check. Receipts are cooperative claims — any stamp at or before the channel's newest entry " +
-            "is accepted.",
-          "Mutates module state (the receipt file beside the journal), not the vault — registered mutating so the " +
-            "attestation is journaled, like a lock claim.",
-        ],
-      },
-      {
-        name: "crosssession_post",
-        purpose:
-          "Append one `## <stamp> · <handle>` entry to the channel's append-only log file; refused (`stale_read`) " +
-          "while unread entries exist.",
-        readOnly: false,
-        options: [
-          { name: "handle", what: "your session handle (self-declared)" },
-          { name: "channel", what: "channel uid, folder-note path, or folder" },
-          { name: "body", what: "the entry body (markdown)" },
-        ],
-        caveats: [
-          "The staleness refusal is typed (`stale_read`) and checked BEFORE any write — read the delta and attest " +
-            "first. Your own entries are exempt.",
-          "Appends body text at end-of-file only; the posting path composes no frontmatter. On success it " +
-            "auto-attests your handle through the new entry.",
-        ],
-      },
-    ],
-  },
-};
 // ── bases module manifest (#243: evaluated Base rows for agents) ────────────
 //
 // A READ-ONLY capability module (like health): both tools readOnlyHint: true,
@@ -1143,16 +1005,6 @@ export interface MountDeps {
   /** Injected fileclass CLI binary (tests / explicit override). Absent ⇒ the
    * registrar resolves from config.binaryPath, else probes the filesystem. */
   fileclassBinary?: string | null;
-  /** The crosssession module's injected vault reader/appender
-   * (obsidianCrosssessionSource live). Absent ⇒ an inert empty source, so the
-   * settings-UI's stand-in deps and pre-crosssession callers still satisfy
-   * MountDeps (the module registers, and answers "no channels"). */
-  crosssessionSource?: CrosssessionSource;
-  /** The crosssession module's read-receipt store (obsidianReceiptStore live —
-   * the file beside the journal). Absent ⇒ an in-memory store. */
-  crosssessionReceipts?: ReceiptStoreLike;
-  /** Injectable clock for crosssession post/attest stamps (tests). */
-  crosssessionNow?: () => Date;
   /** The bases module's injected vault/engine adapter (obsidianBasesSource
    * live — the hidden-leaf capture). Absent ⇒ an inert unavailable source, so
    * the settings-UI's stand-in deps and pre-bases callers still satisfy
@@ -1300,30 +1152,6 @@ export function builtinModules(deps: MountDeps): VaultModule[] {
       () => { /* contributes no MCP tools */ },
       () => ({}),
     ),
-    // The crosssession module (#232): the cross-session channel surface. A
-    // MUTATING capability module — crosssession_post appends a log-file entry
-    // and crosssession_attest writes the module's own receipt state, so both
-    // register readOnlyHint: false through the guard-patched registrar
-    // (read-only mode, queue, journal, kernel args) and the mount gate honors
-    // `mutating: true`. Posting is REFUSED (`stale_read`, typed, before any
-    // write) while unread foreign entries exist; the receipt state lives in
-    // the plugin dir beside the journal, never in notes or data.json. A NEW
-    // module, so it follows the adapters doc: it reads `host`/`config` and
-    // filters with `host.visible` (channels/entries outside the allowlist are
-    // invisible). Default DISABLED (opt-in). Config lives at
-    // `modules.crosssession.config` (no ConfigBinding).
-    moduleFromRegistrar(
-      { id: "crosssession", capabilities: ["coordination"], enabled: false, mutating: true, manifest: CROSSSESSION_MANIFEST },
-      (server: any, ctx: CrosssessionToolsCtx) =>
-        registerCrosssessionTools(server, deps.crosssessionSource ?? emptyCrosssessionSource(), ctx),
-      (host, config) => ({
-        config,
-        getSettings: deps.getSettings,
-        visible: host.visible,
-        receipts: deps.crosssessionReceipts ?? memoryReceiptStore(),
-        ...(deps.crosssessionNow ? { now: deps.crosssessionNow } : {}),
-      }),
-    ),
     // The bases module (#243): evaluated Base rows for agents. A READ-ONLY
     // capability module — both tools readOnlyHint: true, so the mount's
     // read-only-only registrar gate passes them without any exemption, and
@@ -1387,9 +1215,9 @@ export function mountModules(registerTool: ToolRegistrar, deps: MountDeps): Modu
   const modules = builtinModules(deps);
   const registry = new ModuleRegistry(modules, deps.getSettings().modules ?? {});
   // The modules that have EARNED the right to contribute mutating tools
-  // (provenance, fileclass, crosssession and jd-scaffold today; skills and
-  // triage each set the precedent before leaving for their own plugins), by declaring
-  // `mutating` — see VaultModule.mutating.
+  // (provenance, fileclass and jd-scaffold today; skills, triage and
+  // cross-session each set the precedent before leaving for their own
+  // plugins), by declaring `mutating` — see VaultModule.mutating.
   // Every other module is still held to read-only, so a mutating handler
   // cannot drift into a read-only module unreviewed.
   const mutatingModules = new Set(modules.filter((m) => m.mutating).map((m) => m.id));

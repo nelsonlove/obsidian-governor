@@ -25,7 +25,6 @@ import { obsidianProvenanceBackend } from "./tools-provenance.js";
 import { obsidianHealthBackend } from "./tools-health.js";
 import { mountModules } from "./modules-mount.js";
 import { FILECLASS_PLUGIN_ID } from "./tools-fileclass.js";
-import { obsidianCrosssessionSource, obsidianReceiptStore } from "./tools-crosssession.js";
 import { obsidianBasesSource } from "./obsidian-bases-source.js";
 import { obsidianJdScaffoldSource } from "./obsidian-jd-scaffold-source.js";
 import { registerCodeModeTools, makeCaptureRegister, type CapturedRegistry } from "./tools-code-mode.js";
@@ -560,18 +559,6 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
     // locked decision).
     vaultName: ctx.vaultName,
     fileclassPresent: () => !!(app as any).plugins?.plugins?.[FILECLASS_PLUGIN_ID],
-    // The crosssession module (#232): vault reads/appends via the duck-typed
-    // source; read-receipt state in the plugin dir beside the journal
-    // (`crosssession-receipts.json` — the install-id precedent), NOT data.json.
-    crosssessionSource: obsidianCrosssessionSource(app as any),
-    // `ctx.pluginDir` (manifest.dir), NOT the id-derived default — the two
-    // diverge after an in-place 0.12.0 update where the folder is still named
-    // `vault-mcp` while the manifest id is `governor`. Receipts landing in a
-    // stray `plugins/governor/` folder outside the live plugin dir would never
-    // migrate, and deleting that stray (it looks empty) re-serves already
-    // attested cross-session entries. Same threading as the sibling
-    // `obsidianPendingReviewSource(app, ctx.pluginDir)` above.
-    crosssessionReceipts: obsidianReceiptStore(app as any, ctx.pluginDir),
     // The bases module (#243): the hidden-leaf capture over Obsidian's own
     // Bases engine. The adapter feature-detects the public Bases API itself
     // and the registrar registers nothing when it is absent.

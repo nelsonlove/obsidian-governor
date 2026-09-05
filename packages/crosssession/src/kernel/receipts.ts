@@ -9,16 +9,24 @@
 // operational state lives with the audit stream, not with settings.
 //
 // A receipt is a READ-RECEIPT, not authority: it confers nothing, gates only
-// the module's own `crosssession_post` staleness check, and touches no
-// acceptance field anywhere. Handles are COOPERATIVE (self-declared by the
-// caller, per the fleet's fallible-not-adversarial threat model) — the store
-// records what a session claimed to have read; it cannot verify the reading.
+// this plugin's own `post` staleness check, and touches no acceptance field
+// anywhere. Handles are COOPERATIVE (self-declared by the caller, per the
+// fleet's fallible-not-adversarial threat model) — the store records what a
+// session claimed to have read; it cannot verify the reading.
 //
-// Failure discipline follows install-id.ts: a corrupt file is treated as empty
-// (logged) rather than fatal; an unwritable dir degrades to in-memory state
-// for this load rather than failing the operation. Read-modify-write races are
-// prevented upstream: every mutating tool call is serialized through the
-// plugin-singleton write queue, so two attests never interleave.
+// SINCE THE S6 SATELLITE EXTRACTION the "plugin's own directory" is THIS
+// plugin's (`.obsidian/plugins/vault-crosssession/`), not the host's. The
+// host's copy is live operator state — a lost receipt re-serves entries a
+// session already attested — so main.ts adopts it once, by merge, on first
+// load, and never writes the host's file. See settings.ts.
+//
+// Failure discipline follows the host's install-id.ts: a corrupt file is
+// treated as empty (logged) rather than fatal; an unwritable dir degrades to
+// in-memory state for this load rather than failing the operation.
+// Read-modify-write races are prevented upstream: every mutating call is
+// serialized through the HOST's plugin-singleton write queue (an external
+// mutating tool rides the guarded registration path like any built-in), so two
+// attests never interleave.
 
 /** The Obsidian DataAdapter slice this needs — same duck type as
  * InstallIdAdapter, narrowed for headless tests. */
@@ -75,7 +83,7 @@ function sane(parsed: unknown): ReceiptsState {
 export class ReceiptStore implements ReceiptStoreLike {
   constructor(
     private readonly adapter: ReceiptAdapter,
-    /** The plugin's data directory (`.obsidian/plugins/governor`). */
+    /** This plugin's data directory (`.obsidian/plugins/vault-crosssession`). */
     private readonly dir: string,
   ) {}
 
@@ -90,11 +98,11 @@ export class ReceiptStore implements ReceiptStoreLike {
       try {
         return sane(JSON.parse(raw));
       } catch {
-        console.error(`[governor] ${this.file} is unreadable; treating receipts as empty`);
+        console.error(`[vault-crosssession] ${this.file} is unreadable; treating receipts as empty`);
         return {};
       }
     } catch (e) {
-      console.error("[governor] crosssession receipts could not be read", e);
+      console.error("[vault-crosssession] crosssession receipts could not be read", e);
       return {};
     }
   }
@@ -109,19 +117,78 @@ export class ReceiptStore implements ReceiptStoreLike {
     return state[channelKey] ?? {};
   }
 
+  /**
+   * Read a receipt file at an ARBITRARY directory — the adoption read (main.ts
+   * points it at the Governor host's plugin dir). Separate from `load()` so the
+   * store's own file path stays the one thing `load` knows about, and so the
+   * host's copy is unmistakably READ-ONLY here: there is no write counterpart
+   * that takes a directory.
+   */
+  async loadFrom(dir: string): Promise<ReceiptsState | null> {
+    const file = `${dir}/${RECEIPTS_FILE}`;
+    try {
+      if (!(await this.adapter.exists(file))) return {};
+      return sane(JSON.parse(await this.adapter.read(file)));
+    } catch {
+      // NULL, not {} — the distinction is what the adoption latch runs on
+      // (found in review, 2026-09-05): "the host has no receipts" answers the
+      // adoption question and may latch; "the host's file could not be read"
+      // does not, and returning {} for both meant one transient I/O error at
+      // first load permanently dropped the host's live receipts. Never fatal
+      // either way: the plugin must load with or without a predecessor's state.
+      return null;
+    }
+  }
+
+  /**
+   * Merge `incoming` into this store's own file and persist — the one-shot
+   * receipt adoption (see main.ts). OWN VALUES WIN per (channel, handle), the
+   * same rule settings adoption follows, so a receipt this install already
+   * recorded is never rolled back to the host's older position. Returns the
+   * number of (channel, handle) pairs actually adopted.
+   */
+  async merge(incoming: ReceiptsState): Promise<{ adopted: number; persisted: boolean }> {
+    const state = await this.load();
+    let adopted = 0;
+    for (const [ck, handles] of Object.entries(sane(incoming))) {
+      const row = state[ck] ?? {};
+      for (const [h, r] of Object.entries(handles)) {
+        if (row[h] !== undefined) continue; // rule 3: our own value wins
+        row[h] = r;
+        adopted++;
+      }
+      state[ck] = row;
+    }
+    if (adopted === 0) return { adopted, persisted: true };
+    // Persistence is REPORTED, not assumed (review, 2026-09-05): `write`
+    // swallows failures by design — right for attest/post, where a lost
+    // receipt only costs a re-served delta — but the one-shot adoption latch
+    // must not burn on a merge that never reached disk while logging that it
+    // adopted N receipts.
+    const persisted = await this.write(state);
+    return { adopted, persisted };
+  }
+
   async set(channelKey: string, handle: string, through: string, at: string): Promise<void> {
     const state = await this.load();
     const row = state[channelKey] ?? {};
     row[handle] = { through, at };
     state[channelKey] = row;
+    await this.write(state);
+  }
+
+  private async write(state: ReceiptsState): Promise<boolean> {
     try {
       if (!(await this.adapter.exists(this.dir))) await this.adapter.mkdir(this.dir);
       await this.adapter.write(this.file, JSON.stringify(state, null, 2) + "\n");
+      return true;
     } catch (e) {
       // A receipt that could not persist is logged and lost on reload — the
       // caller's operation (attest / post) still succeeded; the next delta
-      // simply re-serves what the lost receipt would have covered.
-      console.error("[governor] crosssession receipt could not be persisted", e);
+      // simply re-serves what the lost receipt would have covered. The boolean
+      // exists for ONE caller: adoption, whose latch must not burn on this.
+      console.error("[vault-crosssession] crosssession receipt could not be persisted", e);
+      return false;
     }
   }
 }

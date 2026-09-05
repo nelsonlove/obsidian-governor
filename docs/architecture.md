@@ -265,7 +265,7 @@ A module declares identity, user outcome, dependencies, settings, action referen
 
 One bad module is skipped and reported rather than taking down the core surface. A load-bearing dependency failure is unavailable, not silently empty.
 
-The [Module directory](modules.md) accounts for scheme, vocabulary, provenance, health, fileclass, acceptance, cross-session coordination, Bases, JD scaffolding, and the conformance, survey, QuickAdd, identity/link, write-kernel, and external-publisher surfaces. Skills compilation is no longer one of this plugin's modules — it ships as the separate `vault-skills` satellite plugin (see [skills.md](skills.md)). Triage is no longer one of this plugin's modules either — it ships as the separate `vault-triage` satellite plugin (see [triage.md](triage.md)).
+The [Module directory](modules.md) accounts for scheme, vocabulary, provenance, health, fileclass, acceptance, Bases, JD scaffolding, and the conformance, survey, QuickAdd, identity/link, write-kernel, and external-publisher surfaces. Skills compilation is no longer one of this plugin's modules — it ships as the separate `vault-skills` satellite plugin (see [skills.md](skills.md)). Triage is no longer one of this plugin's modules either — it ships as the separate `vault-triage` satellite plugin (see [triage.md](triage.md)). Cross-session coordination is no longer one of this plugin's modules either — it ships as the separate `vault-crosssession` satellite plugin (see [crosssession.md](crosssession.md)).
 
 ## Public and private distributions
 
