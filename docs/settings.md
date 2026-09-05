@@ -268,12 +268,12 @@ Optional modules use one common availability vocabulary: available, disabled, mi
 | Module | Default | Consequence | Dependency | Recovery |
 |---|---|---|---|---|
 | Stable identity and link health | On | Read-only reports and stable references | Metadata cache | Repair duplicates deliberately |
-| Bases | On when public API is available | Evaluated read-only rows | Supported Obsidian Bases API | Disable or update Obsidian |
-| Vocabulary | Off until configured | Read-only validation | Vocabulary sources | Fix config or disable |
+| Bases (satellite `vault-bases`) | On when public API is available | Evaluated read-only rows | Supported Obsidian Bases API | Disable or update Obsidian |
+| Vocabulary (satellite `vault-vocab`) | Off until configured | Read-only validation | Vocabulary sources | Fix config or disable |
 | Scheme addressing | Off until configured | Resolution and preview-first placement | Scheme provider | Use literal paths or stable identities |
 | Conformance | Off until baselined | New-drift reporting | Accepted baseline and declared territory | Run report-only, repair or review debt |
 | Provenance | Off | Freshness, reconciliation, and governed regeneration | Declared sources and generator | Report only or restore prior generated artifact |
-| Health | Off | Scoped or whole-vault reports | Scanner rules and resource budget | Disable or narrow scan |
+| Health (satellite `vault-health`) | Off | Scoped or whole-vault reports | Scanner rules and resource budget | Disable or narrow scan |
 | Fileclass | Off | Schema inspection and governed representation changes | Compatible Fileclass plugin and CLI surface | Disable or edit through ordinary note operations |
 | Acceptance | On in target product | Human sessions, cohorts, mandates, admission, and history | Review, Git, verifier, and attestation services | Return to proposal-only operation; never expose agent admission |
 | JD scaffolding | Off | Configured structure and identifier scaffolding | Templates and scheme configuration | Dry-run, restore exact cohort, disable |
@@ -282,7 +282,7 @@ Optional modules use one common availability vocabulary: available, disabled, mi
 
 The complete module list and each module's target default are in the [Module directory](modules.md); this summary is not a second inventory owner. Skills is no longer a module of this plugin's settings tab — its config moved to the separate `vault-skills` plugin's own settings tab, with a one-shot adoption of the recognized keys out of this plugin's former `modules.skills.config` on that plugin's first load (see [skills.md](skills.md)). Triage is no longer a module of this plugin's settings tab either — its config moved to the separate `vault-triage` plugin's own settings tab, with a one-shot adoption of the recognized keys out of this plugin's former `modules.triage.config` on that plugin's first load (see [triage.md](triage.md)). Cross-session coordination is no longer a module of this plugin's settings tab either — its config moved to the separate `vault-crosssession` plugin's own settings tab on the same one-shot terms, out of this plugin's former `modules.crosssession.config`; that plugin also adopts this one's `crosssession-receipts.json` read-receipt file once, because the receipts are live operational state rather than configuration (see [crosssession.md](crosssession.md)).
 
-For the first Community release, skills/policy compilation (now the separate `vault-skills` satellite plugin), cross-session coordination (now the separate `vault-crosssession` satellite plugin), JD scaffolding, triage mutations (now the separate `vault-triage` satellite plugin), QuickAdd execution bindings, and provenance regeneration are private/operator features and are absent from the public bundle. Bases, scheme, vocabulary, conformance, health, survey, Fileclass inspection, and provenance inspection may ship as bounded public optionals when their dependencies and manifests are satisfied.
+For the first Community release, skills/policy compilation (now the separate `vault-skills` satellite plugin), cross-session coordination (now the separate `vault-crosssession` satellite plugin), JD scaffolding, triage mutations (now the separate `vault-triage` satellite plugin), QuickAdd execution bindings, and provenance regeneration are private/operator features and are absent from the public bundle. Bases, scheme, vocabulary, conformance, health, survey, Fileclass inspection, and provenance inspection may ship as bounded public optionals when their dependencies and manifests are satisfied — three of them (Bases, vocabulary, health) as their own plugins since the S7 read-tier extraction, each with its own settings tab rather than a section of the host's.
 
 ## Operation evidence and retention
 

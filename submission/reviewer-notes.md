@@ -46,7 +46,7 @@ Review full mode, compact code mode, in-app tool runner, batch operations, inter
 
 ### 4. Scope
 
-Review normalization, traversal, segment boundaries, source/destination checks, batch items, stable/scheme references, discovery filtering, hidden counts, pending index, Base rows, backlinks, and discovered-blast-radius operations.
+Review normalization, traversal, segment boundaries, source/destination checks, batch items, stable/scheme references, discovery filtering, hidden counts, pending index, backlinks, and discovered-blast-radius operations. (Base-row filtering left this bundle at S7 with the `vault-bases` satellite. What replaces it here is the external-publisher gate: a published tool's read-only claim is distrusted unless its plugin id is in `trustedReadOnlyPlugins`, and under an active path allowlist a published tool whose call arguments carry no recognized path key is refused outright.)
 
 Tools that cannot be path-scoped honestly should refuse under scope or remain absent publicly.
 
@@ -108,11 +108,11 @@ Any intentional non-public API hop must be feature-checked, isolated, documented
 
 ### 11. Optional dependencies
 
-For Bases, vocabulary, schemes, conformance, and external publishers, verify disabled/missing/incompatible/unavailable behavior. A missing source must not become a convincing empty result. (JD scaffolding and provenance regeneration are a stronger check: per [Status and compatibility](../docs/status-and-compatibility.md), they are target-private in the first release — verify they are ABSENT from the Community bundle (the requirement comes from the status page's matrix; the [release checklist](release-checklist.md)'s excluded-capabilities checks are where it is exercised), not merely disabled. Triage mutations and cross-session coordination were the examples here until S5 and S6; they are now separate satellite plugins, so their absence is structural rather than something to verify in this plugin.)
+For schemes, conformance, and external publishers, verify disabled/missing/incompatible/unavailable behavior. A missing source must not become a convincing empty result. (Bases evaluation and vocabulary validation headed this list until S7; they now ship as the separate `vault-bases` and `vault-vocab` satellite plugins, alongside `vault-health`, so from this plugin's side all three are external publishers like any other and are covered by that case. JD scaffolding and provenance regeneration are a stronger check: per [Status and compatibility](../docs/status-and-compatibility.md), they are target-private in the first release — verify they are ABSENT from the Community bundle (the requirement comes from the status page's matrix; the [release checklist](release-checklist.md)'s excluded-capabilities checks are where it is exercised), not merely disabled. Triage mutations and cross-session coordination were the examples here until S5 and S6; they are now separate satellite plugins, so their absence is structural rather than something to verify in this plugin.)
 
 ### 12. Startup and large-vault cost
 
-Inspect work performed during `onload`, layout-ready initialization, connection construction, metadata indexing, Base evaluation, review refresh, and journal handling. Verify caps, pagination, cancellation, hidden-view cleanup, and occluded-window timing.
+Inspect work performed during `onload`, layout-ready initialization, connection construction, metadata indexing, review refresh, and journal handling (Base evaluation left this list at S7 — it is the `vault-bases` satellite's cost now, not this bundle's). Verify caps, pagination, cancellation, hidden-view cleanup, and occluded-window timing.
 
 ## Data-flow summary
 
@@ -164,7 +164,7 @@ These are documented in the [Threat model](../docs/threat-model.md), not hidden 
 - supported Obsidian API review;
 - clean-vault onboarding recording or steps/results;
 - minimum-version and optional-dependency matrix;
-- startup, large-vault, Bases, queue, and review performance measurements;
+- startup, large-vault, queue, and review performance measurements (Bases measurements moved to the `vault-bases` satellite at S7);
 - keyboard/accessibility results;
 - migration closure and old-surface audit;
 - session/mandate/cohort, Git/attestation, key trust, and two-replica Sync evidence;

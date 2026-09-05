@@ -1,18 +1,46 @@
 # Vocabulary provider — controlled vocabulary (read-only)
 
-> **Deep reference for the shipped implementation.** Canonical concepts and the target design live in the [documentation corpus](README.md); what is shipped versus target is owned by [status-and-compatibility.md](status-and-compatibility.md).
+> **Deep reference for the shipped implementation.** Canonical concepts and the target design live in the [documentation corpus](README.md); what is shipped versus target is owned by [status-and-compatibility.md](status-and-compatibility.md). Since the S7 read-tier extraction (`suite-split-design.md` §6) this reference documents the standalone **`vault-vocab`** plugin, not a module of the host plugin (`governor`).
 
-
-The vocabulary provider is a [capability module](module-system.md) (id `vocab`, capabilities
-`["vocabulary"]`) that lets an agent **check a note's tags, properties, types, and glossary
+The vocabulary provider lets an agent **check a note's tags, properties, types, and glossary
 terms against the vault's controlled vocabulary** — and validate them **without writing
 anything**. Validation and resolution only; nothing here mutates a note.
 
-Files: `packages/plugin/src/mcp/tools-vocab.ts` (tools),
-`packages/plugin/src/kernel/vocab/` (the pure engine: `provider.ts`, `registry.ts`,
-`blueprint.ts`, `glossary.ts`, `scope-tags.ts`, `findings.ts`). Obsidian-import-free; the vault
-reader arrives as an injected `VocabSource` exposing only `paths()` / `frontmatter()` /
-`body()` — enumeration and reads, structurally no write reach.
+Files: `packages/vocab/src/tools.ts` (the four tool specs),
+`packages/vocab/src/obsidian-source.ts` (the live vault adapter), `packages/vocab/src/main.ts`
+/ `settings.ts` / `settings-tab.ts` (its own settings, its per-instance form, and the one-shot
+adoption), and **`packages/core/src/vocab/`** — the pure engine (`provider.ts`, `registry.ts`,
+`blueprint.ts`, `glossary.ts`, `scope-tags.ts`, `findings.ts`). Obsidian-import-free above the
+adapter; the vault reader arrives as an injected `VocabSource` exposing only `paths()` /
+`frontmatter()` / `body()` — enumeration and reads, structurally no write reach.
+
+## Now a satellite plugin — and the engine went somewhere else again
+
+This capability shipped as the host plugin's `vocab` module through 2026-08; as of the S7
+extraction it is its own Obsidian plugin, id `vault-vocab`, publishing its tools to the host
+through the `vault-mcp-api` SDK's `publishTools`. **All four tool names changed**, because the
+host publishes an external tool as `<sanitized publisher id>_<bare name>` and so the plugin id
+IS the tool namespace: `obsidian_vocabularies`, `obsidian_resolve_term`,
+`obsidian_validate_terms` and `obsidian_list_vocabulary` are now **`vault_vocab_vocabularies`**,
+**`vault_vocab_resolve_term`**, **`vault_vocab_validate_terms`** and
+**`vault_vocab_list_vocabulary`**. The `obsidian_` prefix was the HOST's built-in namespace,
+never this module's name, so it was stripped rather than carried into a second owner's
+namespace. Sessions and prompts calling the old names must be updated.
+
+**The pure engine did NOT move into the plugin — it moved into `@vault-mcp/core`.** It has two
+consumers and always did: these four tools, and the host's own conformance rail, where
+`conformance/packs/vocab.ts` wraps `noteVocabFindings`, `conformance/cli.ts` builds a
+`VocabRegistry` per run, and `snapshot.ts` / `rule-pack.ts` are typed over `VocabNote`. Copying
+it would have been the failure the split exists to avoid — two copies of a vocabulary rule core
+is how one vault ends up with two vocabularies — so it was published instead, on the same
+precedent as `isVisible` (S4) and `executeQuickAddChoice` (S5). Conformance is itself a planned
+satellite, so core is where both consumers were always going to meet.
+
+**One pre-existing gap the extraction makes visible, and does not create:** the conformance rail
+builds its registry from `DEFAULT_VOCABULARIES`, not from the configured instance list. It never
+read the user's configured vocabularies, so conformance findings and these tools can disagree
+about what is registered. That is a host question, recorded here because this is where a reader
+would look for it.
 
 ## What it validates
 
@@ -51,23 +79,30 @@ name on 2026-08-19, which the default was corrected to follow).
 
 ## The four tools
 
-All read-only (`readOnlyHint: true`), registered through the module registry.
+All declared read-only, published to the Governor host through `vault-mcp-api`. (They registered through the host's module registry until S7; see the allowlist section below for what the host now believes about that read-only declaration.)
 
 | Tool | Input | Returns |
 | --- | --- | --- |
-| **`obsidian_vocabularies`** | *(none)* | `{ vocabularies: [{ id, provider, root, capabilities, kinds, counts, examples }], problems }` — every configured vocabulary, its served kinds, per-kind counts and examples. |
-| **`obsidian_resolve_term`** | `token?` **xor** `path?`; plus `kind?` (`tag`\|`property`\|`type`\|`term`), `parse?`, `vocabulary?` | `token` → `{ token, found, vocabulary, entry }` (one sense) or `{ found:false }`; `token` + `parse:true` → `{ token, valid, findings }` (validate-only); `path` → `{ path, terms:[{ token, kind, found, canonical?, vocabulary?, definition?, deprecated?, ambiguous? }] }` (the note's own tags/properties/types). |
-| **`obsidian_validate_terms`** | `path` | `{ path, findings, clean }` — the note's vocabulary findings. Report-only; findings are returned, never fixed, nothing is written. |
-| **`obsidian_list_vocabulary`** | `kind`, `scope?`, `vocabulary?` | `{ kind, count, entries }` — every registered term of that kind, case-insensitively sorted, each carrying its `vocabulary` id. |
+| **`vault_vocab_vocabularies`** | *(none)* | `{ vocabularies: [{ id, provider, root, capabilities, kinds, counts, examples }], problems }` — every configured vocabulary, its served kinds, per-kind counts and examples. |
+| **`vault_vocab_resolve_term`** | `token?` **xor** `path?`; plus `kind?` (`tag`\|`property`\|`type`\|`term`), `parse?`, `vocabulary?` | `token` → `{ token, found, vocabulary, entry }` (one sense) or `{ found:false }`; `token` + `parse:true` → `{ token, valid, findings }` (validate-only); `path` → `{ path, terms:[{ token, kind, found, canonical?, vocabulary?, definition?, deprecated?, ambiguous? }] }` (the note's own tags/properties/types). |
+| **`vault_vocab_validate_terms`** | `path` | `{ path, findings, clean }` — the note's vocabulary findings. Report-only; findings are returned, never fixed, nothing is written. |
+| **`vault_vocab_list_vocabulary`** | `kind`, `scope?`, `vocabulary?` | `{ kind, count, entries }` — every registered term of that kind, case-insensitively sorted, each carrying its `vocabulary` id. |
 
 ### Error codes and finding shapes
 
 Coded tool errors (`Error [code]: …`):
 
 - **`out_of_allowlist`** — a `path` argument outside the session's allowlist
-  (`obsidian_resolve_term` path branch, `obsidian_validate_terms`).
+  (the resolve tool's path branch, and the validate tool).
 - **`vocab_ambiguous`** — a token with more than one sense across kinds; the resolver refuses to
-  pick and names the candidates (`obsidian_resolve_term` token branch).
+  pick and names the candidates (the resolve tool's token branch).
+- **`invalid_argument`** — the two argument-shape errors (`token` and `path` together, or
+  neither). New at S7 only in the sense that they now carry a code: as a module they were
+  codeless `Error: …` text.
+- **`invalid_path`** / **`invalid_scope`** — a `path` or `scope` argument containing a
+  backslash, refused outright. New at S7: every check downstream splits on `/` alone, so a
+  backslash reads as one opaque segment here and as a traversal to whatever normalizes it
+  later, and Obsidian paths never legitimately contain one.
 
 Finding codes (`VocabFinding.code`, shape `{ code, token, path, detail }`):
 
@@ -83,12 +118,26 @@ blueprint maps an unknown-per-kind token to `unregistered_tag` / `undefined_prop
 (`findings.ts`) adds `malformed_token` (e.g. a whitespace tag) and `ambiguous`; the last five
 are the scope-tags provider's pack (below).
 
+## Allowlist behaviour since S7 — per tool, and for one tool per CALL
+
+The enforced boundary is now the HOST's, because a satellite cannot reach the host's guard settings, and the host's gate tests the arguments a call actually carries. The four tools therefore land differently and the difference is worth reading twice:
+
+- **`vault_vocab_vocabularies`** takes no arguments, and **`vault_vocab_list_vocabulary`** takes `kind` / `scope` / `vocabulary`, none of which is a recognized path key. Under an active path allowlist both are **blocked outright** — stricter than the in-module listing filter they replace.
+- **`vault_vocab_validate_terms`** requires `path`, which IS a path key, so it is **not blocked**: the host scopes it and refuses `out_of_allowlist` for a hidden note.
+- **`vault_vocab_resolve_term`** takes `path` OPTIONALLY, so the same tool is **blocked when called with `{token}` and scoped when called with `{path}`**. That per-call asymmetry is the most surprising fact about this extraction and is not a bug: the host cannot scope a call whose arguments name no path.
+
+The in-plugin LISTING filter — which ran the vault enumeration through the allowlist before any body was read — is now dormant, since nothing supplies it. **Be precise about what that costs**, because "no tool became looser" would be false: the two tools the host still lets through build their providers from the whole-vault listing, so for a token the caller's own visible note already carries, they can disclose whether a hidden registry declares it, its definition gloss, and — through the ambiguity detail — the paths of registry notes claiming a duplicated token. Bounded (you can only ask about tokens you can already read) but real, and not closable from inside a satellite. The `visible` seam is kept, unsupplied, with its tests still driving it, so an apiVersion-2 `vault-mcp-api` able to carry the caller's scope to a publisher closes it with no code change.
+
 ## Read-only, and the findings rule packs
 
-Every tool is `readOnlyHint: true` and the module has no write path. `findings.ts`
+Every tool declares `readOnly: true` and the plugin has no write path at all. `findings.ts`
 (`noteVocabFindings` — the pure whole-note rule pack) is exposed for a single named note through
-`obsidian_validate_terms` but is **not registered as its own tool**: capabilities arrive as rule
-packs, never as new mutating surface. Deciding whether an unregistered tag *should* be added to
+the validate tool but is **not registered as its own tool**: capabilities arrive as rule
+packs, never as new mutating surface. Note what the declaration buys since S7: the host
+DISTRUSTS an external tool's read-only claim unless `vault-vocab` is listed in its
+`trustedReadOnlyPlugins` setting, so by default all four register as mutating — read-only mode
+blocks them, and each call takes a write-queue slot and a journal record. Trusting the publisher
+restores read-only-mode availability; it does not change the scoping gate below. Deciding whether an unregistered tag *should* be added to
 the vocabulary, or a note re-tagged, is a decision the tool **names for you** — it never takes
 it.
 
@@ -102,6 +151,6 @@ The scope-tags provider adds its **five-finding whole-vault rule pack** (`scopeT
 - `registry_duplicate` — two registry notes claiming one token
 
 Per-note, `tag_out_of_scope` and `allowedTags_unregistered` also surface through
-`obsidian_validate_terms` via the optional `noteFindings` seam on `VocabularyProvider` (provider-
+the validate tool via the optional `noteFindings` seam on `VocabularyProvider` (provider-
 specific whole-note checks, called by `noteVocabFindings`); `tag_unregistered` rides the
 ordinary token path. Report-first throughout — no write-time refusal; curation is human.

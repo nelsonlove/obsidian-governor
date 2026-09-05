@@ -13,7 +13,7 @@ import type { DebtSource, DebtRegisterSource } from "./tools-conformance-debt.js
 import type { Finding } from "../conformance/finding.js";
 import { parseSidecar, sidecarPathFor, type DebtSidecar } from "../conformance/debt-sidecar.js";
 import { runConformance, baselineRelFrom, excludedRootsFrom } from "../conformance/cli.js";
-import { DEFAULT_VOCABULARIES } from "../kernel/vocab/registry.js";
+import { DEFAULT_VOCABULARIES } from "@vault-mcp/core";
 import { DEFAULT_SCHEMES } from "../kernel/scheme/registry.js";
 
 /** Read a UTF-8 file, or null when it is absent/unreadable (never throws). */

@@ -97,8 +97,8 @@ The repository and supplied records support these architectural mechanisms:
 - record immutability guard;
 - protected acceptance family and human-only accept surface;
 - in-app review pane and pending review index;
-- read/report modules for schemes, vocabulary, Bases, provenance, and conformance;
-- optional mutating triage and coordination modules; and
+- read/report modules for schemes, provenance, and conformance, plus vocabulary, health, and Bases evaluation — which since the S7 read-tier extraction are the separate `vault-vocab`, `vault-health` and `vault-bases` satellite plugins rather than modules of this one;
+- optional mutating triage and coordination, extracted at S5 and S6 into the separate `vault-triage` and `vault-crosssession` satellite plugins; and
 - explicit residuals for timeouts, link-resolution oracles, opaque output, metadata failure, and third-party APIs.
 
 The target suite retains these because they support durable principles, not because every existing default or document is accepted unchanged.

@@ -98,23 +98,14 @@ export {
 export type { UidSource, UidResolution, UidDuplicate, UidAddressing } from "./uid-index.js";
 export { loadInstallId, mintInstallId, INSTALL_ID_FILE } from "./install-id.js";
 export type { InstallIdAdapter, LoadedInstallId, ServerIdentity } from "./install-id.js";
-export { VocabAmbiguousError, asStrings } from "./vocab/provider.js";
-export type { VocabCapabilities, VocabEntry, VocabFinding, VocabKind, VocabularyProvider } from "./vocab/provider.js";
-export { blueprintProvider, scanFrontmatter } from "./vocab/blueprint.js";
-export type { BlueprintConfig, VocabNote } from "./vocab/blueprint.js";
-export { glossaryProvider, parseTermsSection, DEFAULT_GLOSSARY_CONFIG } from "./vocab/glossary.js";
-export type { GlossaryConfig } from "./vocab/glossary.js";
-export { noteVocabFindings } from "./vocab/findings.js";
-export type { NoteVocabInput } from "./vocab/findings.js";
-export {
-  scopeTagsProvider,
-  scopeTagsFindings,
-  validateScopeTagsConfig,
-  DEFAULT_SCOPE_TAGS_CONFIG,
-} from "./vocab/scope-tags.js";
-export type { ScopeTagsConfig, ScopeTagsProvider } from "./vocab/scope-tags.js";
-export { VocabRegistry, DEFAULT_VOCABULARIES, VOCAB_PROVIDERS, isVocabProvider } from "./vocab/registry.js";
-export type { VocabInstance, VocabInstanceSettings, VocabProviderName } from "./vocab/registry.js";
+// The vocabulary kernel was re-exported HERE until the read-tier satellite
+// extraction (suite split, S7). It now lives in `@vault-mcp/core`
+// (`packages/core/src/vocab/`), because it has two consumers in two plugins:
+// the four vocabulary tools, which left for the `vault-vocab` satellite, and
+// the host's own conformance rail, which stayed. Import it from core — a
+// second copy of a rule core is how one vault gets two vocabularies, which is
+// the same reasoning that kept `queryBaseRows` in one place at S5.
+//
 // The module host (#68) — re-exported here as part of the mount step, the
 // integration its barrel comment deferred to.
 export {

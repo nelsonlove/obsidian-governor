@@ -17,11 +17,15 @@
 // exactly the boundary the acceptance principle requires: agents SEE debt; only
 // a human MINTS acceptance.
 //
-// ── Whole-vault, like obsidian_health ────────────────────────────────────────
+// ── Whole-vault, like the health scan ───────────────────────────────────────
 //
 // The report runs over the whole vault and does NOT apply the path allowlist,
-// matching `obsidian_health`'s precedent ("a partial report is a misleading
-// one"). It is also the right call here specifically: every target it names is
+// matching the health scan's precedent ("a partial report is a misleading
+// one"). That scan is now the `vault-health` satellite's `vault_health_scan`,
+// where the same posture holds; this tool and `provenance_reconcile` are the
+// two whole-vault readers issue #381 still names inside this plugin, and both
+// still owe it the enumerate-or-filter decision. It is also the right call
+// here specifically: every target it names is
 // already a plaintext line in the committed baseline note (a governed vault
 // note), so the paths are not secret to a session that can read the baseline. A
 // filtered debt register would silently under-count carried debt and disagree
@@ -115,7 +119,8 @@ export function registerConformanceDebtTools(server: McpServer, source: DebtSour
         "summary counts { carried, cleared, new }, a `stale` list (items older than the configured threshold), and a " +
         "`budget` status (warns when carried exceeds the configured max). Optional args narrow by folder prefix / pack " +
         "/ check / kind and group the counts. Never writes; acceptance is a human act (via --rebaseline), never this " +
-        "tool. Runs over the whole vault (not allowlist-scoped, like obsidian_health).",
+        "tool. Runs over the whole vault — deliberately not allowlist-scoped, because every target it names is " +
+        "already a plaintext line in the committed baseline note.",
       inputSchema: {
         folder: z.string().min(1).optional().describe("Keep only items whose target is at/under this folder prefix (segment boundary)."),
         pack: z.string().min(1).optional().describe("Keep only items from this rule pack (the finding's `script`), e.g. \"drift_audit\"."),
@@ -177,7 +182,7 @@ export function registerConformanceDebtTools(server: McpServer, source: DebtSour
 // (`registerAcceptRefusal`) — the register's frontmatter is a `generated` +
 // `generator` derivation stamp and can never carry an acceptance-family key.
 //
-// ALLOWLIST: unlike the read tool (whole-vault report, obsidian_health's
+// ALLOWLIST: unlike the read tool (whole-vault report, the health scan's
 // precedent), the render WRITES — so under an active path allowlist it REFUSES
 // (`Error [out_of_allowlist]`, the obsidian_cli / Dataview precedent) unless
 // the register note's path is inside the allowlist. Its write target is not an

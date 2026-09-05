@@ -45,9 +45,9 @@ This section is the single owner of “what is shipped as of the named release�
 | Git-backed history and proposals | Public core, local | Git database stays outside Obsidian Sync; author strings are not identity or authority |
 | Signed attestations | Public core for local evidence; portable standing optional | Subject-bound; trusted keys and predicates; no note bodies in portable ledger |
 | Obsidian Sync compatibility | Public core | File-level arrivals reconcile per replica; incomplete cohorts remain receiving |
-| Bases evaluation | Public optional | Supported Obsidian Bases API and module available |
-| Vocabulary, schemes, conformance | Public optional | Human configuration; report-first |
-| Health, survey, Fileclass inspection, and provenance inspection/staleness | Public optional | Disabled until configured or supported; regeneration remains private |
+| Bases evaluation | Public optional | Supported Obsidian Bases API and the `vault-bases` plugin available. Since the S7 satellite extraction this is no longer one of this plugin's modules — it ships as the separate `vault-bases` satellite plugin, whose tools publish as `vault_bases_list` / `vault_bases_query` (see [bases.md](bases.md)) |
+| Vocabulary, schemes, conformance | Public optional | Human configuration; report-first. Vocabulary is no longer one of this plugin's modules either — since S7 it ships as the separate `vault-vocab` satellite plugin, whose tools publish as `vault_vocab_*` (see [vocabulary-module.md](vocabulary-module.md)); the conformance rail's vocabulary rule pack stays here and reads the shared rule core in `@vault-mcp/core` |
+| Health, survey, Fileclass inspection, and provenance inspection/staleness | Public optional | Disabled until configured or supported; regeneration remains private. The health scan is no longer one of this plugin's modules — since S7 it ships as the separate `vault-health` satellite plugin, whose tools publish as `vault_health_scan` / `vault_health_lint` |
 | Skills/policy compilation, cross-session coordination, JD scaffolding, triage mutations, QuickAdd execution, provenance regeneration | Target private in the first release | Absent from the Community bundle; promotion requires a separate reviewed manifest change. Skills compilation now ships as the separate `vault-skills` satellite plugin, so its absence from the Community bundle is structural (a different plugin, simply not part of it) rather than a manifest decision on this plugin's part. Triage mutations now likewise ship as the separate `vault-triage` satellite plugin, so their absence from the Community bundle is likewise structural rather than a manifest decision. Cross-session coordination now likewise ships as the separate `vault-crosssession` satellite plugin, so its absence is likewise structural rather than a manifest decision |
 | Generic command or arbitrary code | Excluded publicly | Private pack only, if separately governed |
 | Plugin installation/removal | Excluded publicly | Human uses Obsidian's own plugin UI |
@@ -111,9 +111,9 @@ This suite deliberately describes a future coherent product. The existing reposi
 
 **Historical claim:** An older hazard states that Bases are opaque to MCP and unsuitable when agents must read evaluated rows.
 
-**Implementation evidence:** The current repository documents `base_query`, which asks Obsidian's Bases engine to evaluate a view and returns scope-filtered rows.
+**Implementation evidence:** The current repository documents `vault_bases_query` (spelled `base_query` while it was one of this plugin's modules, up to the S7 satellite extraction), which asks Obsidian's Bases engine to evaluate a view and returns its rows. (Scope: the host scopes the `.base` path the call names; since the extraction the satellite's own row filter is dormant, because the publishing contract carries no caller scope, so the rows themselves are not filtered.)
 
-**Resolution:** A Base remains a presentation, not automatic authority. Evaluated rows are agent-readable only when the supported Bases API and module are available. The old opacity statement remains historical evidence, not current implementation truth.
+**Resolution:** A Base remains a presentation, not automatic authority. Evaluated rows are agent-readable only when the supported Bases API and the `vault-bases` satellite plugin are available. The old opacity statement remains historical evidence, not current implementation truth.
 
 **Status:** Resolved.
 

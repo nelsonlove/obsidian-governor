@@ -1,9 +1,11 @@
 // module.ts — the Module contract: the seam between the plugin's tool surface
-// and a capability module (scope provider, vocabulary provider, future) that
+// and a capability module (the scope provider, and any future one) that
 // contributes tools as a settings-toggleable unit. This is the container half
 // of the module consolidation ruling (Assent, 2026-08-09); the modules
-// themselves live in their own kernel directories (kernel/scheme/,
-// kernel/vocab/) and plug in behind this shape.
+// themselves live in their own kernel directories (kernel/scheme/) and plug in
+// behind this shape. The vocabulary provider was the other founding example;
+// it left for the `vault-vocab` satellite at S7 and its kernel now lives in
+// `@vault-mcp/core`.
 //
 // Kernel-module rules apply: nothing here imports from "obsidian" or the MCP
 // SDK, not even types — the registrar surface is structurally typed against

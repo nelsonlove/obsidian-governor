@@ -1,0 +1,9 @@
+{
+  "id": "vault-bases",
+  "name": "Vault Bases",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Evaluated Base result sets for agents: enumerate the vault's `.base` files with their declared views, and evaluate a view through Obsidian's own Bases engine in a hidden background leaf — full filter/formula/sort fidelity, nothing re-implemented, nothing written. Published as MCP tools through the Governor host; the tools are absent unless the running Obsidian exposes the public Bases API (1.10+).",
+  "author": "Nelson Love",
+  "isDesktopOnly": true
+}

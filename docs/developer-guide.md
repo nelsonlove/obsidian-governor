@@ -13,6 +13,7 @@ The current monorepo is organized around:
 | `packages/plugin/` | Governor Obsidian plugin, local bridge, MCP surface, review UI, live adapters, modules, and plugin tests |
 | `packages/core/` | Shared pure types and utilities, including guards used by more than one backend |
 | `packages/vault-mcp-api/` | SDK through which another Obsidian plugin can publish capabilities to Governor |
+| `packages/skills/`, `packages/triage/`, `packages/crosssession/`, `packages/vocab/`, `packages/health/`, `packages/bases/`, `packages/quickadd-choices-compile/` | Satellite plugins extracted from the host by the suite split (ids `vault-skills`, `vault-triage`, `vault-crosssession`, `vault-vocab`, `vault-health`, `vault-bases`, `quickadd-choices-compile`). Each builds its own `main.js` from its own manifest and publishes its tools to Governor through `vault-mcp-api`, so none of them is part of the Community bundle |
 | `packages/server/` | Separate filesystem/server deployment; not part of the ordinary Community Plugin promise |
 | `docs/` | Existing implementation and historical reference; target-state public docs must resolve status explicitly |
 

@@ -1,19 +1,19 @@
 /**
  * modules-mount.test.mjs — the module-host MOUNT (mcp/modules-mount.ts): the
- * two built-in capability modules registering THROUGH the ModuleRegistry, and
- * the mount-step security gate's testable halves:
+ * built-in capability modules registering THROUGH the ModuleRegistry, and the
+ * mount-step security gate's testable halves:
  *
  *   gate 1 (handler reachability): every module-contributed tool is
  *          explicitly read-only, and the mount REFUSES one that is not;
  *   gate 2 (minimal host ctx): mountHost hands modules exactly
  *          {getSettings, visible} — no kernel, no sources, no registrar;
  *   gate 3 (registry-only registration): server.ts no longer calls
- *          registerSchemeTools/registerVocabTools directly (source scan);
+ *          registerSchemeTools directly (source scan);
  *   plus settings-toggling over the real modules, and tripwire/collision
  *   plumbing staying live on the mount path.
  *
  * Headless: modules-mount.ts imports nothing from `obsidian`; the vault
- * arrives as a fake VocabSource + a static note listing.
+ * arrives as a static note listing.
  */
 
 import { test, describe } from "node:test";
@@ -27,13 +27,8 @@ import { ModuleRegistry, collect, toolDocDrift, toolDocReadOnlyDrift } from "../
 
 const SRC = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "src");
 
-/** A tiny fake vault for the vocab source; the scheme module gets `notes`. */
+/** A tiny fake vault: the scheme module gets `notes`. */
 const NOTES = ["00-09 System/06 Agent tooling/06.20 obsidian-vault-mcp-plugin.md"];
-const vocabSource = {
-  paths: () => NOTES,
-  frontmatter: () => null,
-  body: async () => null,
-};
 
 /** A no-op pending-review source for the governance module — the module registers
  * obsidian_pending_review over it without ever calling the handler in these tests. */
@@ -49,37 +44,17 @@ const provenanceSource = {
   writeNote: async () => {},
 };
 
-/** A no-op health source — the (read-only) health module registers its tools over
- * it without ever calling a handler in these registration-only tests. */
-const healthSource = {
-  resolvedLinks: () => ({}),
-  unresolvedLinks: () => ({}),
-  tags: () => ({}),
-  markdownFiles: () => [],
-  allFiles: () => [],
-  aliases: () => ({}),
-  noteBody: async () => null,
-};
-
-/** An inert-but-AVAILABLE bases source — the (read-only, default-enabled,
- * feature-gated) bases module registers its two tools over it in these
- * registration-only tests (its own suite is bases-module.test.mjs). Available
- * so the drift checks see the contributed tools; capture is never called. */
-const basesSource = {
-  available: () => true,
-  listBasePaths: () => [],
-  readBaseConfig: async () => ({ exists: false }),
-  capture: async () => ({ columns: [], rows: [] }),
-};
+// Inert `vocabSource`, `healthSource` and `basesSource` fixtures lived here
+// until the S7 satellite extraction. Those three modules are separate plugins
+// now (`vault-vocab`, `vault-health`, `vault-bases`), each with its own suite,
+// and `MountDeps` no longer declares a slot for any of them.
 
 function deps(overrides = {}) {
   return {
     getSettings: () => ({ ...(overrides.settings ?? {}) }),
     schemeNotes: () => NOTES,
-    vocabSource,
     pendingReviewSource,
     provenanceSource,
-    healthSource,
     // The fileclass module (#188) gates on the Fileclass plugin being present +
     // a CLI binary; supply both so an ENABLED fileclass module registers its
     // eight tools (the drift checks need a contributed tool list). The exec is
@@ -87,7 +62,6 @@ function deps(overrides = {}) {
     vaultName: "TestVault",
     fileclassPresent: () => true,
     fileclassBinary: "/usr/local/bin/fileclass",
-    basesSource,
     ...overrides.deps,
   };
 }
@@ -98,53 +72,53 @@ function mount(overrides = {}) {
   return { server, registry };
 }
 
-describe("mountModules: the two built-in modules register through the registry", () => {
-  test("default settings: scheme + vocab tools all present, no problems", () => {
+describe("mountModules: the built-in modules register through the registry", () => {
+  test("default settings: the scheme tools are all present, no problems", () => {
     const { server, registry } = mount();
     const names = [...server.tools.keys()];
-    // The scheme module's five and the vocab module's four, exactly as the
-    // direct registrations used to contribute them.
+    // The scheme module's five, exactly as the direct registrations used to
+    // contribute them. (The vocab module's four were listed here until the S7
+    // satellite extraction; scheme is the last of the pre-host pair.)
     for (const n of [
       "obsidian_schemes",
       "obsidian_resolve_address",
       "obsidian_next_address",
       "obsidian_list_scope",
       "obsidian_expected_location",
-      "obsidian_vocabularies",
-      "obsidian_resolve_term",
-      "obsidian_validate_terms",
-      "obsidian_list_vocabulary",
     ]) {
       assert.ok(names.includes(n), `missing ${n}`);
     }
     assert.deepEqual(registry.problems, []);
     const described = registry.describe();
-    // provenance (the obsidian-provenance fold), health (the
-    // obsidian-vault-health fold), fileclass (#188, the fileclass CLI fold),
-    // governance (#83) and jd-scaffold (Stage A of the jd-dashboard fold) all
-    // ship DISABLED (opt-in surfaces a human turns on), so they contribute
-    // nothing here — scheme + vocab + bases (#243, the read-only
-    // default-enabled Bases surface) are the live trio. (Triage was a tenth
-    // module until S5 and cross-session a ninth until S6; they are now the
-    // `vault-triage` and `vault-crosssession` satellite plugins and mount
-    // nothing here.)
-    assert.deepEqual(described.map((d) => d.id), ["scheme", "vocab", "provenance", "health", "fileclass", "acceptance", "bases", "jd-scaffold"]);
+    // provenance (the obsidian-provenance fold), fileclass (#188, the
+    // fileclass CLI fold), governance (#83) and jd-scaffold (Stage A of the
+    // jd-dashboard fold) all ship DISABLED (opt-in surfaces a human turns on),
+    // so they contribute nothing here — scheme is the only live module left.
+    // (Triage was a tenth module until S5, cross-session a ninth until S6, and
+    // vocab, health and bases went at S7; they are the `vault-triage`,
+    // `vault-crosssession`, `vault-vocab`, `vault-health` and `vault-bases`
+    // satellite plugins and mount nothing here.)
+    assert.deepEqual(described.map((d) => d.id), ["scheme", "provenance", "fileclass", "acceptance", "jd-scaffold"]);
     for (const d of described) {
-      if (["provenance", "health", "fileclass", "acceptance", "jd-scaffold"].includes(d.id)) {
+      if (["provenance", "fileclass", "acceptance", "jd-scaffold"].includes(d.id)) {
         assert.equal(d.enabled, false);
         assert.deepEqual(d.tools, []);
       } else {
         assert.ok(d.enabled && d.tools.length > 0);
       }
     }
-    // No provenance/health/fileclass tool leaked onto the surface while the modules are off.
+    // No provenance/fileclass tool leaked onto the surface while the modules are off.
     assert.ok(!names.some((n) => n.startsWith("provenance_")));
-    assert.ok(!names.includes("obsidian_health") && !names.includes("obsidian_lint"));
     assert.ok(!names.some((n) => n.startsWith("fileclass_")));
-    // Nothing triage-shaped can leak from the mount at all now: the module is
-    // gone. Kept as a pin because the satellite publishes through the EXTERNAL
-    // registry, which is a different surface with a different gate.
+    // Nothing triage-, vocab-, health- or bases-shaped can leak from the mount
+    // at all now: those modules are gone. Kept as pins because the satellites
+    // publish through the EXTERNAL registry, which is a different surface with
+    // a different gate — and because these names are exactly what a
+    // half-reverted extraction would put back.
     assert.ok(!names.some((n) => n.startsWith("triage_") || n.startsWith("vault_triage_")));
+    assert.ok(!names.some((n) => n.startsWith("obsidian_vocab") || n === "obsidian_resolve_term" || n === "obsidian_validate_terms" || n === "obsidian_list_vocabulary"));
+    assert.ok(!names.includes("obsidian_health") && !names.includes("obsidian_lint"));
+    assert.ok(!names.some((n) => n.startsWith("base_") || n.startsWith("vault_bases_")));
     // obsidian_pending_review is NEVER on the MODULE surface (#83 cycle 2): it is
     // registered always-on in server.ts, decoupled from the governance toggle, so the
     // mount never contributes it whether governance is on or off.
@@ -164,20 +138,32 @@ describe("mountModules: the two built-in modules register through the registry",
     assert.deepEqual(gov.tools, []);
   });
 
-  test("settings-toggle: modules.scheme.enabled=false unmounts only the scheme surface", () => {
+  test("settings-toggle: modules.scheme.enabled=false unmounts the scheme surface", () => {
     const { server, registry } = mount({ settings: { modules: { scheme: { enabled: false } } } });
     const names = [...server.tools.keys()];
     assert.ok(!names.some((n) => n.includes("address") || n === "obsidian_schemes" || n === "obsidian_list_scope"));
-    assert.ok(names.includes("obsidian_vocabularies"));
     assert.equal(registry.isEnabled("scheme"), false);
-    assert.equal(registry.isEnabled("vocab"), true);
   });
 
-  test("settings-toggle: vocab off, scheme on", () => {
-    const { server } = mount({ settings: { modules: { vocab: { enabled: false } } } });
+  test("a stale modules.vocab / .health / .bases row is an unknown id, not a mount", () => {
+    // The three modules left at S7. An existing data.json still carries their
+    // rows; the mount must simply not know them rather than resurrect anything.
+    const { server, registry } = mount({
+      settings: { modules: { vocab: { enabled: true }, health: { enabled: true }, bases: { enabled: true } } },
+    });
     const names = [...server.tools.keys()];
-    assert.ok(names.includes("obsidian_schemes"));
-    assert.ok(!names.some((n) => n.startsWith("obsidian_vocab") || n.endsWith("_term") || n.endsWith("_terms")));
+    assert.ok(!names.some((n) => n.startsWith("obsidian_vocab") || n === "obsidian_health" || n.startsWith("base_")));
+    assert.equal(registry.describe().find((d) => d.id === "vocab"), undefined);
+    assert.equal(registry.describe().find((d) => d.id === "health"), undefined);
+    assert.equal(registry.describe().find((d) => d.id === "bases"), undefined);
+    // Reported, not silently swallowed — the same "unknown module id" note a
+    // stale `modules.skills` / `.triage` / `.crosssession` row already gets.
+    // It is how a user learns why a module tab disappeared.
+    assert.deepEqual(registry.problems, [
+      "settings name unknown module 'vocab' — ignored",
+      "settings name unknown module 'health' — ignored",
+      "settings name unknown module 'bases' — ignored",
+    ]);
   });
 
   test("a registered scheme tool actually answers over the injected listing", async () => {
@@ -251,37 +237,30 @@ describe("mount gate 2: the host ctx handed to modules is minimal", () => {
     assert.deepEqual(host.visible(["Projects/a.md", "Archive/b.md"]), ["Projects/a.md"]);
   });
 
-  test("builtinModules declares the eight capability modules (provenance + fileclass + jd-scaffold mutating; health/governance/bases NOT)", () => {
+  test("builtinModules declares the five capability modules (provenance + fileclass + jd-scaffold mutating; acceptance NOT)", () => {
     const mods = builtinModules(deps());
     assert.deepEqual(mods.map((m) => [m.id, m.posture]), [
       ["scheme", "capability"],
-      ["vocab", "capability"],
       ["provenance", "capability"],
-      // health (the obsidian-vault-health fold) is a READ-ONLY capability module —
-      // no `mutating` flag, both tools readOnlyHint:true.
-      ["health", "capability"],
       // fileclass (#188, the fileclass CLI fold) is a MUTATING capability module
       // (set / set_where write typed frontmatter through the accept guard).
       ["fileclass", "capability"],
       // governance is posture "capability", NOT "governance" — the v1 registry refuses
       // the governance posture (it is inert). It clears that gate by being read-only.
       ["acceptance", "capability"],
-      // bases (#243) is a READ-ONLY capability module (evaluated Base rows via
-      // the hidden-leaf capture) — no `mutating` flag, both tools
-      // readOnlyHint:true, and DEFAULT ENABLED (the scheme/vocab precedent).
-      ["bases", "capability"],
       // jd-scaffold (Stage A of the jd-dashboard fold) is a MUTATING capability
       // module (standard_zeros / ensure_category_indexes / promote_to_folder
       // create/rename real vault notes and folders).
       ["jd-scaffold", "capability"],
-      // triage (#221 phase 2) WAS a tenth, mutating capability module here. It
-      // left for the `vault-triage` satellite plugin at S5 and its dispositions
-      // now reach the vault through the external-tool registry instead — same
-      // guarded interception point, different publisher.
+      // WHAT LEFT, and when: triage (#221 phase 2) at S5, cross-session (#232)
+      // at S6, and vocab + health + bases (#243) at S7. All five are satellite
+      // plugins now, reaching the vault through the external-tool registry —
+      // same guarded interception point, different publisher. This list is the
+      // shrinking record of the suite split; a name reappearing here without a
+      // package being deleted would be a half-reverted extraction.
     ]);
-    // provenance, fileclass and jd-scaffold are the modules that
-    // declare they may contribute mutating tools; health and governance are NOT
-    // mutating.
+    // provenance, fileclass and jd-scaffold are the modules that declare they
+    // may contribute mutating tools; scheme and acceptance are NOT mutating.
     assert.deepEqual(mods.filter((m) => m.mutating).map((m) => m.id), ["provenance", "fileclass", "jd-scaffold"]);
   });
 });
@@ -298,11 +277,12 @@ describe("mount gate 3: registry-only registration (source scan)", () => {
     });
   }
 
-  test("registerSchemeTools/registerVocabTools are CALLED only in modules-mount.ts", () => {
+  test("registerSchemeTools is CALLED only in modules-mount.ts", () => {
     const offenders = [];
     for (const f of tsFiles(SRC)) {
       const base = path.basename(f);
-      if (base === "modules-mount.ts" || base === "tools-scheme.ts" || base === "tools-vocab.ts") continue;
+      // tools-vocab.ts was in this skip list until the S7 satellite extraction.
+      if (base === "modules-mount.ts" || base === "tools-scheme.ts") continue;
       const src = readFileSync(f, "utf8");
       if (/register(Scheme|Vocab)Tools\s*\(/.test(src)) offenders.push(base);
     }
@@ -335,16 +315,22 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
     );
   });
 
-  test("vocab's manifest declares NO config fields — the real capability-directory-only module (not a synthetic test fixture)", () => {
-    const vocab = builtinModules(deps()).find((m) => m.id === "vocab");
-    assert.equal(vocab.manifest.config, undefined);
-    assert.ok(vocab.manifest.directory.tools.length > 0);
+  test("acceptance's manifest is the capability-directory-only case: no config fields is legal", () => {
+    // Vocab was the module this pinned until S7 — a REAL module with a
+    // manifest but no `config` block, so the renderer's "section with zero
+    // fields" path had a live subject rather than a synthetic fixture.
+    // Acceptance inherits the role: it has config fields but an EMPTY tool
+    // directory, the other half of the same "never skipped, never a crash"
+    // guarantee.
+    const acceptance = builtinModules(deps()).find((m) => m.id === "acceptance");
+    assert.ok(acceptance.manifest.config);
+    assert.deepEqual(acceptance.manifest.directory.tools, []);
   });
 
   test("drift check: every ToolDoc names a tool the module ACTUALLY contributed on registerAll, and vice versa", () => {
     // Enable every default-off module so all modules contribute — the drift check
     // needs a contributed tool list to compare each manifest against.
-    const { registry } = mount({ settings: { modules: { provenance: { enabled: true }, health: { enabled: true }, fileclass: { enabled: true }, acceptance: { enabled: true }, "jd-scaffold": { enabled: true } } } });
+    const { registry } = mount({ settings: { modules: { provenance: { enabled: true }, fileclass: { enabled: true }, acceptance: { enabled: true }, "jd-scaffold": { enabled: true } } } });
     const described = registry.describe();
     for (const d of described) {
       const mod = builtinModules(deps()).find((m) => m.id === d.id);
@@ -354,7 +340,7 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
   });
 
   test("readOnly drift: every ToolDoc's readOnly matches the tool's real registered annotation", () => {
-    const { server } = mount({ settings: { modules: { provenance: { enabled: true }, health: { enabled: true }, fileclass: { enabled: true }, acceptance: { enabled: true }, "jd-scaffold": { enabled: true } } } });
+    const { server } = mount({ settings: { modules: { provenance: { enabled: true }, fileclass: { enabled: true }, acceptance: { enabled: true }, "jd-scaffold": { enabled: true } } } });
     const mods = builtinModules(deps());
     const annotationsByName = Object.fromEntries([...server.tools].map(([name, { def }]) => [name, def.annotations]));
     for (const mod of mods) {
@@ -421,16 +407,13 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
     );
   });
 
-  test("collect() over the real mounted modules renders a section for each, scheme with fields, vocab without", () => {
+  test("collect() over the real mounted modules renders a section for each, scheme with fields", () => {
     const settings = { schemes: [{ id: "jd", provider: "johnny-decimal", config: { contentDecimalFloor: 20 } }], modules: {} };
     const mods = builtinModules(deps({ settings }));
     const hosted = collect(mods, settings.modules, settings);
-    assert.deepEqual(hosted.map((h) => h.id), ["scheme", "vocab", "provenance", "health", "fileclass", "acceptance", "bases", "jd-scaffold"]);
+    assert.deepEqual(hosted.map((h) => h.id), ["scheme", "provenance", "fileclass", "acceptance", "jd-scaffold"]);
     const scheme = hosted.find((h) => h.id === "scheme");
     assert.equal(scheme.fields.find((f) => f.key === "contentDecimalFloor").value, 20);
-    const vocab = hosted.find((h) => h.id === "vocab");
-    assert.deepEqual(vocab.fields, []);
-    assert.ok(vocab.directory.tools.length > 0);
     // The governance module renders its section too — two badge-display toggles
     // (ribbon + pane-tab, default ON) plus the two acceptance-convergence fields
     // (#221/#164: acceptedBy text, requiredFrontmatterKeys csv) and an EMPTY capability
@@ -452,15 +435,6 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
     assert.deepEqual(govField("requiredFrontmatterKeys").value, []);
     assert.equal(governance.enabled, false);
     assert.equal(governance.directory.tools.length, 0);
-    // The health module (obsidian-vault-health fold) renders its own config tab:
-    // one config field (the empty-note char threshold, default 40) plus a
-    // two-tool read-only capability directory. Ships disabled (opt-in scanner).
-    const health = hosted.find((h) => h.id === "health");
-    assert.equal(health.fields.length, 1);
-    assert.equal(health.fields.find((f) => f.key === "emptyChars").value, 40);
-    assert.equal(health.enabled, false);
-    assert.equal(health.directory.tools.length, 2);
-    assert.ok(health.directory.tools.every((t) => t.readOnly === true));
     // The fileclass module (#188, the fileclass CLI fold) renders its own config
     // tab: one config field (the CLI binary path, default blank) plus an
     // eight-tool capability directory (six read + two write). Ships disabled.
@@ -470,12 +444,15 @@ describe("#81 config-host: both built-in modules carry a manifest, drift-free", 
     assert.equal(fileclass.enabled, false);
     assert.equal(fileclass.directory.tools.length, 8);
     assert.equal(fileclass.directory.tools.filter((t) => t.readOnly === false).length, 2);
-    // The triage module rendered its own eight-field config tab here until S5,
-    // and the crosssession module its own three-field one until S6. Those
-    // fields now live in packages/triage/src/settings.ts and
-    // packages/crosssession/src/settings.ts (ported verbatim, each pinned by
-    // its own package's suite) and the host hosts nothing for either.
-    assert.equal(hosted.find((h) => h.id === "triage"), undefined);
-    assert.equal(hosted.find((h) => h.id === "crosssession"), undefined);
+    // Five modules rendered their own config tabs here and no longer do:
+    // triage's eight fields left at S5, crosssession's three at S6, and at S7
+    // health's one (`emptyChars`), bases' two (`queryTimeoutMs` / `rowCap`) and
+    // vocab's bespoke LIST-shaped instance form — the one module-specific
+    // branch this renderer ever had. Each set was ported verbatim into its own
+    // package's `src/settings.ts` and is pinned by that package's suite; the
+    // host hosts nothing for any of them.
+    for (const gone of ["triage", "crosssession", "vocab", "health", "bases"]) {
+      assert.equal(hosted.find((h) => h.id === gone), undefined, `${gone} should not be hosted`);
+    }
   });
 });

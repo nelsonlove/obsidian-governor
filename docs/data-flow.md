@@ -128,7 +128,7 @@ The pending index exposes a scope-filtered read view to agents so they can avoid
 | Replayable observation payload | Governor response after scope | Review, recovery, and dependent governed operations | Content-addressed local operation storage; may reference an in-scope Git blob | No |
 | Paths and stable identifiers | Vault/arguments | Governor and connected client | Journal, receipts, pending index | No in core public design |
 | Properties, tags, and links | Obsidian metadata | Requested capability within scope | Review baseline when needed | No in core public design |
-| View results | Obsidian Bases or module | Connected client | Evidence metadata or exact replay payload according to capture policy | No in core public design |
+| View results | Obsidian Bases, through the `vault-bases` satellite plugin (one of this plugin's modules until the S7 extraction) | Connected client | Evidence metadata or exact replay payload according to capture policy | No in core public design |
 | Client label and Governor actor binding | Client/connection registrar | Governor | Mutation journal, session, attestations | No in core public design |
 | Agent intent | Client | Review center | Journal | No in core public design |
 | Settings | Human | Governor | Plugin data | No |

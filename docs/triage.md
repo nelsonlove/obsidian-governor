@@ -200,24 +200,34 @@ with path/inbox/created/modified/age and frontmatter `type`/`status`.
 While triage was a host module, `triage_queue {base: "Views/Stale.base",
 view?: "..."}` returned the **evaluated rows** of that `.base` — Obsidian's
 own Bases engine computing filters, formulas and sort at full fidelity —
-through the bases module's shared capture seam (`tools-bases.ts`'s
-`queryBaseRows`). One human-authored Base definition drove the human's native
-view and the agent's sweep.
+through the bases module's shared capture seam (`queryBaseRows`, then in the
+host's `mcp/tools-bases.ts`; since S7 in `packages/bases/src/tools.ts`). One
+human-authored Base definition drove the human's native view and the agent's
+sweep.
 
-**That seam did not move, and copying it would have been wrong rather than
-merely large.** The capture drives a hidden Bases leaf, which is a *global*
-resource: the host guards it with a module-scoped serializer holding it to one
-capture at a time, and a second serializer in a second plugin would race the
-first over the one leaf. The seam also reaches the bases module's own config
-and typed-refusal vocabulary, neither of which is published.
+**That seam did not come with triage, and copying it would have been wrong
+rather than merely large.** The capture drives a hidden Bases leaf, which is a
+*global* resource: its owner guards it with a module-scoped serializer holding
+it to one capture at a time, and a second serializer in a second plugin would
+race the first over the one leaf. The seam also reaches the bases surface's own
+config and typed-refusal vocabulary, neither of which is published.
+
+**S7 reinforced that reasoning rather than overturning it.** When bases itself
+left the host it took `queryBaseRows` and the serializer WITH it — a move, with
+no copy left behind — so there is still exactly one serializer over the one
+leaf, owned now by the `vault-bases` plugin instead of the host. A copy in
+`packages/triage` would still be wrong today: two plugins each holding a
+serializer over the one leaf is the same race whichever two plugins they are.
 
 So `base`, `view` and `queue` **refuse typed (`bases_unavailable`)** — through
 the same feature-gate branch that always covered a pre-Bases Obsidian, with a
 message saying why. The marker queue above is unaffected and is the working
-surface. For evaluated Base rows, the host's own `base_query` tool is
-unchanged. The arguments and the `queues` config field are kept (its help text
-says it is inert) so the feature re-lights the day `vault-mcp-api` can hand a
-publisher a Bases service — an apiVersion-2 item, alongside carrying the
+surface. For evaluated Base rows, use the `vault-bases` satellite's
+`vault_bases_query` tool — the same evaluation path, under the name publication
+gave it (the module's `base_query`; `base_list` likewise became
+`vault_bases_list`). The arguments and the `queues` config field are kept (its
+help text says it is inert) so the feature re-lights the day `vault-mcp-api` can
+hand a publisher a Bases service — an apiVersion-2 item, alongside carrying the
 caller's scope to a publisher.
 
 **Membership boundary (deliberate, un-relaxed):** `vault_triage_dispose`

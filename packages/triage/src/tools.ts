@@ -5,9 +5,10 @@
 //             the inbox-marker queue (notes under a configured inbox folder,
 //             oldest first). With `base`/`view` — or a config-named `queue` —
 //             the queue would be the EVALUATED rows of a `.base` file; that
-//             path needs the HOST's bases capture seam, which a satellite
-//             cannot reach, so it refuses typed (`bases_unavailable`). See the
-//             base-backed-queue note at the bottom of this file.
+//             path needs the bases capture seam, which since S7 lives in the
+//             `vault-bases` satellite and is reachable from neither the host
+//             nor this plugin, so it refuses typed (`bases_unavailable`). See
+//             the base-backed-queue note at the bottom of this file.
 //   dispose — the ONE guarded mutating verb, disposition selected from the
 //             MERGED table: three built-in primitives (trash / move / stamp)
 //             ∪ human-declared config rows (kernel/descriptors.ts + config.ts).
@@ -232,7 +233,10 @@ export function emptyTriageSource(): TriageSource {
 }
 
 /** The shape a base-backed queue would hand back. Kept as a seam type so the
- * feature can be re-lit without reshaping the handler; see the note below. */
+ * feature can be re-lit without reshaping the handler; see the note below. It
+ * mirrors the `BaseRowsResult` exported from `packages/bases/src/tools.ts` —
+ * which this package cannot import, being a sibling satellite rather than a
+ * published `@vault-mcp/core` type. */
 export interface BaseRowsResult {
   view: string;
   viewType: string;
@@ -285,8 +289,11 @@ function iso(ms: number | null): string | null {
 
 /** Whether a path allowlist is active — gates whether `some_rows_hidden` is
  * disclosed at all (with no allowlist it is a constant false and says nothing).
- * The module imported this from the host's tools-bases.ts; three lines over a
- * core type is the right amount to keep local. */
+ * The module imported this from the host's tools-bases.ts; the original is
+ * still exported, but it moved with the bases surface at S7 and now lives in
+ * `packages/bases/src/tools.ts`, which this package can no more import than it
+ * could the host. Three lines over a core type is the right amount to keep
+ * local. */
 function allowlistActive(ctx: Pick<TriageToolsCtx, "getSettings">): boolean {
   const allow = ctx.getSettings?.()?.allowlist;
   return Array.isArray(allow) && allow.length > 0;
@@ -315,8 +322,9 @@ export function buildTriageTools(source: TriageSource, ctx: TriageToolsCtx): Sdk
       "configured inbox marker (default \" Inbox for \"; the inbox's own folder note is not an item), with " +
       "path, enclosing inbox, created/modified times, age in days, and frontmatter `type`/`status`, OLDEST " +
       "FIRST. Capped by `limit` (`truncated: true` + the total when more exist). `base`/`view`/`queue` select a " +
-      "Base-backed queue, which needs the Governor host's Bases capture path: this plugin cannot reach it, so " +
-      "those forms refuse typed (`bases_unavailable`) and the marker queue is the working surface. Read-only in " +
+      "Base-backed queue, which needs the Bases capture path owned by the separate `vault-bases` plugin: this " +
+      "plugin cannot reach it, so those forms refuse typed (`bases_unavailable`) and the marker queue is the " +
+      "working surface (for evaluated Base rows call `vault_bases_query`). Read-only in " +
       "intent; the host treats an external tool's read-only claim as untrusted, so under a path allowlist this " +
       "tool is blocked outright (it carries no path argument to scope by).",
     inputSchema: {
@@ -388,9 +396,9 @@ export function buildTriageTools(source: TriageSource, ctx: TriageToolsCtx): Sdk
         if (!ctx.baseQuery) {
           refuse(
             "bases_unavailable",
-            "base-backed queues evaluate a .base through the Governor host's Bases capture path, which is " +
-              "internal to the host and not reachable from this plugin — use the inbox-marker queue (omit " +
-              "`base`/`queue`), or read the Base with the host's own `base_query` tool",
+            "base-backed queues evaluate a .base through the Bases capture path owned by the separate " +
+              "`vault-bases` plugin, which is internal to it and not reachable from this plugin — use the " +
+              "inbox-marker queue (omit `base`/`queue`), or read the Base with the `vault_bases_query` tool",
           );
         }
         const outcome = await ctx.baseQuery({ path: basePath, view: baseView, limit: cap });
@@ -656,26 +664,39 @@ export function buildTriageTools(source: TriageSource, ctx: TriageToolsCtx): Sdk
 // ── Base-backed queues: the one capability the extraction costs ──────────────
 //
 // While triage was a host module, `triage_queue {base}` evaluated a `.base`
-// file through the bases module's shared capture seam (`queryBaseRows` in the
-// host's `mcp/tools-bases.ts`) — Obsidian's own Bases engine, so one
+// file through the bases module's shared capture seam (`queryBaseRows`, then
+// in the host's `mcp/tools-bases.ts`) — Obsidian's own Bases engine, so one
 // human-authored Base definition drove the human view AND the agent sweep.
 //
 // That seam did NOT come along, and copying it would have been the wrong call
 // rather than merely a big one. The capture drives a hidden Bases leaf, which
-// is a GLOBAL resource, and the host guards it with a module-scoped serializer
+// is a GLOBAL resource, and its owner guards it with a module-scoped serializer
 // — "one capture at a time across the whole plugin process". A second copy in a
 // second plugin means two serializers with no knowledge of each other racing on
 // the one leaf, which is exactly the invariant the serializer exists to hold.
-// The seam also reaches the bases module's own config (row cap, query timeout)
+// The seam also reaches the bases surface's own config (row cap, query timeout)
 // and its typed-refusal vocabulary, none of which is published.
+//
+// S7 REINFORCED that reasoning rather than overturning it. When bases itself
+// left the host, `queryBaseRows`, `makeSerializer`, the module-scoped
+// `captureSerializer`, `withBeltDeadline` and `captureWithCleanup` MOVED into
+// `packages/bases/src/tools.ts` — a move, with no copy left behind (nothing in
+// `packages/plugin/src` references any of them). One serializer over the one
+// leaf still, owned now by the `vault-bases` plugin rather than by the host. A
+// copy HERE would still be wrong for exactly the reason above: two plugins each
+// holding a serializer over the one leaf is the same race whichever two plugins
+// they are. What changed is only the seam's address, never the argument.
 //
 // So `ctx.baseQuery` is left unsupplied and the base/queue forms refuse typed,
 // through the SAME feature-gate branch they always had for a pre-Bases
-// Obsidian. Callers that want evaluated Base rows have the host's own
-// `base_query` tool, which is unchanged. The seam stays in the ctx (and its
-// tests keep exercising it) so the feature re-lights the day the host can hand
-// a publisher a bases service — an apiVersion-2 item, alongside carrying the
-// caller's scope.
+// Obsidian. Callers that want evaluated Base rows have the `vault-bases`
+// satellite's `vault_bases_query` tool — the same evaluation path, under the
+// name publication gave it (`<sanitized publisher id>_<bare name>`, with the
+// module's redundant `base_` prefix stripped so it is not
+// `vault_bases_base_query`; `base_list` likewise became `vault_bases_list`).
+// The seam stays in the ctx (and its tests keep exercising it) so the feature
+// re-lights the day a publisher can be handed a bases service — an
+// apiVersion-2 item, alongside carrying the caller's scope.
 //
 // `GuardSettings` comes from `@vault-mcp/core`, never a local copy — the same
 // rule the skills satellite records: the host's `guard.ts` and this plugin must

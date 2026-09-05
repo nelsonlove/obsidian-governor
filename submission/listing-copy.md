@@ -24,12 +24,12 @@ It starts read-only. You choose which folders a connection may access and enable
 
 ## What you can do
 
-- Find and explain information across visible notes, properties, links, history, and supported views.
+- Find and explain information across visible notes, properties, links, and history (evaluated Base views come from the companion `vault-bases` plugin, installed separately).
 - Capture new notes or append to existing notes inside a chosen scope.
 - Preview bounded edits, moves, and maintenance before applying them.
 - Review individual proposals or exact session/collection cohorts, request one revision across a cohort, accept, revert, defer, revoke, or expire work in Obsidian.
 - Delegate a named transformation through a bounded mandate with class, scope, verifier, budgets, expiry, and recovery.
-- Check link health, vocabulary, conformance, dependencies, and derived-material freshness.
+- Check link health, conformance, dependencies, and derived-material freshness (controlled-vocabulary validation and the tiered vault scan come from the companion `vault-vocab` and `vault-health` plugins, installed separately).
 
 ## Safety summary
 

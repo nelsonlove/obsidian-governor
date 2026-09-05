@@ -1,0 +1,9 @@
+{
+  "id": "vault-vocab",
+  "name": "Vault Vocabulary",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Controlled-vocabulary lookup for agents: enumerate the vault's configured vocabulary sources, resolve a tag / property / type / glossary term to its canonical entry, report a note's own vocabulary, and validate one note's frontmatter against the registries. Report-only — nothing here writes to a note. Published as MCP tools through the Governor host.",
+  "author": "Nelson Love",
+  "isDesktopOnly": true
+}

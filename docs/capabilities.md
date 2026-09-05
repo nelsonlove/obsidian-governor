@@ -27,8 +27,10 @@ Availability is a runtime fact. An outcome may be disabled, missing a dependency
 | Inspect properties, tags, links, and backlinks | Public default | Read | Looking only | Results filtered before disclosure | No mutation |
 | Open a note, heading, link, or search in Obsidian | Public default | Navigation | Looking only | Hidden targets remain unresolved | Close or navigate elsewhere |
 | Inspect note history and compare revisions | Public default where host support exists | Read | Looking only | Named note must be visible | No restoration capability in public surface |
-| Query an evaluated Obsidian Base | Optional public | Read | Looking only | Base and returned rows are scope-filtered | Missing Bases support is reported, not returned as empty |
+| Query an evaluated Obsidian Base | Optional public | Read | Looking only | The named Base is scope-filtered by the host; since S7 the returned rows are not (see the note below the table) | Missing Bases support is reported, not returned as empty |
 | Inspect active note, bookmarks, and workspace context | Optional public | Read/navigation | Looking only | Hidden active notes appear absent | No mutation |
+
+The Base-query outcome is no longer served by one of this plugin's own modules: since the S7 satellite extraction it ships as the separate `vault-bases` plugin, which publishes `vault_bases_list` and `vault_bases_query` to Governor through `vault-mcp-api` (see [bases.md](bases.md)). The outcome and its posture are unchanged, but the scope story is not: the host still scopes the `.base` path a query names, while the satellite's own row filter is dormant because the publishing contract carries no caller scope, so a query on a visible Base can return rows naming notes outside the allowlist. Under an active allowlist `vault_bases_list` is refused outright, since it names no path for the host to scope by.
 
 ## Capture and add
 
@@ -73,6 +75,8 @@ Availability is a runtime fact. An outcome may be disabled, missing a dependency
 | Check derived material for staleness | Optional public | Read/report | Looking only | Artifact and sources visible | Names changed sources; regeneration is separate |
 | Run conformance checks against accepted debt | Optional public | Read/report | Looking only | Declared territory only | New, carried, and cleared findings remain distinct |
 | Inspect availability and health | Public default | Read/report | Looking only | Does not widen scope | Names disabled, missing, incompatible, or unhealthy state |
+
+Vocabulary and property validation is no longer served by one of this plugin's own modules either: since the S7 satellite extraction it ships as the separate `vault-vocab` plugin, whose four tools publish as `vault_vocab_*` (see [vocabulary-module.md](vocabulary-module.md)). The tiered vault health scan left in the same motion, as the separate `vault-health` plugin (`vault_health_scan` / `vault_health_lint`); it is not one of the outcomes listed above — the broken-link and duplicate-identity row is this plugin's own scope-filtered link report, and the availability row is its dependency report.
 
 ## Private operator capability packs
 

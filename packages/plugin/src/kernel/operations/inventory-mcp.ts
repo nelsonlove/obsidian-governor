@@ -270,28 +270,16 @@ const SCHEME: McpSurfaceRow[] = [
   { tool: "obsidian_renumber_address", readOnly: false, module: "scheme", distribution: "public-optional", paths: ["path"], postcondition: "Move a note to a specific address, optionally displacing the occupant first." },
 ];
 
-// ── module: vocab ────────────────────────────────────────────────────────────
-
-const VOCAB: McpSurfaceRow[] = [
-  { tool: "obsidian_vocabularies", readOnly: true, module: "vocab", distribution: "public-optional", postcondition: "Enumerate configured vocabulary sources." },
-  { tool: "obsidian_resolve_term", readOnly: true, module: "vocab", distribution: "public-optional", paths: ["path"], postcondition: "Resolve a token to its canonical entry, refusing rather than choosing on ambiguity." },
-  { tool: "obsidian_validate_terms", readOnly: true, module: "vocab", distribution: "public-optional", paths: ["path"], postcondition: "Report a note's frontmatter values that fall outside the controlled vocabulary." },
-  { tool: "obsidian_list_vocabulary", readOnly: true, module: "vocab", distribution: "public-optional", paths: ["scope"], postcondition: "Enumerate the registered vocabulary of one kind." },
-];
-
-// ── module: bases ────────────────────────────────────────────────────────────
-
-const BASES: McpSurfaceRow[] = [
-  { tool: "base_list", readOnly: true, module: "bases", distribution: "public-optional", postcondition: "Enumerate visible .base files and their declared views.", gate: "Obsidian's public Bases API present (source.available())" },
-  { tool: "base_query", readOnly: true, module: "bases", distribution: "public-optional", paths: ["path"], postcondition: "Evaluate one declared Base view through Obsidian's own engine, time-boxed.", gate: "Obsidian's public Bases API present (source.available())" },
-];
-
-// ── module: health ───────────────────────────────────────────────────────────
-
-const HEALTH: McpSurfaceRow[] = [
-  { tool: "obsidian_health", readOnly: true, module: "health", distribution: "public-optional", postcondition: "Report a tiered whole-vault health scan; findings are evidence, not instructions." },
-  { tool: "obsidian_lint", readOnly: true, module: "health", distribution: "public-optional", paths: ["scope"], postcondition: "Report the same scan restricted to one folder or note." },
-];
+// The four `obsidian_vocab*` rows, the two `base_*` rows and the two health
+// rows were HERE until the S7 read-tier satellite extraction, for the same
+// reason the six `vault_skills_*` rows left at S4, the two `triage_*` rows at
+// S5 and the four `crosssession_*` rows at S6: all three are separate plugins
+// now (`packages/vocab`, `packages/bases`, `packages/health`) publishing
+// through the external-tool registry. On the wire they are
+// `vault_vocab_{vocabularies,resolve_term,validate_terms,list_vocabulary}`,
+// `vault_bases_{list,query}` and `vault_health_{scan,lint}` — the plugin id IS
+// the tool namespace — and, like every external tool, they are outside this
+// inventory by design.
 
 // ── module: conformance-debt ─────────────────────────────────────────────────
 
@@ -393,9 +381,6 @@ export const MCP_SURFACE_INVENTORY: McpSurfaceRow[] = [
   ...SNIPPETS,
   ...CODE_MODE,
   ...SCHEME,
-  ...VOCAB,
-  ...BASES,
-  ...HEALTH,
   ...CONFORMANCE,
   ...PROVENANCE,
   ...SURVEY,

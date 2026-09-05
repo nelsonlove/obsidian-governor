@@ -3,10 +3,11 @@
 > **Deep reference for the shipped implementation.** Canonical concepts and the target design live in the [documentation corpus](README.md); what is shipped versus target is owned by [status-and-compatibility.md](status-and-compatibility.md).
 
 
-Capability providers — the [scope provider](scope-provider.md) and the
-[vocabulary provider](vocabulary-module.md) — are not hard-wired into the tool surface. They are
+Capability providers — the [scope provider](scope-provider.md) chief among them — are not hard-wired into the tool surface. They are
 **modules**: settings-toggleable units that register their tools **through a registry**, behind
 a set of gates that keep the acceptance model intact even as the plugin grows new capabilities.
+(The [vocabulary provider](vocabulary-module.md) was the other founding example; it ships as the
+separate `vault-vocab` satellite plugin since S7 and is documented here as the pattern's origin.)
 
 Files: `packages/plugin/src/kernel/modules/` (the host — pure, Obsidian-free) and
 `packages/plugin/src/mcp/modules-mount.ts` (the mount — wires the built-in modules to the live
@@ -41,13 +42,13 @@ interface VaultModule {
 
 ## Registration goes *through* the registry — the key property
 
-`server.ts` no longer calls the scope/vocab registrars directly. It calls **`mountModules(...)`**,
+`server.ts` no longer calls the scope registrar directly (nor, while it existed here, the vocab one). It calls **`mountModules(...)`**,
 which builds a `ModuleRegistry` over the built-in modules and registers each enabled module's
 tools through the registry's wrapped registrar. Because the registrar it forwards to is the
 **guard-patched `server.registerTool`**, every module tool lands at the **same interception
 point** as every hand-registered tool — guarded, queued, journaled, kernel-args-declared, Code
 Mode captured — with **no module-specific bypass possible**. A source-scan test pins that the
-two registrars are never called outside the mount.
+registrar is never called outside the mount.
 
 ## The gates the registry enforces
 
@@ -123,12 +124,12 @@ type ModuleSettings = Record<string, { enabled?: boolean; config?: Record<string
   an "Enabled" toggle plus whatever config controls the module's manifest declares — so a new
   module gets its settings surface from its manifest rather than hand-built UI.
 - **`modules.<id>.config`** is merged over the module's `settingsSchema.defaults` (shallow).
-- **When it takes effect.** Config the *handlers* read (allowlist, scheme rows, vocabularies) is
+- **When it takes effect.** Config the *handlers* read (allowlist, scheme rows) is
   a thunk, so those edits land live. But `enabled` is read once **per mount, i.e. per
   connection**, so toggling a module takes effect on the **next session connect** (exactly what
   the settings tab says). This was live-verified: disabling the scheme module dropped the live
-  tool count from 56 to 51 on the next connect (the 5 scheme tools gone, vocab intact), and
-  re-enabling restored it — while `jd:` addressing kept resolving at the kernel level even with
+  tool count from 56 to 51 on the next connect (the 5 scheme tools gone, the vocab module's
+  four — still a module at the time — intact), and re-enabling restored it — while `jd:` addressing kept resolving at the kernel level even with
   the module off.
   - **Exception — the acceptance module's Obsidian surface mounts LIVE.** Acceptance contributes
     zero MCP tools; its `enabled` flag gates an in-Obsidian *review pane + gavel ribbon*, not a
@@ -142,14 +143,11 @@ type ModuleSettings = Record<string, { enabled?: boolean; config?: Record<string
 ## The built-in modules
 
 The authoritative inventory is the [module directory](modules.md); this table is the
-mount-registration view (id, default, declared posture). Eight modules register today:
+mount-registration view (id, default, declared posture). Five modules register today:
 
 | Module id | Default | Posture | Capabilities |
 | --- | --- | --- | --- |
 | `scheme` | enabled | read-only | `addressing`, `allocation` — deep ref: [scope-provider.md](scope-provider.md) |
-| `vocab` | enabled | read-only | `vocabulary` — deep ref: [vocabulary-module.md](vocabulary-module.md) |
-| `bases` | enabled | read-only | `bases` — deep ref: [bases.md](bases.md) |
-| `health` | disabled | read-only | `health` |
 | `acceptance` | disabled | read-only (zero MCP tools; gates the in-Obsidian review pane) | `acceptance` |
 | `provenance` | disabled | **mutating** | `freshness`, `reconcile`, `regen` — deep ref: [provenance.md](provenance.md) |
 | `fileclass` | disabled | **mutating** | `fileclass` |
@@ -161,8 +159,10 @@ Triage is no longer a built-in module either: it now ships as its own satellite 
 
 Cross-session coordination is no longer a built-in module either: it now ships as its own satellite plugin, `vault-crosssession`, publishing its four tools through `vault-mcp-api`. Their NAMES changed in the move (`crosssession_*` → `vault_crosssession_*`), because the plugin id is the tool namespace — the same trade triage made, and unlike skills, whose id happened to reproduce its shipped prefix. See [crosssession.md](crosssession.md).
 
-The first two (`scheme`, `vocab`) pre-date the host, so their config rows still live in the top-level `schemes` /
-`vocabularies` settings (not `modules.<id>.config`) and their tool layers filter via their own
+The whole **read tier** left together at S7 — the vocabulary provider (`vault-vocab`, [vocabulary-module.md](vocabulary-module.md)), the health scan (`vault-health`) and the Bases surface (`vault-bases`, [bases.md](bases.md)) — publishing `vault_vocab_*`, `vault_health_{scan,lint}` and `vault_bases_{list,query}` respectively. All eight names changed, for the same plugin-id-is-the-namespace reason, and `base_`/`obsidian_` were stripped rather than carried into a second namespace.
+
+`scheme` is the last of the two modules that pre-date the host, so its config rows still live in the top-level `schemes`
+setting (not `modules.<id>.config`) and its tool layer filters via its own
 `getSettings` + guard imports — preserved verbatim so the mount is a pure re-wiring with **zero
-behavior change**. A *new* module should instead read `host`/`config` and use `host.visible`,
+behavior change**. (Vocab was the other, on the top-level `vocabularies` setting, until S7.) A *new* module should instead read `host`/`config` and use `host.visible`,
 per the module-host adapters convention.

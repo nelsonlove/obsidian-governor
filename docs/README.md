@@ -110,8 +110,8 @@ The documents above own the concepts and the target design. The shipped implemen
 - [Acceptance model](acceptance-model.md) — **the legacy acceptance system**, the standing authority until the 2026-08-23 cutover; its writers now refuse (see its banner)
 - [Review SOP](review-sop.md) — the shipped review workflow
 - [Module system](module-system.md) — how capability modules register and gate (the mechanism; the [module directory](modules.md) is the inventory)
-- Module deep references: [conformance](conformance.md), [provenance](provenance.md), [Bases](bases.md), [vocabulary provider](vocabulary-module.md), [scope provider](scope-provider.md), [identity and links](identity-and-links.md)
-- Satellite plugin deep references: [skills](skills.md) — `vault-skills`, [triage](triage.md) — `vault-triage`, and [cross-session](crosssession.md) — `vault-crosssession`, all extracted from the module list above per `docs/suite-split-design.md` §6
+- Module deep references: [conformance](conformance.md), [provenance](provenance.md), [scope provider](scope-provider.md), [identity and links](identity-and-links.md)
+- Satellite plugin deep references: [skills](skills.md) — `vault-skills`, [triage](triage.md) — `vault-triage`, [cross-session](crosssession.md) — `vault-crosssession`, [vocabulary provider](vocabulary-module.md) — `vault-vocab`, and [Bases](bases.md) — `vault-bases`, all extracted from the module list above per `docs/suite-split-design.md` §6. The health scan left with the last three at S7 and has no deep reference of its own; `packages/health/README.md` is its documentation.
 - [WP8 cutover runbook](../packages/plugin/docs/wp8-cutover-runbook.md) — the operator's one-page procedure for the authority cutover
 
 ## Documentation layers

@@ -253,7 +253,11 @@ describe("moduleFromRegistrar: the registerXTools adapter", () => {
   // scope provider's offered shape (registerSchemeTools(server, ctx) with
   // {registry(), notes(), getSettings?}) and a vocab-style tool layer. The
   // point pinned here: the EXISTING function signature adapts without any
-  // change to the function itself.
+  // change to the function itself. Both are SYNTHETIC — the names are the two
+  // founding modules', but neither function is imported, and the vocab one no
+  // longer has a real counterpart in this plugin at all (it left for the
+  // `vault-vocab` satellite at S7). The two SHAPES are what this pins, and
+  // they are still the two shapes the adapter has to accept.
   function registerSchemeTools(server, ctx) {
     server.registerTool(
       "obsidian_resolve_address",

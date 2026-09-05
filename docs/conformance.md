@@ -31,6 +31,11 @@ ruling — the engine replaced the loose Python rail scripts, whose retirement i
 
 - **Native** — `scheme.ts` (the scope module's `schemeFindings`: addressing/structure drift)
   and `vocab.ts` (unregistered tags, undefined properties, unknown types, deprecated terms).
+  `vocab.ts` wraps `noteVocabFindings`, which lives in **`@vault-mcp/core`** since the S7
+  read-tier extraction: this rail and the `vault-vocab` satellite are its two consumers, and
+  a second copy of a vocabulary rule core is how one vault gets two vocabularies. Note that
+  this rail builds its registry from `DEFAULT_VOCABULARIES` rather than from the configured
+  instance list — a pre-existing gap the extraction makes visible, not one it introduced.
 - **Ported legacy checks** (#103, completed by `drift.ts` in #127/#130) — `structure.ts`,
   `port.ts`, `ste.ts`, `drift.ts`: line-for-line ports of the Python originals,
   **parity-verified against the live Python before trust** (finding keys diffed both

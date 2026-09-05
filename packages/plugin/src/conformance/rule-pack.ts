@@ -8,7 +8,7 @@
 // the vault itself — the engine injects the snapshot.
 
 import type { Finding } from "./finding.js";
-import type { VocabNote } from "../kernel/vocab/blueprint.js";
+import type { VocabNote } from "@vault-mcp/core";
 
 /** A raw source file: its vault-relative path and its full text (frontmatter
  * included), universal-newline-normalized (CRLF/CR → LF) to match Python's
