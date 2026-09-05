@@ -93,15 +93,26 @@ describe("recordImmutableRefusal (pure core)", () => {
     assert.deepEqual([...RECORD_EXEMPT_OPS], ["obsidian_append_note"]);
   });
 
-  test("crosssession_post is NOT exempt — pinned deliberately, not by oversight", () => {
+  test("vault_crosssession_post is NOT exempt — pinned deliberately, not by oversight", () => {
     // The one other tool whose contract is a dated end-of-file append. It never
-    // reaches this check today (its target arrives as `channel`, which is not a
-    // PATH_KEY, so collectPaths yields nothing), so exempting it would widen a
-    // protective set on a guess about a future argument shape. This test exists
-    // so that if `channel` ever becomes path-keyed, the resulting refusal is a
-    // decision someone makes here rather than a surprise in production.
-    const err = recordImmutableRefusal("crosssession_post", ["Records/2026-08.md"], record);
-    assert.ok(err instanceof RecordImmutableError, "unexempted today — change this only on purpose");
+    // reaches this check (its target arrives as `channel`, which is not a
+    // PATH_KEY, so collectPaths yields nothing, and the file it appends to is
+    // discovered inside the handler and named by no argument), so exempting it
+    // would widen a protective set on a guess about a future argument shape.
+    // This test exists so that if `channel` ever becomes path-keyed, the
+    // resulting refusal is a decision someone makes here rather than a surprise
+    // in production.
+    //
+    // S6 moved the tool into the `vault-crosssession` satellite, which renamed
+    // it — the wire name is now `vault_crosssession_post`. That did NOT make it
+    // reachable: a published external tool registers through the same
+    // guard-patched path as a built-in (it always did, as a module tool), and
+    // its argument names are unchanged. Both spellings are pinned so neither
+    // era's name can quietly slip into the set.
+    for (const op of ["vault_crosssession_post", "crosssession_post"]) {
+      const err = recordImmutableRefusal(op, ["Records/2026-08.md"], record);
+      assert.ok(err instanceof RecordImmutableError, `${op}: unexempted today — change this only on purpose`);
+    }
   });
 
   test("append-shaped ARGUMENTS on a different tool do not exempt it", () => {

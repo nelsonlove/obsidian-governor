@@ -27,13 +27,14 @@ Absent, disabled, incompatible, unavailable, unhealthy, and empty are different 
 | **Health** | Run whole-vault or scoped health and lint reports | Read/report | Disabled opt-in for potentially expensive scans | Findings are evidence, not automatic repair instructions |
 | **Fileclass** | Inspect and apply note-class schemas | Reads may be enabled; writes are representation/content work | Disabled | Depends on supported Fileclass surface; missing dependency is unavailable, not empty |
 | **Acceptance** | Human review, mandate, cohort, verification, admission, revision, and history | Human-facing authority surface; contributes no agent accept verb | Enabled for the coherent public product | Agents may read scoped state and submit proposals; acceptance remains a human act |
-| **Cross-session** | Discover channels, read deltas, attest read position, and post guarded updates | Operational mutation | Disabled | Handles are cooperative labels; session binding comes from Governor; unread-entry guard is coordination, not authentication |
 | **Bases** | Evaluate Obsidian Base views and return scoped rows | Read-only | Enabled when supported API exists | Base is presentation, not authority; evaluated rows come from Obsidian's engine |
 | **JD scaffolding** | Create and maintain configured Johnny Decimal structures and identifiers | Structural and representation work | Disabled | Exact templates and scopes required; allocation and placement remain distinct |
 
 Skills — compile, export, release, and author agent-facing skills and policies from vault sources — is no longer a built-in module of this table: it was extracted to its own satellite plugin, `vault-skills`, per `docs/suite-split-design.md` §6. See [skills.md](skills.md) for its deep reference.
 
 Triage — expose bounded queues and apply declared dispositions — is no longer a built-in module of this table either: it was extracted to its own satellite plugin, `vault-triage`, per `docs/suite-split-design.md` §6. See [triage.md](triage.md) for its deep reference.
+
+Cross-session — discover channels, read deltas, attest read position, and post guarded updates — is no longer a built-in module of this table either: it was extracted to its own satellite plugin, `vault-crosssession`, per `docs/suite-split-design.md` §6. Its boundary is unchanged by the move: handles are cooperative labels, not authenticated identities, and the unread-entry guard is coordination rather than authentication. See [crosssession.md](crosssession.md) for its deep reference.
 
 The target defaults above describe the coherent product, not proof of a particular build. [Status and compatibility](status-and-compatibility.md) owns promotion to shipped status.
 
@@ -122,7 +123,7 @@ The first Community bundle has an exact distribution profile.
 **Private/operator in the first release:**
 
 - skills and policy compilation or export (now the separate `vault-skills` satellite plugin — absent from the Community bundle because it is simply not part of it, not because of a manifest exclusion decision);
-- cross-session fleet coordination;
+- cross-session fleet coordination (now the separate `vault-crosssession` satellite plugin — absent from the Community bundle because it is simply not part of it, not because of a manifest exclusion decision);
 - JD scaffolding;
 - triage mutations (now the separate `vault-triage` satellite plugin — absent from the Community bundle because it is simply not part of it, not because of a manifest exclusion decision);
 - QuickAdd execution bindings;

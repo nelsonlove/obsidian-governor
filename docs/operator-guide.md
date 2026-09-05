@@ -10,7 +10,7 @@ Read-heavy, scope-first, preview-first, with human review. Use this profile unle
 
 ### Advanced governed
 
-Adds configured schemes, vocabulary, conformance, triage, and coordination. These remain bounded and observable but require maintenance of their declarations and baselines.
+Adds configured schemes, vocabulary, and conformance. (Triage and cross-session coordination are no longer this plugin's modules — they ship as the separate `vault-triage` and `vault-crosssession` satellite plugins.) These remain bounded and observable but require maintenance of their declarations and baselines.
 
 ### Private high-authority
 
@@ -145,6 +145,8 @@ Opaque macro-backed dispositions belong in a private profile. Their effects rema
 ## Cross-session coordination
 
 Coordination channels provide discovery, delta reads, read-position attestation, and guarded posting. Handles are cooperative assertions, not authentication.
+
+This capability is no longer part of this plugin: since the S6 satellite extraction it ships as the separate `vault-crosssession` plugin, which publishes its four tools to Governor through `vault-mcp-api` (see [crosssession.md](crosssession.md)). The requirements below are unchanged and are that plugin's to satisfy; what changes for an operator is that it is installed and configured separately, and that its tools are named `vault_crosssession_*`.
 
 Operational requirements:
 

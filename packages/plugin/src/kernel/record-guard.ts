@@ -64,15 +64,35 @@ export class RecordImmutableError extends Error {
  * does not, and an exemption keyed on a tool whose contract is only
  * sometimes an append is exactly the guess this set avoids.)
  *
- * KNOWN, deliberately NOT exempted: `crosssession_post` (tools-crosssession.ts)
- * is the one other tool whose whole contract is a dated end-of-file append.
- * It is unreachable by this check today — its target arrives as `channel`,
- * which is not in guard.ts's PATH_KEYS, so `collectPaths` yields nothing to
- * check — so exempting it would change no behavior now while WIDENING a
- * protective set on a guess about a future argument shape. Pinned by a test
- * below the exemption test; the day `channel` becomes path-keyed (or the tool
- * gains a `path`), appending to a record-flagged channel note starts refusing
- * and this set is where that gets decided, on purpose, by a human.
+ * KNOWN, deliberately NOT exempted: `vault_crosssession_post` — the cross-
+ * session channel plugin's posting tool (`packages/crosssession/src/tools.ts`;
+ * spelled `crosssession_post` before the S6 satellite extraction, when it was
+ * this plugin's own module tool). It is the one other tool whose whole
+ * contract is a dated end-of-file append.
+ *
+ * It is UNREACHABLE by this check, and the extraction did not change that.
+ * Two facts, both re-verified at S6:
+ *
+ *   1. IT WAS NEVER OUTSIDE THE KERNEL. As a module tool it registered on the
+ *      same guard-patched `server.registerTool` every built-in rides, and as a
+ *      published external tool it registers through the very same path
+ *      (`external-tools.ts` → `makeGuarded`). "Unreachable" was never a claim
+ *      that it bypassed the dequeue closure — it always ran through it.
+ *   2. IT IS UNREACHABLE ON ARGUMENTS. Its target arrives as `channel`, which
+ *      is not in guard.ts's PATH_KEYS, so `collectPaths({handle, channel,
+ *      body})` yields an EMPTY list and the loop below has nothing to test.
+ *      The file it actually appends to is DISCOVERED inside the handler (the
+ *      channel folder's single entry-bearing log file) and is named by no
+ *      argument at all.
+ *
+ * So exempting it would change no behavior now while WIDENING a protective set
+ * on a guess about a future argument shape. The satellite pins the other half
+ * — that none of its four tools carries a host path key — in its own
+ * publication tests, so `channel` becoming path-keyed fails a test on both
+ * sides rather than silently starting to refuse. Pinned by a test below the
+ * exemption test; the day `channel` becomes path-keyed (or the tool gains a
+ * `path`), appending to a record-flagged channel note starts refusing and this
+ * set is where that gets decided, on purpose, by a human.
  */
 export const RECORD_EXEMPT_OPS: ReadonlySet<string> = new Set(["obsidian_append_note"]);
 

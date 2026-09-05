@@ -24,8 +24,7 @@ the always-on `governance_submit_revision` + `governance_revisions` (2 tools, se
 the default-ENABLED `bases` module (`base_list` + `base_query`, 2 tools,
 Bases-API-gated — see Section 2b), and
 the default-disabled `provenance`
-(`provenance_*`), `fileclass` (`fileclass_*`, 8 tools, plugin+binary-gated), and
-`crosssession` (`crosssession_*`, 4 tools)
+(`provenance_*`) and `fileclass` (`fileclass_*`, 8 tools, plugin+binary-gated)
 module surfaces — see Section 2c and their own module docs.
 
 Cross-check: the observed live set with Dataview + Templater + Metadata Menu
@@ -308,19 +307,16 @@ slots on hidden rows — visible rows past that limit silently never appear.
 
 ---
 
-## Section 2c — module-mounted, default DISABLED (9)
+## Section 2c — module-mounted, default DISABLED (8)
 
 Registered through the module host like Section 2b, but these modules ship
 `enabled: false` — a human turns them on in the config tab, and the tools appear
 on the next session connect. `health` (2 tools) and `jd-scaffold` (7 tools,
 Stage A + A2 + A3 of the jd-dashboard fold) both use the locked `obsidian_*`
-naming, so both are documented here in full. (The `provenance`, `fileclass`
-and `crosssession` modules also ship disabled, but their tools are named
-`provenance_*` / `fileclass_*` / `crosssession_*`,
-outside the `obsidian_*` family this inventory locks, so the first is
-documented in its own module doc; `fileclass` and `crosssession` are
-documented just below — fileclass because it is also plugin-gated, crosssession
-because it is the cross-session coordination surface (#232).)
+naming, so both are documented here in full. (The `provenance` and `fileclass` modules also ship disabled, but their tools
+are named `provenance_*` / `fileclass_*`, outside the `obsidian_*` family this
+inventory locks, so the first is documented in its own module doc and
+`fileclass` is documented just below, because it is also plugin-gated.)
 
 The `skills` module used to be listed here. It is no longer a module of this
 plugin at all: the skills compiler became its own plugin at the suite split's S4
@@ -328,6 +324,14 @@ plugin at all: the skills compiler became its own plugin at the suite split's S4
 tools through the external-tool registry, like any third-party publisher. This
 inventory locks the `obsidian_*` family and has never counted external tools, so
 the totals are unchanged — see `docs/skills.md` and `packages/skills/README.md`.
+
+The `crosssession` module was listed here too, with its four tools documented in
+full below. Same story at S6: cross-session coordination became its own plugin
+(`packages/crosssession`, id `vault-crosssession`) and publishes through the
+external-tool registry, so it is out of this inventory. Its tool NAMES changed in
+the move — `crosssession_*` became `vault_crosssession_*`, because the plugin id
+is the tool namespace — see `docs/crosssession.md` and
+`packages/crosssession/README.md`.
 
 The `triage` module used to be listed here too. It is no longer a module of this
 plugin at all: it became its own plugin at the suite split's S5 (`packages/triage`,
@@ -407,44 +411,6 @@ an accepted value (`Error [accept_forbidden]`, refused before the CLI runs).
 | `fileclass_validate` | R | Schema violations vault-wide or per fileClass; exit 1 (violations) is returned, not errored — CLI `validate` |
 | `fileclass_set` | W | Validated single-note field write; accept-guarded — CLI `set <path> <field> <value>` |
 | `fileclass_set_where` | W | Validated bulk write; **dry-run by default**, `apply: true` to commit; accept-guarded — CLI `set-where <class> <field> <value>` |
-
-### `tools-crosssession.ts` — `registerCrosssessionTools` via the `crosssession` module (4 tools)
-
-The cross-session channel surface (#232): the fleet's coordination-log
-conventions given an agent surface. Channels are discovered by **fileclass +
-`audience:` frontmatter** (default `Collection/Log` + any `audience` value —
-never by path); a channel's entries are read from BOTH live forms: the single
-append-only log file's `## <stamp> · <handle>` sections and per-message notes
-(`fileClass: Agent/Log/CrossSession`, filename `<stamp> · <handle>.md`). Stamps
-are treated as **opaque ordered strings** (the live file contains imprecise
-`…T14:2x` stamps), compared with `:` stripped so the file form and the filename
-form of one minute agree.
-
-**Handles are cooperative**, self-declared tool arguments — not authenticated
-identities (the fleet's fallible-not-adversarial threat model: the module
-catches honest lapses, not adversaries). **Read positions are module state**:
-per-handle receipts in `crosssession-receipts.json` beside the journal in the
-plugin's own directory — not in any note's frontmatter, not in `data.json`.
-Receipts are keyed by the channel note's `uid` (a reorg move keeps read state).
-A channel outside the path allowlist is **invisible**: absent from discovery,
-`channel_unresolved` to the other tools (no existence oracle); hidden member
-files contribute no entries.
-
-The two write tools ride the guard-patched registrar (read-only mode, queue,
-journal, kernel args). `crosssession_post` refuses **`stale_read`** — a typed
-policy refusal, checked before anything is written — while the channel holds
-entries the poster's receipt does not cover (the poster's own entries exempt):
-"posting asserts you are current," enforced mechanically. Post appends body
-text at end-of-file only and composes no frontmatter; attest writes only the
-module's receipt file (registered mutating for the journal record, the
-lock-claim precedent).
-
-| Tool name | R/W | Description |
-|---|---|---|
-| `crosssession_channels` | R | Discover channels by fileclass + audience frontmatter: uid, path, audience, projects, entry count, newest stamp, recorded receipts (which handles are behind); with `handle`, your position + unread count |
-| `crosssession_delta` | R | Entries newer than your attested position, `{stamp, handle, body}` from both forms, oldest first; capped (default 20, never bisecting a same-stamp group) with `more` + `next_stamp`; own entries omitted |
-| `crosssession_attest` | W | Record a read receipt (`through_stamp` ≤ newest entry; `stamp_ahead` otherwise) — a read-receipt, not authority; mutates module state only |
-| `crosssession_post` | W | Append one `## <stamp> · <handle>` section (run clock, minutes precision) to the channel's log file; **refuses `stale_read` before any write** while unread entries exist; auto-attests through its own entry on success |
 
 ---
 

@@ -17,7 +17,7 @@
 // Registers directly in server.ts rather than through modules-mount.ts: that
 // host's `registerAll` gate refuses a non-readOnlyHint tool UNLESS its module
 // opts in via `mutating: true` (four other modules — provenance,
-// fileclass, crosssession, jd-scaffold — take that path). Direct registration,
+// fileclass, jd-scaffold — take that path). Direct registration,
 // same shape registerSchemeWriteTools already uses immediately above this
 // call in server.ts, was chosen instead for this v1 rather than building the
 // module-host config surface; not because the mutating-module path is

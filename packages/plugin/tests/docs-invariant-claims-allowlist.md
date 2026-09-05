@@ -162,6 +162,23 @@ Known-overstated section instead — see its header for the format.
 - Host-held config cannot serve a provider consumer, so the only alternative to publishing is two copies — which is precisely the failure `territories.ts`'s own header names: *"a prefix present in the pane's list but missing from capture's means the pane politely skips a folder while capture quietly writes its note bodies to disk."* On this operator's vault the guarded prefixes include `80-89` (legal/PII, standing rule that its contents do not leave it), so a drift here is a PII leak into capture blobs, not a tidiness problem.
   tracked by: NOT a guarantee about shipped behavior — it is the RISK ARGUMENT for a design decision (publish `territories` as a contract rather than duplicate it), and it is substantiated by code that exists: `governor/wiring/territories.ts` has three importers landing on both sides of the split (`main.ts`, `mcp/server.ts`, `governor/wiring/wiring.ts`), and the quoted sentence is that module's own header comment, not a new claim. What it does NOT assert: that capture is currently leaking anything, or that publishing the module makes the territory list correct — the list is still this vault's folder names hardcoded, which issue #321 owns. Agent-classified during S3; pending the operator's review like every other span in this file.
 
+## docs/suite-split-design.md (S6 cross-session extraction)
+
+The S6 execution note's guard-argument finding. Substantiated by the same
+evidence as the corresponding `docs/crosssession.md` claims below: the
+`to_address` / `displace_to_address` precedent is recorded in
+`packages/plugin/CLAUDE.md`'s scheme-module bullet (an active allowlist
+checked the address string as if it were a path), `src/guard.ts`'s
+`collectPaths` + `isVisible` are what would do the prefix-matching, and
+`packages/crosssession/tests/crosssession-module.test.mjs`'s publication block
+pins that none of the four tools' arguments is a host `PATH_KEY`. The "file
+`post` writes is discovered inside the handler" half is that package's post
+tests, which assert the append target is chosen from the channel folder's
+members and reported back as `filesChanged` / `files` rather than named by any
+argument.
+
+- First, the guard-argument question came out the OPPOSITE way from triage's: triage renamed `target` → `target_path` to give the host's guard something to scope, but cross-session's `channel` was deliberately left un-path-keyed, because it is a REF (uid | folder-note path | folder) rather than a path, because the file `post` writes is discovered inside the handler and named by no argument, and because path-keying it would refuse every uid-addressed call under an allowlist — the bug the scheme-write `to` → `to_address` rename fixed, in reverse.
+
 ## docs/acceptance-model.md (WP10c retirement)
 
 - **The first consumer — the per-note auto-accept policy (#135) — RETIRED (WP10c, 2026-08-25).** `auto-accept` remains in the default declared list as authority-conferring, but the policy's operational half is deleted per the development guide's order: `auto-accept: all` no longer parses at all (a whole-note blank check never belonged in frontmatter — it reads as no policy under every authority era, including after a cutover rollback), and `auto-accept: appends` is migrated to content proposals — an appended tail is residual content like any other edit, and lands as an ordinary proposal for the human's decision.
@@ -273,6 +290,60 @@ plan time and re-checked at apply.
 - Moves ride a link-healing rename (`fileManager.renameFile`, parents created, **never an overwrite**: `destination_occupied`); trash is Obsidian's trash; frontmatter transitions go through `processFrontMatter` with the shared accept-forbidden rule re-checked over every effective patch.
 - Both tools are published external tools and register at the host's guarded registration point like every built-in: read-only mode, path allowlist, serialized write queue, journal, kernel args.
 - The in-handler re-check of the computed destination against the allowlist is retained in the code but is dormant, since a satellite cannot reach the host's guard settings.
+
+## docs/crosssession.md
+
+Added at the S6 satellite extraction (cross-session coordination is now the
+`vault-crosssession` plugin, so its behavioural suite lives in
+`packages/crosssession/tests/` rather than here). Four claims, each checked
+against the implementation at approval time:
+
+1. **"every mutating call rides the host's guarded registration path … all
+   still bind."** Substantiated here by `tests/external-tools.test.mjs`: an
+   external tool registers through the guard-patched `buildMcpServer` path, is
+   treated as mutating unless the publisher is trusted, and is blocked outright
+   under an allowlist when it carries no recognized path key. The list of what
+   binds is `src/mcp/guarded.ts`'s single interception point, which is the same
+   object for built-ins and external tools alike — there is no second
+   registration path a published tool could take. Note the claim is that the
+   record-immutability check BINDS, not that it ever fires for these tools; see
+   claim 3.
+
+2. **The uid-would-be-prefix-matched claim.** Read against `src/guard.ts`:
+   `collectPaths` collects any string under a `PATH_KEYS` name and `guardCall`
+   runs each through core's `isVisible`, which normalizes and prefix-matches at
+   a segment boundary. A uid string has no allowlisted prefix, so it would
+   refuse `out_of_allowlist`. The named precedent is real and is recorded in
+   `packages/plugin/CLAUDE.md`'s scheme-module bullet: `to`/`displace_to` were
+   renamed to `to_address`/`displace_to_address` precisely because an active
+   allowlist checked the ADDRESS STRING as if it were a path. The claim is a
+   counterfactual about a rename that was NOT made, which is why it is stated
+   as the reason for not making it.
+
+3. **The `RECORD_EXEMPT_OPS` claim.** Re-verified at S6 and substantiated on
+   both sides. Host side: `src/kernel/record-guard.ts`'s exemption set is
+   unchanged, and `tests/record-immutable.test.mjs` pins that BOTH the old
+   `crosssession_post` and the new `vault_crosssession_post` spellings are
+   unexempted. The "always ran inside the kernel" half is
+   `tests/modules-mount.test.mjs` (module tools register through the same
+   registrar) plus `tests/external-tools.test.mjs` (published tools do too).
+   The "unreachable on arguments" half is
+   `packages/crosssession/tests/crosssession-module.test.mjs`'s publication
+   block, which asserts that not one of the four tools' arguments appears in
+   the host's `PATH_KEYS` — so `collectPaths` yields an empty list and the
+   check has nothing to test. If that pin ever fails, this claim is the first
+   thing to re-examine.
+
+4. **"Nothing supplies it today."** The honest counterpart to claim 1: it is a
+   claim about what is NOT enforced. `packages/crosssession/src/main.ts`
+   constructs the tools without `visible` or `getSettings`, and the satellite
+   has no other call site; the seams' behaviour is exercised only by that
+   package's own tests, which supply them deliberately so they cannot rot.
+
+- **What did NOT change:** the entry format, the refusal codes and their messages, the staleness policy, the cooperative-handle model, and the fact that every mutating call rides the host's guarded registration path — read-only mode, the serialized write queue, the journal, the kernel arguments and the record-immutability check all still bind, because an external mutating tool registers at the same interception point as a built-in.
+- The guard would prefix-match a bare uid as if it were a path and refuse every uid-addressed call under an allowlist — exactly the bug the host fixed by renaming its scheme-write `to` → `to_address` *away* from a path key, an address string not being a path.
+- On that point the host's `RECORD_EXEMPT_OPS` was re-examined at S6 and deliberately **not** widened: the post tool always ran inside the kernel — as a module tool it registered through the same guard-patched registrar a published tool now uses — and it is unreachable by the record check on *arguments*, which the extraction did not change.
+- Nothing supplies it today — a satellite cannot reach the host's guard settings — and a `vault-mcp-api` that can carry the caller's scope to a publisher would light it up with no code change.
 
 
 Orphan purge (2026-08-23): the allowlist→docs direction was added to
