@@ -341,11 +341,11 @@ Which current modules belong in the initial Community product rather than the pr
 
 ##### Public optional, disabled until configured or supported
 
-- Bases read evaluation;
+- Bases read evaluation (now ships as the separate `vault-bases` satellite plugin — see [bases.md](bases.md) and `docs/suite-split-design.md` §6);
 - scheme resolution and preview-first bounded placement;
-- vocabulary validation;
+- vocabulary validation (now ships as the separate `vault-vocab` satellite plugin — see [vocabulary-module.md](vocabulary-module.md) and `docs/suite-split-design.md` §6);
 - conformance reporting;
-- health and survey reports;
+- health and survey reports (the health scan now ships as the separate `vault-health` satellite plugin — see `docs/suite-split-design.md` §6; survey stays in this plugin);
 - Fileclass inspection and named representation proposals when a supported dependency exists;
 - provenance inspection and staleness reports, but not unconstrained regeneration.
 

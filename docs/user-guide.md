@@ -186,6 +186,8 @@ The report names findings it can support. Choosing a new link target or deciding
 
 > Validate the tags and properties in this folder against its declared vocabulary. Group unregistered values, values legal elsewhere but not here, and malformed values. Do not change notes.
 
+This outcome comes from a companion plugin rather than Governor itself: since the S7 satellite extraction the vocabulary tools ship as `vault-vocab`, installed and enabled alongside Governor, which publishes them into the same session. If that plugin is not installed, the tools are simply absent from the session and the request has nothing to answer it.
+
 ### Derived material
 
 > Check whether the project summary is stale relative to its declared sources. If stale, name the changed sources and propose a regeneration plan.

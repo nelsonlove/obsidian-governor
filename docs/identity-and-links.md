@@ -91,8 +91,10 @@ index, `available: false` and the uid-derived counts are **`null`, not `0`** (un
 shaped so `notes_with_uid` + `notes_without_uid` always sum to `notes_total` whenever they are
 numbers). Counts are exact for everything visible and in scope; lists cap at 100 each with a
 `truncated` flag. A bad `scope` is **refused, never widened** — `Error [invalid_scope]` for an
-absolute/empty/above-root scope, `Error [out_of_allowlist]` for one naming an area you can't
-see.
+absolute/empty/above-root/backslash-containing scope, `Error [out_of_allowlist]` for one naming
+an area you can't see. The validator behind both codes is `resolveScope`, which moved to
+`@vault-mcp/core` at S7 so this tool and the `vault-health` satellite's lint share one copy; the
+backslash case arrived with that move and made both callers stricter at once.
 
 ## `obsidian_repoint_link` — the one deliberate repair
 

@@ -171,6 +171,63 @@ export { EXCLUDED_PREFIXES, isExcludedTerritory } from "./territories.js";
 export { isVisible } from "./visibility.js";
 export type { GuardSettings } from "./visibility.js";
 
+// `resolveScope` — the validator for a bare `scope` STRING argument, published
+// at the read-tier satellite extraction (suite split, S7) for the same reason
+// as `isVisible`, and with the same alternative declined. A `scope` is not in
+// the host's PATH_KEYS, so the guard never sees it and every tool taking one
+// must check it by hand; `obsidian_lint` did not until 2026-08-29, which was a
+// live read-boundary bypass. When that tool left for the `vault-health`
+// satellite the choice was publish or fork, and forking a guard predicate is
+// the drift this repo has paid for three times. Its two callers are now in
+// different plugins: the host's `obsidian_check_links` and the health
+// satellite's lint. `normalizePosix` rides along because the host's
+// `tools-scheme.ts` needs the identical normalizer for its own scope handling
+// and core is where the one copy now lives.
+export { resolveScope } from "./scope.js";
+export type { ScopeRefusal } from "./scope.js";
+export { normalizePosix } from "./visibility.js";
+
+// ── The controlled-vocabulary kernel (suite split, S7) ──────────────────────
+//
+// Published INTO core rather than moved into the `vault-vocab` satellite,
+// because it has TWO consumers and always did: the four vocabulary tools (now
+// the satellite's) and the HOST's conformance rail — `conformance/packs/vocab.ts`
+// wraps `noteVocabFindings`, `conformance/cli.ts` builds a `VocabRegistry` per
+// run, `conformance/snapshot.ts` and `rule-pack.ts` are typed over `VocabNote`,
+// and `obsidian-drift-source.ts` / `obsidian-debt-source.ts` fall back to
+// `DEFAULT_VOCABULARIES`. This is exactly the shape of the `queryBaseRows`
+// question the triage extraction answered by leaving the seam behind, and it
+// has the same forbidden answer: two copies of a rule core is how one vault
+// gets two vocabularies. Conformance is itself a planned satellite
+// (suite-split-design.md §6), so core is where both consumers end up meeting.
+//
+// It qualifies on the same grounds `isVisible` did: pure, Obsidian-free, no MCP
+// SDK, no host types — it already imported `leadingFrontmatterBlock` from here
+// before the move.
+export { VocabAmbiguousError, asStrings } from "./vocab/provider.js";
+export type {
+  VocabCapabilities,
+  VocabEntry,
+  VocabFinding,
+  VocabKind,
+  VocabularyProvider,
+} from "./vocab/provider.js";
+export { blueprintProvider, scanFrontmatter } from "./vocab/blueprint.js";
+export type { BlueprintConfig, VocabNote } from "./vocab/blueprint.js";
+export { glossaryProvider, parseTermsSection, DEFAULT_GLOSSARY_CONFIG } from "./vocab/glossary.js";
+export type { GlossaryConfig } from "./vocab/glossary.js";
+export { noteVocabFindings } from "./vocab/findings.js";
+export type { NoteVocabInput } from "./vocab/findings.js";
+export {
+  scopeTagsProvider,
+  scopeTagsFindings,
+  validateScopeTagsConfig,
+  DEFAULT_SCOPE_TAGS_CONFIG,
+} from "./vocab/scope-tags.js";
+export type { ScopeTagsConfig, ScopeTagsProvider } from "./vocab/scope-tags.js";
+export { VocabRegistry, DEFAULT_VOCABULARIES, VOCAB_PROVIDERS, isVocabProvider } from "./vocab/registry.js";
+export type { VocabInstance, VocabInstanceSettings, VocabProviderName } from "./vocab/registry.js";
+
 // The QuickAdd executeChoice seam, published at the triage satellite extraction
 // (suite split, S5) for the same reason as `isVisible`. Its own header already
 // said it exists so the two surfaces that drive a choice headlessly "cannot

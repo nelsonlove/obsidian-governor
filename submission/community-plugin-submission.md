@@ -117,7 +117,7 @@ The official process requires a semantic `x.y.z` manifest version, a GitHub rele
 
 ### Minimum app version
 
-`minAppVersion` must be the oldest Obsidian version the release actually supports. Governor's use of Bases and other newer APIs must be feature-gated when the core product supports an older floor.
+`minAppVersion` must be the oldest Obsidian version the release actually supports. Any use of newer Obsidian APIs must be feature-gated when the core product supports an older floor. Bases was this plugin's own example until the S7 satellite extraction; the Bases API is now reached by the separate `vault-bases` plugin, which carries that gate and its own floor.
 
 **Release evidence required:** tested version matrix and feature-degradation results.
 
@@ -210,7 +210,7 @@ See [Reviewer notes](../submission/reviewer-notes.md) and the [Threat model](../
 
 ## Performance and lifecycle
 
-The release captures startup, first connection, large-vault search, queue, Bases, review refresh, and connect/disconnect memory evidence. Every hidden view, socket, interval, event, and child component has lifecycle cleanup.
+The release captures startup, first connection, large-vault search, queue, review refresh, and connect/disconnect memory evidence (Bases evaluation left this bundle at S7 and is measured by the `vault-bases` satellite instead). Every hidden view, socket, interval, event, and child component has lifecycle cleanup.
 
 **Release evidence required:** measured environment and results, not an unqualified “fast.”
 

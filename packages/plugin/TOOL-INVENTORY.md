@@ -10,33 +10,35 @@ The FULL set is locked by `tests/tool-inventory.test.mjs`: the names documented
 here must equal the names registered in source, both directions, or the suite
 fails (the fs-expressible and scheme sub-locks from #25/task-6 still apply).
 
-**Count summary:** 17 fs-expressible + 43 always-live + 10 module-mounted
-(default enabled, settings-toggleable) = **70 base** tools, plus up to
+**Count summary:** 17 fs-expressible + 43 always-live + 6 module-mounted
+(default enabled, settings-toggleable) = **66 base** tools, plus up to
 6 conditional integration tools, 1 Importer-plugin-conditional import tool
 (`obsidian_import_apple_notes`), 5 CLI-binary-conditional dedicated tools
 (`obsidian_note_history`, `obsidian_note_diff`, `obsidian_base_create`,
 `obsidian_plugin_install`, `obsidian_plugin_uninstall`), and 1 settings-gated
 CLI-conditional tool (`obsidian_cli`, default OFF)
-= **up to 83 total**.  The 3 Code Mode meta-tools are an alternative
+= **up to 79 total**.  The 3 Code Mode meta-tools are an alternative
 per-connection surface and are not counted (a session sees one surface or the
 other, never both).  Not counted here (outside the locked `obsidian_*` family):
-the always-on `governance_submit_revision` + `governance_revisions` (2 tools, see their section below),
-the default-ENABLED `bases` module (`base_list` + `base_query`, 2 tools,
-Bases-API-gated — see Section 2b), and
-the default-disabled `provenance`
-(`provenance_*`) and `fileclass` (`fileclass_*`, 8 tools, plugin+binary-gated)
-module surfaces — see Section 2c and their own module docs.
+the always-on `governance_submit_revision` + `governance_revisions` (2 tools, see their section below)
+and the default-disabled `provenance` (`provenance_*`) and `fileclass`
+(`fileclass_*`, 8 tools, plugin+binary-gated) module surfaces — see Section 2c
+and their own module docs.  The `bases` module's `base_list` + `base_query`
+were listed here until the S7 satellite extraction; they are satellite tools
+now (`vault_bases_list` / `vault_bases_query`), and this inventory has never
+counted external tools.
 
 Cross-check: the observed live set with Dataview + Templater + Metadata Menu
 loaded (but NOT Omnisearch, no CLI binary) reported 44 tools — an observation
-that PREDATES the kernel-v0 tools (locks ×4, uid ×1, links ×1), the vocab
-module (×4), the scheme module (×6), `obsidian_write_notes`,
+that PREDATES the kernel-v0 tools (locks ×4, uid ×1, links ×1),
+the scheme module (×6), `obsidian_write_notes`,
 `obsidian_pending_review`, `obsidian_plugin_info`, `obsidian_plugin_reload`,
 the scheme write surface (`obsidian_assign_address`,
 `obsidian_refile_address`, `obsidian_renumber_address`), and subsequent
 `main` additions (in-Obsidian dev tool-runner, conformance debt register,
 the snippet tools);
-the same plugin set today registers 17 + 44 + 10 + 6 = **77**.
+the same plugin set today registers 17 + 44 + 6 + 6 = **73** (the vocab
+module's four left the host at S7, along with health's two and bases' two).
 
 ---
 
@@ -238,17 +240,16 @@ journaled, and read-only mode or an allowlist blocks both mutators.
 
 ---
 
-## Section 2b — module-mounted, default enabled (10)
+## Section 2b — module-mounted, default enabled (6)
 
 Registered through the module host (`modules-mount.ts` → `ModuleRegistry`), not
 directly: `server.ts` calls `mountModules`, and each module's tools register
 only when the module is enabled (`settings.modules.<id>.enabled`, defaulting to
-the module's own `enabled: true`).  These modules ship default-ON, so the 10
+the module's own `enabled: true`).  These modules ship default-ON, so the 6
 `obsidian_*` tools below are present on a stock connection; a settings toggle
-takes effect on the next session connect.  The `bases` module is also
-default-ON but its two tools are named `base_*`, outside the locked
-`obsidian_*` family and the (10) count — documented in its subsection below,
-locked by `tests/bases-module.test.mjs`'s own inventory check.
+takes effect on the next session connect.  `scheme` is the only one left: the
+`vocab` module's four tools and the default-ON `bases` module's two both left
+for their own plugins at the S7 satellite extraction.
 
 ### `tools-scheme.ts` — `registerSchemeTools` via the `scheme` module (6 tools)
 
@@ -261,59 +262,27 @@ locked by `tests/bases-module.test.mjs`'s own inventory check.
 | `obsidian_list_scope` | Members of a scope in address order, plus up to 20 open slots |
 | `obsidian_expected_location` | Per-note or per-address placement report |
 
-### `tools-vocab.ts` — `registerVocabTools` via the `vocab` module (4 tools)
+### The `vocab` and `bases` subsections were HERE (S7)
 
-| Tool name | Description |
-|---|---|
-| `obsidian_vocabularies` | Enumerate configured vocab sources: capabilities, counts, examples |
-| `obsidian_resolve_term` | Token → canonical entry; path → its terms; parse-only mode |
-| `obsidian_validate_terms` | One note's frontmatter → vocabulary findings, report-only |
-| `obsidian_list_vocabulary` | Entries of a kind (tag/property/type/term), optionally scoped |
-
-### `tools-bases.ts` — `registerBasesTools` via the `bases` module (2 tools, #243)
-
-Evaluated Base result sets for agents. Obsidian's public Bases API (1.10+)
-evaluates a `.base` query only into a rendered view, so `base_query` opens the
-base in a **hidden background leaf** (detached `WorkspaceLeaf` parented under
-an invisible fixed-position host — real to the engine, absent from the
-human's workspace: no tab, no flash, no focus steal), waits for the engine's
-first completed data push, materializes the rows via the public
-`BasesEntry.getValue`, and detaches the leaf in a `finally` — success,
-failure, and timeout alike. **Full engine fidelity** (base + view filters,
-formulas, sort, the view's own limit): Obsidian computes; the module never
-parses the Bases expression language. Read-only module, **default ENABLED**
-(a pure read surface over rows the session could already assemble
-note-by-note); **feature-gated** — the registrar registers nothing on an
-Obsidian without the public Bases API. Queries are **serialized** (one
-capture at a time — the hidden leaf is a global resource) and **time-boxed**
-(`modules.bases.config.queryTimeoutMs`, default 30000ms — the engine's scan
-is heavily throttled while the window is hidden) with a typed, retryable
-`base_timeout` refusal; rows are capped (`rowCap`, default 500; the tool's
-`limit` clamps to it) with `truncated` + the pre-cap total. Allowlist: a
-hidden `.base` file is invisible to `base_list` and refused
-(`out_of_allowlist`) by `base_query`; result rows for hidden notes drop
-silently, disclosed only as a boolean `some_rows_hidden` (never a count —
-the visible-totals precedent against cardinality oracles). **Residual under
-an allowlist**, inherent to "Obsidian computes" (the same class as
-`obsidian_check_links`' documented resolution oracle): the engine evaluates
-over the whole vault BEFORE the row filter, so a formula value on a visible
-row can be computed from hidden notes, and a view's own `limit` consumes
-slots on hidden rows — visible rows past that limit silently never appear.
-
-| Tool name | R/W | Description |
-|---|---|---|
-| `base_list` | R | Every visible `.base` file with its declared views (name, type, column count); per-file `parse_error` / `invalid_shape` markers for broken YAML |
-| `base_query` | R | Evaluate one declared view (`{path, view?, limit?}`; default the file's first view) → `{columns, rows: [{path, properties}], total, truncated}`; values stringified via the engine's own `Value.toString()`; typed refusals `not_a_base` / `out_of_allowlist` / `not_found` / `base_parse_error` / `view_not_found` / `base_timeout` |
+Both modules left for their own plugins at the read-tier satellite extraction
+and publish through the external-tool registry, like any third-party publisher.
+On the wire they are `vault_vocab_vocabularies` / `_resolve_term` /
+`_validate_terms` / `_list_vocabulary` and `vault_bases_list` /
+`vault_bases_query` — the plugin id is the tool namespace, so the `obsidian_`
+and `base_` spellings are both gone. This inventory locks the `obsidian_*`
+family and has never counted external tools, so only the module-mounted totals
+above move. See `docs/vocabulary-module.md`, `docs/bases.md`,
+`packages/vocab/README.md` and `packages/bases/README.md`.
 
 ---
 
-## Section 2c — module-mounted, default DISABLED (8)
+## Section 2c — module-mounted, default DISABLED (7)
 
 Registered through the module host like Section 2b, but these modules ship
 `enabled: false` — a human turns them on in the config tab, and the tools appear
-on the next session connect. `health` (2 tools) and `jd-scaffold` (7 tools,
-Stage A + A2 + A3 of the jd-dashboard fold) both use the locked `obsidian_*`
-naming, so both are documented here in full. (The `provenance` and `fileclass` modules also ship disabled, but their tools
+on the next session connect. `jd-scaffold` (7 tools, Stage A + A2 + A3 of the
+jd-dashboard fold) uses the locked `obsidian_*` naming, so it is documented
+here in full. (`health` was the other one until S7.) (The `provenance` and `fileclass` modules also ship disabled, but their tools
 are named `provenance_*` / `fileclass_*`, outside the `obsidian_*` family this
 inventory locks, so the first is documented in its own module doc and
 `fileclass` is documented just below, because it is also plugin-gated.)
@@ -341,15 +310,14 @@ third-party publisher. Its tools are on the wire as `vault_triage_queue` /
 inventory locks the `obsidian_*` family and has never counted external tools, so
 the totals are unchanged — see `docs/triage.md` and `packages/triage/README.md`.
 
-### `tools-health.ts` — `registerHealthTools` via the `health` module (2 tools)
+### The `health` subsection was HERE (S7)
 
-Read-only vault-health scanner, folded from the standalone `obsidian-vault-health`.
-Both tools are `readOnlyHint: true`; the module has no write path.
-
-| Tool name | Description |
-|---|---|
-| `obsidian_health` | Full tiered vault health scan → findings by fix risk (auto-safe repointable links / approval-gated empty notes + orphan attachments / report-only dangling links + duplicate groups + low-signal tags) plus summary counts. Read-only, whole-vault |
-| `obsidian_lint` | The same scan restricted to one folder or note (`scope`); link resolution + orphan inbound-set stay vault-wide, low-signal tags omitted |
+The tiered read-only vault-health scanner left for its own plugin
+(`packages/health`, id `vault-health`) at the read-tier satellite extraction.
+Its tools are on the wire as `vault_health_scan` and `vault_health_lint`: the
+`obsidian_` spellings could not survive, because the host REFUSES any published
+external tool name in the reserved `obsidian_*` namespace
+(`external-tools.ts`'s F1 check). See `packages/health/README.md`.
 
 ### `tools-jd-scaffold.ts` — `registerJdScaffoldTools` via the `jd-scaffold` module (7 tools)
 
@@ -550,8 +518,6 @@ this historical snapshot.
 | `packages/plugin/src/mcp/tools-write-notes.ts` | `registerWriteNotesTool` | 1 always-live |
 | `packages/plugin/src/mcp/tools-pending-review.ts` | `registerPendingReviewTools` | 1 always-live |
 | `packages/plugin/src/mcp/tools-scheme.ts` | `registerSchemeTools` (via `modules-mount.ts`) | 6 module-mounted |
-| `packages/plugin/src/mcp/tools-vocab.ts` | `registerVocabTools` (via `modules-mount.ts`) | 4 module-mounted |
-| `packages/plugin/src/mcp/tools-health.ts` | `registerHealthTools` (via `modules-mount.ts`) | 2 module-mounted (default-disabled) |
 | `packages/plugin/src/mcp/tools-snippets.ts` | `registerSnippetTools` | 4 always-live |
 | `packages/plugin/src/mcp/tools-integrations.ts` | `registerIntegrationTools` | up to 6 conditional |
 | `packages/plugin/src/mcp/tools-import.ts` | `registerImportTools` | 1 conditional (Importer plugin, version-gated) |

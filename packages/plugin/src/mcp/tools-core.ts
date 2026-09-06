@@ -8,7 +8,7 @@ import type { App, TFile } from "obsidian";
 import { ok, fail } from "./helpers.js";
 import { isVisible, type GuardSettings } from "../guard.js";
 import type { ExternalToolEntry } from "./external-tools.js";
-import type { Kernel, ModuleSettings, ServerIdentity, VocabInstanceSettings } from "../kernel/index.js";
+import type { Kernel, ModuleSettings, ServerIdentity } from "../kernel/index.js";
 import { findObsidianBinary } from "./tools-cli.js";
 import type { SchemeInstanceConfig } from "../kernel/scheme/registry.js";
 import type { CliCommandPolicy } from "./cli-policy.js";
@@ -64,9 +64,10 @@ export interface ServerCtx {
   historyEnabled?: boolean;
   historyScope?: { mode: "whole-vault" | "explicit"; include: string[]; exclude: string[] };
   };
-  /** The configured controlled-vocabulary sources (tools-vocab.ts). Optional:
-   * absent means the defaults; absent in tests that don't exercise it. */
-  getVocabularies?: () => VocabInstanceSettings[];
+  // `getVocabularies` was here until the read-tier satellite extraction (suite
+  // split, S7). It carried `settings.vocabularies` to the vocab module's tool
+  // layer; that module is now the `vault-vocab` plugin, which owns its own
+  // copy of the list, so nothing on this context needs it.
   /** Externally-published tools (other Obsidian plugins via plugin.api). Optional: absent in tests that don't exercise it. */
   getExternalTools?: () => ExternalToolEntry[];
   /**

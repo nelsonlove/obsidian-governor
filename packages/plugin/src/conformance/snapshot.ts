@@ -22,8 +22,12 @@
 import { opendir, readFile } from "node:fs/promises";
 import { realpathSync, lstatSync, readlinkSync } from "node:fs";
 import { join, relative, resolve, dirname, basename, sep } from "node:path";
-import { parseAllFrontmatter, stripLeadingFrontmatter, EXCLUDED_PREFIXES } from "@vault-mcp/core";
-import type { VocabNote } from "../kernel/vocab/blueprint.js";
+import {
+  parseAllFrontmatter,
+  stripLeadingFrontmatter,
+  EXCLUDED_PREFIXES,
+  type VocabNote,
+} from "@vault-mcp/core";
 import type { SourceFile, VaultSnapshot } from "./rule-pack.js";
 import { intendedRealPath, isInside } from "./path-identity.js";
 import { envAliased } from "../env-alias.js";

@@ -13,7 +13,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { vocabPack, schemePack } from "../src/conformance/packs/index.ts";
 import { runEngine } from "../src/conformance/engine.ts";
-import { blueprintProvider } from "../src/kernel/vocab/blueprint.ts";
+import { blueprintProvider } from "@vault-mcp/core";
 import { makeRegistry } from "../src/kernel/scheme/registry.ts";
 
 // ── vocab pack ────────────────────────────────────────────────────────────────

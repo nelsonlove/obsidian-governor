@@ -1,0 +1,9 @@
+{
+  "id": "vault-health",
+  "name": "Vault Health",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Read-only vault health scan: broken links tiered by fix risk (auto-safe repointable / report-only dangling), empty and near-empty notes, orphan attachments, exact-duplicate note groups and low-signal tags — for the whole vault or restricted to one folder. Published as MCP tools through the Governor host; it never writes.",
+  "author": "Nelson Love",
+  "isDesktopOnly": true
+}

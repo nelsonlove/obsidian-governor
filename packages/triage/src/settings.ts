@@ -199,11 +199,11 @@ export const TRIAGE_FIELDS: TriageField[] = [
     type: "text",
     help:
       'JSON array of named queues `{id, base, view?}`, e.g. [{"id": "acceptance", "base": ' +
-      '"Views/Acceptance.base"}]. NOT CURRENTLY USABLE from this plugin: evaluating a Base needs the Governor ' +
-      "host's own Bases capture path, which a separate plugin cannot reach, so the base-backed forms of the " +
-      "queue tool refuse `bases_unavailable`. The inbox-marker queue always works; for evaluated Base rows use " +
-      "the host's `base_query` tool. Declarations here are preserved for the day the host can hand a publisher " +
-      "a Bases service.",
+      '"Views/Acceptance.base"}]. NOT CURRENTLY USABLE from this plugin: evaluating a Base needs the Bases ' +
+      "capture path owned by the separate Vault Bases plugin, which this plugin cannot reach, so the " +
+      "base-backed forms of the queue tool refuse `bases_unavailable`. The inbox-marker queue always works; " +
+      "for evaluated Base rows use that plugin's `vault_bases_query` tool. Declarations here are preserved for " +
+      "the day a publisher can be handed a Bases service.",
     caveats: ["Base-backed queues are unavailable while triage ships as a separate plugin."],
   },
 ];

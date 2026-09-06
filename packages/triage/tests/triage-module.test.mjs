@@ -15,8 +15,9 @@
  *     tests/governance-dispositions.test.mjs (it needs the host's DISPOSITIONS
  *     table; the triage half of the same claim stayed here);
  *   • the `queryBaseRows` seam tests — to the host's
- *     tests/bases-module.test.mjs (the seam is host code and did not come with
- *     the module; see the note at the bottom of src/tools.ts);
+ *     tests/bases-module.test.mjs (the seam did not come with the module; see
+ *     the note at the bottom of src/tools.ts). At S7 both the seam and those
+ *     tests left the host as well, and now live in packages/bases;
  *   • the opaque-execution deny-constant pin — to the host's
  *     tests/cli-policy.test.mjs (the constants are host code);
  *   • the module-host conformance block — deleted. There is no module to
@@ -593,7 +594,7 @@ describe("triage_queue: base-backed queues through the shared seam", () => {
     }
   });
 
-  test("some_rows_hidden is disclosed only under an active allowlist (the base_query rule)", async () => {
+  test("some_rows_hidden is disclosed only under an active allowlist (the vault_bases_query rule)", async () => {
     const hiddenRows = async () => ({ result: { ...ROWS, someRowsHidden: true } });
     const bare = register(fakeVault(), { baseQuery: hiddenRows });
     const res1 = await bare.tools.get("vault_triage_queue").handler({ base: "V/A.base" });
@@ -607,13 +608,15 @@ describe("triage_queue: base-backed queues through the shared seam", () => {
   });
 });
 
-// The `queryBaseRows` seam's own tests moved to the HOST's
-// tests/bases-module.test.mjs at the S5 extraction: the seam is host code and
-// deliberately did not come with the module (a second copy would race the
-// host's module-scoped capture serializer over Obsidian's one hidden Bases
-// leaf — see the note at the bottom of src/tools.ts). What remains here is
-// this side of the contract: with no `baseQuery` wired, the base-backed forms
-// refuse typed and the marker queue is unaffected.
+// The `queryBaseRows` seam's own tests moved to the host's
+// tests/bases-module.test.mjs at the S5 extraction, and at S7 moved again with
+// the seam itself to packages/bases/tests/bases-module.test.mjs. The seam
+// deliberately did not come with the triage module (a second copy would race
+// the one module-scoped capture serializer over Obsidian's one hidden Bases
+// leaf — see the note at the bottom of src/tools.ts), and it still must not be
+// copied here now that its owner is a sibling satellite rather than the host.
+// What remains here is this side of the contract: with no `baseQuery` wired,
+// the base-backed forms refuse typed and the marker queue is unaffected.
 
 // ── triage_dispose: primitives (plan/apply parity with #238 where unchanged) ─
 

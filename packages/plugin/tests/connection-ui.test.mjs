@@ -28,14 +28,7 @@ const {
   parseNumberField,
   numberFieldProblem,
   parseLineList,
-  parseVocabConfig,
-  stringifyVocabConfig,
-  coerceVocabInstances,
-  validateVocabInstances,
   addAllowOpaqueEntry,
-  addVocabInstance,
-  removeVocabInstanceAt,
-  updateVocabInstanceAt,
   buildSettingsTabs,
   resolveActiveTab,
   moduleTabId,
@@ -123,121 +116,15 @@ describe("numberFieldProblem — surfaces what parseNumberField cannot express o
   });
 });
 
-// ── Gap B: vocab-instance form helpers (parse / validate / coerce / mutate) ──
-
-describe("parseVocabConfig", () => {
-  test("blank yields no config key (the 'no config' case), never an error", () => {
-    assert.deepEqual(parseVocabConfig(""), { ok: true, config: undefined });
-    assert.deepEqual(parseVocabConfig("   \n "), { ok: true, config: undefined });
-  });
-
-  test("a valid JSON object parses through", () => {
-    assert.deepEqual(parseVocabConfig('{"termsRoot": "Assent"}'), { ok: true, config: { termsRoot: "Assent" } });
-  });
-
-  test("unparseable JSON is a loud problem — refused, never coerced", () => {
-    const r = parseVocabConfig("{not json");
-    assert.equal(r.ok, false);
-    assert.match(r.error, /not valid JSON/);
-  });
-
-  test("valid JSON that is NOT an object (array / scalar / null) is refused", () => {
-    assert.equal(parseVocabConfig("[1,2,3]").ok, false);
-    assert.equal(parseVocabConfig('"a string"').ok, false);
-    assert.equal(parseVocabConfig("42").ok, false);
-    assert.equal(parseVocabConfig("null").ok, false);
-  });
-});
-
-describe("stringifyVocabConfig", () => {
-  test("absent or empty config is the empty string (the no-config textarea)", () => {
-    assert.equal(stringifyVocabConfig(undefined), "");
-    assert.equal(stringifyVocabConfig({}), "");
-  });
-
-  test("a config object round-trips through parseVocabConfig", () => {
-    const cfg = { termsRoot: "Assent", nested: { a: 1 } };
-    const parsed = parseVocabConfig(stringifyVocabConfig(cfg));
-    assert.deepEqual(parsed, { ok: true, config: cfg });
-  });
-});
-
-describe("coerceVocabInstances — degrade gracefully, never throw on malformed data.json", () => {
-  test("a non-array yields [] (no crash)", () => {
-    assert.deepEqual(coerceVocabInstances(undefined), []);
-    assert.deepEqual(coerceVocabInstances("garbage"), []);
-    assert.deepEqual(coerceVocabInstances(null), []);
-    assert.deepEqual(coerceVocabInstances({}), []);
-  });
-
-  test("non-object entries are dropped; object entries are coerced field-by-field", () => {
-    const raw = [
-      null,
-      42,
-      "x",
-      { id: "a", provider: "blueprint", root: "Root" },
-      { id: "b", provider: "glossary", root: "", config: { termsRoot: "T" } },
-    ];
-    assert.deepEqual(coerceVocabInstances(raw), [
-      { id: "a", provider: "blueprint", root: "Root" },
-      { id: "b", provider: "glossary", root: "", config: { termsRoot: "T" } },
-    ]);
-  });
-
-  test("missing / wrong-typed fields fall back to empty strings; a non-object config is dropped", () => {
-    const raw = [{ id: 5, provider: null, config: "nope" }];
-    assert.deepEqual(coerceVocabInstances(raw), [{ id: "", provider: "", root: "" }]);
-  });
-
-  test("an unknown provider is PRESERVED (so the form shows it and validate flags it), not rewritten", () => {
-    const raw = [{ id: "a", provider: "mystery", root: "R" }];
-    assert.deepEqual(coerceVocabInstances(raw), [{ id: "a", provider: "mystery", root: "R" }]);
-  });
-});
-
-describe("validateVocabInstances", () => {
-  test("a clean list has no problems", () => {
-    assert.deepEqual(
-      validateVocabInstances([
-        { id: "registry", provider: "blueprint", root: "R" },
-        { id: "glossary", provider: "glossary", root: "" },
-      ]),
-      [],
-    );
-  });
-
-  test("blank id is flagged", () => {
-    const p = validateVocabInstances([{ id: "  ", provider: "blueprint", root: "R" }]);
-    assert.equal(p.length, 1);
-    assert.match(p[0], /id is required/);
-  });
-
-  test("duplicate id is flagged (mirrors VocabRegistry's skip-and-report)", () => {
-    const p = validateVocabInstances([
-      { id: "dup", provider: "blueprint", root: "R" },
-      { id: "dup", provider: "glossary", root: "R2" },
-    ]);
-    assert.equal(p.length, 1);
-    assert.match(p[0], /duplicate id 'dup'/);
-  });
-
-  test("unknown provider is flagged, naming the allowed set", () => {
-    const p = validateVocabInstances([{ id: "a", provider: "mystery", root: "R" }]);
-    assert.equal(p.length, 1);
-    assert.match(p[0], /unknown provider 'mystery'/);
-    assert.match(p[0], /blueprint, glossary/);
-  });
-
-  test('empty root ("" = whole vault) is VALID — the shipping glossary default uses it', () => {
-    assert.deepEqual(validateVocabInstances([{ id: "g", provider: "glossary", root: "" }]), []);
-  });
-
-  test("a whitespace-only root (neither blank nor a real path) is flagged", () => {
-    const p = validateVocabInstances([{ id: "a", provider: "blueprint", root: "   " }]);
-    assert.equal(p.length, 1);
-    assert.match(p[0], /whitespace-only/);
-  });
-});
+// ── Gap B: the vocab-instance form helpers were tested HERE ─────────────────
+//
+// `parseVocabConfig` / `stringifyVocabConfig` / `coerceVocabInstances` /
+// `validateVocabInstances` and the three array mutations moved to
+// `packages/vocab/src/settings.ts` at the read-tier satellite extraction
+// (suite split, S7), with their tests. They were the settings form for the
+// vocab MODULE's `settings.vocabularies` list; the module is now the
+// `vault-vocab` plugin and renders its own tab. Nothing was copied — this
+// file's coverage moved, it did not fork.
 
 describe("addAllowOpaqueEntry — the 'Add a command' picker's append+dedupe", () => {
   const validIds = { "quickadd:choice:New Area note": {}, "app:reload": {} };
@@ -271,52 +158,6 @@ describe("addAllowOpaqueEntry — the 'Add a command' picker's append+dedupe", (
   test("an empty allowOpaque list still appends normally", () => {
     const after = addAllowOpaqueEntry([], "app:reload", validIds);
     assert.deepEqual(after, ["app:reload"]);
-  });
-});
-
-describe("vocab instance array mutations (pure)", () => {
-  test("addVocabInstance appends a blank instance with the first provider preselected", () => {
-    const before = [{ id: "a", provider: "blueprint", root: "R" }];
-    const after = addVocabInstance(before);
-    assert.equal(after.length, 2);
-    assert.deepEqual(after[1], { id: "", provider: "blueprint", root: "" });
-    assert.equal(before.length, 1, "input is not mutated");
-  });
-
-  test("removeVocabInstanceAt removes exactly the indexed instance", () => {
-    const before = [
-      { id: "a", provider: "blueprint", root: "R" },
-      { id: "b", provider: "glossary", root: "" },
-      { id: "c", provider: "blueprint", root: "R3" },
-    ];
-    assert.deepEqual(
-      removeVocabInstanceAt(before, 1).map((i) => i.id),
-      ["a", "c"],
-    );
-    assert.equal(before.length, 3, "input is not mutated");
-  });
-
-  test("updateVocabInstanceAt patches only the indexed instance", () => {
-    const before = [
-      { id: "a", provider: "blueprint", root: "R" },
-      { id: "b", provider: "glossary", root: "" },
-    ];
-    const after = updateVocabInstanceAt(before, 0, { provider: "glossary", root: "R2" });
-    assert.deepEqual(after[0], { id: "a", provider: "glossary", root: "R2" });
-    assert.deepEqual(after[1], before[1]);
-  });
-
-  test("a patch value of undefined REMOVES the key (blank config drops config)", () => {
-    const before = [{ id: "a", provider: "glossary", root: "", config: { termsRoot: "T" } }];
-    const after = updateVocabInstanceAt(before, 0, { config: undefined });
-    assert.deepEqual(after[0], { id: "a", provider: "glossary", root: "" });
-    assert.ok(!("config" in after[0]), "config key is removed, not set to undefined");
-  });
-
-  test("setting config through a patch adds the key", () => {
-    const before = [{ id: "a", provider: "glossary", root: "" }];
-    const after = updateVocabInstanceAt(before, 0, { config: { termsRoot: "Assent" } });
-    assert.deepEqual(after[0].config, { termsRoot: "Assent" });
   });
 });
 

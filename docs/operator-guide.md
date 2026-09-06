@@ -10,7 +10,7 @@ Read-heavy, scope-first, preview-first, with human review. Use this profile unle
 
 ### Advanced governed
 
-Adds configured schemes, vocabulary, and conformance. (Triage and cross-session coordination are no longer this plugin's modules — they ship as the separate `vault-triage` and `vault-crosssession` satellite plugins.) These remain bounded and observable but require maintenance of their declarations and baselines.
+Adds configured schemes, vocabulary, Bases evaluation, the health scan, and conformance. (Only schemes and conformance are still this plugin's own modules. Triage and cross-session coordination ship as the separate `vault-triage` and `vault-crosssession` satellite plugins; since the S7 read-tier extraction, vocabulary, health and Bases ship as the separate `vault-vocab`, `vault-health` and `vault-bases` satellite plugins. Each is installed, enabled and configured on its own, and publishes its tools to Governor through `vault-mcp-api`.) These remain bounded and observable but require maintenance of their declarations and baselines.
 
 ### Private high-authority
 
@@ -76,6 +76,8 @@ For each connection record:
 Revoke stale connections.
 
 ## Controlled vocabulary
+
+The vocabulary tools are no longer part of this plugin: since the S7 satellite extraction they ship as the separate `vault-vocab` plugin, which publishes its four tools to Governor through `vault-mcp-api` (see [vocabulary-module.md](vocabulary-module.md)). The requirements below are unchanged and are that plugin's to satisfy; what changes for an operator is that it is installed and configured separately, and that its tools are named `vault_vocab_*`. The vocabulary rule core itself lives in `@vault-mcp/core`, shared with this plugin's conformance rail, so one vault keeps one vocabulary.
 
 Use controlled vocabulary only when a term changes validation, permission, lifecycle, filing, retrieval, receipt, or recovery. Every vocabulary source has:
 

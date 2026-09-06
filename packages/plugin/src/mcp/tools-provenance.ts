@@ -126,7 +126,8 @@ async function globVaultRoot(adapter: VaultAdapter, pattern: string): Promise<st
 }
 
 /** The Obsidian adapter — the ONLY vault coupling for provenance in vault-mcp,
- * and (like `obsidianHealthBackend`) the one part not headlessly unit-tested;
+ * and (like the health satellite's `obsidianHealthBackend`, which was this
+ * file's sibling until S7) the one part not headlessly unit-tested;
  * verify it against a running Obsidian. Duck-typed against `app` (no `obsidian`
  * import) so this file stays headless-testable. */
 export function obsidianProvenanceBackend(app: {

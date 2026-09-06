@@ -34,7 +34,7 @@ export interface GuardSettings {
  * unresolvable leading `..` — which is exactly what the caller below tests
  * for. Behaviour matches `node:path`'s posix.normalize for the relative,
  * vault-relative paths the guard sees. */
-function normalizePosix(input: string): string {
+export function normalizePosix(input: string): string {
   const absolute = input.startsWith("/");
   const trailingSlash = input.length > 1 && input.endsWith("/");
   const out: string[] = [];

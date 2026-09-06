@@ -12,8 +12,8 @@ import { ExternalToolRegistry, type VaultMcpApi } from "./mcp/external-tools.js"
 import { createGovernanceSeam, type GovernanceSeam } from "./mcp/seam.js";
 import type { ProviderToolRegistrar } from "./mcp/server.js";
 import { registerMandateTools } from "./mcp/tools-governance-mandate.js";
-import { isLive, livenessOf } from "@vault-mcp/core";
-import { Kernel, WriteQueue, WriteJournal, IdempotencyStore, LockStore, UidIndex, loadInstallId, migrateLegacyModuleIds, DEFAULT_VOCABULARIES, type VocabInstanceSettings, type ModuleSettings } from "./kernel/index.js";
+import { isLive, livenessOf, DEFAULT_VOCABULARIES, type VocabInstanceSettings } from "@vault-mcp/core";
+import { Kernel, WriteQueue, WriteJournal, IdempotencyStore, LockStore, UidIndex, loadInstallId, migrateLegacyModuleIds, type ModuleSettings } from "./kernel/index.js";
 import { createSessionStore } from "./governor/kernel/sessions/session-store.js";
 import { createProposalStore } from "./governor/kernel/proposals/proposal-store.js";
 import { createProposalObserver } from "./governor/wiring/write-observer.js";
@@ -82,14 +82,19 @@ interface VaultMcpSettings {
    */
   protectedProperties: Array<{ key: string; grade: string }>;
   /**
-   * Controlled-vocabulary sources for the vocab tools (mcp/tools-vocab.ts):
-   * `{ id, provider, root, config }` rows, mirroring the scheme settings
-   * shape. Defaults to one registry-blueprint instance over the vault's
-   * registries slot plus one glossary instance. Edited in the settings tab via
-   * the vocab module's bespoke per-instance form (connection-ui.ts
-   * `renderVocabInstances`) — add / remove instances and edit id / provider /
-   * root / config there; edits land per-connection through the vocab tool
-   * layer's `getVocabularies` thunk.
+   * Controlled-vocabulary sources: `{ id, provider, root, config }` rows,
+   * mirroring the scheme settings shape.
+   *
+   * MIGRATION-ONLY SINCE S7. Nothing in this plugin reads it any more — the
+   * four vocabulary tools and their settings form left for the `vault-vocab`
+   * satellite at the read-tier extraction, and the host's conformance rail
+   * builds its registry from `DEFAULT_VOCABULARIES` (it always did; it never
+   * read this field). It is deliberately still declared, still defaulted, and
+   * still persisted, because it is the ADOPTION SOURCE: `vault-vocab` copies
+   * it once on its first load and never writes back. Deleting it here would
+   * destroy a user's configuration before the plugin that inherits it had a
+   * chance to read it. Remove it only after the adoption window is closed,
+   * which is a separate, dated decision.
    */
   vocabularies: VocabInstanceSettings[];
   /**
@@ -899,7 +904,6 @@ export default class VaultMcpPlugin extends Plugin {
       // the per-connection servers built below.
       seam: seamOf(this).consult,
       getExternalTools: () => externalRegistryOf(this).entries(),
-      getVocabularies: () => this.settings.vocabularies,
       kernel,
     };
 

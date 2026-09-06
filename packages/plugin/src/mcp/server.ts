@@ -20,12 +20,9 @@ import { registerGovernanceRevisionTool, registerGovernanceRevisionsListTool } f
 import { registerLinkTools, obsidianLinkSource } from "./tools-links.js";
 import { registerConformanceDebtTools, registerConformanceDebtRenderTool } from "./tools-conformance-debt.js";
 import { obsidianDebtRenderSource } from "./obsidian-debt-source.js";
-import { obsidianVocabSource } from "./tools-vocab.js";
 import { obsidianProvenanceBackend } from "./tools-provenance.js";
-import { obsidianHealthBackend } from "./tools-health.js";
 import { mountModules } from "./modules-mount.js";
 import { FILECLASS_PLUGIN_ID } from "./tools-fileclass.js";
-import { obsidianBasesSource } from "./obsidian-bases-source.js";
 import { obsidianJdScaffoldSource } from "./obsidian-jd-scaffold-source.js";
 import { registerCodeModeTools, makeCaptureRegister, type CapturedRegistry } from "./tools-code-mode.js";
 import { makeGuarded, resolveGuardedPath, withKernelArgs } from "./guarded.js";
@@ -539,8 +536,8 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
       console.error("[governor] provider tool registrar failed", e);
     }
   }
-  // ── capability modules: scope-provider + vocab + the rest ──────────────────
-  // Ruled decision #2 realized: the two capability modules register THROUGH
+  // ── capability modules: scope-provider + the rest ─────────────────────────
+  // Ruled decision #2 realized: the capability modules register THROUGH
   // the ModuleRegistry — settings-toggleable (`modules.<id>.enabled`), behind
   // the accept/baseline tripwire, collision refusal, and the mount's
   // read-only-only registrar. The registrar handed over is the PATCHED
@@ -548,21 +545,21 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   // interception point as every hand-registered tool, in both modes.
   const moduleRegistry = mountModules((name, def, handler) => (server as any).registerTool(name, def, handler), {
     getSettings: () => ctx.getSettings(),
-    getVocabularies: ctx.getVocabularies,
     schemeNotes: () => app.vault.getMarkdownFiles().map((f) => f.path),
-    vocabSource: obsidianVocabSource(app),
     provenanceSource: obsidianProvenanceBackend(app),
-    healthSource: obsidianHealthBackend(app),
     // The fileclass module (#188) pins the CLI to THIS vault and gates on the
     // Fileclass plugin being LOADED (the instance, not enabledPlugins — a
     // configured-but-uninstalled plugin lingers there, per the plugin-gated-tools
     // locked decision).
     vaultName: ctx.vaultName,
     fileclassPresent: () => !!(app as any).plugins?.plugins?.[FILECLASS_PLUGIN_ID],
-    // The bases module (#243): the hidden-leaf capture over Obsidian's own
-    // Bases engine. The adapter feature-detects the public Bases API itself
-    // and the registrar registers nothing when it is absent.
-    basesSource: obsidianBasesSource(app),
+    // The vocab, health and bases adapters were wired HERE until the
+    // read-tier satellite extraction (suite split, S7). All three ship as
+    // their own plugins now (`vault-vocab`, `vault-health`, `vault-bases`) and
+    // build their own adapters; the bases hidden-leaf capture went with them
+    // whole, so this composition root no longer touches Obsidian's Bases API
+    // at all.
+    //
     // The jd-scaffold module (Stage A + A2 + A3 of the jd-dashboard fold):
     // standard-zeros creation, category-index self-heal, promote-to-folder,
     // reindex-category, and template-driven note creation — reads via
@@ -584,7 +581,8 @@ export function buildMcpServer(app: App, ctx: ServerCtx, opts: BuildOpts = {}): 
   registerLinkTools(server, obsidianLinkSource(app), ctx);
   // ── conformance debt register (issue #211, Parts A2 + B) ────────────────────
   // The READ tool reports the carried debt (baseline + sidecar + live run:
-  // burn-down counts, staleness, budget) — whole-vault, like obsidian_health.
+  // burn-down counts, staleness, budget) — whole-vault, like the health scan
+  // (now the `vault-health` satellite's `vault_health_scan`).
   // The RENDER tool (Part B) materializes the same report as a generated
   // register note beside the baseline; it is mutating (readOnlyHint: false), so
   // it rides the guard-patched registrar (read-only mode, queue, journal) and

@@ -49,7 +49,7 @@ import {
 } from "../conformance/cli.js";
 import { parseBaseline } from "../conformance/ratchet.js";
 import { newSchemeDrift, type DriftGroup } from "../conformance/drift-view.js";
-import { DEFAULT_VOCABULARIES } from "../kernel/vocab/registry.js";
+import { DEFAULT_VOCABULARIES } from "@vault-mcp/core";
 import { DEFAULT_SCHEMES } from "../kernel/scheme/registry.js";
 
 /** The on-disk root of this vault (FileSystemAdapter). Desktop-only, which

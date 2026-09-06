@@ -1,13 +1,13 @@
-// modules-mount.ts — the module host's mount: the two built-in capability
-// modules (scope-provider, vocabulary provider) assembled as VaultModules and
-// registered THROUGH the ModuleRegistry (ruled decision #2 realized — they
-// are settings-toggleable units behind the host's tripwire/collision checks,
-// no longer direct registerXTools calls in server.ts).
+// modules-mount.ts — the module host's mount: the built-in capability modules
+// assembled as VaultModules and registered THROUGH the ModuleRegistry (ruled
+// decision #2 realized — they are settings-toggleable units behind the host's
+// tripwire/collision checks, no longer direct registerXTools calls in
+// server.ts).
 //
 // Pure and headless-testable: no `obsidian` imports — the vault-facing
-// dependencies (note listings, the vocab source) arrive injected via
-// MountDeps, exactly as tools-scheme/tools-vocab already take them; server.ts
-// contributes only the live adapters and the patched registerTool.
+// dependencies (note listings, the provenance backend) arrive injected via
+// MountDeps, exactly as tools-scheme already takes them; server.ts contributes
+// only the live adapters and the patched registerTool.
 //
 // ── The hard security gate this file answers (recorded by the orchestrator
 //    on the module-host merge; verified by test where testable) ─────────────
@@ -30,9 +30,10 @@
 //     and nothing else — no kernel, no raw server, no registerTool, no
 //     baseline/accept surface. Pinned by test over `mountHost`'s keys.
 //  3. Modules register ONLY through the registry: server.ts no longer calls
-//     registerSchemeTools/registerVocabTools directly (pinned by a source
-//     scan in the test suite), so the tripwire and collision checks cannot be
-//     bypassed for module tools.
+//     registerSchemeTools directly (pinned by a source scan in the test
+//     suite), so the tripwire and collision checks cannot be bypassed for
+//     module tools. (The same scan used to name registerVocabTools; the vocab
+//     module left for the `vault-vocab` satellite at S7.)
 //  4. Capability modules only — nothing here declares (or could smuggle) a
 //     governance posture; the registry refuses that posture at construction
 //     anyway.
@@ -52,18 +53,12 @@ import {
 } from "../kernel/modules/index.js";
 import { makeRegistry, DEFAULT_SCHEMES, validateExcludedRoots, excludeRoots, type SchemeInstanceConfig } from "../kernel/scheme/registry.js";
 import { validateJdConfig, type JdConfig } from "../kernel/scheme/jd.js";
-import type { VocabInstanceSettings } from "../kernel/index.js";
 import { registerSchemeTools } from "./tools-scheme.js";
-import { registerVocabTools, type VocabSource, type VocabToolsCtx } from "./tools-vocab.js";
 import { registerProvenanceTools, type ProvenanceToolsCtx } from "./tools-provenance.js";
 import { DEFAULT_PROVENANCE_CONFIG, validateProvenanceConfig, DEFAULT_NOTES_DIR, DEFAULT_AUDIT_NOTE, type ProvenanceBackend } from "../kernel/provenance/index.js";
-import { registerHealthTools, type HealthToolsCtx } from "./tools-health.js";
-import { DEFAULT_HEALTH_CONFIG, validateHealthConfig, DEFAULT_EMPTY_CHARS, type HealthSource } from "../kernel/health/index.js";
 import { registerFileclassTools, type FileclassToolsCtx } from "./tools-fileclass.js";
 import { DEFAULT_GOVERNANCE_SETTINGS, DEFAULT_ACCEPTANCE_SETTINGS } from "../governor/kernel/settings.js";
-import { registerBasesTools, emptyBasesSource, type BasesSource, type BasesToolsCtx } from "./tools-bases.js";
 import { registerJdScaffoldTools, emptyJdScaffoldSource, type JdScaffoldSource, type JdScaffoldToolsCtx } from "./tools-jd-scaffold.js";
-import { DEFAULT_BASES_CONFIG, validateBasesConfig } from "../kernel/bases/index.js";
 
 // ── manifests (#81: config-host — see
 //    docs/superpowers/specs/2026-08-10-config-host-design.md) ──────────────
@@ -72,17 +67,15 @@ import { DEFAULT_BASES_CONFIG, validateBasesConfig } from "../kernel/bases/index
 // `settings.schemes[0].config` / `.excludedRoots`, not
 // `settings.modules.scheme.config`) — `schemeBinding` below resolves the
 // manifest's flat field keys against that existing shape, per design §3
-// ("no data migration in v1"). The vocab module gets a manifest too, but
-// deliberately NO manifest `config` block: its settings are a LIST of
-// structured instances (`settings.vocabularies`, `{id, provider, root,
-// config}` each), which the scalar manifest-field renderer cannot express.
-// Its per-instance settings UI is instead a BESPOKE form in connection-ui's
-// vocab section (`renderVocabInstances`) — like the top-level allowlist/deny
-// textareas — writing straight to `settings.vocabularies` (read
-// per-connection by the vocab tool layer's `getVocabularies` thunk). The
-// manifest stays a capability-directory-only subscription, so this is also
-// the real-code instance of "a module with no config fields must still
-// render" the renderer/tests are built to handle.
+// ("no data migration in v1"). The vocab module USED to get a manifest with
+// no `config` block and a bespoke `renderVocabInstances` form writing to
+// `settings.vocabularies`, read per-connection through a `getVocabularies`
+// thunk — all three left with the vault-vocab satellite at S7 (the form and
+// the thunk are gone; the setting survives host-side as the satellite's
+// migration-only adoption source and is read by nothing here). This
+// paragraph keeps the shape as history because the "structured-instance
+// list a scalar manifest-field renderer cannot express" problem will recur
+// for any future module with list-shaped config.
 
 const SCHEME_CONFIG_FIELDS: ConfigField[] = [
   {
@@ -308,60 +301,35 @@ const schemeBinding: ConfigBinding = {
   },
 };
 
-const VOCAB_MANIFEST: ModuleManifest = {
-  summary:
-    "Controlled-vocabulary validation and resolution over the configured registries: tags, properties, types, and " +
-    "glossary terms. Report-only — nothing here writes to a note.",
-  // No manifest `config` block: the vocab settings are a LIST of structured
-  // instances (registry + glossary, each `{id, provider, root, config}`),
-  // which the scalar manifest-field renderer cannot express. The per-instance
-  // settings UI now ships as a BESPOKE form in connection-ui's vocab section
-  // (`renderVocabInstances`) — id / provider / root / config editors plus
-  // add- and remove-instance controls, writing straight to
-  // `settings.vocabularies`. The module still renders its enable toggle +
-  // capability directory generically from this manifest; the bespoke form is
-  // appended to that section for this one module.
-  directory: {
-    tools: [
-      {
-        name: "obsidian_vocabularies",
-        purpose:
-          "Enumerate the configured controlled-vocabulary sources: id, provider, root, capabilities, per-kind " +
-          "counts and examples.",
-        readOnly: true,
-      },
-      {
-        name: "obsidian_resolve_term",
-        purpose: "Resolve a vocabulary token to its canonical entry, or report a note's own vocabulary.",
-        readOnly: true,
-        options: [
-          { name: "token", what: "a tag, property key, type name, or term" },
-          { name: "kind", what: "narrow the lookup to tag / property / type / term" },
-          { name: "path", what: "report a note's own vocabulary instead of resolving one token" },
-          { name: "parse", what: "with `token`: validate only, resolve nothing" },
-        ],
-        caveats: ["A token with more than one sense refuses to pick, naming every candidate."],
-      },
-      {
-        name: "obsidian_validate_terms",
-        purpose: "Check one note's frontmatter against the controlled vocabulary and report findings.",
-        readOnly: true,
-        options: [{ name: "path", what: "vault-relative note path to validate" }],
-        caveats: ["Report-only — findings are returned, never fixed; nothing is written."],
-      },
-      {
-        name: "obsidian_list_vocabulary",
-        purpose: "Enumerate the registered vocabulary of one kind, sorted, each entry naming its source.",
-        readOnly: true,
-        options: [
-          { name: "kind", what: "tag / property / type / term" },
-          { name: "scope", what: "only entries declared under this vault-relative path prefix" },
-        ],
-      },
-    ],
-  },
-};
-
+// ── the vocab module manifest USED TO LIVE HERE ─────────────────────────────
+//
+// Removed at the read-tier satellite extraction (suite split, S7), with the
+// health and bases manifests below it, for the same reason the skills manifest
+// left at S4, triage's at S5 and cross-session's at S6: controlled-vocabulary
+// validation is now a separate plugin (`packages/vocab`, id `vault-vocab`)
+// publishing through the external-tool registry. Its four tools are on the
+// wire as `vault_vocab_vocabularies` / `_resolve_term` / `_validate_terms` /
+// `_list_vocabulary` — the plugin id IS the tool namespace, so the `obsidian_`
+// spellings are gone.
+//
+// TWO THINGS DID NOT LEAVE WITH IT, and both are deliberate:
+//
+//   • THE KERNEL. `src/kernel/vocab/` moved to `@vault-mcp/core`, not into the
+//     satellite, because the host's conformance rail is its second consumer
+//     (`conformance/packs/vocab.ts` wraps `noteVocabFindings`,
+//     `conformance/cli.ts` builds a `VocabRegistry` per run). Same shape as the
+//     `queryBaseRows` question at S5, same forbidden answer: two copies of a
+//     rule core is how one vault gets two vocabularies.
+//   • THE SETTING. `settings.vocabularies` is a TOP-LEVEL host setting, not a
+//     `modules.vocab.config` row, and since S7 it is MIGRATION-ONLY: the field
+//     stays declared as the satellite's one-shot adoption source, and nothing
+//     in the host reads it any more. An earlier draft of this comment said
+//     conformance keeps it live — WRONG, and worth recording because the error
+//     is re-derivable: the rail's three `runConformance` call sites all pass
+//     `DEFAULT_VOCABULARIES` unconditionally and always have (drift-source,
+//     debt-source, cli). See `packages/vocab/CLAUDE.md`, which records the
+//     same correction.
+//
 // ── provenance module manifest (the obsidian-provenance CLI fold) ──────────
 //
 // The second mutating capability module (after skills, which left for its own
@@ -458,72 +426,24 @@ const PROVENANCE_MANIFEST: ModuleManifest = {
   },
 };
 
-// ── health module manifest (the obsidian-vault-health scanner fold) ────────
+// ── the health module manifest USED TO LIVE HERE ────────────────────────────
 //
-// A READ-ONLY capability module (unlike provenance, which is mutating).
-// Ported from the standalone `obsidian-vault-health` Bash+eval scanner. It emits
-// tiered findings and NEVER mutates — the fixing is a separate skill, out of
-// scope — so both its tools register `readOnlyHint: true`, it declares NO
-// `mutating` flag, and it needs no ConfigBinding: config lives at
-// `modules.health.config`, so the manifest's flat field keys map straight
-// through. One field today — the empty-note char threshold (the Python
-// `VAULT_HEALTH_EMPTY_CHARS`, default 40). The directory documents both tools.
+// Removed at the read-tier satellite extraction (suite split, S7). The vault
+// health scan is now `packages/health` (id `vault-health`), publishing
+// `vault_health_scan` and `vault_health_lint`. Its one config field
+// (`emptyChars`) moved to that plugin's own settings tab and is adopted once
+// out of `modules.health.config`.
 //
-// Default DISABLED (opt-in): a newly-folded scan surface stays off until a human
-// turns it on in the config tab.
-const HEALTH_CONFIG_FIELDS: ConfigField[] = [
-  {
-    key: "emptyChars",
-    label: "Empty-note character threshold",
-    type: "number",
-    help:
-      "Body characters (frontmatter excluded) at/under which a note is reported as empty / near-empty. Also the floor " +
-      `below which identical stubs are skipped from duplicate grouping. Blank ⇒ the default (${DEFAULT_EMPTY_CHARS}).`,
-  },
-];
-
-const HEALTH_MANIFEST: ModuleManifest = {
-  summary:
-    "Vault health scan, ported from the obsidian-vault-health scanner: report maintenance issues TIERED BY FIX RISK — " +
-    "auto-safe (broken links that uniquely resolve to one existing note), approval-gated (empty / near-empty notes; " +
-    "orphan attachments), and report-only (dangling links, duplicate note groups, low-signal tags). READ-ONLY — it " +
-    "only emits findings and never mutates the vault; the fixing is a separate skill.",
-  config: {
-    fields: HEALTH_CONFIG_FIELDS,
-    defaults: { ...DEFAULT_HEALTH_CONFIG } as Record<string, unknown>,
-    validate: validateHealthConfig,
-  },
-  directory: {
-    tools: [
-      {
-        name: "obsidian_health",
-        purpose: "Full tiered vault health scan → structured findings (auto-safe / approval-gated / report-only) plus summary counts.",
-        readOnly: true,
-        caveats: [
-          "Auto-safe repointable links: a unique-basename match is NOT proof a link should be repointed — a " +
-            "`[[core.el]]`-style reference in a vendored / knowledge-base / template tree can coincidentally match an " +
-            "unrelated note. Scope auto-safe repoints to authored areas.",
-          "Orphan attachments include files referenced ONLY via frontmatter or CSS (those references are not in " +
-            "Obsidian's resolvedLinks). Verify before trashing, and protect sensitive trees.",
-          "Runs over the whole vault (not allowlist-scoped) — a partial health report would misreport orphans and " +
-            "duplicates.",
-        ],
-      },
-      {
-        name: "obsidian_lint",
-        purpose: "The same health scan restricted to one folder or note.",
-        readOnly: true,
-        options: [{ name: "scope", what: 'a vault-relative folder or note path to restrict findings to, e.g. "Projects"' }],
-        caveats: [
-          "Link resolution and the orphan inbound-set are still computed vault-wide, so an attachment referenced from " +
-            "outside the scope is correctly not reported as orphaned.",
-          "Low-signal tags are omitted from a scoped lint (tags are vault-wide and cannot be attributed to a folder).",
-        ],
-      },
-    ],
-  },
-};
-
+// Worth recording because it closes an open issue: #381 asked whether the
+// whole-vault read exception had grown by precedent rather than by decision,
+// and named `obsidian_health` as one of three tools scanning the entire vault
+// with no allowlist filtering. For these two the question is now moot — as
+// untrusted external tools carrying no recognized path-key argument they are
+// blocked WHOLESALE while a path allowlist is active, which is stricter than
+// the documented-exception outcome the issue was weighing. The issue's list is
+// down to `provenance_reconcile` and `obsidian_conformance_debt`, both still
+// here.
+//
 // ── fileclass module manifest (#188: the fileclass CLI fold) ───────────────
 //
 // A MUTATING capability module that proxies the standalone `fileclass` CLI
@@ -787,84 +707,23 @@ const ACCEPTANCE_MANIFEST: ModuleManifest = {
   },
 };
 
-// ── bases module manifest (#243: evaluated Base rows for agents) ────────────
+// ── the bases module manifest USED TO LIVE HERE ─────────────────────────────
 //
-// A READ-ONLY capability module (like health): both tools readOnlyHint: true,
-// no `mutating` flag, no write path anywhere. Unlike health it ships DEFAULT
-// ENABLED — it is a pure read surface over content the session could already
-// read note-by-note (the scheme/vocab precedent for read-only default-on),
-// and its rows are allowlist-filtered like every other read. Feature-gated
-// like fileclass: the registrar registers NOTHING when the running Obsidian
-// lacks the public Bases API (pre-1.10), so an enabled module on an old
-// Obsidian is absent, not broken. Config lives at `modules.bases.config`
-// (a new module, no ConfigBinding).
-const BASES_CONFIG_FIELDS: ConfigField[] = [
-  {
-    key: "queryTimeoutMs",
-    label: "Query timeout (ms)",
-    type: "number",
-    help:
-      "Hard deadline for one base_query evaluation. The Bases engine's scan is heavily throttled while the " +
-      "Obsidian window is hidden, so slow answers are normal in the background — expiry refuses with a typed, " +
-      `retryable base_timeout. Blank ⇒ the default (${DEFAULT_BASES_CONFIG.queryTimeoutMs}).`,
-  },
-  {
-    key: "rowCap",
-    label: "Row cap",
-    type: "number",
-    help:
-      "Maximum rows one base_query returns (the tool's `limit` argument clamps to this). Blank ⇒ the default " +
-      `(${DEFAULT_BASES_CONFIG.rowCap}).`,
-  },
-];
-
-const BASES_MANIFEST: ModuleManifest = {
-  summary:
-    "Evaluated Base result sets for agents: enumerate the vault's `.base` files and their declared views, and " +
-    "evaluate a view — Obsidian's own Bases engine computes the rows (base + view filters, formulas, sort) in a " +
-    "hidden background leaf that is detached whatever happens; this module never parses the Bases expression " +
-    "language and never writes anything. Registers only when the running Obsidian exposes the public Bases API " +
-    "(1.10+); queries are serialized (one capture at a time) and time-boxed with a typed base_timeout refusal.",
-  config: {
-    fields: BASES_CONFIG_FIELDS,
-    defaults: { ...DEFAULT_BASES_CONFIG } as Record<string, unknown>,
-    validate: validateBasesConfig,
-  },
-  directory: {
-    tools: [
-      {
-        name: "base_list",
-        purpose: "Enumerate every visible `.base` file with its declared views (name, type, column count).",
-        readOnly: true,
-        caveats: ["A base outside the path allowlist is invisible — absent from the answer, not refused."],
-      },
-      {
-        name: "base_query",
-        purpose:
-          "Evaluate one declared view of a `.base` file via the engine and return its rows: note path + the view's " +
-          "columns' values.",
-        readOnly: true,
-        options: [
-          { name: "path", what: 'vault-relative `.base` path, e.g. "Views/Tasks.base"' },
-          { name: "view", what: "declared view name (default: the file's first view)" },
-          { name: "limit", what: "maximum rows to return (clamped to the module's rowCap)" },
-        ],
-        caveats: [
-          "Full engine fidelity — Obsidian computes filters/formulas/sort; nothing is re-implemented — but the " +
-            "scan is throttled while the window is hidden, so a busy vault can take tens of seconds (typed " +
-            "base_timeout on expiry, retryable).",
-          "Rows for notes outside the path allowlist are dropped silently; the response then carries " +
-            "`some_rows_hidden: true` (a boolean, never a count).",
-          "Residual under an allowlist, inherent to \"Obsidian computes\" (the check_links resolution-oracle " +
-            "class): the engine evaluates over the WHOLE vault before rows are filtered, so a formula value on a " +
-            "visible row can be computed from hidden notes, and a view's own `limit` consumes slots on hidden " +
-            "rows — visible rows past that limit silently never appear.",
-        ],
-      },
-    ],
-  },
-};
-
+// Removed at the read-tier satellite extraction (suite split, S7). Evaluated
+// Base rows are now `packages/bases` (id `vault-bases`), publishing
+// `vault_bases_list` and `vault_bases_query`.
+//
+// THE CAPTURE SEAM WENT WITH IT, and that is the decision worth carrying. At
+// S5 the triage module's base-backed queues were cut loose rather than take
+// `queryBaseRows` along, because the capture drives a hidden Bases leaf — a
+// GLOBAL resource held to one capture at a time by a module-scoped serializer
+// — and a second serializer in a second plugin would race the first over the
+// one leaf. That argument does not block THIS extraction: bases OWNS the leaf
+// and the serializer, and `base_query`'s own handler was the only production
+// caller left once triage was gone. So the whole set moved and NOTHING was
+// copied — the mirror-image risk (a host copy racing the satellite's) is
+// exactly why it had to be a move.
+//
 // jd-scaffold, Stage A + Stage A2 + Stage A3 of the jd-dashboard fold
 // (docs/superpowers/specs/2026-08-19-jd-dashboard-fold-design.md): seven
 // mutating tools ported from obsidian-jd-dashboard's standard-zeros.ts,
@@ -971,7 +830,7 @@ const JD_SCAFFOLD_MANIFEST: ModuleManifest = {
 /** What the mount needs from the live plugin (server.ts supplies the Obsidian
  * adapters; tests supply fakes). The same per-call freshness discipline as
  * the direct registrations it replaces: config the HANDLERS read (allowlist,
- * scheme rows, vocabularies) is a thunk, so those edits land live — but
+ * scheme rows) is a thunk, so those edits land live — but
  * `modules.<id>.enabled` is read once per mount, i.e. per connection, so a
  * module toggle takes effect on the next session connect (exactly what the
  * settings tab says). */
@@ -980,18 +839,11 @@ export interface MountDeps {
     schemes?: SchemeInstanceConfig[];
     modules?: ModuleSettings;
   };
-  /** The `vocabularies` settings array. Absent ⇒ the vocab module's defaults. */
-  getVocabularies?: () => VocabInstanceSettings[];
   /** Vault markdown paths, for the scheme module's placement/membership answers. */
   schemeNotes: () => string[];
-  /** The vocab module's injected vault reader (obsidianVocabSource live). */
-  vocabSource: VocabSource;
   /** The provenance module's injected backend (obsidianProvenanceBackend live)
    * — the freshness/reconcile read seam plus the regen write primitive. */
   provenanceSource: ProvenanceBackend;
-  /** The health module's injected source (obsidianHealthBackend live) — the
-   * read-only resolver + on-disk-body seam the tiered scan runs over. */
-  healthSource: HealthSource;
   /** This vault's name — pinned into every fileclass CLI call via `--vault`.
    * Optional so the settings-UI's stand-in deps and pre-fileclass callers still
    * satisfy MountDeps (the fileclass module only reads it when it registers). */
@@ -1005,17 +857,12 @@ export interface MountDeps {
   /** Injected fileclass CLI binary (tests / explicit override). Absent ⇒ the
    * registrar resolves from config.binaryPath, else probes the filesystem. */
   fileclassBinary?: string | null;
-  /** The bases module's injected vault/engine adapter (obsidianBasesSource
-   * live — the hidden-leaf capture). Absent ⇒ an inert unavailable source, so
-   * the settings-UI's stand-in deps and pre-bases callers still satisfy
-   * MountDeps (the module's registrar then registers nothing, exactly like a
-   * pre-1.10 Obsidian). */
-  basesSource?: BasesSource;
   /** The jd-scaffold module's injected vault reader/writer
    *  (obsidianJdScaffoldSource live — standard-zeros creation, category-index
    *  self-heal, promote-to-folder). Absent ⇒ emptyJdScaffoldSource(): reads
    *  answer empty, writes refuse with a clear error rather than a silent
-   *  no-op — same "registers, degrades cleanly" shape as bases. */
+   *  no-op — the "registers, degrades cleanly" shape the bases module used
+   *  before it left for the `vault-bases` satellite at S7. */
   jdScaffoldSource?: JdScaffoldSource;
   /** Feeds jd-scaffold's template-creation tools' accept-forbidden content
    *  scan (same `{parseYaml}` shape `registerCliTools` already takes) —
@@ -1039,17 +886,17 @@ export function mountHost(deps: MountDeps): ModuleHostCtx {
 
 /** The built-in capability modules, adapted without touching their tool
  * layers (module-host adapters doc): scope-provider in its exact
- * `register(server, ctx)` shape, vocab via the documented one-line closure
- * for its injected-source middle parameter.
+ * `register(server, ctx)` shape.
  *
- * Both `ctxOf` closures deliberately ignore the `host`/`config` parameters
- * and build from `deps` instead: these two modules PRE-DATE the host, so
- * their config rows live in the top-level `schemes`/`vocabularies` settings
- * (not `modules.<id>.config`) and their tool layers filter via their own
- * `getSettings` + guard imports (not `host.visible`) — preserved verbatim so
- * the mount is a pure re-wiring, zero behavior change. A NEW module should
- * do the opposite: read `host`/`config` and use `host.visible`, per the
- * adapters doc. */
+ * Scheme's `ctxOf` closure deliberately ignores the `host`/`config`
+ * parameters and builds from `deps` instead: it PRE-DATES the host, so its
+ * config rows live in the top-level `schemes` setting (not
+ * `modules.<id>.config`) and its tool layer filters via its own `getSettings`
+ * + guard imports (not `host.visible`) — preserved verbatim so the mount is a
+ * pure re-wiring, zero behavior change. Vocab was the other module in that
+ * pair, on the top-level `vocabularies` setting, until it left for the
+ * `vault-vocab` satellite at S7. A NEW module should do the opposite: read
+ * `host`/`config` and use `host.visible`, per the adapters doc. */
 export function builtinModules(deps: MountDeps): VaultModule[] {
   return [
     moduleFromRegistrar(
@@ -1061,17 +908,15 @@ export function builtinModules(deps: MountDeps): VaultModule[] {
         getSettings: deps.getSettings,
       }),
     ),
-    moduleFromRegistrar(
-      { id: "vocab", capabilities: ["vocabulary"], enabled: true, manifest: VOCAB_MANIFEST },
-      // The documented closure form for a registrar with an injected middle
-      // parameter — `server` is `any` per the adapter contract, so the
-      // McpServer-typed signature needs no cast.
-      (server: any, ctx: VocabToolsCtx) => registerVocabTools(server, deps.vocabSource, ctx),
-      () => ({
-        getSettings: deps.getSettings,
-        ...(deps.getVocabularies ? { getVocabularies: deps.getVocabularies } : {}),
-      }),
-    ),
+    // THE VOCAB MODULE IS GONE FROM HERE (suite split, S7). Its four read
+    // tools ship as `packages/vocab` (plugin id `vault-vocab`), published
+    // through vault-mcp-api as `vault_vocab_*`. Its kernel did NOT go with it
+    // — it went to `@vault-mcp/core`, because the host's conformance rail is
+    // its second consumer; the setting `settings.vocabularies` stays declared
+    // host-side as the satellite's MIGRATION-ONLY adoption source, read by
+    // nothing in the host (conformance builds from DEFAULT_VOCABULARIES and
+    // always did). See the note where the manifest used to be.
+    //
     // THE SKILLS MODULE IS GONE FROM HERE (suite split, S4). It was the FIRST
     // mutating capability module and it is the precedent several comments below
     // still cite; it now ships as its own plugin, `packages/skills` (plugin id
@@ -1096,20 +941,12 @@ export function builtinModules(deps: MountDeps): VaultModule[] {
       (server: any, ctx: ProvenanceToolsCtx) => registerProvenanceTools(server, deps.provenanceSource, ctx),
       (_host, config) => ({ config, getSettings: deps.getSettings }),
     ),
-    // The health module (the obsidian-vault-health scanner fold): a READ-ONLY
-    // capability module. Unlike provenance it declares NO `mutating` flag
-    // — both its tools (obsidian_health / obsidian_lint) register with
-    // `readOnlyHint: true`, so the mount's read-only-only registrar gate passes
-    // them without any exemption, and there is no write tool, write guard, or
-    // accept verb anywhere in the module. Default DISABLED (opt-in): the scan
-    // surface stays off until a human turns it on in the config tab. Config lives
-    // at `modules.health.config` (a new module, no ConfigBinding), so `config`
-    // here is that record merged over the manifest defaults.
-    moduleFromRegistrar(
-      { id: "health", capabilities: ["health"], enabled: false, manifest: HEALTH_MANIFEST },
-      (server: any, ctx: HealthToolsCtx) => registerHealthTools(server, deps.healthSource, ctx),
-      (_host, config) => ({ config, getSettings: deps.getSettings }),
-    ),
+    // THE HEALTH MODULE IS GONE FROM HERE (suite split, S7). The tiered vault
+    // health scan ships as `packages/health` (plugin id `vault-health`),
+    // publishing `vault_health_scan` and `vault_health_lint`. It took its
+    // whole kernel (`src/kernel/health/`) with it — nothing else in this
+    // plugin imported it.
+    //
     // The fileclass module (#188: the fileclass CLI fold): a MUTATING capability
     // module that PROXIES the standalone `fileclass` CLI (execFile, the
     // obsidian_cli precedent). Like provenance it declares `mutating:
@@ -1152,26 +989,12 @@ export function builtinModules(deps: MountDeps): VaultModule[] {
       () => { /* contributes no MCP tools */ },
       () => ({}),
     ),
-    // The bases module (#243): evaluated Base rows for agents. A READ-ONLY
-    // capability module — both tools readOnlyHint: true, so the mount's
-    // read-only-only registrar gate passes them without any exemption, and
-    // there is no write tool, write guard, or accept verb anywhere in the
-    // module. DEFAULT ENABLED (the scheme/vocab precedent: a pure read
-    // surface over rows the session could already assemble note-by-note,
-    // allowlist-filtered like every other read); feature-gated like fileclass
-    // (its registrar registers nothing when the public Bases API is absent).
-    // A NEW module, so it follows the adapters doc: it reads `host`/`config`
-    // and filters with `host.visible`. Config lives at `modules.bases.config`
-    // (no ConfigBinding).
-    moduleFromRegistrar(
-      { id: "bases", capabilities: ["bases"], enabled: true, manifest: BASES_MANIFEST },
-      (server: any, ctx: BasesToolsCtx) => registerBasesTools(server, deps.basesSource ?? emptyBasesSource(), ctx),
-      (host, config) => ({
-        config,
-        getSettings: deps.getSettings,
-        visible: host.visible,
-      }),
-    ),
+    // THE BASES MODULE IS GONE FROM HERE (suite split, S7). Evaluated Base
+    // rows ship as `packages/bases` (plugin id `vault-bases`), publishing
+    // `vault_bases_list` and `vault_bases_query`. The hidden-leaf capture
+    // seam and its module-scoped serializer moved WITH it, as one piece and
+    // with no copy left behind — see the note where the manifest used to be.
+    //
     // jd-scaffold (Stage A + A2 + A3 of the jd-dashboard fold): another
     // MUTATING capability module (skills' own reasoning applies here too) —
     // it declares `mutating: true` so its seven write tools (standard_zeros,

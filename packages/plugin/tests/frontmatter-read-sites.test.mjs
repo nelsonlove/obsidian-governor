@@ -20,7 +20,8 @@
  * The sites (issue #189's table):
  *   - src/conformance/packs/drift.ts        `fmBlock`          (BOM+CRLF-blind)
  *   - src/conformance/packs/structure.ts    FM_STRIP + noteInfo (BOM+CRLF-blind)
- *   - src/kernel/vocab/blueprint.ts         `scanFrontmatter`  (BOM+CRLF-blind)
+ *   - @vault-mcp/core src/vocab/blueprint.ts `scanFrontmatter`  (BOM+CRLF-blind)
+ *     (was src/kernel/vocab/blueprint.ts until the S7 satellite extraction)
  *   - src/kernel/skills/transclude.ts       `stripFrontmatter` (BOM-blind)
  *     — MOVED OUT: the skills compiler is its own plugin since the suite
  *     split S4; that site is now pinned by
@@ -34,7 +35,7 @@ import assert from "node:assert/strict";
 
 import { driftPack, DEFAULT_REGISTRIES_ROOT } from "../src/conformance/packs/index.ts";
 import { noteInfo, emittedH2s } from "../src/conformance/packs/structure.ts";
-import { scanFrontmatter } from "../src/kernel/vocab/blueprint.ts";
+import { scanFrontmatter } from "@vault-mcp/core";
 
 // U+FEFF by code point, never a literal BOM byte in source (accept-guard.ts's
 // own convention — stripLeadingBom compares 0xfeff the same way).
@@ -140,7 +141,7 @@ describe("structure.ts noteInfo binds both halves to the shared recognizer (#189
   });
 });
 
-// ── site 3: kernel/vocab/blueprint.ts `scanFrontmatter` ───────────────────────
+// ── site 3: @vault-mcp/core vocab/blueprint.ts `scanFrontmatter` ─────────────
 
 describe("vocab blueprint.ts scanFrontmatter binds to the shared recognizer (#189)", () => {
   const WANT = { extends: "Base", retired: true, tags: ["a", "b"] };

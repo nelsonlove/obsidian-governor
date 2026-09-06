@@ -130,7 +130,9 @@ export default class VaultTriagePlugin extends Plugin {
           // satellite cannot reach the host's guard settings, and the host's
           // external-tool gate is the enforced boundary. `baseQuery` and
           // `schemeExpected` are not supplied either: both were host-module
-          // seams with no published equivalent. See tools.ts.
+          // seams with no published equivalent, and `baseQuery`'s counterpart
+          // has since moved out of the host too — into the `vault-bases`
+          // satellite, which is no more reachable from here. See tools.ts.
         }),
       );
     } catch (e) {

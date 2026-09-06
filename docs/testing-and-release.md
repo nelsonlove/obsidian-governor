@@ -64,7 +64,7 @@ Verify behavior that a headless fake cannot establish:
 - `processFrontMatter` serialization;
 - trash behavior;
 - active workspace and deferred views;
-- Bases evaluation and cleanup;
+- Bases evaluation and cleanup (since the S7 satellite extraction this is the `vault-bases` plugin's evidence to capture, not this plugin's);
 - optional plugin feature detection;
 - review gesture and focus behavior;
 - configuration-directory handling; and
@@ -158,7 +158,7 @@ Measure:
 - search and identity-index warm/cold behavior;
 - write queue latency under concurrent clients;
 - large note and batch operations;
-- Bases query foreground and occluded;
+- Bases query foreground and occluded (the `vault-bases` satellite's measurement since S7, taken through the same published tools);
 - review queue refresh with small and large pending sets;
 - cohort freeze, full-coverage verification, and drill-down at 10, 100, 1,000, and 10,000 items;
 - Git object ingestion, diff, bundle, and garbage-collection behavior;

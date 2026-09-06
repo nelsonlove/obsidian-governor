@@ -314,7 +314,7 @@ export function makeRegistry(configs: SchemeInstanceConfig[]): SchemeRegistry {
       continue;
     }
     // Reserve the id BEFORE the provider/config checks below (worker-1's
-    // review, post-merge — mirrors kernel/vocab/registry.ts's VocabRegistry
+    // review, post-merge — mirrors @vault-mcp/core's VocabRegistry
     // constructor, which fixed the identical gap): a row that fails those
     // checks is still SKIPPED, not absent — the id it named is spoken for
     // and must not be silently claimable by a later row of the same id. Add

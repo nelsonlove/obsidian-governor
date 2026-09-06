@@ -110,7 +110,7 @@ Official references:
 - [ ] Cohort freeze, verification, drill-down, and admission are measured at release-scale item counts.
 - [ ] Git ingestion/diff/bundle and attestation import/validation are measured.
 - [ ] Two-replica Sync behavior is recorded with community-plugin data on and off.
-- [ ] Foreground and occluded Bases behavior are measured when included.
+- [ ] Foreground and occluded Bases behavior are measured when included — since the S7 satellite extraction that is the `vault-bases` plugin's release evidence, not this bundle's.
 - [ ] Connect/disconnect and hidden-view cleanup show no material leak.
 - [ ] Keyboard and assistive-technology review is recorded.
 - [ ] A new evaluator completes getting started without maintainer assistance.

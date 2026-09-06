@@ -55,7 +55,11 @@ import { z } from "zod";
 import { posix } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ok, fail, codedError } from "./helpers.js";
-import { guardCall, visiblePaths, type GuardSettings } from "../guard.js";
+import { visiblePaths, type GuardSettings } from "../guard.js";
+// `resolveScope` moved to @vault-mcp/core at the read-tier satellite
+// extraction (suite split, S7) — see the note where it used to be defined,
+// below.
+import { resolveScope } from "@vault-mcp/core";
 import type { Kernel } from "../kernel/index.js";
 
 const RO = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
@@ -106,68 +110,30 @@ export interface LinkToolsCtx {
  */
 const MAX_ITEMS = 100;
 
-/** A refusal, carrying the machine-readable code the wire shape wants. */
-interface Refusal {
-  code: string;
-  message: string;
-}
-
-const HOW = "give a vault-relative prefix like 'Projects', or omit scope to report on everything you can see. Nothing was reported.";
-
-/**
- * Resolve `scope` to a normalized prefix, or REFUSE it — the same shape and the
- * same code vocabulary `scopeRefusal` uses for an advisory claim (tools-locks.ts),
- * so the two scope-taking surfaces answer a bad scope the same way.
- *
- * Two families of refusal, both typed rather than silently repaired:
- *
- *   • MALFORMED (`invalid_scope`) — one that normalizes to nothing, to `.`, or
- *     above the vault root; one that is absolute; one padded with whitespace.
- *     A caller who wrote `..` meant to NARROW, and quietly handing back the
- *     whole vault is the opposite of what they asked for; `/Projects` and
- *     ` Projects` are equally a mistake about what a vault-relative prefix is,
- *     and repairing them silently teaches a shape that will not hold elsewhere.
- *   • OUT OF ALLOWLIST (`out_of_allowlist`) — a scope naming an area this
- *     session cannot see. It refuses TYPED rather than returning a zeroed
- *     report, matching the claims surface: a zeroed report for `Archive/` and a
- *     zeroed report for a genuinely clean `Archive/` are indistinguishable, so
- *     the refusal is both the more honest answer and the consistent one. A
- *     scope that merely CONTAINS your allowlist (`Projects` under an allowlist
- *     of `Projects/Alpha`) is out of it too — narrow the scope, or omit it.
- *
- * Omitting `scope` is how you ask for everything visible, and it is unambiguous.
- */
-/** Exported so `obsidian_lint` (tools-health.ts) guards its own bare `scope`
- *  argument with THIS logic rather than a second copy — a scope string is not
- *  in `PATH_KEYS`, so `guardCall` never sees it and each tool taking one must
- *  check it by hand. Two hand-rolled copies would drift, which is the failure
- *  this repo has already paid for once with the territory list. */
-export function resolveScope(scope: string | undefined, settings?: GuardSettings): { prefix?: string; refusal?: Refusal } {
-  const malformed = (raw: string, why: string) => ({ refusal: { code: "invalid_scope", message: `scope '${raw}' ${why} — ${HOW}` } });
-  if (scope === undefined) return {};
-  if (scope !== scope.trim()) return malformed(scope, "has leading or trailing whitespace");
-  if (scope.startsWith("/")) return malformed(scope, "is an absolute path");
-  const prefix = posix.normalize(scope).replace(/\/+$/, "");
-  if (!prefix || prefix === "." || prefix === ".." || prefix.startsWith("../")) {
-    return malformed(scope, "does not name a folder in this vault");
-  }
-  const blocked = guardCall({
-    isMutating: false,
-    args: { path: prefix },
-    // Normalized FIELD BY FIELD, not just `settings ?? default`: `guardCall`
-    // reads `settings.allowlist.length` unguarded, so a partial settings object
-    // (one with no `allowlist` key at all) throws rather than allowing. The
-    // old `??` only covered a wholly-undefined `settings`. Absent means
-    // unrestricted here, which is what an empty allowlist already means.
-    settings: {
-      ...(settings ?? {}),
-      readOnly: settings?.readOnly ?? false,
-      allowlist: settings?.allowlist ?? [],
-    },
-  });
-  if (blocked) return { refusal: { code: blocked.code, message: `${blocked.message} — narrow the scope, or omit it. Nothing was reported.` } };
-  return { prefix };
-}
+// ── `resolveScope` USED TO LIVE HERE ────────────────────────────────────────
+//
+// It was exported from this file so `obsidian_lint` could guard its own bare
+// `scope` argument with THIS logic rather than a second copy — a scope string
+// is not in `PATH_KEYS`, so `guardCall` never sees it and each tool taking one
+// must check it by hand.
+//
+// At the read-tier satellite extraction (suite split, S7) `obsidian_lint` left
+// for the `vault-health` satellite, and a satellite cannot import host
+// internals. The choice was copy or publish; forking a guard predicate is the
+// drift this repo has already paid for three times, so it was PUBLISHED into
+// `@vault-mcp/core` (`packages/core/src/scope.ts`), joining `isVisible` (S4)
+// and `executeQuickAddChoice` (S5). Its two callers now sit in two plugins:
+// `obsidian_check_links` below, and the satellite's lint.
+//
+// The move is behaviour-preserving by construction: the old body called
+// `guardCall({isMutating: false, args: {path: prefix}, settings})`, whose
+// read-only branch cannot fire for a non-mutating call and whose allowlist
+// branch is `collectPaths({path: prefix})` -> `[prefix]` -> `isVisible(prefix,
+// settings)`. Core's version is that `isVisible` call, with the refusal code
+// and message reproduced verbatim. One thing DID change and it changed for
+// both callers at once, which is the point of one copy: a scope containing a
+// backslash is now refused `invalid_scope`, because every check downstream of
+// the resolver splits on "/" alone. Pinned by `packages/core/tests/scope.test.mjs`.
 
 /** Segment-boundary prefix match against an already-normalized scope. */
 function inScope(path: string, prefix?: string): boolean {

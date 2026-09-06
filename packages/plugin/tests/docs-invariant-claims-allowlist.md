@@ -393,6 +393,41 @@ and narrow it) — this list is not meant to be permanent.
 - An agent that has never heard of the acceptance model, or one actively trying to forge acceptance, hits the same wall: the write is refused before it lands.
   tracked by: #137, #105, #107 — for these specific paths, the write is not currently refused.
 
+## docs/bases.md + docs/vocabulary-module.md (S7 read-tier extraction)
+
+Two spans, one claim in two documents: that after S7 the enforced allowlist
+boundary is the HOST's rather than the satellite's, and that the host's gate
+decides per call from the arguments the call actually carries.
+
+Substantiated, and deliberately NARROW. The mechanism is
+`packages/plugin/src/mcp/external-tools.ts`'s F3 branch, which reads
+`if (settings.allowlist.length > 0 && collectPaths(args ?? {}).length === 0)`
+— evaluated inside the registered handler, on the ARGUMENTS object, not on the
+declared schema. So "the arguments a call actually carries" is the literal
+behaviour, and it is why the two documents go on to state a per-tool (and, for
+`vault_vocab_resolve_term`, a per-CALL) posture instead of one blanket rule.
+The "a satellite cannot reach the host's guard settings" half is a statement
+about what is NOT wired: `vault-mcp-api`'s publishing contract carries no
+caller scope at apiVersion 1, which is why both packages keep `ctx.visible` /
+`ctx.getSettings` as dormant seams with tests that supply them. Pinned on the
+satellite side by each package's `publication` test block (which asserts what
+its own argument names are, against a SNAPSHOT of the host's `PATH_KEYS` held
+as data in `tests/host-shim.mjs` — a review aid, explicitly not a live
+tripwire), and on the host side by `tests/guard.test.mjs`'s pin over the live
+`collectPaths` and by `tests/external-tools.test.mjs`.
+
+What these spans do NOT assert, and both documents say so in the surrounding
+prose rather than leaving it to the reader: that the extraction made every
+tool stricter. It did not. `docs/bases.md` records that the row filter and
+`some_rows_hidden` are now dormant, so a query on a visible base can return
+rows naming notes outside the allowlist; `docs/vocabulary-module.md` records
+the bounded disclosure the two still-reachable vocab tools retain. Both name
+the apiVersion-2 seam that would close them. Agent-classified during S7;
+pending the operator's review like every other span in this file.
+
+- **Since S7 the enforced boundary is the HOST's, because a satellite cannot reach the host's guard settings.** The host's gate tests the arguments a call actually carries, so the two tools land differently and the difference matters:
+- The enforced boundary is now the HOST's, because a satellite cannot reach the host's guard settings, and the host's gate tests the arguments a call actually carries.
+
 ## Imported documentation corpus (2026-08-23) — tracked, not approved-as-true, PENDING OPERATOR REVIEW
 
 The 2026-08-23 documentation migration (PR #340, executed on the operator's
