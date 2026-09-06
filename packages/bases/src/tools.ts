@@ -99,6 +99,9 @@
 //     live again with no code change.
 //   * THE ROW FILTER IS DORMANT TOO, AND THAT IS A REAL LOSS. `boundRows`'
 //     allowlist drop and the `some_rows_hidden` marker depend on `ctx.visible`,
+//     and a returned row is {path, properties} — the hidden note's evaluated
+//     frontmatter/formula VALUES, not merely its name; say so wherever this
+//     loosening is described,
 //     which nothing supplies — and the host's guard checks the `path` ARGUMENT,
 //     never the discovered ROW paths. So under an allowlist `vault_bases_query`
 //     on a VISIBLE base can now return rows naming notes OUTSIDE the allowlist,

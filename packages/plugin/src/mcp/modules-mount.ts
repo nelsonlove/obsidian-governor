@@ -67,17 +67,15 @@ import { registerJdScaffoldTools, emptyJdScaffoldSource, type JdScaffoldSource, 
 // `settings.schemes[0].config` / `.excludedRoots`, not
 // `settings.modules.scheme.config`) — `schemeBinding` below resolves the
 // manifest's flat field keys against that existing shape, per design §3
-// ("no data migration in v1"). The vocab module gets a manifest too, but
-// deliberately NO manifest `config` block: its settings are a LIST of
-// structured instances (`settings.vocabularies`, `{id, provider, root,
-// config}` each), which the scalar manifest-field renderer cannot express.
-// Its per-instance settings UI is instead a BESPOKE form in connection-ui's
-// vocab section (`renderVocabInstances`) — like the top-level allowlist/deny
-// textareas — writing straight to `settings.vocabularies` (read
-// per-connection by the vocab tool layer's `getVocabularies` thunk). The
-// manifest stays a capability-directory-only subscription, so this is also
-// the real-code instance of "a module with no config fields must still
-// render" the renderer/tests are built to handle.
+// ("no data migration in v1"). The vocab module USED to get a manifest with
+// no `config` block and a bespoke `renderVocabInstances` form writing to
+// `settings.vocabularies`, read per-connection through a `getVocabularies`
+// thunk — all three left with the vault-vocab satellite at S7 (the form and
+// the thunk are gone; the setting survives host-side as the satellite's
+// migration-only adoption source and is read by nothing here). This
+// paragraph keeps the shape as history because the "structured-instance
+// list a scalar manifest-field renderer cannot express" problem will recur
+// for any future module with list-shaped config.
 
 const SCHEME_CONFIG_FIELDS: ConfigField[] = [
   {
@@ -323,10 +321,14 @@ const schemeBinding: ConfigBinding = {
 //     `queryBaseRows` question at S5, same forbidden answer: two copies of a
 //     rule core is how one vault gets two vocabularies.
 //   • THE SETTING. `settings.vocabularies` is a TOP-LEVEL host setting, not a
-//     `modules.vocab.config` row, and it stays LIVE here because conformance
-//     reads it. Unlike every prior satellite's config, the host's copy does not
-//     simply stop being read — see `packages/vocab/CLAUDE.md` for the two-live-
-//     copies consequence and why it was accepted.
+//     `modules.vocab.config` row, and since S7 it is MIGRATION-ONLY: the field
+//     stays declared as the satellite's one-shot adoption source, and nothing
+//     in the host reads it any more. An earlier draft of this comment said
+//     conformance keeps it live — WRONG, and worth recording because the error
+//     is re-derivable: the rail's three `runConformance` call sites all pass
+//     `DEFAULT_VOCABULARIES` unconditionally and always have (drift-source,
+//     debt-source, cli). See `packages/vocab/CLAUDE.md`, which records the
+//     same correction.
 //
 // ── provenance module manifest (the obsidian-provenance CLI fold) ──────────
 //
@@ -910,9 +912,10 @@ export function builtinModules(deps: MountDeps): VaultModule[] {
     // tools ship as `packages/vocab` (plugin id `vault-vocab`), published
     // through vault-mcp-api as `vault_vocab_*`. Its kernel did NOT go with it
     // — it went to `@vault-mcp/core`, because the host's conformance rail is
-    // its second consumer; and its setting did not go either, because
-    // `settings.vocabularies` is a top-level host setting that conformance
-    // still reads. See the note where the manifest used to be.
+    // its second consumer; the setting `settings.vocabularies` stays declared
+    // host-side as the satellite's MIGRATION-ONLY adoption source, read by
+    // nothing in the host (conformance builds from DEFAULT_VOCABULARIES and
+    // always did). See the note where the manifest used to be.
     //
     // THE SKILLS MODULE IS GONE FROM HERE (suite split, S4). It was the FIRST
     // mutating capability module and it is the precedent several comments below
